@@ -80,7 +80,6 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
@@ -108,9 +107,13 @@ def get_key_models(
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
-        all_models = list(user_api_key_dict.models)  # copy to avoid mutating cached objects
+        all_models = list(
+            user_api_key_dict.models
+        )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_team_models.value in all_models:
-            all_models = list(user_api_key_dict.team_models)  # copy to avoid mutating cached objects
+            all_models = list(
+                user_api_key_dict.team_models
+            )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
             if include_model_access_groups:
@@ -186,6 +189,7 @@ def get_complete_model_list(
     """
 
     unique_models = []
+
     def append_unique(models):
         for model in models:
             if model not in unique_models:
@@ -198,7 +202,7 @@ def get_complete_model_list(
     else:
         append_unique(proxy_model_list)
         if include_model_access_groups:
-            append_unique(list(model_access_groups.keys())) # TODO: keys order
+            append_unique(list(model_access_groups.keys()))  # TODO: keys order
 
         if user_model:
             append_unique([user_model])

@@ -39,9 +39,7 @@ class CyberArkSecretManager(BaseSecretManager):
         self.ssl_verify: bool = ssl_verify_env if ssl_verify_env is not None else True
 
         # Validate environment
-        if not self.conjur_api_key and not (
-            self.tls_cert_path and self.tls_key_path
-        ):
+        if not self.conjur_api_key and not (self.tls_cert_path and self.tls_key_path):
             raise ValueError(
                 "Missing CyberArk credentials. Please set CYBERARK_API_KEY or both CYBERARK_CLIENT_CERT and CYBERARK_CLIENT_KEY in your environment."
             )
@@ -318,7 +316,6 @@ class CyberArkSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error writing secret to CyberArk Conjur: {e}")
             return {"status": "error", "message": str(e)}
 
-
     async def async_delete_secret(
         self,
         secret_name: str,
@@ -351,4 +348,3 @@ class CyberArkSecretManager(BaseSecretManager):
             "status": "not_supported",
             "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
         }
-

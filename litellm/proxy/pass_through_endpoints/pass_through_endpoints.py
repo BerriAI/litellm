@@ -2062,7 +2062,9 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_mapped_route = InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
+            full_mapped_route = (
+                InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
+            )
             if route.startswith(full_mapped_route):
                 return True
 
@@ -2115,11 +2117,7 @@ class InitPassThroughEndpointHelpers:
 
                 # If path matches and method filter is provided, check if method is allowed
                 if path_matches:
-                    if (
-                        method is None
-                        or not route_methods
-                        or method in route_methods
-                    ):
+                    if method is None or not route_methods or method in route_methods:
                         return _registered_pass_through_routes[key]
 
         return None

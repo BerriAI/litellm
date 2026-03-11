@@ -21,11 +21,12 @@ if TYPE_CHECKING:
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
         generationConfig: Optional[Any]
-        tools: Optional[ToolConfigDict] # type: ignore[assignment]
+        tools: Optional[ToolConfigDict]  # type: ignore[assignment]
 
-    class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
+    class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc]
         _hidden_params: dict = {}
         pass
+
 else:
     # Fallback types when google.genai is not available
     ContentListUnion = Any
@@ -48,11 +49,11 @@ else:
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
         def __init__(self, **kwargs):  # type: ignore
             # Extract specific fields
-            self.generationConfig = kwargs.get('generationConfig')
-            self.tools = kwargs.get('tools')
+            self.generationConfig = kwargs.get("generationConfig")
+            self.tools = kwargs.get("tools")
             super().__init__(**kwargs)
 
-    class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
+    class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc]
         def __init__(self, **kwargs):  # type: ignore
             super().__init__(**kwargs)
-            self._hidden_params = kwargs.get('_hidden_params', {})
+            self._hidden_params = kwargs.get("_hidden_params", {})

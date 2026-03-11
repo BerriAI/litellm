@@ -81,6 +81,7 @@ def _write_byok_cred_cache(
         _byok_cred_cache.clear()
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -182,7 +183,7 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=False, # enables SSE streaming
+        json_response=False,  # enables SSE streaming
         stateless=True,
     )
 
@@ -341,9 +342,9 @@ if MCP_AVAILABLE:
         host_progress_callback = None
         try:
             host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, 'progressToken', None)
-                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, "progressToken", None)
+                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
                     async def forward_progress(progress: float, total: float | None):
@@ -352,14 +353,20 @@ if MCP_AVAILABLE:
                             await host_session.send_progress_notification(
                                 progress_token=host_token,
                                 progress=progress,
-                                total=total
+                                total=total,
                             )
-                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                            verbose_logger.debug(
+                                f"Forwarded progress {progress}/{total} to Host"
+                            )
                         except Exception as e:
-                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                            verbose_logger.error(
+                                f"Failed to forward progress to Host: {e}"
+                            )
 
                     host_progress_callback = forward_progress
-                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+                    verbose_logger.debug(
+                        f"Host progressToken captured: {host_token[:8]}..."
+                    )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
@@ -834,18 +841,18 @@ if MCP_AVAILABLE:
                 )
 
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            )
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_server_ids, _ip_blocked = (
-            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-                allowed_mcp_server_ids, client_ip
-            )
+        (
+            allowed_mcp_server_ids,
+            _ip_blocked,
+        ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+            allowed_mcp_server_ids, client_ip
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
-            client_ip, allowed_mcp_server_ids,
+            client_ip,
+            allowed_mcp_server_ids,
         )
         if _ip_blocked > 0:
             verbose_logger.debug(
@@ -870,7 +877,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
-        
 
         return allowed_mcp_servers
 
@@ -983,7 +989,6 @@ if MCP_AVAILABLE:
 
             # Attach user identifiers using the standard helper
             if user_api_key_auth is not None:
-
                 LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                     data=list_tools_request_data,
                     user_api_key_dict=user_api_key_auth,
@@ -1160,7 +1165,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         # Get prompts from each allowed server
         all_prompts = []
         for server in allowed_mcp_servers:
@@ -1219,7 +1223,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
             if server is None:
@@ -1274,7 +1277,6 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
         )
-
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1773,7 +1775,9 @@ if MCP_AVAILABLE:
             # configured auth_type so the generator doesn't need to know the prefix.
             auth_header_value: Optional[str] = None
             if mcp_auth_header:
-                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                server_auth_type = (
+                    getattr(mcp_server, "auth_type", None) if mcp_server else None
+                )
                 if server_auth_type == MCPAuth.api_key:
                     auth_header_value = f"ApiKey {mcp_auth_header}"
                 elif server_auth_type == MCPAuth.basic:
@@ -1809,12 +1813,8 @@ if MCP_AVAILABLE:
         # Deprecated: Local MCP Server Tool
         #########################################################
         else:
-            local_content = await _handle_local_mcp_tool(
-                original_tool_name, arguments
-            )
-            response = CallToolResult(
-                content=cast(Any, local_content), isError=False
-            )
+            local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
+            response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         return response
 
@@ -1934,7 +1934,6 @@ if MCP_AVAILABLE:
                 status_code=403,
                 detail="User not allowed to get this prompt.",
             )
-
 
         # Extract server name from prefixed prompt name
         original_prompt_name, server_name = split_server_prefix_from_name(name)

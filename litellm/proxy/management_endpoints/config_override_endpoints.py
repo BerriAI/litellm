@@ -218,9 +218,7 @@ async def update_hashicorp_vault_config(
     _set_env_vars(config_data)
 
     try:
-        proxy_config.initialize_secret_manager(
-            key_management_system="hashicorp_vault"
-        )
+        proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
     except Exception as e:
         _set_env_vars(previous_env)
         verbose_proxy_logger.exception(
@@ -295,9 +293,7 @@ async def get_hashicorp_vault_config(
 
         # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
         decrypted_data = proxy_config._decrypt_db_variables(config_data)
-        masked_data = _mask_sensitive_fields(
-            decrypted_data, HASHICORP_SENSITIVE_FIELDS
-        )
+        masked_data = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
 
         return ConfigOverrideSettingsResponse(
             config_type="hashicorp_vault",
@@ -307,9 +303,7 @@ async def get_hashicorp_vault_config(
 
     # Fallback to env vars — also mask sensitive values
     env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
-    masked_env_values = _mask_sensitive_fields(
-        env_values, HASHICORP_SENSITIVE_FIELDS
-    )
+    masked_env_values = _mask_sensitive_fields(env_values, HASHICORP_SENSITIVE_FIELDS)
 
     return ConfigOverrideSettingsResponse(
         config_type="hashicorp_vault",
@@ -399,7 +393,9 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager
+        )
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace

@@ -653,7 +653,9 @@ async def byok_authorize_post(
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
     if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
-        raise HTTPException(status_code=503, detail="Too many pending authorization flows")
+        raise HTTPException(
+            status_code=503, detail="Too many pending authorization flows"
+        )
 
     if code_challenge_method != "S256":
         raise HTTPException(
@@ -745,6 +747,7 @@ async def byok_token(
             from litellm.proxy._experimental.mcp_server.server import (
                 _invalidate_byok_cred_cache,
             )
+
             _invalidate_byok_cred_cache(user_id, server_id)
         except Exception as exc:
             verbose_proxy_logger.error(

@@ -55,7 +55,13 @@ from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import FileTypes, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
+from litellm.types.utils import (
+    FileTypes,
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -91,7 +97,9 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 if key == "size":
                     if "image_config" not in mapped_params:
                         mapped_params["image_config"] = {}
-                    mapped_params["image_config"]["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
+                    mapped_params["image_config"][
+                        "aspect_ratio"
+                    ] = self._map_size_to_aspect_ratio(cast(str, value))
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:
@@ -109,11 +117,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("OPENROUTER_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
         headers.update(
@@ -133,7 +137,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        base_url = (
+            api_base
+            or get_secret_str("OPENROUTER_API_BASE")
+            or "https://openrouter.ai/api/v1"
+        )
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/chat/completions"):
             return f"{base_url}/chat/completions"
@@ -162,9 +170,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 content_parts.append(
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime_type};base64,{b64_data}"
-                        },
+                        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
                     }
                 )
 
@@ -344,7 +350,9 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                model_response._hidden_params["response_cost_details"].update(
+                    cost_details
+                )
 
         model_response._hidden_params["model"] = response_json.get("model", model)
 

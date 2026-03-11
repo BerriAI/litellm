@@ -6,7 +6,8 @@ from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
-Phase = Optional[Literal["commentary", "final_answer"]]  
+Phase = Optional[Literal["commentary", "final_answer"]]
+
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
     """Annotation for content in a message"""

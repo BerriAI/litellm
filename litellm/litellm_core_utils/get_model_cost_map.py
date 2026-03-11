@@ -92,7 +92,10 @@ class GetModelCostMap:
             )
             return False
 
-        if backup_model_count > 0 and fetched_count < backup_model_count * max_shrink_ratio:
+        if (
+            backup_model_count > 0
+            and fetched_count < backup_model_count * max_shrink_ratio
+        ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map shrank significantly "
                 "(fetched=%d, backup=%d, threshold=%.0f%%). "
@@ -231,7 +234,9 @@ def get_model_cost_map(url: str) -> dict:
             url,
         )
         _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        _cost_map_source_info.fallback_reason = (
+            "Remote data failed integrity validation"
+        )
         return GetModelCostMap.load_local_model_cost_map()
 
     _cost_map_source_info.source = "remote"

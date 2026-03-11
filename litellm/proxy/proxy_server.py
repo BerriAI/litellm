@@ -4602,9 +4602,7 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_hashicorp_vault_config_override(
-        self, prisma_client: PrismaClient
-    ):
+    async def _init_hashicorp_vault_config_override(self, prisma_client: PrismaClient):
         """
         Load Hashicorp Vault config override from DB.
         Decrypts sensitive fields, sets HCP_VAULT_* env vars, and reinitializes the secret manager.
@@ -4643,18 +4641,14 @@ class ProxyConfig:
 
             # Reinitialize the secret manager
             try:
-                self.initialize_secret_manager(
-                    key_management_system="hashicorp_vault"
-                )
+                self.initialize_secret_manager(key_management_system="hashicorp_vault")
             except Exception:
                 # Restore previous working env vars instead of wiping all
                 _set_env_vars(previous_env)
                 raise
 
             self._last_hashicorp_vault_config = config_data.copy()
-            verbose_proxy_logger.debug(
-                "Hashicorp Vault config override loaded from DB"
-            )
+            verbose_proxy_logger.debug("Hashicorp Vault config override loaded from DB")
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
@@ -4754,7 +4748,14 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
+                        "update": {
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            )
+                        },
                     },
                 )
 
@@ -4855,7 +4856,14 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
+                        "update": {
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            )
+                        },
                     },
                 )
 
@@ -5635,9 +5643,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -12505,7 +12513,11 @@ async def reload_model_cost_map(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"interval_hours": existing_interval, "force_reload": True})},
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": existing_interval, "force_reload": True}
+                    )
+                },
             },
         )
 
@@ -12840,7 +12852,9 @@ async def reload_anthropic_beta_headers(
         )
         existing_beta_interval = None
         if existing_beta_config and existing_beta_config.param_value:
-            existing_beta_interval = existing_beta_config.param_value.get("interval_hours")
+            existing_beta_interval = existing_beta_config.param_value.get(
+                "interval_hours"
+            )
 
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "anthropic_beta_headers_reload_config"},
@@ -12851,7 +12865,11 @@ async def reload_anthropic_beta_headers(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"interval_hours": existing_beta_interval, "force_reload": True})},
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": existing_beta_interval, "force_reload": True}
+                    )
+                },
             },
         )
 

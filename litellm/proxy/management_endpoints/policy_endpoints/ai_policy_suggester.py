@@ -101,9 +101,7 @@ class AiPolicySuggester:
         template_descriptions = []
         for t in templates:
             examples = t.get("example_sentences", [])
-            examples_str = (
-                ", ".join(f'"{e}"' for e in examples) if examples else "none"
-            )
+            examples_str = ", ".join(f'"{e}"' for e in examples) if examples else "none"
             entry = (
                 f"- ID: {t['id']}\n"
                 f"  Title: {t['title']}\n"
@@ -121,9 +119,7 @@ class AiPolicySuggester:
             "Available templates:\n\n" + "\n\n".join(template_descriptions)
         )
 
-    def _build_user_prompt(
-        self, attack_examples: List[str], description: str
-    ) -> str:
+    def _build_user_prompt(self, attack_examples: List[str], description: str) -> str:
         parts = []
         filtered_examples = [e for e in attack_examples if e.strip()]
         if filtered_examples:

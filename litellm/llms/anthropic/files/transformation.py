@@ -179,9 +179,10 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.get("api_base")
-        ) or ANTHROPIC_FILES_API_BASE
+        api_base = (
+            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
+            or ANTHROPIC_FILES_API_BASE
+        )
         return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
 
     def transform_retrieve_file_response(
@@ -199,9 +200,10 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.get("api_base")
-        ) or ANTHROPIC_FILES_API_BASE
+        api_base = (
+            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
+            or ANTHROPIC_FILES_API_BASE
+        )
         return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
 
     def transform_delete_file_response(
@@ -224,9 +226,10 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.get("api_base")
-        ) or ANTHROPIC_FILES_API_BASE
+        api_base = (
+            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
+            or ANTHROPIC_FILES_API_BASE
+        )
         url = f"{api_base.rstrip('/')}/v1/files"
         params: Dict[str, Any] = {}
         if purpose:
@@ -259,9 +262,10 @@ class AnthropicFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         file_id = file_content_request.get("file_id")
-        api_base = AnthropicModelInfo.get_api_base(
-            litellm_params.get("api_base")
-        ) or ANTHROPIC_FILES_API_BASE
+        api_base = (
+            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
+            or ANTHROPIC_FILES_API_BASE
+        )
         return f"{api_base.rstrip('/')}/v1/files/{file_id}/content", {}
 
     def transform_file_content_response(

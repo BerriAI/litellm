@@ -50,7 +50,9 @@ def _parse_tool_names_from_payload(payload: Dict[str, Any]) -> Set[str]:
             _add_tool_calls_to_set(response_obj.get("tool_calls"), tool_names)
             choices = response_obj.get("choices")
             if isinstance(choices, list) and choices:
-                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                msg = (
+                    choices[0].get("message") if isinstance(choices[0], dict) else None
+                )
                 if isinstance(msg, dict):
                     _add_tool_calls_to_set(msg.get("tool_calls"), tool_names)
 
@@ -101,9 +103,7 @@ async def process_spend_logs_tool_usage(
             continue
         if isinstance(start_time, str):
             try:
-                start_time = datetime.fromisoformat(
-                    start_time.replace("Z", "+00:00")
-                )
+                start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 continue
         if start_time.tzinfo is None:
@@ -111,11 +111,13 @@ async def process_spend_logs_tool_usage(
 
         tool_names = _parse_tool_names_from_payload(payload)
         for tool_name in tool_names:
-            index_rows.append({
-                "request_id": request_id,
-                "tool_name": tool_name,
-                "start_time": start_time,
-            })
+            index_rows.append(
+                {
+                    "request_id": request_id,
+                    "tool_name": tool_name,
+                    "start_time": start_time,
+                }
+            )
 
     if not index_rows:
         return
@@ -131,11 +133,13 @@ async def process_spend_logs_tool_usage(
                     continue
             if st.tzinfo is None:
                 st = st.replace(tzinfo=timezone.utc)
-            index_data.append({
-                "request_id": r["request_id"],
-                "tool_name": r["tool_name"],
-                "start_time": st,
-            })
+            index_data.append(
+                {
+                    "request_id": r["request_id"],
+                    "tool_name": r["tool_name"],
+                    "start_time": st,
+                }
+            )
         if index_data:
             await prisma_client.db.litellm_spendlogtoolindex.create_many(
                 data=index_data,

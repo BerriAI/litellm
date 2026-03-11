@@ -269,7 +269,9 @@ class ResponsesIDSecurity(CustomLogger):
         if isinstance(response, ResponsesAPIResponse):
             response = cast(
                 ResponsesAPIResponse,
-                self._encrypt_response_id(response, user_api_key_dict, request_cache=None),
+                self._encrypt_response_id(
+                    response, user_api_key_dict, request_cache=None
+                ),
             )
         return response
 
@@ -288,5 +290,7 @@ class ResponsesIDSecurity(CustomLogger):
                 == "/v1/responses"  # only encrypt the response id for the responses api
                 and not general_settings.get("disable_responses_id_security", False)
             ):
-                chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)
+                chunk = self._encrypt_response_id(
+                    chunk, user_api_key_dict, request_encryption_cache
+                )
             yield chunk
