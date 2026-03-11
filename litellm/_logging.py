@@ -188,6 +188,22 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+# If LITELLM_LOG_FILE is set, also write all log output to that file
+_log_file_path = os.getenv("LITELLM_LOG_FILE")
+if _log_file_path:
+    try:
+        _file_handler = logging.FileHandler(_log_file_path, encoding="utf-8")
+        _file_handler.setLevel(numeric_level)
+        if handler.formatter:
+            _file_handler.setFormatter(handler.formatter)
+        verbose_logger.addHandler(_file_handler)
+        verbose_router_logger.addHandler(_file_handler)
+        verbose_proxy_logger.addHandler(_file_handler)
+    except Exception as _fh_err:
+        logging.getLogger(__name__).warning(
+            f"LITELLM_LOG_FILE: could not open log file '{_log_file_path}': {_fh_err}"
+        )
+
 
 def _suppress_loggers():
     """Suppress noisy loggers at INFO level"""
