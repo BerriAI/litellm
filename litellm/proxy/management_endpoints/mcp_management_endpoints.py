@@ -324,6 +324,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
     ) -> List[LiteLLM_MCPServerTable]:
         """Return MCP servers allowed by the team + allow_all_keys servers."""
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.management_helpers.object_permission_utils import (
             get_team_mcp_permissions,
@@ -346,9 +347,23 @@ if MCP_AVAILABLE:
             # Team has no MCP config - only allow_all_keys servers
             allowed_ids = allow_all_ids
 
-        all_servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-        filtered = [s for s in all_servers if s.server_id in allowed_ids]
-        return _redact_mcp_credentials_list(filtered)
+        # Collect servers from both in-memory registry and DB
+        servers_by_id: Dict[str, LiteLLM_MCPServerTable] = {}
+
+        # 1. Check in-memory registry (config + previously loaded DB servers)
+        for server_id in allowed_ids:
+            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if server:
+                servers_by_id[server_id] = global_mcp_server_manager._build_mcp_server_table(server)
+
+        # 2. For any IDs not found in registry, query DB directly
+        missing_ids = allowed_ids - set(servers_by_id.keys())
+        if missing_ids and prisma_client is not None:
+            db_servers = await get_mcp_servers(prisma_client, missing_ids)
+            for s in db_servers:
+                servers_by_id[s.server_id] = s
+
+        return _redact_mcp_credentials_list(servers_by_id.values())
 
     async def _get_team_scoped_access_groups(team_id: str) -> dict:
         """Return access groups available to the specified team."""

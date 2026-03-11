@@ -1534,14 +1534,26 @@ class TestTeamIdParam:
         )
 
         server_1 = generate_mock_mcp_server_db_record(server_id="server-1")
-        server_2 = generate_mock_mcp_server_db_record(server_id="server-2")
         server_public = generate_mock_mcp_server_db_record(server_id="server-public")
+
+        # Build config-style MCPServer mocks for the registry
+        config_server_1 = generate_mock_mcp_server_config_record(server_id="server-1")
+        config_server_public = generate_mock_mcp_server_config_record(server_id="server-public")
 
         mock_manager = MagicMock()
         mock_manager.get_allow_all_keys_server_ids.return_value = ["server-public"]
-        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
-            return_value=[server_1, server_2, server_public]
-        )
+
+        def mock_get_by_id(sid):
+            lookup = {"server-1": config_server_1, "server-public": config_server_public}
+            return lookup.get(sid)
+
+        mock_manager.get_mcp_server_by_id.side_effect = mock_get_by_id
+
+        def mock_build_table(server):
+            lookup = {"server-1": server_1, "server-public": server_public}
+            return lookup.get(server.server_id, server_1)
+
+        mock_manager._build_mcp_server_table.side_effect = mock_build_table
 
         with (
             patch(
@@ -1581,7 +1593,6 @@ class TestTeamIdParam:
             server_ids = {s.server_id for s in result}
             assert "server-1" in server_ids
             assert "server-public" in server_ids
-            assert "server-2" not in server_ids
 
     @pytest.mark.asyncio
     async def test_fetch_mcp_servers_team_id_non_member_rejected(self):
