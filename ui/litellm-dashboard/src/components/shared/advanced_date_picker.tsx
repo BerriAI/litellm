@@ -1,7 +1,8 @@
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { CalendarOutlined, ClockCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { Select } from "antd";
 import { Button, DateRangePickerValue, Text } from "@tremor/react";
 import moment from "moment";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -9,7 +10,47 @@ interface AdvancedDatePickerProps {
   label?: string;
   className?: string;
   showTimeRange?: boolean;
+  timezoneOffset?: number;
+  onTimezoneChange?: (offset: number) => void;
 }
+
+const getLocalTimezoneOffset = (): number => new Date().getTimezoneOffset();
+
+const formatTimezoneLabel = (offsetMinutes: number): string => {
+  if (offsetMinutes === 0) return "UTC";
+  const sign = offsetMinutes > 0 ? "-" : "+";
+  const absMinutes = Math.abs(offsetMinutes);
+  const hours = Math.floor(absMinutes / 60);
+  const minutes = absMinutes % 60;
+  const formatted = minutes > 0 ? `${hours}:${String(minutes).padStart(2, "0")}` : `${hours}`;
+  return `UTC${sign}${formatted}`;
+};
+
+// Common timezone options: offset in minutes (JS getTimezoneOffset convention: positive = west of UTC)
+const TIMEZONE_OPTIONS: { label: string; offset: number }[] = [
+  { label: "UTC-10 (Hawaii)", offset: 600 },
+  { label: "UTC-9 (Alaska)", offset: 540 },
+  { label: "UTC-8 (Pacific)", offset: 480 },
+  { label: "UTC-7 (Mountain)", offset: 420 },
+  { label: "UTC-6 (Central)", offset: 360 },
+  { label: "UTC-5 (Eastern)", offset: 300 },
+  { label: "UTC-4 (Atlantic)", offset: 240 },
+  { label: "UTC-3 (Buenos Aires)", offset: 180 },
+  { label: "UTC (London/UTC)", offset: 0 },
+  { label: "UTC+1 (Central Europe)", offset: -60 },
+  { label: "UTC+2 (Eastern Europe)", offset: -120 },
+  { label: "UTC+3 (Moscow)", offset: -180 },
+  { label: "UTC+4 (Dubai)", offset: -240 },
+  { label: "UTC+5 (Pakistan)", offset: -300 },
+  { label: "UTC+5:30 (India)", offset: -330 },
+  { label: "UTC+5:45 (Nepal)", offset: -345 },
+  { label: "UTC+6 (Bangladesh)", offset: -360 },
+  { label: "UTC+7 (Bangkok)", offset: -420 },
+  { label: "UTC+8 (Singapore)", offset: -480 },
+  { label: "UTC+9 (Japan/Korea)", offset: -540 },
+  { label: "UTC+10 (Sydney)", offset: -600 },
+  { label: "UTC+12 (Auckland)", offset: -720 },
+];
 
 interface RelativeTimeOption {
   label: string;
@@ -68,7 +109,22 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   onValueChange,
   label = "Select Time Range",
   showTimeRange = true,
+  timezoneOffset,
+  onTimezoneChange,
 }) => {
+  const timezoneOptions = useMemo(() => {
+    const localOffset = getLocalTimezoneOffset();
+    const hasLocalInList = TIMEZONE_OPTIONS.some((tz) => tz.offset === localOffset);
+    const opts = TIMEZONE_OPTIONS.map((tz) => ({
+      value: tz.offset,
+      label: tz.label + (tz.offset === localOffset ? " (Local)" : ""),
+    }));
+    if (!hasLocalInList) {
+      opts.unshift({ value: localOffset, label: `Local (${formatTimezoneLabel(localOffset)})` });
+    }
+    return opts;
+  }, []);
+
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -78,6 +134,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const [endDate, setEndDate] = useState("");
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const settingsPanelRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
   const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
@@ -343,6 +400,29 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 </div>
 
                 <div className="p-6 space-y-6 pb-20">
+                  {/* Timezone selector */}
+                  {onTimezoneChange && (
+                    <div ref={settingsPanelRef}>
+                      <label className="text-sm text-gray-700 mb-1 block">Timezone</label>
+                      <Select
+                        showSearch
+                        value={timezoneOffset !== undefined ? timezoneOffset : getLocalTimezoneOffset()}
+                        onChange={(val) => onTimezoneChange(val)}
+                        options={timezoneOptions}
+                        popupMatchSelectWidth={false}
+                        listHeight={200}
+                        filterOption={(input, option) =>
+                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                        }
+                        getPopupContainer={() => settingsPanelRef.current!}
+                        suffixIcon={null}
+                        prefix={<SearchOutlined className="text-gray-400" />}
+                        className="w-full"
+                        size="small"
+                      />
+                    </div>
+                  )}
+
                   {/* Start date */}
                   <div>
                     <label className="text-sm text-gray-700 mb-1 block">Start date</label>

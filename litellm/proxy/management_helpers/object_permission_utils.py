@@ -4,7 +4,7 @@ organizations, teams, and keys.
 """
 
 import json
-from typing import Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
@@ -12,6 +12,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTableCachedObj,
+    )
         
 
 
