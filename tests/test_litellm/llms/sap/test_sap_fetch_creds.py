@@ -55,6 +55,9 @@ def test_fetch_creds_from_env_vcap_service(monkeypatch):
     creds = sap_credentials.fetch_credentials()
     assert creds['client_id'] == "vcap-clientid"
     assert creds['client_secret'] == "vcap-clientsecret"
+    assert creds['auth_url'] == "vcap-auth-url/oauth/token"
+    assert creds['base_url'] == "vcap-api-url/v2"
+    assert creds['resource_group'] == "default"
 
 def test_fetch_creds_from_env(monkeypatch):
     _prep_env(monkeypatch)
