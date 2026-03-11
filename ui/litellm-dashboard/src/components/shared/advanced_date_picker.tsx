@@ -1,4 +1,4 @@
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { CalendarOutlined, ClockCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Select } from "antd";
 import { Button, DateRangePickerValue, Text } from "@tremor/react";
 import moment from "moment";
@@ -415,6 +415,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                           (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
                         }
                         getPopupContainer={() => settingsPanelRef.current!}
+                        suffixIcon={null}
+                        prefix={<SearchOutlined className="text-gray-400" />}
                         className="w-full"
                         size="small"
                       />
