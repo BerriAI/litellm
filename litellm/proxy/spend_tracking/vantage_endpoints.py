@@ -487,6 +487,8 @@ async def vantage_export(
             summary=None,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error performing Vantage export: {str(e)}")
         raise HTTPException(
