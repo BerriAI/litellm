@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Form, Input, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { FormInstance } from "antd/es/form";
-import { AUTH_TYPE } from "./types";
+import { AUTH_TYPE, OAUTH_FLOW } from "./types";
 import OpenAPIQuickPicker, { OpenAPIRegistryEntry, OpenAPIKeyTool } from "./OpenAPIQuickPicker";
 
 interface OpenAPIFormSectionProps {
@@ -14,6 +14,8 @@ interface OpenAPIFormSectionProps {
   onKeyToolsChange?: (tools: OpenAPIKeyTool[]) => void;
   /** Called when a preset is selected so the parent can set the logo URL from icon_url. */
   onLogoUrlChange?: (url: string | undefined) => void;
+  /** Called when the OAuth docs URL changes (e.g. link to create a GitHub OAuth App). */
+  onOAuthDocsUrlChange?: (url: string | null) => void;
 }
 
 /**
@@ -27,6 +29,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
   onValuesChange,
   onKeyToolsChange,
   onLogoUrlChange,
+  onOAuthDocsUrlChange,
 }) => {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
@@ -39,14 +42,19 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
     };
     if (entry.oauth) {
       updates.auth_type = AUTH_TYPE.OAUTH2;
+      // OAuth2 registry entries always use the interactive (PKCE) flow — users
+      // authorize via their browser, not machine-to-machine client credentials.
+      updates.oauth_flow_type = OAUTH_FLOW.INTERACTIVE;
       updates.authorization_url = entry.oauth.authorization_url;
       updates.token_url = entry.oauth.token_url;
       form.setFieldsValue(updates);
+      onOAuthDocsUrlChange?.(entry.oauth.docs_url ?? null);
     } else {
       // resetFields is required to visually clear Ant Design form fields —
       // setFieldsValue with undefined silently skips undefined keys.
       form.resetFields(["auth_type", "authorization_url", "token_url"]);
       form.setFieldsValue(updates);
+      onOAuthDocsUrlChange?.(null);
     }
     onValuesChange(updates);
   };
@@ -79,6 +87,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
             // so stale suggested tools from a previous preset don't persist.
             setSelectedPreset(null);
             onKeyToolsChange?.([]);
+            onOAuthDocsUrlChange?.(null);
           }}
         />
       </Form.Item>
