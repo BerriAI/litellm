@@ -557,6 +557,17 @@ class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
 
 
+class GeminiEmbedContentRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class GeminiEmbedContentResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
 # Vertex AI Batch Prediction
 
 
