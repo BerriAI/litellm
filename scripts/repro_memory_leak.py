@@ -9,8 +9,8 @@ Reproduces the linear memory growth pattern reported in production:
 - Runs for a configurable duration
 
 Usage:
-    # Start proxy first:
-    #   poetry run litellm --config scripts/repro_memory_leak_config.yaml --port 4000
+    # Start proxy first (unset DATABASE_URL to avoid default Neon DB):
+    #   unset DATABASE_URL && poetry run litellm --config scripts/repro_memory_leak_config.yaml --port 4000
     #
     # Then run this script:
     poetry run python scripts/repro_memory_leak.py
@@ -333,7 +333,10 @@ async def wait_for_proxy(base_url: str, timeout: int = 60) -> bool:
     while time.time() - start < timeout:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{base_url}/health") as resp:
+                async with session.get(
+                    f"{base_url}/health",
+                    headers={"Authorization": "Bearer sk-1234"},
+                ) as resp:
                     if resp.status == 200:
                         return True
         except Exception:

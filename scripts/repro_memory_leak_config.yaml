@@ -1,7 +1,9 @@
 model_list:
+  # For /v1/messages (Anthropic format) - using OpenAI backend
+  # The proxy will translate anthropic format -> openai format -> mock endpoint
   - model_name: claude-3-5-sonnet
     litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
+      model: openai/claude-3-5-sonnet
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: gpt-4o
@@ -11,7 +13,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
-  # Match customer: postgres callbacks (we'll skip actual DB but keep the callback registered)
+  # Match customer: callbacks
   success_callback: ["prometheus"]
   failure_callback: ["prometheus"]
 
@@ -36,3 +38,4 @@ general_settings:
   master_key: sk-1234
   allow_cors: true
   docs_enabled: true
+  store_model_in_db: false
