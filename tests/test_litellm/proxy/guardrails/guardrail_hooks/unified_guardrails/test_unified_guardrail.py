@@ -159,7 +159,7 @@ class TestUnifiedLLMGuardrails:
                 async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
                     return data
 
-                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None):  # type: ignore[override]
+                async def process_output_response(self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None):  # type: ignore[override]
                     return response
 
                 async def process_output_streaming_response(
@@ -168,6 +168,7 @@ class TestUnifiedLLMGuardrails:
                     guardrail_to_apply,
                     litellm_logging_obj=None,
                     user_api_key_dict=None,
+                    request_data=None,
                 ):
                     # Simulate what the real handler does:
                     # put combined text in first chunk, clear the rest

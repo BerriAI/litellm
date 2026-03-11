@@ -1,13 +1,18 @@
 """
 Tests for fix/guardrail-request-data-passthrough
 
-Verifies that BaseTranslation.process_output_response() declares request_data
-so implementing classes are type-consistent with the abstract interface.
+Verifies that:
+1. BaseTranslation.process_output_response() declares request_data
+   so implementing classes are type-consistent with the abstract interface.
+2. Concrete handlers actually forward request_data values to apply_guardrail().
 
 Related issue: https://github.com/BerriAI/litellm/issues/22821
 """
 
+import asyncio
 import inspect
+from unittest.mock import AsyncMock, MagicMock
+
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 
 
@@ -71,3 +76,58 @@ def test_all_handler_implementations_accept_request_data():
     assert validated_count > 0, (
         "No handler classes were validated — all imports failed or no matching classes found."
     )
+
+
+def test_openai_handler_forwards_request_data_to_apply_guardrail():
+    """
+    Behavioural test: instantiate the OpenAI chat handler, call
+    process_output_response with a sentinel value in request_data, and
+    verify that the sentinel reaches apply_guardrail().
+    """
+    from litellm.llms.openai.chat.guardrail_translation.handler import (
+        OpenAIChatCompletionsHandler,
+    )
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    handler = OpenAIChatCompletionsHandler()
+
+    # Build a real ModelResponse so _has_text_content passes
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(content="Hello world", role="assistant"),
+                finish_reason="stop",
+            )
+        ],
+        model="gpt-4",
+    )
+
+    # Sentinel value simulating PII tokens stored during input masking
+    sentinel = {"pii_tokens": {"[NAME_1]": "Alice"}}
+
+    # Capture what apply_guardrail receives
+    captured_request_data = {}
+
+    async def _capture_apply_guardrail(inputs, request_data, input_type, logging_obj=None):
+        captured_request_data.update(request_data)
+        return inputs  # pass through unchanged
+
+    guardrail = MagicMock()
+    guardrail.guardrail_name = "test-guardrail"
+    guardrail.apply_guardrail = AsyncMock(side_effect=_capture_apply_guardrail)
+
+    asyncio.get_event_loop().run_until_complete(
+        handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=sentinel,
+        )
+    )
+
+    # The sentinel PII tokens must be visible inside apply_guardrail's request_data
+    assert "pii_tokens" in captured_request_data, (
+        "request_data with pii_tokens was not forwarded to apply_guardrail()"
+    )
+    assert captured_request_data["pii_tokens"] == {"[NAME_1]": "Alice"}
