@@ -62,6 +62,11 @@ class VertexBase:
                 return supported_regions[0]
             # If user specified a region not supported by this model, override it
             if vertex_region not in supported_regions:
+                verbose_logger.warning(
+                    "Vertex AI model '%s' does not support region '%s' "
+                    "(supported: %s). Routing to '%s'.",
+                    model, vertex_region, supported_regions, supported_regions[0],
+                )
                 return supported_regions[0]
             return vertex_region
         return vertex_region or "us-central1"

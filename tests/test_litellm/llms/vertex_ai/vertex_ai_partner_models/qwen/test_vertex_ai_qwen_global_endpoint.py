@@ -2,8 +2,8 @@
 Tests for Vertex AI Qwen MaaS models that require the global endpoint.
 
 These tests verify that:
-1. Qwen models are correctly identified as global-only models
-2. The correct global URL is constructed (https://aiplatform.googleapis.com)
+1. The correct global URL is constructed (https://aiplatform.googleapis.com)
+2. The get_vertex_region method resolves regions from model_cost supported_regions
 3. The completion() and responses() API work with Qwen models
 """
 
@@ -19,7 +19,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
@@ -46,38 +45,6 @@ def clean_vertex_env():
     # Restore saved environment variables
     for var, value in saved_env.items():
         os.environ[var] = value
-
-
-class TestQwenGlobalOnlyDetection:
-    """Test that Qwen models are correctly identified as global-only."""
-
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
-            "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas",
-            "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas",
-            "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas",
-        ],
-    )
-    def test_qwen_models_are_global_only(self, model):
-        """Test that Qwen MaaS models are identified as global-only."""
-        # This test requires the model_cost to have supported_regions: ["global"]
-        # If the model is not in model_cost, it should return False (fallback behavior)
-        result = is_global_only_vertex_model(model)
-        # Note: This will return True only if the model is in model_cost with supported_regions: ["global"]
-        # If running without the updated model_cost, this may return False
-        assert isinstance(result, bool)
-
-    def test_non_global_model_returns_false(self):
-        """Test that non-global models return False."""
-        result = is_global_only_vertex_model("vertex_ai/gemini-1.5-pro")
-        assert result is False
-
-    def test_unknown_model_returns_false(self):
-        """Test that unknown models return False (fallback behavior)."""
-        result = is_global_only_vertex_model("vertex_ai/unknown-model-xyz")
-        assert result is False
 
 
 class TestVertexBaseGetVertexRegion:
