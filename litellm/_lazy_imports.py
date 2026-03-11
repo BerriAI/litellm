@@ -1,259 +1,439 @@
-from typing import Any
+"""
+Lazy Import System
+
+This module implements lazy loading for LiteLLM attributes. Instead of importing
+everything when the module loads, we only import things when they're actually used.
+
+How it works:
+1. When someone accesses `litellm.some_attribute`, Python calls __getattr__ in __init__.py
+2. __getattr__ looks up the attribute name in a registry
+3. The registry points to a handler function (like _lazy_import_utils)
+4. The handler function imports the module and returns the attribute
+5. The result is cached so we don't import it again
+
+This makes importing litellm much faster because we don't load heavy dependencies
+until they're actually needed.
+"""
+import importlib
 import sys
+from typing import Any, Optional, cast, Callable
+
+# Import all the data structures that define what can be lazy-loaded
+# These are just lists of names and maps of where to find them
+from ._lazy_imports_registry import (
+    # Name tuples
+    COST_CALCULATOR_NAMES,
+    LITELLM_LOGGING_NAMES,
+    UTILS_NAMES,
+    TOKEN_COUNTER_NAMES,
+    LLM_CLIENT_CACHE_NAMES,
+    BEDROCK_TYPES_NAMES,
+    TYPES_UTILS_NAMES,
+    CACHING_NAMES,
+    HTTP_HANDLER_NAMES,
+    DOTPROMPT_NAMES,
+    LLM_CONFIG_NAMES,
+    TYPES_NAMES,
+    LLM_PROVIDER_LOGIC_NAMES,
+    UTILS_MODULE_NAMES,
+    # Import maps
+    _UTILS_IMPORT_MAP,
+    _COST_CALCULATOR_IMPORT_MAP,
+    _TYPES_UTILS_IMPORT_MAP,
+    _TOKEN_COUNTER_IMPORT_MAP,
+    _BEDROCK_TYPES_IMPORT_MAP,
+    _CACHING_IMPORT_MAP,
+    _LITELLM_LOGGING_IMPORT_MAP,
+    _DOTPROMPT_IMPORT_MAP,
+    _TYPES_IMPORT_MAP,
+    _LLM_CONFIGS_IMPORT_MAP,
+    _LLM_PROVIDER_LOGIC_IMPORT_MAP,
+    _UTILS_MODULE_IMPORT_MAP,
+)
+
 
 def _get_litellm_globals() -> dict:
-    """Helper to get the globals dictionary of the litellm module."""
+    """
+    Get the globals dictionary of the litellm module.
+    
+    This is where we cache imported attributes so we don't import them twice.
+    When you do `litellm.some_function`, it gets stored in this dictionary.
+    """
     return sys.modules["litellm"].__dict__
 
-# Lazy import for utils module - imports only the requested item by name.
-# Note: PLR0915 (too many statements) is suppressed because the many if statements
-# are intentional - each attribute is imported individually only when requested,
-# ensuring true lazy imports rather than importing the entire utils module.
-def _lazy_import_utils(name: str) -> Any:  # noqa: PLR0915
-    """Lazy import for utils module - imports only the requested item by name."""
+
+def _get_utils_globals() -> dict:
+    """
+    Get the globals dictionary of the utils module.
+    
+    This is where we cache imported attributes so we don't import them twice.
+    When you do `litellm.utils.some_function`, it gets stored in this dictionary.
+    """
+    return sys.modules["litellm.utils"].__dict__
+
+# These are special lazy loaders for things that are used internally
+# They're separate from the main lazy import system because they have specific use cases
+
+# Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
+_default_encoding: Optional[Any] = None
+
+
+def _get_default_encoding() -> Any:
+    """
+    Lazily load and cache the default OpenAI encoding.
+    
+    This avoids importing `litellm.litellm_core_utils.default_encoding` (and thus tiktoken)
+    at `litellm` import time. The encoding is cached after the first import.
+    
+    This is used internally by utils.py functions that need the encoding but shouldn't
+    trigger its import during module load.
+    """
+    global _default_encoding
+    if _default_encoding is None:
+        from litellm.litellm_core_utils.default_encoding import encoding
+
+        _default_encoding = encoding
+    return _default_encoding
+
+
+# Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
+_get_modified_max_tokens_func: Optional[Any] = None
+
+
+def _get_modified_max_tokens() -> Any:
+    """
+    Lazily load and cache the get_modified_max_tokens function.
+    
+    This avoids importing `litellm.litellm_core_utils.token_counter` at `litellm` import time.
+    The function is cached after the first import.
+    
+    This is used internally by utils.py functions that need the token counter but shouldn't
+    trigger its import during module load.
+    """
+    global _get_modified_max_tokens_func
+    if _get_modified_max_tokens_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            get_modified_max_tokens as _get_modified_max_tokens_imported,
+        )
+
+        _get_modified_max_tokens_func = _get_modified_max_tokens_imported
+    return _get_modified_max_tokens_func
+
+
+# Lazy loader for token_counter to avoid importing token_counter module at module import time
+_token_counter_new_func: Optional[Any] = None
+
+
+def _get_token_counter_new() -> Any:
+    """
+    Lazily load and cache the token_counter function (aliased as token_counter_new).
+    
+    This avoids importing `litellm.litellm_core_utils.token_counter` at `litellm` import time.
+    The function is cached after the first import.
+    
+    This is used internally by utils.py functions that need the token counter but shouldn't
+    trigger its import during module load.
+    """
+    global _token_counter_new_func
+    if _token_counter_new_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            token_counter as _token_counter_imported,
+        )
+
+        _token_counter_new_func = _token_counter_imported
+    return _token_counter_new_func
+
+
+# ============================================================================
+# MAIN LAZY IMPORT SYSTEM
+# ============================================================================
+
+# This registry maps attribute names (like "ModelResponse") to handler functions
+# It's built once the first time someone accesses a lazy-loaded attribute
+# Example: {"ModelResponse": _lazy_import_utils, "Cache": _lazy_import_caching, ...}
+_LAZY_IMPORT_REGISTRY: Optional[dict[str, Callable[[str], Any]]] = None
+
+
+def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
+    """
+    Build the registry that maps attribute names to their handler functions.
+    
+    This is called once, the first time someone accesses a lazy-loaded attribute.
+    After that, we just look up the handler function in this dictionary.
+    
+    Returns:
+        Dictionary like {"ModelResponse": _lazy_import_utils, ...}
+    """
+    global _LAZY_IMPORT_REGISTRY
+    if _LAZY_IMPORT_REGISTRY is None:
+        # Build the registry by going through each category and mapping
+        # all the names in that category to their handler function
+        _LAZY_IMPORT_REGISTRY = {}
+        # For each category, map all its names to the handler function
+        # Example: All names in UTILS_NAMES get mapped to _lazy_import_utils
+        for name in COST_CALCULATOR_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_cost_calculator
+        for name in LITELLM_LOGGING_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_litellm_logging
+        for name in UTILS_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils
+        for name in TOKEN_COUNTER_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_token_counter
+        for name in LLM_CLIENT_CACHE_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_client_cache
+        for name in BEDROCK_TYPES_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_bedrock_types
+        for name in TYPES_UTILS_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types_utils
+        for name in CACHING_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_caching
+        for name in HTTP_HANDLER_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_http_handlers
+        for name in DOTPROMPT_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_dotprompt
+        for name in LLM_CONFIG_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_configs
+        for name in TYPES_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types
+        for name in LLM_PROVIDER_LOGIC_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_provider_logic
+        for name in UTILS_MODULE_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils_module
+    
+    return _LAZY_IMPORT_REGISTRY
+
+
+def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> Any:
+    """
+    Generic function that handles lazy importing for most attributes.
+    
+    This is the workhorse function - it does the actual importing and caching.
+    Most handler functions just call this with their specific import map.
+    
+    Steps:
+    1. Check if the name exists in the import map (if not, raise error)
+    2. Check if we've already imported it (if yes, return cached value)
+    3. Look up where to find it (module_path and attr_name from the map)
+    4. Import the module (Python caches this automatically)
+    5. Get the attribute from the module
+    6. Cache it in _globals so we don't import again
+    7. Return it
+    
+    Args:
+        name: The attribute name someone is trying to access (e.g., "ModelResponse")
+        import_map: Dictionary telling us where to find each attribute
+                   Format: {"ModelResponse": (".utils", "ModelResponse")}
+        category: Just for error messages (e.g., "Utils", "Cost calculator")
+    """
+    # Step 1: Make sure this attribute exists in our map
+    if name not in import_map:
+        raise AttributeError(f"{category} lazy import: unknown attribute {name!r}")
+    
+    # Step 2: Get the cache (where we store imported things)
     _globals = _get_litellm_globals()
-    if name == "exception_type":
-        from .utils import exception_type as _exception_type
-        _globals["exception_type"] = _exception_type
-        return _exception_type
     
-    if name == "get_optional_params":
-        from .utils import get_optional_params as _get_optional_params
-        _globals["get_optional_params"] = _get_optional_params
-        return _get_optional_params
+    # Step 3: If we've already imported it, just return the cached version
+    if name in _globals:
+        return _globals[name]
     
-    if name == "get_response_string":
-        from .utils import get_response_string as _get_response_string
-        _globals["get_response_string"] = _get_response_string
-        return _get_response_string
+    # Step 4: Look up where to find this attribute
+    # The map tells us: (module_path, attribute_name)
+    # Example: (".utils", "ModelResponse") means "look in .utils module, get ModelResponse"
+    module_path, attr_name = import_map[name]
     
-    if name == "token_counter":
-        from .utils import token_counter as _token_counter
-        _globals["token_counter"] = _token_counter
-        return _token_counter
+    # Step 5: Import the module
+    # Python automatically caches modules in sys.modules, so calling this twice is fast
+    # If module_path starts with ".", it's a relative import (needs package="litellm")
+    # Otherwise it's an absolute import (like "litellm.caching.caching")
+    if module_path.startswith("."):
+        module = importlib.import_module(module_path, package="litellm")
+    else:
+        module = importlib.import_module(module_path)
     
-    if name == "create_pretrained_tokenizer":
-        from .utils import create_pretrained_tokenizer as _create_pretrained_tokenizer
-        _globals["create_pretrained_tokenizer"] = _create_pretrained_tokenizer
-        return _create_pretrained_tokenizer
+    # Step 6: Get the actual attribute from the module
+    # Example: getattr(utils_module, "ModelResponse") returns the ModelResponse class
+    value = getattr(module, attr_name)
     
-    if name == "create_tokenizer":
-        from .utils import create_tokenizer as _create_tokenizer
-        _globals["create_tokenizer"] = _create_tokenizer
-        return _create_tokenizer
+    # Step 7: Cache it so we don't have to import again next time
+    _globals[name] = value
     
-    if name == "supports_function_calling":
-        from .utils import supports_function_calling as _supports_function_calling
-        _globals["supports_function_calling"] = _supports_function_calling
-        return _supports_function_calling
-    
-    if name == "supports_web_search":
-        from .utils import supports_web_search as _supports_web_search
-        _globals["supports_web_search"] = _supports_web_search
-        return _supports_web_search
-    
-    if name == "supports_url_context":
-        from .utils import supports_url_context as _supports_url_context
-        _globals["supports_url_context"] = _supports_url_context
-        return _supports_url_context
-    
-    if name == "supports_response_schema":
-        from .utils import supports_response_schema as _supports_response_schema
-        _globals["supports_response_schema"] = _supports_response_schema
-        return _supports_response_schema
-    
-    if name == "supports_parallel_function_calling":
-        from .utils import supports_parallel_function_calling as _supports_parallel_function_calling
-        _globals["supports_parallel_function_calling"] = _supports_parallel_function_calling
-        return _supports_parallel_function_calling
-    
-    if name == "supports_vision":
-        from .utils import supports_vision as _supports_vision
-        _globals["supports_vision"] = _supports_vision
-        return _supports_vision
-    
-    if name == "supports_audio_input":
-        from .utils import supports_audio_input as _supports_audio_input
-        _globals["supports_audio_input"] = _supports_audio_input
-        return _supports_audio_input
-    
-    if name == "supports_audio_output":
-        from .utils import supports_audio_output as _supports_audio_output
-        _globals["supports_audio_output"] = _supports_audio_output
-        return _supports_audio_output
-    
-    if name == "supports_system_messages":
-        from .utils import supports_system_messages as _supports_system_messages
-        _globals["supports_system_messages"] = _supports_system_messages
-        return _supports_system_messages
-    
-    if name == "supports_reasoning":
-        from .utils import supports_reasoning as _supports_reasoning
-        _globals["supports_reasoning"] = _supports_reasoning
-        return _supports_reasoning
-    
-    if name == "get_litellm_params":
-        from .utils import get_litellm_params as _get_litellm_params
-        _globals["get_litellm_params"] = _get_litellm_params
-        return _get_litellm_params
-    
-    if name == "acreate":
-        from .utils import acreate as _acreate
-        _globals["acreate"] = _acreate
-        return _acreate
-    
-    if name == "get_max_tokens":
-        from .utils import get_max_tokens as _get_max_tokens
-        _globals["get_max_tokens"] = _get_max_tokens
-        return _get_max_tokens
-    
-    if name == "get_model_info":
-        from .utils import get_model_info as _get_model_info
-        _globals["get_model_info"] = _get_model_info
-        return _get_model_info
-    
-    if name == "register_prompt_template":
-        from .utils import register_prompt_template as _register_prompt_template
-        _globals["register_prompt_template"] = _register_prompt_template
-        return _register_prompt_template
-    
-    if name == "validate_environment":
-        from .utils import validate_environment as _validate_environment
-        _globals["validate_environment"] = _validate_environment
-        return _validate_environment
-    
-    if name == "check_valid_key":
-        from .utils import check_valid_key as _check_valid_key
-        _globals["check_valid_key"] = _check_valid_key
-        return _check_valid_key
-    
-    if name == "register_model":
-        from .utils import register_model as _register_model
-        _globals["register_model"] = _register_model
-        return _register_model
-    
-    if name == "encode":
-        from .utils import encode as _encode
-        _globals["encode"] = _encode
-        return _encode
-    
-    if name == "decode":
-        from .utils import decode as _decode
-        _globals["decode"] = _decode
-        return _decode
-    
-    if name == "_calculate_retry_after":
-        from .utils import _calculate_retry_after as __calculate_retry_after
-        _globals["_calculate_retry_after"] = __calculate_retry_after
-        return __calculate_retry_after
-    
-    if name == "_should_retry":
-        from .utils import _should_retry as __should_retry
-        _globals["_should_retry"] = __should_retry
-        return __should_retry
-    
-    if name == "get_supported_openai_params":
-        from .utils import get_supported_openai_params as _get_supported_openai_params
-        _globals["get_supported_openai_params"] = _get_supported_openai_params
-        return _get_supported_openai_params
-    
-    if name == "get_api_base":
-        from .utils import get_api_base as _get_api_base
-        _globals["get_api_base"] = _get_api_base
-        return _get_api_base
-    
-    if name == "get_first_chars_messages":
-        from .utils import get_first_chars_messages as _get_first_chars_messages
-        _globals["get_first_chars_messages"] = _get_first_chars_messages
-        return _get_first_chars_messages
-    
-    if name == "ModelResponse":
-        from .utils import ModelResponse as _ModelResponse
-        _globals["ModelResponse"] = _ModelResponse
-        return _ModelResponse
-    
-    if name == "ModelResponseStream":
-        from .utils import ModelResponseStream as _ModelResponseStream
-        _globals["ModelResponseStream"] = _ModelResponseStream
-        return _ModelResponseStream
-    
-    if name == "EmbeddingResponse":
-        from .utils import EmbeddingResponse as _EmbeddingResponse
-        _globals["EmbeddingResponse"] = _EmbeddingResponse
-        return _EmbeddingResponse
-    
-    if name == "ImageResponse":
-        from .utils import ImageResponse as _ImageResponse
-        _globals["ImageResponse"] = _ImageResponse
-        return _ImageResponse
-    
-    if name == "TranscriptionResponse":
-        from .utils import TranscriptionResponse as _TranscriptionResponse
-        _globals["TranscriptionResponse"] = _TranscriptionResponse
-        return _TranscriptionResponse
-    
-    if name == "TextCompletionResponse":
-        from .utils import TextCompletionResponse as _TextCompletionResponse
-        _globals["TextCompletionResponse"] = _TextCompletionResponse
-        return _TextCompletionResponse
-    
-    if name == "get_provider_fields":
-        from .utils import get_provider_fields as _get_provider_fields
-        _globals["get_provider_fields"] = _get_provider_fields
-        return _get_provider_fields
-    
-    if name == "ModelResponseListIterator":
-        from .utils import ModelResponseListIterator as _ModelResponseListIterator
-        _globals["ModelResponseListIterator"] = _ModelResponseListIterator
-        return _ModelResponseListIterator
-    
-    if name == "get_valid_models":
-        from .utils import get_valid_models as _get_valid_models
-        _globals["get_valid_models"] = _get_valid_models
-        return _get_valid_models
-    
-    raise AttributeError(f"Utils lazy import: unknown attribute {name!r}")
+    # Step 8: Return it
+    return value
+
+
+# ============================================================================
+# HANDLER FUNCTIONS
+# ============================================================================
+# These functions are called when someone accesses a lazy-loaded attribute.
+# Most of them just call _generic_lazy_import with their specific import map.
+# The registry (above) maps attribute names to these handler functions.
+
+def _lazy_import_utils(name: str) -> Any:
+    """Handler for utils module attributes (ModelResponse, token_counter, etc.)"""
+    return _generic_lazy_import(name, _UTILS_IMPORT_MAP, "Utils")
 
 
 def _lazy_import_cost_calculator(name: str) -> Any:
-    """Lazy import for cost_calculator functions."""
-    _globals = _get_litellm_globals()
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
-    
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
-    
-    func = _cost_functions[name]
-    _globals[name] = func
-    return func
+    """Handler for cost calculator functions (completion_cost, cost_per_token, etc.)"""
+    return _generic_lazy_import(name, _COST_CALCULATOR_IMPORT_MAP, "Cost calculator")
 
+
+def _lazy_import_token_counter(name: str) -> Any:
+    """Handler for token counter utilities"""
+    return _generic_lazy_import(name, _TOKEN_COUNTER_IMPORT_MAP, "Token counter")
+
+
+def _lazy_import_bedrock_types(name: str) -> Any:
+    """Handler for Bedrock type aliases"""
+    return _generic_lazy_import(name, _BEDROCK_TYPES_IMPORT_MAP, "Bedrock types")
+
+
+def _lazy_import_types_utils(name: str) -> Any:
+    """Handler for types from litellm.types.utils (BudgetConfig, ImageObject, etc.)"""
+    return _generic_lazy_import(name, _TYPES_UTILS_IMPORT_MAP, "Types utils")
+
+
+def _lazy_import_caching(name: str) -> Any:
+    """Handler for caching classes (Cache, DualCache, RedisCache, etc.)"""
+    return _generic_lazy_import(name, _CACHING_IMPORT_MAP, "Caching")
+
+def _lazy_import_dotprompt(name: str) -> Any:
+    """Handler for dotprompt integration globals"""
+    return _generic_lazy_import(name, _DOTPROMPT_IMPORT_MAP, "Dotprompt")
+
+
+def _lazy_import_types(name: str) -> Any:
+    """Handler for type classes (GuardrailItem, etc.)"""
+    return _generic_lazy_import(name, _TYPES_IMPORT_MAP, "Types")
+
+
+def _lazy_import_llm_configs(name: str) -> Any:
+    """Handler for LLM config classes (AnthropicConfig, OpenAILikeChatConfig, etc.)"""
+    return _generic_lazy_import(name, _LLM_CONFIGS_IMPORT_MAP, "LLM config")
 
 def _lazy_import_litellm_logging(name: str) -> Any:
-    """Lazy import for litellm_logging module."""
+    """Handler for litellm_logging module (Logging, modify_integration)"""
+    return _generic_lazy_import(name, _LITELLM_LOGGING_IMPORT_MAP, "Litellm logging")
+
+
+def _lazy_import_llm_provider_logic(name: str) -> Any:
+    """Handler for LLM provider logic functions (get_llm_provider, etc.)"""
+    return _generic_lazy_import(name, _LLM_PROVIDER_LOGIC_IMPORT_MAP, "LLM provider logic")
+
+
+def _lazy_import_utils_module(name: str) -> Any:
+    """
+    Handler for utils module lazy imports.
+    
+    This uses a custom implementation because utils module needs to use
+    _get_utils_globals() instead of _get_litellm_globals() for caching.
+    """
+    # Check if this attribute exists in our map
+    if name not in _UTILS_MODULE_IMPORT_MAP:
+        raise AttributeError(f"Utils module lazy import: unknown attribute {name!r}")
+    
+    # Get the cache (where we store imported things) - use utils globals
+    _globals = _get_utils_globals()
+    
+    # If we've already imported it, just return the cached version
+    if name in _globals:
+        return _globals[name]
+    
+    # Look up where to find this attribute
+    module_path, attr_name = _UTILS_MODULE_IMPORT_MAP[name]
+    
+    # Import the module
+    if module_path.startswith("."):
+        module = importlib.import_module(module_path, package="litellm")
+    else:
+        module = importlib.import_module(module_path)
+    
+    # Get the actual attribute from the module
+    value = getattr(module, attr_name)
+    
+    # Cache it so we don't have to import again next time
+    _globals[name] = value
+    
+    # Return it
+    return value
+
+# ============================================================================
+# SPECIAL HANDLERS
+# ============================================================================
+# These handlers have custom logic that doesn't fit the generic pattern
+
+def _lazy_import_llm_client_cache(name: str) -> Any:
+    """
+    Handler for LLM client cache - has special logic for singleton instance.
+    
+    This one is different because:
+    - "LLMClientCache" is the class itself
+    - "in_memory_llm_clients_cache" is a singleton instance of that class
+    So we need custom logic to handle both cases.
+    """
     _globals = _get_litellm_globals()
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
+    
+    # If already cached, return it
+    if name in _globals:
+        return _globals[name]
+    
+    # Import the class
+    module = importlib.import_module("litellm.caching.llm_caching_handler")
+    LLMClientCache = getattr(module, "LLMClientCache")
+    
+    # If they want the class itself, return it
+    if name == "LLMClientCache":
+        _globals["LLMClientCache"] = LLMClientCache
+        return LLMClientCache
+    
+    # If they want the singleton instance, create it (only once)
+    if name == "in_memory_llm_clients_cache":
+        instance = LLMClientCache()
+        _globals["in_memory_llm_clients_cache"] = instance
+        return instance
+    
+    raise AttributeError(f"LLM client cache lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_http_handlers(name: str) -> Any:
+    """
+    Handler for HTTP clients - has special logic for creating client instances.
+    
+    This one is different because:
+    - These aren't just imports, they're actual client instances that need to be created
+    - They need configuration (timeout, etc.) from the module globals
+    - They use factory functions instead of direct instantiation
+    """
+    _globals = _get_litellm_globals()
+
+    if name == "module_level_aclient":
+        # Create an async HTTP client using the factory function
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+        # Get timeout from module config (if set)
+        timeout = _globals.get("request_timeout")
+        params = {"timeout": timeout, "client_alias": "module level aclient"}
+        
+        # Create the client instance
+        provider_id = cast(Any, "litellm_module_level_client")
+        async_client = get_async_httpx_client(
+            llm_provider=provider_id,
+            params=params,
         )
         
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
+        # Cache it so we don't create it again
+        _globals["module_level_aclient"] = async_client
+        return async_client
+
+    if name == "module_level_client":
+        # Create a sync HTTP client
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        timeout = _globals.get("request_timeout")
+        sync_client = HTTPHandler(timeout=timeout)
         
-        obj = _logging_objects[name]
-        _globals[name] = obj
-        return obj
-    except Exception as e:
-        raise AttributeError(
-            f"module 'litellm' has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
+        # Cache it
+        _globals["module_level_client"] = sync_client
+        return sync_client
+
+    raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")

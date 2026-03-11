@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
-import { ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox } from "antd";
+import { ToolOutlined, CheckCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { Badge, Spin, Checkbox, Input } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPToolConfigurationProps {
@@ -21,7 +21,9 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   existingAllowedTools,
   onAllowedToolsChange,
 }) => {
-  const previousToolsLengthRef = useRef(0);
+  const previousToolsRef = useRef<any[]>([]);
+  const [toolSearchTerm, setToolSearchTerm] = useState("");
+  const hasInitializedRef = useRef(false);
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
     accessToken,
@@ -30,28 +32,52 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     enabled: true,
   });
 
-  // Auto-select tools when tools are first loaded
+  // Filter tools based on search term
+  const filteredTools = tools.filter((tool) => {
+    const searchLower = toolSearchTerm.toLowerCase();
+    return (
+      tool.name.toLowerCase().includes(searchLower) ||
+      (tool.description && tool.description.toLowerCase().includes(searchLower))
+    );
+  });
+
+  // Auto-select tools when tools are first loaded or when tools list changes
   useEffect(() => {
-    // Only auto-select if:
-    // 1. We have tools
-    // 2. Tools length changed (new tools loaded)
-    // 3. No tools are currently selected (initial state)
-    if (tools.length > 0 && tools.length !== previousToolsLengthRef.current && allowedTools.length === 0) {
-      if (existingAllowedTools && existingAllowedTools.length > 0) {
-        // If we have existing allowed tools, use those as the initial selection
-        // Filter to only include tools that are actually available from the server
-        const availableToolNames = tools.map((tool) => tool.name);
-        const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
-        onAllowedToolsChange(validExistingTools);
+    // Check if the tools list has actually changed by comparing tool names
+    const currentToolNames = tools.map((tool) => tool.name).sort().join(",");
+    const previousToolNames = previousToolsRef.current.map((tool) => tool.name).sort().join(",");
+    const toolsListChanged = currentToolNames !== previousToolNames;
+
+    if (tools.length > 0 && toolsListChanged) {
+      const availableToolNames = tools.map((tool) => tool.name);
+      
+      // On initial load (first time tools are fetched)
+      if (!hasInitializedRef.current) {
+        hasInitializedRef.current = true;
+        
+        if (existingAllowedTools && existingAllowedTools.length > 0) {
+          // Edit mode: pre-select tools that match existing allowed tools
+          const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
+          onAllowedToolsChange(validExistingTools);
+        } else {
+          // Create mode: auto-select all tools
+          onAllowedToolsChange(availableToolNames);
+        }
       } else {
-        // If no existing allowed tools, auto-select all tools (create mode)
-        const allToolNames = tools.map((tool) => tool.name);
-        onAllowedToolsChange(allToolNames);
+        // Tools list changed after initial load (e.g., URL was edited)
+        // Keep any tools from the current selection that exist in the new tools list
+        const matchingTools = allowedTools.filter((toolName) => availableToolNames.includes(toolName));
+        onAllowedToolsChange(matchingTools);
       }
+    } else if (tools.length === 0 && previousToolsRef.current.length > 0) {
+      // Tools were cleared (e.g., URL became invalid or is being edited)
+      // Don't clear allowedTools here - let the user keep their selection
+      // until new tools are loaded
     }
-    // Update ref to track tools length (will be 0 when tools clear)
-    previousToolsLengthRef.current = tools.length;
-  }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange]);
+    
+    // Update ref to track current tools
+    previousToolsRef.current = tools;
+  }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange]);
 
   const handleToolToggle = (toolName: string) => {
     if (allowedTools.includes(toolName)) {
@@ -71,7 +97,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   };
 
   // Don't show anything if required fields aren't filled
-  if (!canFetchTools && !formValues.url) {
+  if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
   }
 
@@ -130,7 +156,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
 
         {/* Incomplete form state */}
-        {!canFetchTools && formValues.url && (
+        {!canFetchTools && (formValues.url || formValues.spec_path) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>Complete required fields to configure tools</Text>
@@ -168,9 +194,26 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               </div>
             </div>
 
+            {/* Search bar */}
+            <Input
+              placeholder="Search tools by name or description..."
+              prefix={<SearchOutlined className="text-gray-400" />}
+              value={toolSearchTerm}
+              onChange={(e) => setToolSearchTerm(e.target.value)}
+              allowClear
+              className="rounded-lg"
+              size="large"
+            />
+
             {/* Tool list with checkboxes */}
             <div className="space-y-2">
-              {tools.map((tool, index) => (
+              {filteredTools.length === 0 ? (
+                <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                  <SearchOutlined className="text-2xl mb-2" />
+                  <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
+                </div>
+              ) : (
+                filteredTools.map((tool, index) => (
                 <div
                   key={index}
                   className={`p-4 rounded-lg border transition-colors cursor-pointer ${
@@ -202,7 +245,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                     </div>
                   </div>
                 </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}

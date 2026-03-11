@@ -11,7 +11,6 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 
-import litellm.proxy.management_endpoints.budget_management_endpoints as bm
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -22,13 +21,13 @@ sys.path.insert(
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
-    mock_table  = MagicMock()
+    mock_table = MagicMock()
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
 
     mock_prisma.db = types.SimpleNamespace(
-        litellm_budgettable = mock_table,
-        litellm_dailyspend   = mock_table,
+        litellm_budgettable=mock_table,
+        litellm_dailyspend=mock_table,
     )
 
     # Monkeypatch Mocked Prisma client into the server module
@@ -79,6 +78,7 @@ async def test_new_budget_db_not_connected(client_and_mocks, monkeypatch):
 
     # override the prisma_client that the handler imports at runtime
     import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr(ps, "prisma_client", None)
 
     # Call /budget/new endpoint
@@ -123,6 +123,7 @@ async def test_update_budget_db_not_connected(client_and_mocks, monkeypatch):
 
     # override the prisma_client that the handler imports at runtime
     import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr(ps, "prisma_client", None)
 
     payload = {"budget_id": "any", "max_budget": 1.0}
@@ -136,7 +137,7 @@ async def test_update_budget_db_not_connected(client_and_mocks, monkeypatch):
 async def test_update_budget_allows_null_max_budget(client_and_mocks):
     """
     Test that /budget/update allows setting max_budget to null.
-    
+
     Previously, using exclude_none=True would drop null values,
     making it impossible to remove a budget limit. With exclude_unset=True,
     explicitly setting max_budget to null should include it in the update.
@@ -144,11 +145,11 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     client, _, mock_table = client_and_mocks
 
     captured_data = {}
-    
+
     async def capture_update(*, where, data):
         captured_data.update(data)
         return {**where, **data}
-    
+
     mock_table.update = AsyncMock(side_effect=capture_update)
 
     payload = {
@@ -159,7 +160,108 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     assert resp.status_code == 200, resp.text
 
     # Verify that max_budget=None was included in the update data
-    assert "max_budget" in captured_data, "max_budget should be included when explicitly set to null"
+    assert (
+        "max_budget" in captured_data
+    ), "max_budget should be included when explicitly set to null"
     assert captured_data["max_budget"] is None, "max_budget should be None"
-    
+
     mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative max_budget values.
+
+    This prevents the issue where negative budgets would always trigger
+    budget exceeded errors.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative",
+        "max_budget": -7.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative_soft",
+        "soft_budget": -10.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative max_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative",
+        "max_budget": -5.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative_soft",
+        "soft_budget": -15.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_new_budget_invalid_model_max_budget(client_and_mocks, monkeypatch):
+    """
+    Test that /budget/new validates model_max_budget and returns 400 for invalid structure.
+    Per-model budget implementation: validate_model_max_budget is called in new_budget.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "premium_user", True)
+
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_invalid_mmb",
+        "max_budget": 10.0,
+        "model_max_budget": {"gpt-4": "not-a-dict"},
+    }
+    resp = client.post("/budget/new", json=payload)
+    # Pydantic may reject invalid structure with 422 before our validator runs
+    assert resp.status_code in (400, 422), resp.text
+    detail = resp.json()["detail"]
+    assert "model_max_budget" in str(detail) or "dictionary" in str(detail).lower()

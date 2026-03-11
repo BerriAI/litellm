@@ -228,13 +228,17 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def _build_request_payload(self, model: str, prompt: str, optional_params: Dict) -> Dict:
+    def _build_request_payload(
+        self, model: str, prompt: str, optional_params: Dict
+    ) -> Dict:
         """Shared logic to build request payload"""
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params = _get_api_params(params=optional_params)
-        watsonx_auth_payload = self._prepare_payload(model=model, api_params=watsonx_api_params)
-        
+        watsonx_api_params = _get_api_params(params=optional_params, model=model)
+        watsonx_auth_payload = self._prepare_payload(
+            model=model, api_params=watsonx_api_params
+        )
+
         return {
             "input": prompt,
             "moderations": optional_params.pop("moderations", {}),
@@ -242,21 +246,43 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             **watsonx_auth_payload,
         }
 
-    async def atransform_request(self, model: str, messages: List[AllMessageValues], optional_params: Dict, litellm_params: Dict, headers: Dict) -> Dict:
+    async def atransform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        headers: Dict,
+    ) -> Dict:
         """Async version of transform_request"""
         from litellm.llms.watsonx.common_utils import (
             aconvert_watsonx_messages_to_prompt,
         )
-        
+
         provider = model.split("/")[0]
-        prompt = await aconvert_watsonx_messages_to_prompt(model=model, messages=messages, provider=provider, custom_prompt_dict={})
-        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
-    
-    def transform_request(self, model: str, messages: List[AllMessageValues], optional_params: Dict, litellm_params: Dict, headers: Dict) -> Dict:
+        prompt = await aconvert_watsonx_messages_to_prompt(
+            model=model, messages=messages, provider=provider, custom_prompt_dict={}
+        )
+        return self._build_request_payload(
+            model=model, prompt=prompt, optional_params=optional_params
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        headers: Dict,
+    ) -> Dict:
         """Sync version of transform_request"""
         provider = model.split("/")[0]
-        prompt = convert_watsonx_messages_to_prompt(model=model, messages=messages, provider=provider, custom_prompt_dict={})
-        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
+        prompt = convert_watsonx_messages_to_prompt(
+            model=model, messages=messages, provider=provider, custom_prompt_dict={}
+        )
+        return self._build_request_payload(
+            model=model, prompt=prompt, optional_params=optional_params
+        )
 
     def transform_response(
         self,

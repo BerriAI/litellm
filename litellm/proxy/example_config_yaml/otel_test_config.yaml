@@ -1,7 +1,7 @@
 model_list:
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/fake
+     model: openai/gpt-3.5-turbo-0301
      api_key: fake-key
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
      tags: ["teamA"]
@@ -9,7 +9,7 @@ model_list:
      id: "team-a-model"
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/fake
+     model: openai/gpt-3.5-turbo-0301
      api_key: fake-key
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
      tags: ["teamB"]
@@ -78,6 +78,15 @@ guardrails:
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
       mode: "post_call"
+  # Load balancing guardrails - two guardrails with same name
+  - guardrail_name: "lb-test-guard"
+    litellm_params:
+      guardrail: custom_guardrail.GuardrailForLBTestingA
+      mode: "pre_call"
+  - guardrail_name: "lb-test-guard"
+    litellm_params:
+      guardrail: custom_guardrail.GuardrailForLBTestingB
+      mode: "pre_call"
 
 router_settings:
   enable_tag_filtering: True # 👈 Key Change

@@ -1,23 +1,23 @@
-import React, { useState, useEffect } from "react";
 import {
-  Card,
   BarChart,
-  Subtitle,
-  Grid,
+  Card,
   Col,
   DateRangePickerValue,
+  Grid,
+  Icon,
   MultiSelect,
   MultiSelectItem,
-  TabPanel,
-  TabPanels,
+  Subtitle,
+  Tab,
   TabGroup,
   TabList,
-  Tab,
-  Icon,
+  TabPanel,
+  TabPanels,
   Text,
 } from "@tremor/react";
-import UsageDatePicker from "./shared/usage_date_picker";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "./molecules/notifications_manager";
+import UsageDatePicker from "./shared/usage_date_picker";
 
 import { RefreshIcon } from "@heroicons/react/outline";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
@@ -162,13 +162,13 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
     /* 
     Data looks like this 
-    [{"api_key":"147dba2181f28914eea90eb484926c293cdcf7f5b5c9c3dd6a004d9e0f9fdb21","call_type":"acompletion","model":"llama3-8b-8192","total_rows":13,"cache_hit_true_rows":0},
-    {"api_key":"8c23f021d0535c2e59abb7d83d0e03ccfb8db1b90e231ff082949d95df419e86","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b","call_type":"acompletion","model":"gpt-3.5-turbo","total_rows":19,"cache_hit_true_rows":0},
-    {"api_key":"88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b","call_type":"aimage_generation","model":"","total_rows":3,"cache_hit_true_rows":0},
-    {"api_key":"0ad4b3c03dcb6de0b5b8f761db798c6a8ae80be3fd1e2ea30c07ce6d5e3bf870","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"034224b36e9769bc50e2190634abc3f97cad789b17ca80ac43b82f46cd5579b3","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"4f9c71cce0a2bb9a0b62ce6f0ebb3245b682702a8851d26932fa7e3b8ebfc755","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
+    [{"api_key":"sk-test-mock-key-001","call_type":"acompletion","model":"llama3-8b-8192","total_rows":13,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-002","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-123","call_type":"acompletion","model":"gpt-3.5-turbo","total_rows":19,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-123","call_type":"aimage_generation","model":"","total_rows":3,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-003","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-004","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
+    {"api_key":"sk-test-mock-key-005","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
     */
 
     // What data we need for bar chat
@@ -271,9 +271,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
           <Tab>Cache Analytics</Tab>
-          <Tab>
-            <pre>Cache Health</pre>
-          </Tab>
+          <Tab>Cache Health</Tab>
           <Tab>Cache Settings</Tab>
         </div>
 

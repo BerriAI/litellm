@@ -2,8 +2,11 @@ import os
 import sys
 
 sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")
+    ),
+)
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
@@ -94,9 +97,19 @@ class TestIdempotentErrorDetection:
         error_message = "constraint 'fk_user_id' already exists"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
+    def test_is_idempotent_error_does_not_exist(self):
+        """Test detection of 'does not exist' error"""
+        error_message = "ERROR: index 'idx' does not exist"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
+
     def test_is_idempotent_error_case_insensitive(self):
         """Test that idempotent error detection is case insensitive"""
         error_message = "COLUMN 'ID' ALREADY EXISTS"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
+
+    def test_is_idempotent_error_does_not_exist(self):
+        """Test detection of 'does not exist' error"""
+        error_message = "ERROR: index 'idx' does not exist"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
     def test_is_idempotent_error_negative(self):

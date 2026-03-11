@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # /responses
 
 
-LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+LiteLLM provides an endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
 
 Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
@@ -14,6 +14,7 @@ Requests to /chat/completions may be bridged here automatically when the provide
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
+| WebSocket Mode | ✅ | Lower-latency persistent connections for all providers |
 | Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
@@ -810,6 +811,245 @@ for event in response:
 </TabItem>
 </Tabs>
 
+## WebSocket Mode
+
+The Responses API supports **WebSocket mode** for lower-latency, persistent connections ideal for agentic workflows. WebSocket mode works with **all LiteLLM providers**, not just those with native WebSocket support.
+
+### Architecture
+
+LiteLLM provides two WebSocket modes:
+
+1. **Native WebSocket**: Direct `wss://` connection to providers that support it (OpenAI, Azure)
+2. **Managed WebSocket**: HTTP streaming over WebSocket for all other providers (Anthropic, Gemini, Bedrock, etc.)
+
+The system automatically selects the appropriate mode based on provider capabilities.
+
+### Usage
+
+<Tabs>
+<TabItem value="python" label="Python (websocket-client)">
+
+```python showLineNumbers title="WebSocket with Python"
+import json
+from websocket import create_connection  # pip install websocket-client
+
+# Connect to LiteLLM proxy WebSocket endpoint
+ws = create_connection(
+    "ws://localhost:4000/v1/responses?model=gemini-2.5-flash",
+    header=["Authorization: Bearer sk-1234"]
+)
+
+try:
+    # Send initial message
+    ws.send(json.dumps({
+        "type": "response.create",
+        "model": "gemini-2.5-flash",
+        "store": True,
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "My favorite color is blue."}]
+        }]
+    }))
+    
+    # Collect response events
+    response_id = None
+    while True:
+        event = json.loads(ws.recv())
+        print(f"Event: {event['type']}")
+        
+        if event["type"] == "response.completed":
+            response_id = event["response"]["id"]
+            break
+        elif event["type"] == "response.output_text.delta":
+            print(f"Text: {event.get('delta', '')}", end="", flush=True)
+    
+    print(f"\nResponse ID: {response_id}")
+    
+    # Send follow-up with previous_response_id for multi-turn
+    ws.send(json.dumps({
+        "type": "response.create",
+        "model": "gemini-2.5-flash",
+        "previous_response_id": response_id,
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What is my favorite color?"}]
+        }]
+    }))
+    
+    # Collect follow-up response
+    while True:
+        event = json.loads(ws.recv())
+        if event["type"] == "response.completed":
+            break
+        elif event["type"] == "response.output_text.delta":
+            print(event.get("delta", ""), end="", flush=True)
+            
+finally:
+    ws.close()
+```
+
+</TabItem>
+<TabItem value="javascript" label="JavaScript (ws)">
+
+```javascript showLineNumbers title="WebSocket with JavaScript"
+const WebSocket = require('ws'); // npm install ws
+
+const ws = new WebSocket(
+    'ws://localhost:4000/v1/responses?model=gemini-2.5-flash',
+    {
+        headers: {
+            'Authorization': 'Bearer sk-1234'
+        }
+    }
+);
+
+ws.on('open', () => {
+    // Send initial message
+    ws.send(JSON.stringify({
+        type: 'response.create',
+        model: 'gemini-2.5-flash',
+        store: true,
+        input: [{
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'My favorite color is blue.' }]
+        }]
+    }));
+});
+
+let responseId = null;
+
+ws.on('message', (data) => {
+    const event = JSON.parse(data.toString());
+    console.log(`Event: ${event.type}`);
+    
+    if (event.type === 'response.completed') {
+        responseId = event.response.id;
+        console.log(`Response ID: ${responseId}`);
+        
+        // Send follow-up
+        ws.send(JSON.stringify({
+            type: 'response.create',
+            model: 'gemini-2.5-flash',
+            previous_response_id: responseId,
+            input: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'What is my favorite color?' }]
+            }]
+        }));
+    } else if (event.type === 'response.output_text.delta') {
+        process.stdout.write(event.delta || '');
+    }
+});
+
+ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+});
+```
+
+</TabItem>
+<TabItem value="curl" label="curl (websocat)">
+
+```bash showLineNumbers title="WebSocket with websocat"
+# Install websocat: brew install websocat (macOS) or cargo install websocat
+
+# Connect to WebSocket endpoint
+websocat "ws://localhost:4000/v1/responses?model=gemini-2.5-flash" \
+  -H="Authorization: Bearer sk-1234"
+
+# Then send JSON events (paste and press Enter):
+{"type":"response.create","model":"gemini-2.5-flash","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello!"}]}]}
+
+# You'll receive streaming events back:
+# {"type":"response.created",...}
+# {"type":"response.in_progress",...}
+# {"type":"response.output_text.delta","delta":"Hello",...}
+# {"type":"response.completed",...}
+```
+
+</TabItem>
+</Tabs>
+
+### Event Types
+
+WebSocket connections receive Server-Sent Events (SSE) formatted as JSON:
+
+| Event Type | Description |
+|------------|-------------|
+| `response.created` | Response generation started |
+| `response.in_progress` | Response is being generated |
+| `response.output_item.added` | New output item (message, tool call, etc.) added |
+| `response.output_text.delta` | Incremental text chunk |
+| `response.output_text.done` | Text output completed |
+| `response.content_part.done` | Content part completed |
+| `response.output_item.done` | Output item completed |
+| `response.completed` | Full response completed successfully |
+| `response.failed` | Response generation failed |
+| `response.incomplete` | Response incomplete (e.g., max tokens reached) |
+| `error` | Error occurred |
+
+### Multi-Turn Conversations
+
+Use `previous_response_id` to maintain conversation context across multiple WebSocket messages:
+
+```python showLineNumbers title="Multi-turn WebSocket Conversation"
+# Turn 1
+ws.send(json.dumps({
+    "type": "response.create",
+    "model": "gemini-2.5-flash",
+    "store": True,  # Required for multi-turn
+    "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}]
+}))
+
+# ... collect events and get response_id from response.completed event ...
+
+# Turn 2 - reference previous response
+ws.send(json.dumps({
+    "type": "response.create",
+    "model": "gemini-2.5-flash",
+    "previous_response_id": response_id,  # Links to previous turn
+    "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Continue"}]}]
+}))
+```
+
+### Provider Support
+
+| Provider | WebSocket Mode | Notes |
+|----------|----------------|-------|
+| OpenAI | Native | Direct `wss://` connection to OpenAI |
+| Azure OpenAI | Native | Direct `wss://` connection to Azure |
+| Anthropic | Managed | HTTP streaming over WebSocket |
+| Google AI Studio (Gemini) | Managed | HTTP streaming over WebSocket |
+| Vertex AI | Managed | HTTP streaming over WebSocket |
+| AWS Bedrock | Managed | HTTP streaming over WebSocket |
+| All other providers | Managed | HTTP streaming over WebSocket |
+
+**Note**: Both native and managed modes provide the same event stream format. The difference is transparent to clients.
+
+### Configuration
+
+No special configuration needed. WebSocket mode is automatically available on the `/v1/responses` endpoint when accessed via WebSocket protocol (`ws://` or `wss://`).
+
+For LiteLLM Proxy, ensure your models are configured normally:
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+Both models will automatically support WebSocket mode at `ws://localhost:4000/v1/responses`.
+
 ## Response ID Security
 
 By default, LiteLLM Proxy prevents users from accessing other users' response IDs.
@@ -884,7 +1124,13 @@ router = litellm.Router(
             },
         },
     ],
-    optional_pre_call_checks=["responses_api_deployment_check"],
+    # `responses_api_deployment_check` ensures Requests with `previous_response_id`
+    # are routed to the same deployment. `deployment_affinity` adds sticky sessions
+    # for requests without `previous_response_id` (useful for implicit caching).
+    # `session_affinity` adds sticky sessions based on `session_id` metadata.
+    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity", "session_affinity"],
+    # Optional (default is 3600 seconds / 1 hour)
+    deployment_affinity_ttl_seconds=3600,
 )
 
 # Initial request
@@ -911,7 +1157,23 @@ follow_up = await router.aresponses(
 
 #### 1. Setup session continuity on proxy config.yaml
 
-To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
+
+- `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `encrypted_content_affinity`: **[Recommended]** content-aware routing for encrypted items (e.g., `rs_...` reasoning items)
+- `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
+- `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
+
+:::tip Recommended: Use `encrypted_content_affinity`
+For Responses API with load balancing across deployments with **different API keys**, use `encrypted_content_affinity` instead of `deployment_affinity`. It only pins requests that contain encrypted content, avoiding quota reduction while preventing `invalid_encrypted_content` errors.
+:::
+
+Notes:
+- User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
+- Session-ID affinity is keyed on `metadata.session_id`. For proxy requests, this can be passed via the `x-litellm-session-id` or `x-litellm-trace-id` HTTP header (they are interchangeable for call chaining). For Python SDK requests, you can pass it via `litellm_metadata={"session_id": "value"}` in request args.
+- `user_api_key_hash` is already SHA-256, and is used as-is (no double hashing).
+- Affinity is scoped by a stable model identifier (the model-map key, e.g. `model_map_information.model_map_key`) so model aliases map to the same stickiness bucket.
+- The mapping TTL is controlled by `deployment_affinity_ttl_seconds` (configured on Router init / proxy startup).
 
 ```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
@@ -929,7 +1191,12 @@ model_list:
       api_base: https://endpoint2.openai.azure.com
 
 router_settings:
-  optional_pre_call_checks: ["responses_api_deployment_check"]
+  optional_pre_call_checks:
+    - responses_api_deployment_check
+    - session_affinity
+    - deployment_affinity
+  # Optional (default is 3600 seconds / 1 hour)
+  deployment_affinity_ttl_seconds: 3600
 ```
 
 #### 2. Use the OpenAI Python SDK to make requests to LiteLLM Proxy
@@ -960,6 +1227,142 @@ follow_up = client.responses.create(
 
 </TabItem>
 </Tabs>
+
+## Encrypted Content Affinity (Multi-Region Load Balancing)
+
+When load balancing Responses API across deployments with **different API keys** (e.g., different Azure regions or OpenAI organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the API key that created them.
+
+### The Problem
+
+```json
+{
+  "error": {
+    "message": "The encrypted content for item rs_0d09d6e56879e76500699d6feee41c8197bd268aae76141f87 could not be verified. Reason: Encrypted content organization_id did not match the target organization.",
+    "type": "invalid_request_error",
+    "code": "invalid_encrypted_content"
+  }
+}
+```
+
+This error occurs when:
+1. Initial request goes to Deployment A (API Key 1) → produces encrypted item `rs_xyz`
+2. Follow-up request with `rs_xyz` in input gets load balanced to Deployment B (API Key 2)
+3. Deployment B cannot decrypt content created by Deployment A → **request fails**
+
+### The Solution: `encrypted_content_affinity`
+
+The `encrypted_content_affinity` pre-call check routes follow-up requests containing encrypted items to the originating deployment **only when necessary**
+
+**Key Benefits:**
+- ✅ **No quota reduction**: Unlike `deployment_affinity`, only pins requests that contain encrypted items
+- ✅ **Bypasses rate limits**: When encrypted content requires a specific deployment, RPM/TPM limits are bypassed (the request would fail on any other deployment anyway)
+- ✅ **No `previous_response_id` required**: Works by encoding `model_id` directly into item IDs
+- ✅ **No cache required**: `model_id` is decoded on-the-fly — no Redis dependency, no TTL to manage
+- ✅ **Globally safe**: Can be enabled for all models; non-Responses-API calls (chat, embeddings) are unaffected
+
+### How It Works
+
+1. **Encoding Phase** (on response):
+   - For each output item that contains `encrypted_content`, LiteLLM rewrites the item ID to embed the originating `model_id`: `rs_xyz` → `encitem_{base64("litellm:model_id:{model_id};item_id:rs_xyz")}`
+   - The original item ID is restored before forwarding the request to the upstream provider
+
+2. **Routing Phase** (before request):
+   - Scans request `input` for `encitem_` prefixed IDs
+   - If found → decodes `model_id`, pins to originating deployment, bypasses rate limits
+   - If no encoded items → normal load balancing
+
+### Configuration
+
+<Tabs>
+<TabItem value="sdk" label="Python SDK">
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "gpt-5.1-codex",
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_key": "org-1-api-key",  # Different API key
+            },
+            "model_info": {"id": "deployment-us-east"},
+        },
+        {
+            "model_name": "gpt-5.1-codex",
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_key": "org-2-api-key",  # Different API key
+            },
+            "model_info": {"id": "deployment-eu-west"},
+        },
+    ],
+    optional_pre_call_checks=["encrypted_content_affinity"],
+)
+
+# Initial request - routes to any deployment
+response1 = await router.aresponses(
+    model="gpt-5.1-codex",
+    input="Explain quantum computing",
+)
+
+# Follow-up with encrypted items - automatically routes to same deployment
+response2 = await router.aresponses(
+    model="gpt-5.1-codex",
+    input=response1.output,  # Contains encrypted items from response1
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy Server">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://eastus.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_EASTUS
+      rpm: 600
+      tpm: 100000
+    model_info:
+      id: "gpt-5.1-codex-eastus"
+
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://westeurope.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_WESTEUROPE
+      rpm: 600
+      tpm: 100000
+    model_info:
+      id: "gpt-5.1-codex-westeurope"
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  enable_pre_call_checks: true
+  optional_pre_call_checks:
+    - encrypted_content_affinity
+```
+
+**Start proxy:**
+```bash
+litellm --config config.yaml
+```
+
+</TabItem>
+</Tabs>
+
+### When to Use Each Affinity Type
+
+| Affinity Type | Use Case | Scope | Quota Impact |
+|---------------|----------|-------|--------------|
+| **`encrypted_content_affinity`** | **[Recommended]** Multi-region Responses API with different API keys | Only requests with tracked encrypted items | ✅ None (surgical pinning) |
+| `responses_api_deployment_check` | When `previous_response_id` is available | Requests with `previous_response_id` | ✅ None |
+| `session_affinity` | Session-based applications | All requests with same `session_id` | ⚠️ Reduces quota by # of sessions |
+| `deployment_affinity` | Simple sticky sessions | All requests from same API key | ❌ Reduces quota by # of users |
+
 
 ## Calling non-Responses API endpoints (`/responses` to `/chat/completions` Bridge)
 
@@ -1022,6 +1425,136 @@ curl http://localhost:4000/v1/responses \
 
 
 
+
+## Server-side compaction
+
+For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
+
+Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
+
+> **Note:** You can use openai `context_management` format with Anthropic models via LiteLLM via responses API. LiteLLM will automatically translate this format for Anthropic and handle context management for you.
+
+For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
+
+### Python SDK
+
+```python showLineNumbers title="Server-side compaction with LiteLLM Python SDK"
+import litellm
+
+# Non-streaming: enable compaction when context exceeds 200k tokens
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+
+# Streaming: same context_management, compaction runs in-stream if threshold is crossed
+stream = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    stream=True,
+)
+for event in stream:
+    print(event)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `context_management` to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Server-side compaction via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",  # LiteLLM Proxy (AI Gateway)
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+```
+
+**curl (proxy):**
+
+```bash title="Server-side compaction via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "Your conversation input...",
+    "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+    "max_output_tokens": 1024
+  }'
+```
+
+## Shell tool
+
+The **Shell tool** lets the model run commands in a hosted container or local runtime (OpenAI Responses API). You pass `tools=[{"type": "shell", "environment": {...}}]`; the `environment` object configures the runtime (e.g. `type: "container_auto"` for auto-provisioned containers). See [OpenAI Shell tool guide](https://developers.openai.com/api/docs/guides/tools-shell) for full options.
+
+Supported when using the `openai` or `azure` provider with a model that supports the Shell tool.
+
+### Python SDK
+
+```python showLineNumbers title="Shell tool with LiteLLM Python SDK"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data and run python --version.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `tools` (including `type: "shell"`) to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Shell tool via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+**curl:**
+
+```bash title="Shell tool via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-5.2",
+    "input": "List files in /mnt/data.",
+    "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+    "tool_choice": "auto",
+    "max_output_tokens": 1024
+  }'
+```
 
 ## Session Management
 
@@ -1220,11 +1753,6 @@ Response:
   }]
 }
 ```
-
-
-
-
-
 
 
 

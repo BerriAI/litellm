@@ -1,4 +1,12 @@
-import { PencilAltIcon, PlayIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import {
+  PencilAltIcon,
+  PlayIcon,
+  RefreshIcon,
+  TrashIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ExternalLinkIcon,
+} from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import BaseActionButton from "../BaseActionButton";
 
@@ -21,6 +29,9 @@ export const TableIconActionButtonMap: Record<string, TableIconActionButtonBaseP
   Delete: { icon: TrashIcon, className: "hover:text-red-600" },
   Test: { icon: PlayIcon, className: "hover:text-blue-600" },
   Regenerate: { icon: RefreshIcon, className: "hover:text-green-600" },
+  Up: { icon: ChevronUpIcon, className: "hover:text-blue-600" },
+  Down: { icon: ChevronDownIcon, className: "hover:text-blue-600" },
+  Open: { icon: ExternalLinkIcon, className: "hover:text-green-600" },
 };
 
 export default function TableIconActionButton({

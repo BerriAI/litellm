@@ -10,6 +10,7 @@ Has 4 primary methods:
 
 import ast
 import asyncio
+import hashlib
 import inspect
 import json
 import time
@@ -21,7 +22,11 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_REDIS_MAJOR_VERSION
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
-from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.caching import (
+    RedisPipelineIncrementOperation,
+    RedisPipelineLpopOperation,
+    RedisPipelineRpushOperation,
+)
 from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
@@ -145,9 +150,17 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
-        ### ASYNC HEALTH PING ###
+        self._setup_health_pings()
+
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
+    def _setup_health_pings(self):
+        """Setup async and sync health pings for Redis."""
+        # ASYNC HEALTH PING
         try:
-            # asyncio.get_running_loop().create_task(self.ping())
             _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
@@ -159,8 +172,9 @@ class RedisCache(BaseCache):
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
                 )
+                self._handle_async_ping_error(e)
 
-        ### SYNC HEALTH PING ###
+        # SYNC HEALTH PING
         try:
             if hasattr(self.redis_client, "ping"):
                 self.redis_client.ping()  # type: ignore
@@ -168,11 +182,53 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
+            self._handle_sync_ping_error(e)
 
-        if litellm.default_redis_ttl is not None:
-            super().__init__(default_ttl=int(litellm.default_redis_ttl))
-        else:
-            super().__init__()  # defaults to 60s
+    def _handle_async_ping_error(self, e: Exception):
+        """Handle async ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_async_ping",
+                )
+            )
+        except Exception:
+            pass
+
+    def _handle_sync_ping_error(self, e: Exception):
+        """Handle sync ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_sync_ping",
+                )
+            )
+        except Exception:
+            pass
+
+    def _get_async_client_cache_key(self) -> str:
+        """
+        Generate a cache key for the async Redis client based on connection parameters.
+        This ensures different Redis configurations use different cached clients.
+        """
+        # Create a stable representation of redis_kwargs for hashing
+        # Sort keys to ensure consistent hash regardless of parameter order
+        sorted_kwargs = sorted(self.redis_kwargs.items())
+        kwargs_str = json.dumps(sorted_kwargs, sort_keys=True)
+        kwargs_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
+        return f"async-redis-client-{kwargs_hash}"
 
     def init_async_client(
         self,
@@ -181,7 +237,8 @@ class RedisCache(BaseCache):
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
 
-        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
+        cache_key = self._get_async_client_cache_key()
+        cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(
                 Union[async_redis_client, async_redis_cluster_client], cached_client
@@ -193,7 +250,7 @@ class RedisCache(BaseCache):
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
             in_memory_llm_clients_cache.set_cache(
-                key="async-redis-client", value=redis_async_client
+                key=cache_key, value=redis_async_client
             )
 
         self.redis_async_client = redis_async_client  # type: ignore
@@ -1052,6 +1109,10 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        try:
+            self.redis_client.close()
+        except Exception as e:
+            verbose_logger.debug("Error closing sync Redis client: %s", e)
     
     async def test_connection(self) -> dict:
         """
@@ -1070,7 +1131,7 @@ class RedisCache(BaseCache):
             redis_client = redis_async.Redis(**self.redis_kwargs)
             
             # Test the connection
-            ping_result = await redis_client.ping()
+            ping_result = await redis_client.ping()  # type: ignore[misc]
 
             # Close the connection
             await redis_client.aclose()  # type: ignore[attr-defined]
@@ -1263,6 +1324,75 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    async def _pipeline_rpush_helper(
+        self,
+        pipe: pipeline,
+        rpush_list: List[RedisPipelineRpushOperation],
+    ) -> List[int]:
+        """Helper function for pipeline rpush operations"""
+        for rpush_op in rpush_list:
+            pipe.rpush(rpush_op["key"], *rpush_op["values"])
+        results = await pipe.execute()
+        # Preserve positional correspondence — raise on per-command errors
+        for r in results:
+            if isinstance(r, Exception):
+                raise r
+        return results
+
+    async def async_rpush_pipeline(
+        self,
+        rpush_list: List[RedisPipelineRpushOperation],
+    ) -> List[int]:
+        """
+        Use Redis Pipelines for bulk RPUSH operations
+
+        Args:
+            rpush_list: List of RedisPipelineRpushOperation dicts containing:
+                - key: str
+                - values: List[Any]
+
+        Returns:
+            List[int]: List lengths after each push
+        """
+        if len(rpush_list) == 0:
+            return []
+
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                results = await self._pipeline_rpush_helper(pipe, rpush_list)
+
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            return results
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_rpush_pipeline() - Got exception from REDIS %s",
+                str(e),
+            )
+            raise e
+
     async def handle_lpop_count_for_older_redis_versions(
         self, pipe: pipeline, key: str, count: int
     ) -> List[bytes]:
@@ -1341,5 +1471,122 @@ class RedisCache(BaseCache):
             )
             verbose_logger.error(
                 f"LiteLLM Redis Cache LPOP: - Got exception from REDIS : {str(e)}"
+            )
+            raise e
+
+    async def _pipeline_lpop_helper(
+        self,
+        pipe: pipeline,
+        lpop_list: List[RedisPipelineLpopOperation],
+    ) -> List[Optional[List[str]]]:
+        """Helper function for pipeline lpop operations.
+
+        For Redis >= 7, queues one LPOP(key, count) per operation.
+        For Redis < 7, queues `count` individual LPOP(key) commands per operation.
+        """
+        major_version = self._parse_redis_major_version()
+
+        if major_version >= 7:
+            for lpop_op in lpop_list:
+                pipe.lpop(lpop_op["key"], lpop_op["count"])
+            raw_results = await pipe.execute()
+        else:
+            # For Redis < 7, LPOP doesn't support count param.
+            # Issue `count` individual LPOP commands per key, all in one pipeline.
+            counts: List[int] = []
+            for lpop_op in lpop_list:
+                count = lpop_op["count"] or 1
+                counts.append(count)
+                for _ in range(count):
+                    pipe.lpop(lpop_op["key"])
+            flat_results = await pipe.execute()
+
+            # Re-group the flat results back into per-key lists
+            raw_results = []
+            offset = 0
+            for count in counts:
+                key_results = [
+                    r for r in flat_results[offset : offset + count] if r is not None
+                ]
+                raw_results.append(key_results if key_results else None)
+                offset += count
+
+        # Raise on per-command errors (matches _pipeline_rpush_helper behavior)
+        for r in raw_results:
+            if isinstance(r, Exception):
+                raise r
+
+        # Decode bytes -> str for each result set
+        decoded_results: List[Optional[List[str]]] = []
+        for r in raw_results:
+            if r is None:
+                decoded_results.append(None)
+            elif isinstance(r, list):
+                try:
+                    decoded_results.append(
+                        [
+                            item.decode("utf-8") if isinstance(item, bytes) else item
+                            for item in r
+                            if item is not None
+                        ]
+                        or None
+                    )
+                except Exception:
+                    decoded_results.append(r)  # type: ignore
+            else:
+                decoded_results.append(None)
+        return decoded_results
+
+    async def async_lpop_pipeline(
+        self,
+        lpop_list: List[RedisPipelineLpopOperation],
+    ) -> List[Optional[List[str]]]:
+        """
+        Use Redis Pipelines for bulk LPOP operations
+
+        Args:
+            lpop_list: List of RedisPipelineLpopOperation dicts containing:
+                - key: str
+                - count: Optional[int]
+
+        Returns:
+            List[Optional[List[str]]]: Decoded results per key, None if key was empty
+        """
+        if len(lpop_list) == 0:
+            return []
+
+        _redis_client: Any = self.init_async_client()
+        start_time = time.time()
+
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                results = await self._pipeline_lpop_helper(pipe, lpop_list)
+
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            return results
+        except Exception as e:
+            ## LOGGING ##
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
+                )
+            )
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async_lpop_pipeline() - Got exception from REDIS %s",
+                str(e),
             )
             raise e

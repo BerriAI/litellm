@@ -1,7 +1,6 @@
 import os
 import sys
-from typing import Any, Dict
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
     convert_anyof_null_to_nullable,
@@ -214,7 +212,7 @@ def test_build_vertex_schema():
         "properties": {
             "state": {
                 "properties": {
-                    "messages": {"items": {"type": "object"}, "type": "array"},
+                    "messages": {"items": {}, "type": "array"},
                     "conversation_id": {"type": "string"},
                 },
                 "required": ["messages", "conversation_id"],
@@ -228,7 +226,7 @@ def test_build_vertex_schema():
                     "callbacks": {
                         "anyOf": [
                             {"type": "array", "nullable": True},
-                            {"type": "object", "nullable": True},
+                            {"nullable": True},
                         ]
                     },
                     "run_name": {"type": "string"},
@@ -272,23 +270,28 @@ def test_process_items_basic():
     """Test basic functionality of process_items."""
     from litellm.llms.vertex_ai.common_utils import process_items
 
-    # Test empty items
+    # Test empty items — should preserve "any type" semantics (not coerce to object)
     schema = {"type": "array", "items": {}}
     process_items(schema)
-    assert schema["items"] == {"type": "object"}
+    assert schema["items"] == {}
 
-    # Test nested items
+    # Test nested items — should preserve "any type" semantics
     schema = {"type": "array", "items": {"type": "array", "items": {}}}
     process_items(schema)
-    assert schema["items"]["items"] == {"type": "object"}
+    assert schema["items"]["items"] == {}
 
-    # Test items in properties
+    # Test items in properties — should preserve "any type" semantics
     schema = {
         "type": "object",
         "properties": {"nested": {"type": "array", "items": {}}},
     }
     process_items(schema)
-    assert schema["properties"]["nested"]["items"] == {"type": "object"}
+    assert schema["properties"]["nested"]["items"] == {}
+
+    # Test items with actual type — should not be modified
+    schema = {"type": "array", "items": {"type": "string"}}
+    process_items(schema)
+    assert schema["items"] == {"type": "string"}
 
 
 def test_vertex_ai_complex_response_schema():
@@ -442,7 +445,7 @@ def test_vertex_ai_complex_response_schema():
     optional_params = {}
 
     v.apply_response_schema_transformation(
-        value=non_default_params["response_format"], optional_params=optional_params
+        value=non_default_params["response_format"], optional_params=optional_params, model="gemini-1.5-pro-preview-0409"
     )
 
     # Assertions for the transformed schema
@@ -798,9 +801,84 @@ def test_fix_enum_empty_strings():
     assert "mobile" in enum_values
     assert "tablet" in enum_values
 
-    # 3. Other properties preserved
-    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
-    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+def test_get_vertex_model_id_from_url():
+    """Test get_vertex_model_id_from_url with various URLs"""
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with valid URL
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gemini-pro"
+
+    # Test with invalid URL
+    url = "https://invalid-url.com"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id is None
+
+
+def test_get_vertex_model_id_from_url_with_slashes():
+    """Test get_vertex_model_id_from_url with model names containing slashes (e.g., gcp/google/gemini-2.5-flash)
+
+    Regression test for NVIDIA issue: custom model names with slashes in passthrough URLs
+    were being truncated (e.g., 'gcp/google/gemini-2.5-flash' -> 'gcp'), causing access_groups
+    checks to fail.
+    """
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with model name containing slashes: gcp/google/gemini-2.5-flash
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+    # Test with model name containing slashes: gcp/google/gemini-3-flash-preview
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-3-flash-preview"
+
+    # Test with custom model path: custom/model
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/custom/model:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "custom/model"
+
+    # Test passthrough URL format (without host)
+    url = "v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+
+def test_construct_target_url_with_version_prefix():
+    """Test construct_target_url with version prefixes"""
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    # Test with /v1/ prefix
+    url = "/v1/publishers/google/models/gemini-pro:streamGenerateContent"
+    vertex_project = "test-project"
+    vertex_location = "us-central1"
+    base_url = "https://us-central1-aiplatform.googleapis.com"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
+
+    # Test with /v1beta1/ prefix
+    url = "/v1beta1/publishers/google/models/gemini-pro:streamGenerateContent"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
 
 
 def test_fix_enum_types():
@@ -862,7 +940,7 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],  # Kept - string type
                 "type": "string",
-                "description": "How to truncate content"
+                "description": "How to truncate content",
             },
             "maxLength": {  # enum removed
                 "type": "integer",
@@ -984,6 +1062,7 @@ async def test_vertex_ai_token_counter_routes_partner_models():
     to the partner models token counter instead of the Gemini token counter.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1021,12 +1100,60 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_uses_count_tokens_location():
+    """
+    Test that VertexAITokenCounter uses vertex_count_tokens_location to override
+    vertex_location when counting tokens for partner models.
+
+    Count tokens API is not available on global location for partner models:
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with vertex_count_tokens_location overriding vertex_location
+        await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",  # Original location (not supported for count_tokens)
+                    "vertex_count_tokens_location": "us-east5",  # Override for count_tokens
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify the partner models handler was called with the overridden location
+        assert mock_partner_count_tokens.called
+        call_kwargs = mock_partner_count_tokens.call_args.kwargs
+        assert call_kwargs["vertex_location"] == "us-east5"
+        assert call_kwargs["vertex_project"] == "test-project"
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_routes_gemini_models():
     """
     Test that VertexAITokenCounter correctly routes Gemini models
     to the Gemini token counter (not partner models).
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1123,4 +1250,246 @@ def test_vertex_ai_moonshot_uses_openai_handler():
 
     assert VertexAIPartnerModels.should_use_openai_handler(
         "moonshotai/kimi-k2-thinking-maas"
+    )
+
+
+def test_vertex_ai_zai_uses_openai_handler():
+    """
+    Ensure ZAI partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "zai-org/glm-4.7-maas"
+    )
+
+
+def test_vertex_ai_zai_is_partner_model():
+    """
+    Ensure ZAI models are detected as Vertex AI partner models.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
+
+
+def test_build_vertex_schema_empty_properties():
+    """
+    Test _build_vertex_schema handles empty properties objects correctly.
+    
+    This test verifies the fix for the issue where Gemini rejects schemas 
+    with empty properties objects like {"properties": {}, "type": "object"}.
+    
+    Error from Gemini: "GenerateContentRequest.generation_config.response_schema
+    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties: 
+    should be non-empty for OBJECT type"
+    
+    The fix removes empty properties objects and their associated type/required fields.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Input: Schema with empty properties (the problematic case from real request)
+    input_schema = {
+        "properties": {
+            "action": {
+                "description": "List of actions to execute",
+                "items": {
+                    "anyOf": [
+                        {
+                            "properties": {
+                                "go_back": {
+                                    "properties": {},
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "description": "Go back",
+                                    "required": []
+                                }
+                            },
+                            "required": ["go_back"],
+                            "type": "object",
+                            "additionalProperties": False
+                        }
+                    ]
+                },
+                "type": "array"
+            }
+        },
+        "type": "object",
+        "additionalProperties": False
+    }
+
+    # Apply the transformation
+    result = _build_vertex_schema(input_schema)
+
+    # Verify the transformation removed empty properties
+    # Navigate to the go_back schema
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
+    
+    # Verify empty properties was removed
+    assert "properties" not in go_back_schema, "Empty properties should be removed"
+    
+    # Verify type is kept as object (Gemini requires type: object even without properties)
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
+    
+    # Verify required was also removed
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
+    
+    # Verify description is preserved
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
+    
+    # Verify parent schema still has proper structure
+    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
+
+
+def test_add_object_type_schema_with_no_properties_and_no_type():
+    """
+    Test that add_object_type adds type: object when schema has no properties and no type.
+    Fixes issue where tools with no arguments (e.g. EnterPlanMode) fail on Gemini.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with no properties and no type (the problematic case)
+    input_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type: object was added
+    assert input_schema.get("type") == "object", "type: object should be added"
+
+    # Verify $schema is preserved
+    assert input_schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema"
+
+
+def test_add_object_type_does_not_override_existing_type():
+    """
+    Test add_object_type does not override existing type field.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with existing type
+    input_schema = {
+        "type": "string",
+        "description": "A string field"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not changed
+    assert input_schema.get("type") == "string", "Existing type should not be changed"
+
+
+def test_add_object_type_does_not_add_type_when_anyof_present():
+    """
+    Test add_object_type does not add type: object when anyOf is present.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with anyOf but no type
+    input_schema = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not added (anyOf handles the type)
+    assert "type" not in input_schema, "type should not be added when anyOf is present"
+
+
+def test_is_any_type_schema():
+    """Test _is_any_type_schema correctly identifies unconstrained schemas."""
+    from litellm.llms.vertex_ai.common_utils import _is_any_type_schema
+
+    # Empty schema = any type
+    assert _is_any_type_schema({}) is True
+
+    # Only metadata keys = any type
+    assert _is_any_type_schema({"description": "Any value"}) is True
+    assert _is_any_type_schema({"title": "MyField"}) is True
+    assert _is_any_type_schema({"title": "X", "description": "Y", "default": 0}) is True
+
+    # Has type-constraining keys = NOT any type
+    assert _is_any_type_schema({"type": "object"}) is False
+    assert _is_any_type_schema({"type": "string"}) is False
+    assert _is_any_type_schema({"properties": {"a": {}}}) is False
+    assert _is_any_type_schema({"items": {"type": "string"}}) is False
+    assert _is_any_type_schema({"anyOf": [{"type": "string"}]}) is False
+    assert _is_any_type_schema({"$schema": "https://json-schema.org/draft/2020-12/schema"}) is False
+    assert _is_any_type_schema({"enum": ["a", "b"]}) is False
+
+
+def test_add_object_type_preserves_any_type_schema():
+    """Test add_object_type does NOT add type:object to empty schemas (any type)."""
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Empty schema should be preserved (any type)
+    schema = {}
+    add_object_type(schema)
+    assert "type" not in schema, "Empty schema (any type) should not get type: object"
+
+    # Schema with only description should be preserved
+    schema = {"description": "Any JSON value"}
+    add_object_type(schema)
+    assert "type" not in schema
+
+    # Schema with $schema key should still get type: object (tool with no args)
+    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema"}
+    add_object_type(schema)
+    assert schema["type"] == "object"
+
+
+def test_convert_anyof_preserves_any_type_members():
+    """Test convert_anyof_null_to_nullable does NOT coerce empty anyOf members to object."""
+    from litellm.llms.vertex_ai.common_utils import convert_anyof_null_to_nullable
+
+    # anyOf with empty schema and null — empty should be preserved
+    schema = {
+        "anyOf": [
+            {},
+            {"type": "null"},
+        ]
+    }
+    convert_anyof_null_to_nullable(schema)
+    # null should be removed, empty schema should be preserved (not coerced to object)
+    assert len(schema["anyOf"]) == 1
+    assert "type" not in schema["anyOf"][0] or schema["anyOf"][0].get("type") != "object"
+    assert schema["anyOf"][0].get("nullable") is True
+
+
+def test_build_vertex_schema_jsonvalue():
+    """
+    End-to-end: Pydantic JsonValue generates {} in $defs.
+    _build_vertex_schema should preserve any-type semantics.
+    Regression test for https://github.com/BerriAI/litellm/issues/22391
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Simulates what Pydantic generates for a model with JsonValue field
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {},  # after $ref resolution, this is what JsonValue becomes
+        },
+        "required": ["name", "value"],
+    }
+    result = _build_vertex_schema(schema)
+
+    # The "value" field should NOT have been coerced to type: object
+    value_schema = result["properties"]["value"]
+    assert value_schema.get("type") != "object", (
+        "JsonValue schema {} should not be coerced to {type: object}"
     )

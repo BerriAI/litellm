@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vercel_ai_gateway/` |
 | Link to Provider Doc | [Vercel AI Gateway Documentation ↗](https://vercel.com/docs/ai-gateway) |
 | Base URL | `https://ai-gateway.vercel.sh/v1` |
-| Supported Operations | `/chat/completions`, `/models` |
+| Supported Operations | `/chat/completions`, `/embeddings`, `/models` |
 
 <br />
 <br />
@@ -73,13 +73,40 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Vercel AI Gateway call with streaming
 response = completion(
-    model="vercel_ai_gateway/openai/gpt-4o", 
+    model="vercel_ai_gateway/openai/gpt-4o",
     messages=messages,
     stream=True
 )
 
 for chunk in response:
     print(chunk)
+```
+
+### Embeddings
+
+```python showLineNumbers title="Vercel AI Gateway Embeddings"
+import os
+from litellm import embedding
+
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-api-key"
+
+# Vercel AI Gateway embedding call
+response = embedding(
+    model="vercel_ai_gateway/openai/text-embedding-3-small",
+    input="Hello world"
+)
+
+print(response.data[0]["embedding"][:5])  # Print first 5 dimensions
+```
+
+You can also specify the `dimensions` parameter:
+
+```python showLineNumbers title="Vercel AI Gateway Embeddings with Dimensions"
+response = embedding(
+    model="vercel_ai_gateway/openai/text-embedding-3-small",
+    input=["Hello world", "Goodbye world"],
+    dimensions=768
+)
 ```
 
 ## Usage - LiteLLM Proxy
@@ -96,6 +123,11 @@ model_list:
   - model_name: claude-4-sonnet-gateway
     litellm_params:
       model: vercel_ai_gateway/anthropic/claude-4-sonnet
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  - model_name: text-embedding-3-small-gateway
+    litellm_params:
+      model: vercel_ai_gateway/openai/text-embedding-3-small
       api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
 ```
 

@@ -8,7 +8,7 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
     AgentMakePublicResponse,
@@ -23,8 +24,28 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 
 router = APIRouter()
+
+
+def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Raises HTTP 403 if the caller does not have permission to create, update,
+    or delete agents.  Only PROXY_ADMIN users are allowed to perform these
+    write operations.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
 
 
 @router.get(
@@ -160,6 +181,8 @@ async def create_agent(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _check_agent_management_permission(user_api_key_dict)
+
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
@@ -228,11 +251,18 @@ async def get_agent_by_id(agent_id: str):
     try:
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
-            agent = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": agent_id}
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": agent_id},
+                include={"object_permission": True},
             )
-            if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+            if agent_row is not None:
+                agent_dict = agent_row.model_dump()
+                if agent_row.object_permission is not None:
+                    try:
+                        agent_dict["object_permission"] = agent_row.object_permission.model_dump()
+                    except Exception:
+                        agent_dict["object_permission"] = agent_row.object_permission.dict()
+                agent = AgentResponse(**agent_dict)  # type: ignore
 
         if agent is None:
             raise HTTPException(
@@ -290,6 +320,8 @@ async def update_agent(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(
@@ -380,6 +412,8 @@ async def patch_agent(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _check_agent_management_permission(user_api_key_dict)
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
@@ -430,7 +464,10 @@ async def patch_agent(
     tags=["Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_agent(agent_id: str):
+async def delete_agent(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete an agent
 
@@ -448,6 +485,8 @@ async def delete_agent(agent_id: str):
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -703,3 +742,64 @@ async def make_agents_public(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error making agent public: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/agent/daily/activity",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_agent_daily_activity(
+    agent_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_agent_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily activity for specific agents or all accessible agents.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    agent_ids_list = agent_ids.split(",") if agent_ids else None
+    exclude_agent_ids_list: Optional[List[str]] = None
+    if exclude_agent_ids:
+        exclude_agent_ids_list = (
+            exclude_agent_ids.split(",") if exclude_agent_ids else None
+        )
+
+    where_condition = {}
+    if agent_ids_list:
+        where_condition["agent_id"] = {"in": list(agent_ids_list)}
+
+    agent_records = await prisma_client.db.litellm_agentstable.find_many(
+        where=where_condition
+    )
+    agent_metadata = {
+        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
+    }
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=agent_ids_list,
+        entity_metadata_field=agent_metadata,
+        exclude_entity_ids=exclude_agent_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )

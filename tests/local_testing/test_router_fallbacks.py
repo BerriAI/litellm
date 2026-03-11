@@ -1358,9 +1358,10 @@ def test_router_fallbacks_with_custom_model_costs():
             "model_name": "claude-sonnet-4-5-20250929",
             "litellm_params": {
                 "model": "claude-sonnet-4-5-20250929",
-                "api_key": os.environ["ANTHROPIC_API_KEY"],
+                "api_key": os.environ.get("ANTHROPIC_API_KEY", "fake-key"),
                 "input_cost_per_token": 30,
                 "output_cost_per_token": 60,
+                "mock_response": "Hello! How can I help you today?",
             },
         },
         {
@@ -1371,6 +1372,7 @@ def test_router_fallbacks_with_custom_model_costs():
                 "output_cost_per_token": 0.000015,  # 15$/M
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
                 "api_key": "my-fake-key",
+                "mock_response": "Hello! How can I help you today?",
             },
         },
     ]
