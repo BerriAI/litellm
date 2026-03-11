@@ -1,12 +1,14 @@
 import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import NewBadge from "../common_components/NewBadge";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
 import { deleteMCPServer } from "../networking";
+import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
@@ -27,8 +29,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
-  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -162,8 +163,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         handleDelete,
         isLoadingHealth,
         (server: MCPServer) => setByokModalServer(server),
+        recheckServerHealth,
+        recheckingServerIds,
       ),
-    [userRole, isLoadingHealth],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
   );
 
   function handleDelete(server_id: string) {
@@ -299,11 +302,25 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </div>
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
-        {isAdminRole(userRole) && (
-          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-            + Add New MCP Server
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdminRole(userRole) && (
+            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+              + Add New MCP Server
+            </Button>
+          )}
+          {!isAdminRole(userRole) && (
+            <Button
+              className="flex-shrink-0"
+              onClick={() => {
+                setPrefillData(null);
+                setModalVisible(true);
+              }}
+              variant="secondary"
+            >
+              + Submit MCP Server
+            </Button>
+          )}
+        </div>
       </div>
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
@@ -327,6 +344,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
+            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
           </div>
         </TabList>
         <TabPanels>
@@ -410,6 +428,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPNetworkSettings accessToken={accessToken} />
           </TabPanel>
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPSubmissionsTab accessToken={accessToken} />
+            </TabPanel>
+          )}
         </TabPanels>
       </TabGroup>
 
