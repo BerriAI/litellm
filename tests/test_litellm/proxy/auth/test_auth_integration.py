@@ -78,6 +78,10 @@ class TestCustomAuthIntegration:
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_common, patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_user, patch(
             "litellm.proxy.proxy_server.general_settings",
             {},
         ):
@@ -92,6 +96,8 @@ class TestCustomAuthIntegration:
 
             # common_checks must NOT be called (backwards compat)
             mock_common.assert_not_called()
+            # user lookup should have been attempted
+            mock_get_user.assert_called_once()
             # Token should pass through unchanged
             assert result.token == "sk-custom-key"
 
@@ -117,6 +123,10 @@ class TestCustomAuthIntegration:
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_common, patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
             "litellm.proxy.proxy_server.general_settings",
             {"custom_auth_run_common_checks": True},
         ):
@@ -151,6 +161,10 @@ class TestCustomAuthIntegration:
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_common, patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
             "litellm.proxy.proxy_server.general_settings",
             {},
         ):
@@ -173,8 +187,9 @@ class TestCustomAuthIntegration:
     @pytest.mark.asyncio
     async def test_custom_auth_with_end_user_id(self):
         """
-        Custom auth returning an end_user_id should propagate it
-        to the valid_token, regardless of common_checks flag.
+        Custom auth returning an end_user_id triggers the end-user
+        lookup, and budget limits from the DB object are applied to
+        the valid_token.
         """
         from litellm.proxy.auth.user_api_key_auth import _run_post_custom_auth_checks
 
@@ -183,10 +198,19 @@ class TestCustomAuthIntegration:
             end_user_id="eu-123",
         )
 
+        # Simulate _lookup_end_user_and_apply_budget returning a token
+        # with allowed_model_region set (as it would from a real DB lookup)
+        patched_token = valid_token.model_copy()
+        patched_token.allowed_model_region = "us"
+
         with patch(
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_common, patch(
+            "litellm.proxy.auth.user_api_key_auth._lookup_end_user_and_apply_budget",
+            new_callable=AsyncMock,
+            return_value=(patched_token, MagicMock()),
+        ) as mock_lookup, patch(
             "litellm.proxy.proxy_server.general_settings",
             {},
         ):
@@ -199,7 +223,11 @@ class TestCustomAuthIntegration:
                 parent_otel_span=None,
             )
 
+            # Verify the lookup was called with the end_user_id
+            mock_lookup.assert_called_once()
             assert result.end_user_id == "eu-123"
+            # Verify budget info from DB lookup was propagated
+            assert result.allowed_model_region == "us"
 
     @pytest.mark.asyncio
     async def test_custom_auth_with_team_id_triggers_team_lookup(self):
