@@ -96,7 +96,7 @@ def test_filter_redacts_non_string_args():
     assert "REDACTED" in output
 
 
-def test_disable_redaction_passes_secrets_through(_enable_redaction):
+def test_disable_redaction_passes_secrets_through():
     """When _ENABLE_SECRET_REDACTION is False, secrets pass through."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
         record = logging.LogRecord(
