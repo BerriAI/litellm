@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Badge, Text } from "@tremor/react";
 import { Switch, message } from "antd";
 import { LockOutlined, UnlockOutlined } from "@ant-design/icons";
@@ -27,6 +27,11 @@ const BlockToggle: React.FC<BlockToggleProps> = ({
 }) => {
   const [isBlocked, setIsBlocked] = useState(currentBlockedStatus);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Sync state when prop changes externally
+  useEffect(() => {
+    setIsBlocked(currentBlockedStatus);
+  }, [currentBlockedStatus]);
 
   // Only render for proxy admins
   if (userRole !== "proxy_admin") {
