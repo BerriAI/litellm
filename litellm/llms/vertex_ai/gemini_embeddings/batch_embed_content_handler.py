@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 import httpx
 
@@ -15,7 +15,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
-    GeminiEmbedContentResponseObject,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
 )
