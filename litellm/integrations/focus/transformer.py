@@ -10,27 +10,34 @@ import polars as pl
 from .schema import FOCUS_NORMALIZED_SCHEMA
 
 
-def _build_tags_json(row: dict) -> str:
-    """Build a JSON string of metadata tags from a DB row.
+_TAG_KEYS = (
+    "team_id",
+    "team_alias",
+    "user_id",
+    "user_email",
+    "api_key_alias",
+    "model",
+    "model_group",
+    "custom_llm_provider",
+)
 
-    Vantage uses this for Token Allocation — enriching billing data with
-    team, user, and API key metadata.
+
+def _build_tags_expr(available_keys: list[str]) -> pl.Expr:
+    """Build a Polars expression that produces a JSON Tags string per row.
+
+    Uses ``pl.struct`` + ``map_elements`` so the heavy iteration stays inside
+    Polars rather than materialising every row to a Python dict first.
     """
-    tags: dict[str, str] = {}
-    for key in (
-        "team_id",
-        "team_alias",
-        "user_id",
-        "user_email",
-        "api_key_alias",
-        "model",
-        "model_group",
-        "custom_llm_provider",
-    ):
-        val = row.get(key)
-        if val is not None:
-            tags[key] = str(val)
-    return json.dumps(tags) if tags else "{}"
+
+    def _struct_to_json(row: dict) -> str:
+        tags = {k: str(v) for k, v in row.items() if v is not None}
+        return json.dumps(tags) if tags else "{}"
+
+    return (
+        pl.struct(available_keys)
+        .map_elements(_struct_to_json, return_dtype=pl.String)
+        .alias("Tags")
+    )
 
 
 class FocusTransformer:
@@ -43,19 +50,12 @@ class FocusTransformer:
         if frame.is_empty():
             return pl.DataFrame(schema=self.schema)
 
-        # Build Tags JSON from metadata columns
-        tag_col = "Tags"
-        tag_keys = [
-            "team_id", "team_alias", "user_id", "user_email",
-            "api_key_alias", "model", "model_group", "custom_llm_provider",
-        ]
-        available_keys = [k for k in tag_keys if k in frame.columns]
+        # Build Tags JSON from metadata columns using vectorized Polars expression
+        available_keys = [k for k in _TAG_KEYS if k in frame.columns]
         if available_keys:
-            tags_series = frame.select(available_keys).to_dicts()
-            tags_json = [_build_tags_json(row) for row in tags_series]
-            frame = frame.with_columns(pl.Series(tag_col, tags_json))
+            frame = frame.with_columns(_build_tags_expr(available_keys))
         else:
-            frame = frame.with_columns(pl.lit("{}").alias(tag_col))
+            frame = frame.with_columns(pl.lit("{}").alias("Tags"))
 
         # derive period start/end from usage date
         frame = frame.with_columns(
@@ -124,5 +124,5 @@ class FocusTransformer:
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),
-            pl.col(tag_col).cast(pl.String).alias("Tags"),
+            pl.col("Tags").cast(pl.String).alias("Tags"),
         )
