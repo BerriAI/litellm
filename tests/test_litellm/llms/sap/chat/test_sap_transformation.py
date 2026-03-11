@@ -426,7 +426,10 @@ class TestSAPTransformationIntegration:
             headers={}
         )
         assert "translation" not in config["config"]["modules"][0]
-        assert config["config"]["modules"][1]["translation"] == translation_config
+        translation = config["config"]["modules"][1]["translation"]
+        assert translation["input"]["config"]["source_language"] == "en-US"
+        assert translation["input"]["config"]["target_language"] == "de-DE"
+        assert translation["output"]["config"]["target_language"] == "fr-FR"
         assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
         assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
         assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
