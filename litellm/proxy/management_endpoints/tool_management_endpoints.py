@@ -26,6 +26,7 @@ from litellm.types.tool_management import (
     ToolDetailResponse,
     ToolInputPolicy,
     ToolListResponse,
+    ToolOutputPolicy,
     ToolPolicyOption,
     ToolPolicyOptionsResponse,
     ToolPolicyUpdateRequest,
