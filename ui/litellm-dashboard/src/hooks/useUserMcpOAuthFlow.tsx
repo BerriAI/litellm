@@ -44,7 +44,9 @@ interface UseUserMcpOAuthFlowResult {
 }
 
 const FLOW_STATE_KEY = "litellm-user-mcp-oauth-flow-state";
-const RESULT_KEY = "litellm-mcp-oauth-result";
+// Use a user-flow-specific key to avoid collisions with the admin OAuth flow
+// (useMcpOAuthFlow) which uses "litellm-mcp-oauth-result".
+const RESULT_KEY = "litellm-user-mcp-oauth-result";
 const RETURN_URL_KEY = "litellm-mcp-oauth-return-url";
 
 type StoredFlowState = {
@@ -88,7 +90,7 @@ const setStorage = (key: string, value: string) => {
 
 const getStorage = (key: string): string | null => {
   try {
-    return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+    return window.sessionStorage.getItem(key);
   } catch (_) {
     return null;
   }
@@ -98,7 +100,6 @@ const clearStorage = (...keys: string[]) => {
   keys.forEach((k) => {
     try {
       window.sessionStorage.removeItem(k);
-      window.localStorage.removeItem(k);
     } catch (_) {}
   });
 };

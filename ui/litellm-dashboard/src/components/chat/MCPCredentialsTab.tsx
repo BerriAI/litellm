@@ -8,7 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Spin } from "antd";
+import { Spin, message } from "antd";
 import { CheckCircleOutlined, DeleteOutlined, LinkOutlined } from "@ant-design/icons";
 import {
   deleteMCPOAuthUserCredential,
@@ -76,7 +76,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
       await deleteMCPOAuthUserCredential(accessToken, serverId);
       setCredentials((prev) => prev.filter((c) => c.server_id !== serverId));
     } catch {
-      // silently fail — user can retry
+      message.error("Failed to revoke connection. Please try again.");
     } finally {
       setRevoking((prev) => { const n = new Set(prev); n.delete(serverId); return n; });
     }
