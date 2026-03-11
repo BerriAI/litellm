@@ -8529,6 +8529,12 @@ class ProviderConfigManager:
             from litellm.llms.manus.files.transformation import ManusFilesConfig
 
             return ManusFilesConfig()
+        elif LlmProviders.ANTHROPIC == provider:
+            from litellm.llms.anthropic.files.transformation import (
+                AnthropicFilesConfig,
+            )
+
+            return AnthropicFilesConfig()
         return None
 
     @staticmethod

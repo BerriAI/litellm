@@ -3012,6 +3012,15 @@ class BaseLLMHTTPHandler:
                     data=transformed_request,
                     timeout=timeout,
                 )
+        elif isinstance(transformed_request, dict) and "file" in transformed_request:
+            # Handle multipart form-data uploads (e.g., Anthropic Files API)
+            # The dict contains tuples suitable for httpx's `files` parameter
+            upload_response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                files=transformed_request,
+                timeout=timeout,
+            )
         else:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
@@ -3140,6 +3149,15 @@ class BaseLLMHTTPHandler:
                     data=transformed_request,
                     timeout=timeout,
                 )
+        elif isinstance(transformed_request, dict) and "file" in transformed_request:
+            # Handle multipart form-data uploads (e.g., Anthropic Files API)
+            # The dict contains tuples suitable for httpx's `files` parameter
+            upload_response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                files=transformed_request,
+                timeout=timeout,
+            )
         else:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
