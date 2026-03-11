@@ -1202,7 +1202,7 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     @field_validator("cost", mode="before")
     @classmethod
     def parse_cost(cls, v: Any) -> Optional[float]:
-        """Accept cost as a dict (e.g. Perplexity's {total_cost: 0.01}) and extract the float."""
+        """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
         if isinstance(v, dict):
             return v.get("total_cost")
         return v
