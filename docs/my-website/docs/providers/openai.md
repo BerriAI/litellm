@@ -687,6 +687,7 @@ response = litellm.completion(
     tools=[{"type": "web_search_preview"}],  # Supported in Responses API
     # ... other kwargs
 )
+```
 
 ### Examples
 
