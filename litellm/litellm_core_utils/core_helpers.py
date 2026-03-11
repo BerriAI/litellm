@@ -71,10 +71,11 @@ def map_finish_reason(
         return "length"
     elif finish_reason == "ERROR_TOXIC":
         return "content_filter"
-    elif (
-        finish_reason == "ERROR"
-    ):  # openai currently doesn't support an 'error' finish reason
-        return "stop"
+    elif finish_reason in (
+        "ERROR",
+        "error",
+    ):  # Gemini / OpenRouter return lowercase "error" for MALFORMED_FUNCTION_CALL
+        return "malformed_function_call"
     # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
     elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
         return "stop"
