@@ -289,6 +289,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    _response_model_has_provider_prefix,
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -5417,24 +5418,26 @@ def _restamp_streaming_chunk_model(
     request_data: dict,
     model_mismatch_logged: bool,
 ) -> Tuple[Any, bool]:
-    # Always return the client-requested model name (not provider-prefixed internal identifiers)
-    # on streaming chunks.
-    #
-    # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
-    # internal provider/deployment identifier is leaking into the public API, and helps
-    # maintainers/operators catch regressions while preserving OpenAI-compatible output.
+    # Only override the streaming chunk model when it contains a LiteLLM-internal provider
+    # prefix (e.g. ``hosted_vllm/...``).  When the downstream provider already returns a clean
+    # model name, preserve it so callers can see which actual model served the request.
     if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
         return chunk, model_mismatch_logged
 
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
+
+    # If the downstream model does not carry a provider prefix, preserve it as-is.
+    if not _response_model_has_provider_prefix(downstream_model):
+        return chunk, model_mismatch_logged
+
     if not model_mismatch_logged and downstream_model != requested_model_from_client:
         verbose_proxy_logger.debug(
-            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            "litellm_call_id=%s: streaming chunk has provider prefix - downstream=%r -> requested=%r",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
             downstream_model,
+            requested_model_from_client,
         )
         model_mismatch_logged = True
 
