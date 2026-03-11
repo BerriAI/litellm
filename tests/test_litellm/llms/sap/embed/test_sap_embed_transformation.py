@@ -50,10 +50,18 @@ def test_basic_config_transform(fake_token_creator, fake_deployment_url):
         assert body == expected_dict
 
 def test_model_params(fake_token_creator, fake_deployment_url):
-    body = GenAIHubEmbeddingConfig().transform_embedding_request(
-        model="text-embedding-3-small",
-        input="Hi",
-        optional_params={"parameters": {"truncate": "END"}},
-        headers={}
-    )
-    assert body["config"]["modules"]["embeddings"]["model"]["params"] == {"truncate": "END"}
+    with patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+    ), patch(
+        "litellm.llms.sap.embed.transformation.get_token_creator",
+        return_value=fake_token_creator,
+    ):
+        body = GenAIHubEmbeddingConfig().transform_embedding_request(
+            model="text-embedding-3-small",
+            input="Hi",
+            optional_params={"parameters": {"truncate": "END"}},
+            headers={}
+        )
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {"truncate": "END"}

@@ -276,6 +276,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         ]
 
         for modules_dict in fallback_modules:
+            modules_dict = dict(modules_dict)
             fallback_model = modules_dict.pop("model")
             if fallback_model.startswith("sap/"):
                 fallback_model = fallback_model[4:]
@@ -289,9 +290,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 )
             )
 
+        if fallback_modules:
+            modules_payload = modules  # list
+        else:
+            modules_payload = modules[0]  # single dict
+
         request_body = {
             "config": {
-                "modules": modules,
+                "modules": modules_payload,
                 "stream": stream_config,
             },
             **placeholder_values,
