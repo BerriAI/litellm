@@ -98,7 +98,7 @@ export async function makeOpenAIResponsesRequest(
         tools.push({
           type: "mcp",
           server_label: "litellm",
-          server_url: "litellm_proxy/mcp",
+          server_url: `${proxyBaseUrl}/mcp`,
           require_approval: "never",
         });
       } else {
@@ -111,7 +111,7 @@ export async function makeOpenAIResponsesRequest(
           tools.push({
             type: "mcp",
             server_label: "litellm",
-            server_url: `litellm_proxy/mcp/${serverName}`,
+            server_url: `${proxyBaseUrl}/mcp/${serverName}`,
             require_approval: "never",
             ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
           });
@@ -197,8 +197,7 @@ export async function makeOpenAIResponsesRequest(
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
           const delta = event.delta;
           console.log("Text delta", delta);
-          // skip pure whitespace/newlines
-          if (delta.trim().length > 0) {
+          if (delta.length > 0) {
             updateTextUI("assistant", delta, selectedModel);
 
             // Calculate time to first token
