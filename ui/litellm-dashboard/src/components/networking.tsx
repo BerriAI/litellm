@@ -6320,10 +6320,15 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
   try {
-    // Construct base URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    // Construct base URL with optional team_id filter
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    if (teamId) {
+      const params = new URLSearchParams();
+      params.append("team_id", teamId);
+      url = `${url}?${params.toString()}`;
+    }
 
     console.log("Fetching MCP servers from:", url);
 
