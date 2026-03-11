@@ -61,6 +61,9 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    scrub_callback_config_params_from_dict,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -537,11 +540,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if _is_debugging_on() or self.litellm_request_debug:
             verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
+        sanitized_optional_params = scrub_callback_config_params_from_dict(
+            dict(optional_params)
+        )
         self.model_call_details.update(
             {
                 "model": self.model,
                 "messages": self.messages,
-                "optional_params": self.optional_params,
+                "optional_params": sanitized_optional_params,
                 "litellm_params": self.litellm_params,
                 "start_time": self.start_time,
                 "stream": self.stream,
@@ -550,7 +556,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "litellm_call_id": self.litellm_call_id,
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
-                **self.optional_params,
+                **sanitized_optional_params,
                 **additional_params,
             }
         )

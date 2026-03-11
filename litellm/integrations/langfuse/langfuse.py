@@ -20,16 +20,16 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
-from litellm.litellm_core_utils.core_helpers import (
-    safe_deep_copy,
-    reconstruct_model_name,
-    filter_exceptions_from_params,
-)
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    reconstruct_model_name,
+    safe_deep_copy,
+)
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -272,7 +272,9 @@ class LangFuseLogger:
         """
         try:
             verbose_logger.debug(
-                f"Langfuse Logging - Enters logging function for model {kwargs}"
+                "Langfuse Logging - Enters logging function for model call_type=%s litellm_call_id=%s",
+                kwargs.get("call_type"),
+                kwargs.get("litellm_call_id"),
             )
 
             # set default values for input/output for langfuse logging
