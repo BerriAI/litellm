@@ -46,5 +46,3 @@ class TagDeleteRequest(BaseModel):
 
 class TagInfoRequest(BaseModel):
     names: List[str]
-
-

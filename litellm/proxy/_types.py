@@ -1127,13 +1127,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_by: Optional[str] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_at: Optional[datetime] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
     @model_validator(mode="before")

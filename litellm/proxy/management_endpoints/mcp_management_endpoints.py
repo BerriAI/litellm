@@ -163,9 +163,7 @@ if MCP_AVAILABLE:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
 
-    _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(
-        NewMCPServerRequest.model_fields
-    )
+    _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: Any) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
@@ -713,8 +711,7 @@ if MCP_AVAILABLE:
                     check_db_only=True,
                 )
                 user_in_team = any(
-                    m.user_id is not None
-                    and m.user_id == user_api_key_dict.user_id
+                    m.user_id is not None and m.user_id == user_api_key_dict.user_id
                     for m in team_obj.members_with_roles
                 )
                 if not user_in_team:
@@ -723,20 +720,26 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(
+                sanitized_team_id
+            )
         else:
             user_mcp_management_mode = _get_user_mcp_management_mode()
 
             if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-                servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                servers = (
+                    await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                )
                 redacted_mcp_servers = _redact_mcp_credentials_list(servers)
             else:
                 auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
                 aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
                 for auth_context in auth_contexts:
-                    servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                        user_api_key_auth=auth_context
+                    servers = (
+                        await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                            user_api_key_auth=auth_context
+                        )
                     )
                     for server in servers:
                         if server.server_id not in aggregated_servers:
@@ -765,8 +768,10 @@ if MCP_AVAILABLE:
                 if getattr(s, "is_byok", False)
             ]
             if byok_server_ids:
-                cred_rows = await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                cred_rows = (
+                    await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
+                        where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                    )
                 )
                 cred_set = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
@@ -918,7 +923,9 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Admin access required to view MCP server submissions."},
+                detail={
+                    "error": "Admin access required to view MCP server submissions."
+                },
             )
 
         prisma_client = get_prisma_client_or_throw(
@@ -944,7 +951,9 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Admin access required to approve MCP server submissions."},
+                detail={
+                    "error": "Admin access required to approve MCP server submissions."
+                },
             )
 
         prisma_client = get_prisma_client_or_throw(
@@ -990,7 +999,9 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Admin access required to reject MCP server submissions."},
+                detail={
+                    "error": "Admin access required to reject MCP server submissions."
+                },
             )
 
         prisma_client = get_prisma_client_or_throw(
@@ -1432,10 +1443,13 @@ if MCP_AVAILABLE:
                 detail={"error": "User ID not found in token"},
             )
         if payload.save:
-            await store_user_credential(prisma_client, user_id, server_id, payload.credential)
+            await store_user_credential(
+                prisma_client, user_id, server_id, payload.credential
+            )
             from litellm.proxy._experimental.mcp_server.server import (
                 _invalidate_byok_cred_cache,
             )
+
             _invalidate_byok_cred_cache(user_id, server_id)
             return MCPUserCredentialResponse(server_id=server_id, has_credential=True)
         # save=False: credential not persisted
@@ -1469,6 +1483,7 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.server import (
             _invalidate_byok_cred_cache,
         )
+
         _invalidate_byok_cred_cache(user_id, server_id)
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
 
@@ -1650,9 +1665,7 @@ if MCP_AVAILABLE:
         query: Optional[str] = Query(
             None, description="Search filter for server names and descriptions"
         ),
-        category: Optional[str] = Query(
-            None, description="Filter by category"
-        ),
+        category: Optional[str] = Query(None, description="Filter by category"),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -1686,15 +1699,11 @@ if MCP_AVAILABLE:
 
         # Apply category filter
         if category:
-            servers = [
-                s for s in servers if s.get("category", "") == category
-            ]
+            servers = [s for s in servers if s.get("category", "") == category]
 
         # Extract unique categories from the full list (before filtering)
         all_servers = registry.get("servers", [])
-        categories = sorted(
-            set(s.get("category", "Other") for s in all_servers)
-        )
+        categories = sorted(set(s.get("category", "Other") for s in all_servers))
 
         return {
             "servers": servers,

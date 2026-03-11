@@ -168,7 +168,9 @@ class GenerateContentHelper:
             )
         )
         # Extract systemInstruction from kwargs to pass to transform
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
@@ -318,7 +320,9 @@ def generate_content(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -407,7 +411,9 @@ async def agenerate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
