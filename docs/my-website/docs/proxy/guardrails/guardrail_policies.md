@@ -11,7 +11,6 @@ Use policies to group guardrails and control which ones run for specific teams, 
 - Enable/disable specific guardrails for teams, keys, or models
 - Group guardrails into a single policy
 - Inherit from existing policies and override what you need
-- **Chain guardrails into pipelines** — Use the [Policy Flow Builder](./policy_flow_builder) for fallback guardrails and retry (e.g., strict fails → retry with permissive before blocking)
 
 ## Quick Start
 
@@ -310,6 +309,10 @@ Response:
 </TabItem>
 </Tabs>
 
+## Policy Flow Builder
+
+For conditional execution (e.g., run a second guardrail only if the first fails), use the [Policy Flow Builder](./policy_flow_builder) to define pipelines with per-step pass/fail actions.
+
 ## Config Reference
 
 ### `policies`
@@ -324,7 +327,7 @@ policies:
       remove: [...]
     condition:
       model: ...
-    pipeline: ...   # optional - see Policy Flow Builder
+    pipeline: ...  # optional; see Policy Flow Builder
 ```
 
 | Field | Type | Description |
@@ -334,7 +337,7 @@ policies:
 | `guardrails.add` | `list[string]` | Guardrails to enable. |
 | `guardrails.remove` | `list[string]` | Guardrails to disable (useful with inheritance). |
 | `condition.model` | `string` or `list[string]` | Optional. Only apply when model matches. Supports regex. |
-| `pipeline` | `object` | Optional. Ordered guardrail execution with conditional actions. See [Policy Flow Builder](./policy_flow_builder) for details. |
+| `pipeline` | `object` | Optional. Ordered guardrail execution with per-step actions. See [Policy Flow Builder](./policy_flow_builder). |
 
 ### `policy_attachments`
 

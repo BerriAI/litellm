@@ -1,156 +1,178 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Policy Flow Builder
 
-The Policy Flow Builder lets you define **guardrail pipelines** with conditional, sequential execution. Instead of running guardrails independently, you chain them into multi-step flows where each step has configurable **ON PASS** and **ON FAIL** actions.
+The Policy Flow Builder lets you design guardrail pipelines with **conditional execution**. Instead of running guardrails independently, you chain them into ordered steps and control what happens when each guardrail passes or fails.
 
-## Fallback Guardrails & Retry
+Two powerful patterns it enables: **guardrail fallbacks** (try a different guardrail when one fails) and **retrying the same guardrail** (run the same guardrail again if it fails, e.g. to handle transient errors).
 
-A primary use case is **fallback and retry**: run a strict guardrail first, and if it fails, **retry with a fallback guardrail** instead of blocking immediately. Use `on_fail: next` to escalate to the next step.
+## When to use the Flow Builder
 
-| Pattern | Use case |
-|---------|----------|
-| **Strict → Permissive fallback** | Fast, cheap guardrail first; if it flags content, retry with a more accurate (or different provider) guardrail before deciding to block |
-| **Provider fallback** | Primary guardrail (e.g., Lakera) fails or times out → fall back to a secondary provider (e.g., custom model) |
-| **Tiered validation** | Lightweight check first; only run expensive checks when the first step fails |
+| Approach | Use case |
+|----------|----------|
+| **Simple policy** (`guardrails.add`) | All guardrails run in parallel; any failure blocks the request. |
+| **Flow Builder** (pipeline) | Guardrails run in sequence; you choose actions per step (next, block, allow, custom response). |
 
-This reduces false positives (strict-only can over-block) and improves resilience (provider outages don't block all traffic).
+Use the Flow Builder when you need:
 
-## Why use the Flow Builder?
+- **Guardrail fallbacks** — use `on_fail: next` to try a different guardrail when one fails (e.g., fast filter → stricter filter)
+- **Retrying the same guardrail** — add the same guardrail as multiple steps; if it fails, `on_fail: next` moves to the next step, which can be the same guardrail again (useful for transient API errors or rate limits)
+- **Conditional routing** — e.g., if a fast guardrail fails, run a more advanced one instead of blocking immediately
+- **Custom responses** — return a specific message when a guardrail fails instead of a generic block
+- **Data chaining** — pass modified data (e.g., PII-masked content) from one step to the next
+- **Fine-grained control** — different actions on pass vs. fail per step
 
-- **Fallback & retry** — Retry with a different guardrail when the first fails instead of blocking immediately
-- **Conditional escalation** — Strict fails → route to permissive; only block if both fail
-- **Sequential execution** — Run guardrails in order; later steps can use modified data from earlier steps
-- **Flexible actions** — Choose Next Step, Block, Allow, or Custom Response per pass/fail outcome
-- **Test before deploy** — Run the pipeline against sample messages before saving
+## Concepts
 
-## Quick Start
+### Pipeline
 
-<Tabs>
-<TabItem value="ui" label="UI (LiteLLM Dashboard)">
+A pipeline has:
 
-**Step 1: Open the Flow Builder**
+- **Mode**: `pre_call` (before the LLM) or `post_call` (after the LLM)
+- **Steps**: Ordered list of guardrail steps
 
-1. Go to **Policies** and click **+ Create New Policy**
-2. Select **Flow Builder** (instead of Simple)
-3. Click **Continue to Builder**
+### Step actions
 
-Or, when editing an existing policy with a pipeline, click **Edit** — the Flow Builder opens directly.
-
-**Step 2: Build your pipeline**
-
-1. Add steps by clicking the **+** between steps
-2. For each step, select a guardrail and set **ON PASS** and **ON FAIL** actions
-3. Use **Test** to run the pipeline against sample messages
-4. Click **Save** when done
-
-</TabItem>
-<TabItem value="config" label="config.yaml">
-
-```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: strict-filter
-    litellm_params:
-      guardrail: my_guardrails.StrictFilter
-      mode: pre_call
-  - guardrail_name: permissive-filter
-    litellm_params:
-      guardrail: my_guardrails.PermissiveFilter
-      mode: pre_call
-
-policies:
-  content-safety:
-    description: "Strict filter with permissive fallback"
-    guardrails:
-      add: [strict-filter, permissive-filter]
-    pipeline:
-      mode: pre_call
-      steps:
-        - guardrail: strict-filter
-          on_fail: next    # escalate to permissive
-          on_pass: allow   # clean content proceeds
-        - guardrail: permissive-filter
-          on_fail: block   # hard block
-          on_pass: allow
-```
-
-</TabItem>
-</Tabs>
-
-## Step Actions
-
-Each pipeline step has two action dropdowns:
+Each step defines what happens when the guardrail **passes** and when it **fails**:
 
 | Action | Description |
 |--------|-------------|
-| **Next Step** | Continue to the next step in the pipeline |
-| **Allow** | Stop the pipeline and allow the request |
+| **Next Step** | Continue to the next guardrail in the pipeline |
+| **Allow** | Stop the pipeline and allow the request to proceed |
 | **Block** | Stop the pipeline and block the request |
-| **Custom Response** | Return a custom message instead of the default block/allow response |
+| **Custom Response** | Return a custom message instead of the default block |
 
-### ON PASS vs ON FAIL
+### Step options
 
-- **ON PASS** — Action when the guardrail accepts the content
-- **ON FAIL** — Action when the guardrail rejects the content
+| Field | Type | Description |
+|-------|------|--------------|
+| `guardrail` | `string` | Name of the guardrail to run |
+| `on_pass` | `string` | Action when guardrail passes: `next`, `allow`, `block`, `modify_response` |
+| `on_fail` | `string` | Action when guardrail fails: `next`, `allow`, `block`, `modify_response` |
+| `pass_data` | `boolean` | Forward modified request data (e.g., PII-masked) to the next step |
+| `modify_response_message` | `string` | Custom message when using `modify_response` action |
 
-**Fallback example:** A strict PII filter with `on_fail: next` escalates to a permissive filter; if the permissive filter passes, the request is allowed. The pipeline effectively **retries** with the fallback guardrail when the first one fails.
+## Using the Flow Builder (UI)
 
-## Pipeline Mode
+1. Go to **Policies** in the LiteLLM Admin UI
+2. Click **+ Create New Policy** or **Edit** on an existing policy
+3. Select **Flow Builder** (instead of the simple form)
+4. Design your flow:
+   - **Trigger** — Incoming LLM request (runs when the policy matches)
+   - **Steps** — Add guardrails, set ON PASS and ON FAIL actions per step
+   - **End** — Request proceeds to the LLM
+5. Use the **+** between steps to insert new steps
+6. Use the **Test** panel to run sample messages through the pipeline before saving
+7. Click **Save** to create or update the policy
 
-| Mode | When it runs |
-|------|--------------|
-| `pre_call` | Before the request is sent to the LLM (input validation) |
-| `post_call` | After the LLM responds (output validation) |
+## Config (YAML)
 
-## Example: Fallback & Retry
+Define a pipeline in your policy config:
 
 ```yaml showLineNumbers title="config.yaml"
 guardrails:
-  - guardrail_name: lakera-prompt-injection
-    litellm_params:
-      guardrail: lakera
-      mode: pre_call
-      api_key: os.environ/LAKERA_API_KEY
-  - guardrail_name: custom-pii-check
+  - guardrail_name: pii_masking
     litellm_params:
       guardrail: presidio
       mode: pre_call
 
+  - guardrail_name: prompt_injection
+    litellm_params:
+      guardrail: lakera
+      mode: pre_call
+
 policies:
-  # Fallback & retry: Lakera first, fall back to custom check when it fails
-  prompt-safety-with-fallback:
+  my-pipeline-policy:
+    description: "PII mask first, then check for prompt injection"
     guardrails:
-      add: [lakera-prompt-injection, custom-pii-check]
+      add:
+        - pii_masking
+        - prompt_injection
     pipeline:
       mode: pre_call
       steps:
-        - guardrail: lakera-prompt-injection
-          on_fail: next   # retry with fallback guardrail instead of blocking
+        - guardrail: pii_masking
+          on_pass: next
+          on_fail: block
+          pass_data: true
+        - guardrail: prompt_injection
           on_pass: allow
-        - guardrail: custom-pii-check
-          on_fail: block  # both failed → block
-          on_pass: allow
+          on_fail: block
+
+policy_attachments:
+  - policy: my-pipeline-policy
+    scope: "*"
 ```
 
-**Flow:** Request → Lakera (fail) → **retry** with custom-pii-check → allow if it passes, block if it fails.
+## Fallbacks and retries
 
-Set `pass_data: true` on a step to forward modified request data (e.g., PII-masked content) to the next step. Useful when an earlier guardrail transforms the input and you want later steps to operate on the transformed data.
+### Guardrail fallbacks
+
+Use `on_fail: next` to fall back to another guardrail when one fails. Run a lightweight guardrail first; if it fails, escalate to a stricter or different provider:
 
 ```yaml
-steps:
-  - guardrail: pii_masking
-    on_pass: next
-    on_fail: block
-    pass_data: true   # forward masked content to next step
-  - guardrail: prompt_injection
-    on_pass: allow
-    on_fail: block
+policies:
+  fallback-policy:
+    guardrails:
+      add:
+        - fast_content_filter
+        - strict_content_filter
+    pipeline:
+      mode: pre_call
+      steps:
+        - guardrail: fast_content_filter
+          on_pass: allow
+          on_fail: next
+        - guardrail: strict_content_filter
+          on_pass: allow
+          on_fail: block
 ```
 
-## Test Pipeline (API)
+If `fast_content_filter` passes → allow. If it fails → run `strict_content_filter`; pass → allow, fail → block.
 
-Run a pipeline against sample messages without saving:
+### Retrying the same guardrail
+
+Add the same guardrail as multiple steps to retry on failure. Useful for transient errors (API timeouts, rate limits):
+
+```yaml
+policies:
+  retry-policy:
+    guardrails:
+      add:
+        - lakera_prompt_injection
+    pipeline:
+      mode: pre_call
+      steps:
+        - guardrail: lakera_prompt_injection
+          on_pass: allow
+          on_fail: next
+        - guardrail: lakera_prompt_injection
+          on_pass: allow
+          on_fail: block
+```
+
+First attempt passes → allow. First attempt fails → retry the same guardrail; second pass → allow, second fail → block.
+
+## Example: Custom response on fail
+
+Return a branded message instead of a generic block:
+
+```yaml
+policies:
+  branded-block-policy:
+    guardrails:
+      add:
+        - pii_detector
+    pipeline:
+      mode: pre_call
+      steps:
+        - guardrail: pii_detector
+          on_pass: allow
+          on_fail: modify_response
+          modify_response_message: "Your message contains sensitive information. Please remove PII and try again."
+```
+
+## Test a pipeline (API)
+
+Test a pipeline with sample messages before attaching it:
 
 ```bash
 curl -X POST "http://localhost:4000/policies/test-pipeline" \
@@ -160,45 +182,38 @@ curl -X POST "http://localhost:4000/policies/test-pipeline" \
     "pipeline": {
       "mode": "pre_call",
       "steps": [
-        {"guardrail": "strict-filter", "on_pass": "next", "on_fail": "block"},
-        {"guardrail": "permissive-filter", "on_pass": "allow", "on_fail": "block"}
+        {
+          "guardrail": "pii_masking",
+          "on_pass": "next",
+          "on_fail": "block",
+          "pass_data": true
+        },
+        {
+          "guardrail": "prompt_injection",
+          "on_pass": "allow",
+          "on_fail": "block"
+        }
       ]
     },
     "test_messages": [
-      {"role": "user", "content": "Sample message to test"}
+      {"role": "user", "content": "What is 2+2?"},
+      {"role": "user", "content": "My SSN is 123-45-6789"}
     ]
   }'
 ```
 
-Response includes step-by-step results: which guardrails passed/failed, actions taken, and timing.
+Response includes per-step outcomes (pass/fail/error), actions taken, and timing.
 
-## Config Reference
+## Pipeline vs simple policy
 
-### `pipeline` (optional)
+When a policy has a `pipeline`, the pipeline defines execution order and actions. The `guardrails.add` list must include all guardrails used in the pipeline steps.
 
-When present on a policy, guardrails run in pipeline order instead of independently.
+| Policy type | Execution |
+|-------------|-----------|
+| Simple (`guardrails.add` only) | All guardrails run; any failure blocks |
+| Pipeline (`pipeline` present) | Steps run in order; actions control flow |
 
-```yaml
-pipeline:
-  mode: pre_call | post_call
-  steps:
-    - guardrail: <guardrail_name>
-      on_pass: next | allow | block | modify_response
-      on_fail: next | allow | block | modify_response
-      pass_data: false | true
-      modify_response_message: <string>   # for modify_response action
-```
+## Related docs
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mode` | `string` | `pre_call` | When the pipeline runs: `pre_call` or `post_call` |
-| `steps` | `list` | — | Ordered list of pipeline steps (at least 1) |
-| `guardrail` | `string` | — | **Required.** Name of the guardrail to run |
-| `on_pass` | `string` | `allow` | Action when guardrail passes |
-| `on_fail` | `string` | `block` | Action when guardrail fails |
-| `pass_data` | `bool` | `false` | Forward modified data to next step |
-| `modify_response_message` | `string` | `null` | Custom message for `modify_response` action |
-
-### Relationship to `guardrails.add`
-
-`guardrails.add` lists which guardrails the policy uses. When a `pipeline` is present, those guardrails are executed in the order defined by `pipeline.steps`. If there is no `pipeline`, guardrails in `guardrails.add` run independently (legacy behavior).
+- [Guardrail Policies](./guardrail_policies) — Policy basics, attachments, inheritance
+- [Policy Templates](./policy_templates) — Pre-built policy templates
