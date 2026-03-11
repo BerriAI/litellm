@@ -2,8 +2,20 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import newrelic.agent  # ensure submodule is loaded so patch() can resolve it
 import pytest
+
+# newrelic is a container-only dependency (requirements.txt) and is not installed
+# in the CI Python environment. Mock it in sys.modules before importing the
+# integration so that deferred `import newrelic.agent` calls inside NewRelicLogger
+# methods resolve to these mocks rather than failing with ModuleNotFoundError.
+_mock_newrelic = MagicMock()
+_mock_newrelic_agent = MagicMock()
+# Explicitly link so _mock_newrelic.agent IS _mock_newrelic_agent. Without this,
+# the first getattr(_mock_newrelic, 'agent') auto-creates a different child mock,
+# causing patch("newrelic.agent.xxx") to patch the wrong object.
+_mock_newrelic.agent = _mock_newrelic_agent
+sys.modules["newrelic"] = _mock_newrelic
+sys.modules["newrelic.agent"] = _mock_newrelic_agent
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -22,9 +34,8 @@ NR_ENV = {
 
 def make_logger(**kwargs) -> NewRelicLogger:
     """Instantiate NewRelicLogger with NR agent calls mocked out."""
-    with patch("newrelic.agent.register_application"):
-        with patch.dict(os.environ, NR_ENV):
-            return NewRelicLogger(**kwargs)
+    with patch.dict(os.environ, NR_ENV):
+        return NewRelicLogger(**kwargs)
 
 
 def make_kwargs(
@@ -106,8 +117,8 @@ class TestNewRelicLoggerInit:
         assert logger.enabled is True
 
     def test_disabled_on_import_error(self):
-        with patch(
-            "newrelic.agent.register_application", side_effect=ImportError
+        with patch.object(
+            _mock_newrelic_agent, "register_application", side_effect=ImportError
         ):
             with patch.dict(os.environ, NR_ENV):
                 logger = NewRelicLogger()
