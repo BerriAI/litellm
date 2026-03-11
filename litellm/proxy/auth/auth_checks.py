@@ -398,7 +398,7 @@ async def common_checks(  # noqa: PLR0915
     # 2. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise ProxyException(
-            message=f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin.",
+            message=f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.",
             type=ProxyErrorTypes.auth_error,
             param="team_id",
             code=status.HTTP_403_FORBIDDEN,
