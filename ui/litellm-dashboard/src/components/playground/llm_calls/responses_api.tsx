@@ -3,7 +3,7 @@ import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import type { MCPEvent } from "../../chat/types";
 import { MCPServer } from "../../mcp_tools/types";
 import {
   CodeInterpreterResult,

@@ -165,7 +165,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     createConversation,
     appendMessage,
     updateLastAssistantMessage,
-    truncateAfterMessage,
+    truncateFromMessage,
     deleteConversation,
     renameConversation,
   } = useChatHistory(activeConversationId);
@@ -397,10 +397,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       const priorMessages = (idx === -1 ? msgs : msgs.slice(0, idx))
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-      truncateAfterMessage(activeConversationId, messageId);
+      truncateFromMessage(activeConversationId, messageId);
       handleSend(newContent, priorMessages);
     },
-    [activeConversationId, isStreaming, activeConversation, truncateAfterMessage, handleSend],
+    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend],
   );
 
   const handleSubmit = useCallback(

@@ -2,8 +2,6 @@ import React from "react";
 import { Typography, Collapse } from "antd";
 import type { MCPEvent } from "../../chat/types";
 
-export type { MCPEvent };
-
 const { Text } = Typography;
 const { Panel } = Collapse;
 
