@@ -15,6 +15,7 @@ from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
+    _resolve_team_allowed_mcp_servers,
     _set_object_permission,
     validate_key_mcp_servers_against_team,
 )
@@ -394,4 +395,41 @@ async def test_validate_team_access_groups_resolve_to_servers(mock_access_groups
         object_permission={"mcp_servers": ["server-from-group"]},
         team_obj=team_obj,
     )
+
+
+# ---- Tests for _resolve_team_allowed_mcp_servers with JSON string mcp_tool_permissions ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(mock_access_groups):
+    """mcp_tool_permissions stored as a JSON string (via safe_dumps) should be deserialized correctly."""
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = ["server-1"]
+    mock_perm.mcp_access_groups = []
+    mock_perm.mcp_tool_permissions = json.dumps({"server-2": ["tool1"]})
+
+    result = await _resolve_team_allowed_mcp_servers(mock_perm)
+    assert result == {"server-1", "server-2"}
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(mock_access_groups):
+    """mcp_tool_permissions as a dict should work without deserialization."""
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = []
+    mock_perm.mcp_access_groups = []
+    mock_perm.mcp_tool_permissions = {"server-a": ["tool1"]}
+
+    result = await _resolve_team_allowed_mcp_servers(mock_perm)
+    assert result == {"server-a"}
 
