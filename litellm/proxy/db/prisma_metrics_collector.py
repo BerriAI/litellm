@@ -17,25 +17,29 @@ def _get_or_create_gauge(
     labelnames: Optional[list] = None,
     multiprocess_mode: str = "max",
 ):
-    from prometheus_client import REGISTRY, Gauge
+    from prometheus_client import Gauge
 
-    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
-    if names_to_collectors is not None and name in names_to_collectors:
-        return names_to_collectors[name]
-    if labelnames:
-        return Gauge(
-            name, description, labelnames=labelnames, multiprocess_mode=multiprocess_mode
-        )
-    return Gauge(name, description, multiprocess_mode=multiprocess_mode)
+    try:
+        if labelnames:
+            return Gauge(
+                name, description, labelnames=labelnames, multiprocess_mode=multiprocess_mode
+            )
+        return Gauge(name, description, multiprocess_mode=multiprocess_mode)
+    except ValueError:
+        from prometheus_client import REGISTRY
+
+        return REGISTRY._names_to_collectors.get(name)
 
 
 def _get_or_create_counter(name: str, description: str):
-    from prometheus_client import REGISTRY, Counter
+    from prometheus_client import Counter
 
-    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
-    if names_to_collectors is not None and name in names_to_collectors:
-        return names_to_collectors[name]
-    return Counter(name, description)
+    try:
+        return Counter(name, description)
+    except ValueError:
+        from prometheus_client import REGISTRY
+
+        return REGISTRY._names_to_collectors.get(name)
 
 
 _POOL_METRICS_SQL = """
