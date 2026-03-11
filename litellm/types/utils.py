@@ -1234,6 +1234,13 @@ class Delta(SafeAttributeModel, OpenAIObject):
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
+        # Map 'reasoning' to 'reasoning_content' for providers that return
+        # delta.reasoning (e.g., Cerebras, Groq gpt-oss models).
+        # Must be done before super().__init__ to prevent 'reasoning' from
+        # leaking as an extra attribute on the parent model.
+        if reasoning_content is None and "reasoning" in params:
+            reasoning_content = params.pop("reasoning", None)
+
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
@@ -3114,6 +3121,7 @@ class LlmProviders(str, Enum):
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
+    BLACK_FOREST_LABS = "black_forest_labs"
     AZURE = "azure"
     AZURE_TEXT = "azure_text"
     AZURE_AI = "azure_ai"
