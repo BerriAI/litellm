@@ -278,7 +278,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         for modules_dict in fallback_modules:
             modules_dict = dict(modules_dict)
-            fallback_model = modules_dict.pop("model")
+            fallback_model = modules_dict.pop("model", None)
+            if fallback_model is None:
+                raise ValueError(
+                    "Each entry in `fallback_sap_modules` must include a 'model' key."
+                )
             if fallback_model.startswith("sap/"):
                 fallback_model = fallback_model[4:]
             fallback_template = modules_dict.pop("messages", [])
