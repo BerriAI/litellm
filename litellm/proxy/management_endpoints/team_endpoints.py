@@ -2384,24 +2384,24 @@ async def team_member_update(
             rpm_limit=data.rpm_limit,
         )
 
-    ### update team member models
-    if data.models is not None:
-        await prisma_client.db.litellm_teammembership.upsert(
-            where={
-                "user_id_team_id": {
-                    "user_id": received_user_id,
-                    "team_id": data.team_id,
-                }
-            },
-            data={
-                "create": {
-                    "user_id": received_user_id,
-                    "team_id": data.team_id,
-                    "models": data.models,
+        ### update team member models (inside transaction for atomicity)
+        if data.models is not None:
+            await tx.litellm_teammembership.upsert(
+                where={
+                    "user_id_team_id": {
+                        "user_id": received_user_id,
+                        "team_id": data.team_id,
+                    }
                 },
-                "update": {"models": data.models},
-            },
-        )
+                data={
+                    "create": {
+                        "user_id": received_user_id,
+                        "team_id": data.team_id,
+                        "models": data.models,
+                    },
+                    "update": {"models": data.models},
+                },
+            )
 
     ### update team member role
     if data.role is not None:
