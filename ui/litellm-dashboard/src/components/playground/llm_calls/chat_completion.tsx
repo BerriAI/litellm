@@ -3,8 +3,7 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
-import { MCPServer } from "../../mcp_tools/types";
-import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import type { MCPEvent, MCPServer } from "../../mcp_tools/types";
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
