@@ -25,9 +25,13 @@ const { Text } = Typography;
 
 interface UserDropdownProps {
   onLogout: () => void;
+  disableBouncingIconByEnv?: boolean;
 }
 
-const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
+const UserDropdown: React.FC<UserDropdownProps> = ({
+  onLogout,
+  disableBouncingIconByEnv = false,
+}) => {
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableUsageIndicator = useDisableUsageIndicator();
@@ -169,23 +173,25 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           aria-label="Toggle hide blog posts"
         />
       </Space>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Bouncing Icon</Text>
-        <Switch
-          size="small"
-          checked={disableBouncingIcon}
-          onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableBouncingIcon", "true");
-              emitLocalStorageChange("disableBouncingIcon");
-            } else {
-              removeLocalStorageItem("disableBouncingIcon");
-              emitLocalStorageChange("disableBouncingIcon");
-            }
-          }}
-          aria-label="Toggle hide bouncing icon"
-        />
-      </Space>
+      {!disableBouncingIconByEnv && (
+        <Space style={{ width: "100%", justifyContent: "space-between" }}>
+          <Text type="secondary">Hide Bouncing Icon</Text>
+          <Switch
+            size="small"
+            checked={disableBouncingIcon}
+            onChange={(checked) => {
+              if (checked) {
+                setLocalStorageItem("disableBouncingIcon", "true");
+                emitLocalStorageChange("disableBouncingIcon");
+              } else {
+                removeLocalStorageItem("disableBouncingIcon");
+                emitLocalStorageChange("disableBouncingIcon");
+              }
+            }}
+            aria-label="Toggle hide bouncing icon"
+          />
+        </Space>
+      )}
     </Space>
   );
 

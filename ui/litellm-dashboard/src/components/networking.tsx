@@ -268,6 +268,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  disable_bouncing_icon?: boolean;
 }
 
 export interface CredentialsResponse {

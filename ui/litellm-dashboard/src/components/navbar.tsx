@@ -53,6 +53,8 @@ const Navbar: React.FC<NavbarProps> = ({
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
+  const disableBouncingIconFromEnv = uiConfig?.disable_bouncing_icon === true;
+  const shouldHideBouncingIcon = disableBouncingIconFromEnv || disableBouncingIcon;
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
@@ -109,13 +111,13 @@ const Navbar: React.FC<NavbarProps> = ({
               </Link>
               {version && (
                 <div className="relative">
-                  {!disableBouncingIcon && (
+                  {!shouldHideBouncingIcon && (
                     <span
                       className="absolute -top-1 -left-2 text-lg animate-bounce"
                       style={{ animationDuration: "2s" }}
                       title="Thanks for using LiteLLM!"
                     >
-                      🌑
+                      ❄️
                     </span>
                   )}
                   <Tag className="relative text-xs font-medium cursor-pointer z-10">
@@ -186,7 +188,12 @@ const Navbar: React.FC<NavbarProps> = ({
             </Button>
             <BlogDropdown />
 
-            {!isPublicPage && <UserDropdown onLogout={handleLogout} />}
+            {!isPublicPage && (
+              <UserDropdown
+                onLogout={handleLogout}
+                disableBouncingIconByEnv={disableBouncingIconFromEnv}
+              />
+            )}
           </div>
         </div>
       </div>

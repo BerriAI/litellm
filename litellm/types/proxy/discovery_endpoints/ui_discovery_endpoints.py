@@ -9,3 +9,4 @@ class UiDiscoveryEndpoints(BaseModel):
     auto_redirect_to_sso: bool
     admin_ui_disabled: bool
     sso_configured: bool
+    disable_bouncing_icon: bool = False
