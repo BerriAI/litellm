@@ -1,7 +1,8 @@
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { Select } from "antd";
 import { Button, DateRangePickerValue, Text } from "@tremor/react";
 import moment from "moment";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -111,6 +112,19 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   timezoneOffset,
   onTimezoneChange,
 }) => {
+  const timezoneOptions = useMemo(() => {
+    const localOffset = getLocalTimezoneOffset();
+    const hasLocalInList = TIMEZONE_OPTIONS.some((tz) => tz.offset === localOffset);
+    const opts = TIMEZONE_OPTIONS.map((tz) => ({
+      value: tz.offset,
+      label: tz.label + (tz.offset === localOffset ? " (Local)" : ""),
+    }));
+    if (!hasLocalInList) {
+      opts.unshift({ value: localOffset, label: `Local (${formatTimezoneLabel(localOffset)})` });
+    }
+    return opts;
+  }, []);
+
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -120,6 +134,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const [endDate, setEndDate] = useState("");
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const settingsPanelRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
   const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
@@ -385,6 +400,27 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 </div>
 
                 <div className="p-6 space-y-6 pb-20">
+                  {/* Timezone selector */}
+                  {onTimezoneChange && (
+                    <div ref={settingsPanelRef}>
+                      <label className="text-sm text-gray-700 mb-1 block">Timezone</label>
+                      <Select
+                        showSearch
+                        value={timezoneOffset !== undefined ? timezoneOffset : getLocalTimezoneOffset()}
+                        onChange={(val) => onTimezoneChange(val)}
+                        options={timezoneOptions}
+                        popupMatchSelectWidth={false}
+                        listHeight={200}
+                        filterOption={(input, option) =>
+                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                        }
+                        getPopupContainer={() => settingsPanelRef.current!}
+                        className="w-full"
+                        size="small"
+                      />
+                    </div>
+                  )}
+
                   {/* Start date */}
                   <div>
                     <label className="text-sm text-gray-700 mb-1 block">Start date</label>
@@ -462,27 +498,6 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           </div>
         )}
       </div>
-      {/* Timezone selector */}
-      {onTimezoneChange && (() => {
-        const localOffset = getLocalTimezoneOffset();
-        const hasLocalInList = TIMEZONE_OPTIONS.some((tz) => tz.offset === localOffset);
-        return (
-          <select
-            value={timezoneOffset !== undefined ? timezoneOffset : localOffset}
-            onChange={(e) => onTimezoneChange(Number(e.target.value))}
-            className="px-2 py-2 text-xs border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-gray-700"
-          >
-            {!hasLocalInList && (
-              <option value={localOffset}>Local ({formatTimezoneLabel(localOffset)})</option>
-            )}
-            {TIMEZONE_OPTIONS.map((tz) => (
-              <option key={tz.label} value={tz.offset}>
-                {tz.label}{tz.offset === localOffset ? " (Local)" : ""}
-              </option>
-            ))}
-          </select>
-        );
-      })()}
     </div>
   );
 };
