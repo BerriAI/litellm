@@ -1635,7 +1635,8 @@ class Router:
 
         class FallbackStreamWrapper(CustomStreamWrapper):
             def __init__(self, async_generator: AsyncGenerator):
-                # Copy attributes from the original model_response
+                # Keep ref to original stream for __getattr__ proxy
+                self._wrapped_response = model_response
                 super().__init__(
                     completion_stream=async_generator,
                     model=model_response.model,
@@ -1646,6 +1647,10 @@ class Router:
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
+
+            def __getattr__(self, name: str):
+                # Proxy unknown attrs to the original stream (e.g. ddtrace .handler)
+                return getattr(self._wrapped_response, name)
 
             def __aiter__(self):
                 return self
@@ -1781,6 +1786,8 @@ class Router:
 
         class SyncFallbackStreamWrapper(CustomStreamWrapper):
             def __init__(self, sync_generator: Generator):
+                # Keep ref to original stream for __getattr__ proxy
+                self._wrapped_response = model_response
                 super().__init__(
                     completion_stream=sync_generator,
                     model=model_response.model,
@@ -1790,6 +1797,10 @@ class Router:
                 self._sync_generator = sync_generator
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
+
+            def __getattr__(self, name: str):
+                # Proxy unknown attrs to the original stream (e.g. ddtrace .handler)
+                return getattr(self._wrapped_response, name)
 
             def __iter__(self):
                 return self

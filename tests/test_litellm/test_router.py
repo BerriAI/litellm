@@ -1526,6 +1526,73 @@ def test_completion_streaming_iterator_preserves_hidden_params():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_proxies_unknown_attrs():
+    """FallbackStreamWrapper.__getattr__ proxies attrs from the original stream."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {}
+    # Simulate an attribute added by a third-party patch (e.g. ddtrace .handler)
+    mock_response.handler = MagicMock(name="ddtrace-handler")
+
+    async def _empty():
+        return
+        yield
+
+    mock_response.__aiter__ = lambda self: _empty().__aiter__()
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result.handler is mock_response.handler
+
+
+def test_completion_streaming_iterator_proxies_unknown_attrs():
+    """SyncFallbackStreamWrapper.__getattr__ proxies attrs from the original stream."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {}
+    mock_response.handler = MagicMock(name="ddtrace-handler")
+    mock_response.__iter__ = MagicMock(return_value=iter([]))
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result.handler is mock_response.handler
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
     """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
     from unittest.mock import MagicMock
