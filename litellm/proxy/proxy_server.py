@@ -6132,9 +6132,31 @@ class ProxyStartupEvent:
         # Vantage Background Job
         ########################################################
         from litellm.integrations.vantage.vantage_logger import VantageLogger
-        from litellm.proxy.spend_tracking.vantage_endpoints import is_vantage_setup
+        from litellm.proxy.spend_tracking.vantage_endpoints import (
+            _get_vantage_settings,
+            is_vantage_setup,
+            is_vantage_setup_in_config,
+            is_vantage_setup_in_db,
+        )
 
         if await is_vantage_setup():
+            # If configured via DB but not in config.yaml callbacks,
+            # instantiate and register a VantageLogger so the scheduler
+            # can find it.
+            if not is_vantage_setup_in_config() and await is_vantage_setup_in_db():
+                try:
+                    db_settings = await _get_vantage_settings()
+                    if db_settings:
+                        vantage_logger = VantageLogger(
+                            api_key=db_settings.get("api_key"),
+                            integration_token=db_settings.get("integration_token"),
+                            base_url=db_settings.get("base_url"),
+                        )
+                        litellm.callbacks.append(vantage_logger)  # type: ignore[arg-type]
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "Failed to register VantageLogger from DB settings: %s", e
+                    )
             await VantageLogger.init_vantage_background_job(scheduler=scheduler)
 
         ########################################################

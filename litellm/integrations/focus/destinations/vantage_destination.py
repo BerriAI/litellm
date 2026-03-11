@@ -108,7 +108,7 @@ class FocusVantageDestination(FocusDestination):
             if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
                 await self._upload_size_limited(header, batch_lines, filename, batch_num)
             else:
-                batch_filename = f"{filename}.part{batch_num}" if batch_num > 0 else filename
+                batch_filename = f"{filename}.part{batch_num}"
                 await self._upload_csv(batch_csv, batch_filename)
             batch_num += 1
 

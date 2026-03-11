@@ -304,6 +304,8 @@ async def init_vantage_settings(
             message="Vantage settings initialized successfully", status="success"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error initializing Vantage settings: {str(e)}"

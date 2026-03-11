@@ -43,6 +43,9 @@ FOCUS_NORMALIZED_SCHEMA = pl.Schema(
         ("SubAccountId", pl.String),
         ("SubAccountName", pl.String),
         ("SubAccountType", pl.String),
+        # Changed from pl.Object to pl.String to hold JSON metadata
+        # (team_id, user_id, etc.) needed by Vantage Token Allocation.
+        # Previously Tags was always None so no existing data is lost.
         ("Tags", pl.String),
     ]
 )
