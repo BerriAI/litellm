@@ -180,20 +180,28 @@ async def update_vantage_settings(
     try:
         current_settings = await _get_vantage_settings()
 
+        if not current_settings:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
+                },
+            )
+
         updated_api_key = (
             request.api_key
             if request.api_key is not None
-            else current_settings["api_key"]
+            else current_settings.get("api_key", "")
         )
         updated_token = (
             request.integration_token
             if request.integration_token is not None
-            else current_settings["integration_token"]
+            else current_settings.get("integration_token", "")
         )
         updated_base_url = (
             request.base_url
             if request.base_url is not None
-            else current_settings["base_url"]
+            else current_settings.get("base_url", "https://api.vantage.sh")
         )
 
         await _set_vantage_settings(
@@ -208,14 +216,7 @@ async def update_vantage_settings(
             message="Vantage settings updated successfully", status="success"
         )
 
-    except HTTPException as e:
-        if e.status_code == 400:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
-                },
-            )
+    except HTTPException:
         raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error updating Vantage settings: {str(e)}")
@@ -340,12 +341,32 @@ async def vantage_dry_run_export(
         )
 
     try:
-        from litellm.integrations.vantage.vantage_logger import VantageLogger
+        # Dry-run uses the FOCUS database + transformer directly,
+        # bypassing the destination so no Vantage credentials are required.
+        from litellm.integrations.focus.database import FocusLiteLLMDatabase
+        from litellm.integrations.focus.transformer import FocusTransformer
 
-        logger = VantageLogger()
-        dry_run_result = await logger.dry_run_export_usage_data(
-            limit=request.limit
-        )
+        database = FocusLiteLLMDatabase()
+        transformer = FocusTransformer()
+
+        data = await database.get_usage_data(limit=request.limit)
+        normalized = transformer.transform(data)
+
+        usage_sample = data.head(min(50, len(data))).to_dicts() if not data.is_empty() else []
+        normalized_sample = normalized.head(min(50, len(normalized))).to_dicts() if not normalized.is_empty() else []
+
+        summary = {
+            "total_records": len(normalized),
+            "total_spend": float(normalized.select("BilledCost").sum().item()) if not normalized.is_empty() and "BilledCost" in normalized.columns else 0.0,
+            "unique_teams": normalized["SubAccountId"].n_unique() if not normalized.is_empty() and "SubAccountId" in normalized.columns else 0,
+            "unique_models": normalized["ResourceType"].n_unique() if not normalized.is_empty() and "ResourceType" in normalized.columns else 0,
+        }
+
+        dry_run_result = {
+            "usage_data": usage_sample,
+            "normalized_data": normalized_sample,
+            "summary": summary,
+        }
 
         verbose_proxy_logger.info("Vantage dry run export completed successfully")
 
@@ -353,7 +374,7 @@ async def vantage_dry_run_export(
             message="Vantage dry run export completed successfully.",
             status="success",
             dry_run_data=dry_run_result,
-            summary=dry_run_result.get("summary") if dry_run_result else None,
+            summary=summary,
         )
 
     except Exception as e:

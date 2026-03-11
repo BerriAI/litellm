@@ -56,12 +56,18 @@ class FocusVantageDestination(FocusDestination):
             verbose_logger.debug("Vantage destination: empty content, skipping upload")
             return
 
-        # If the payload is within limits, send in one shot
-        if len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD:
+        # Check both size and row-count limits before single-shot upload
+        lines = content.split(b"\n")
+        data_line_count = sum(1 for line in lines[1:] if line.strip())
+        within_limits = (
+            len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
+            and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
+        )
+        if within_limits:
             await self._upload_csv(content, filename)
             return
 
-        # Otherwise split into chunks by line count
+        # Otherwise split into batches respecting both limits
         await self._upload_batched(content, filename)
 
     async def _upload_csv(self, csv_bytes: bytes, filename: str) -> None:
