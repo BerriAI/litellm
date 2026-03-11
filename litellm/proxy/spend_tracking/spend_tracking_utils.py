@@ -15,21 +15,28 @@ from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
 )
-from litellm.constants import \
-    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import (
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs, reconstruct_model_name)
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import (CostBreakdown,
-                                 StandardLoggingGuardrailInformation,
-                                 StandardLoggingMCPToolCall,
-                                 StandardLoggingModelInformation,
-                                 StandardLoggingPayload,
-                                 StandardLoggingVectorStoreRequest,
-                                 VectorStoreSearchResponse)
+from litellm.types.utils import (
+    CostBreakdown,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -273,9 +280,9 @@ def get_logging_payload(  # noqa: PLR0915
 
     api_key = metadata.get("user_api_key", "")
 
-    standard_logging_prompt_tokens: int = 0
-    standard_logging_completion_tokens: int = 0
-    standard_logging_total_tokens: int = 0
+    standard_logging_prompt_tokens: Optional[int] = None
+    standard_logging_completion_tokens: Optional[int] = None
+    standard_logging_total_tokens: Optional[int] = None
     if standard_logging_payload is not None:
         standard_logging_prompt_tokens = standard_logging_payload.get(
             "prompt_tokens", 0
@@ -438,10 +445,10 @@ def get_logging_payload(  # noqa: PLR0915
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
-            total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
-            prompt_tokens=usage.get("prompt_tokens", standard_logging_prompt_tokens),
-            completion_tokens=usage.get(
-                "completion_tokens", standard_logging_completion_tokens
+            total_tokens=standard_logging_total_tokens if standard_logging_total_tokens is not None else usage.get("total_tokens", 0),
+            prompt_tokens=standard_logging_prompt_tokens if standard_logging_prompt_tokens is not None else usage.get("prompt_tokens", 0),
+            completion_tokens=standard_logging_completion_tokens if standard_logging_completion_tokens is not None else usage.get(
+                "completion_tokens", 0
             ),
             request_tags=request_tags,
             end_user=end_user_id or "",
@@ -782,7 +789,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
-                    perform_redaction, should_redact_message_logging)
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
 
                 # Build model_call_details dict to check redaction settings
                 model_call_details = {
@@ -853,7 +862,9 @@ def _get_response_for_spend_logs_payload(
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction, should_redact_message_logging)
+                perform_redaction,
+                should_redact_message_logging,
+            )
 
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
