@@ -259,7 +259,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         stream_config = {}
         if "stream_options" in optional_params:
             stream_options = optional_params.pop("stream_options", {})
-            stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
+            if "chunk_size" in stream_options:
+                stream_config["chunk_size"] = stream_options.get("chunk_size")
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options.get("delimiters")
 

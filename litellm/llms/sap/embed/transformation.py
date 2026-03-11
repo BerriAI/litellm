@@ -167,7 +167,8 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         input_dict = {"text": input}
         if optional_params.get("type"):
             input_dict["type"] = optional_params.get("type")
-        masking = {"masking": optional_params.get("masking")} if optional_params.get("masking") else {}
+        masking = optional_params.get("masking")
+        masking = {"masking": masking} if masking is not None else {}
         body = {
             "config": {
                 "modules": {
