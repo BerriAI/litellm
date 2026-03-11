@@ -13,7 +13,6 @@ Here's the full specification with all available fields:
 ```json
 {
     "sample_spec": {
-        "aliases": ["optional list of alternate names for this model, e.g. dated versions like sample_spec-20250101"],
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
         "computer_use_output_cost_per_1k_tokens": 0.0,
@@ -122,28 +121,4 @@ Here's the full specification with all available fields:
 }
 ```
 
-### Using Aliases
-
-Many providers release the same model under multiple names — for example, a `latest` tag and a dated version like `claude-sonnet-4-5-20250929`. Instead of duplicating the entire entry, you can use the `aliases` field:
-
-```json
-{
-    "claude-sonnet-4-5": {
-        "aliases": ["claude-sonnet-4-5-20250929"],
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "anthropic",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 64000,
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_tool_choice": true
-    }
-}
-```
-
-At load time, each alias is expanded into a top-level entry sharing the same data as the canonical entry. The example above makes both `claude-sonnet-4-5` and `claude-sonnet-4-5-20250929` resolve with the same pricing and capabilities.
-
-:::info
-This is different from [`model_alias_map`](../completion/model_alias.md), which is a runtime SDK/proxy feature for mapping user-facing model names to LiteLLM model identifiers. The `aliases` field here is for the model cost JSON only — it avoids duplicate entries for models that share identical pricing and capabilities.
-:::
+That's it! Your PR will be reviewed and merged.
