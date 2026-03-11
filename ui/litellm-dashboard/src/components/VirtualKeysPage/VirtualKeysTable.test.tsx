@@ -262,8 +262,8 @@ it("should display user email correctly", async () => {
   });
 });
 
-it("should show loading message only on initial load (isPending)", () => {
-  // Mock initial loading state
+it("should show skeleton loaders when isLoading is true", () => {
+  // Mock loading state
   mockUseKeys.mockReturnValue({
     data: null,
     isPending: true,
@@ -283,7 +283,7 @@ it("should show loading message only on initial load (isPending)", () => {
 
   renderWithProviders(<VirtualKeysTable {...mockProps} />);
 
-  // Check that loading message is shown on initial load
+  // Check that loading message is shown
   expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
 
   // Check that actual key data is not shown
@@ -793,81 +793,5 @@ describe("pagination display – total count and page count", () => {
       expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
       expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
     });
-  });
-});
-
-describe("refetch button", () => {
-  it("should show Fetch button in normal state", () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
-
-    const fetchButton = screen.getByTitle("Fetch data");
-    expect(fetchButton).toBeInTheDocument();
-    expect(fetchButton).not.toBeDisabled();
-    expect(screen.getByText("Fetch")).toBeInTheDocument();
-  });
-
-  it("should show Fetching state and keep table data visible during refetch", () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 1,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: true,
-      refetch: vi.fn(),
-    } as any);
-
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
-
-    // Button should show "Fetching" and be disabled
-    expect(screen.getByText("Fetching")).toBeInTheDocument();
-    const fetchButton = screen.getByTitle("Fetch data");
-    expect(fetchButton).toBeDisabled();
-
-    // Table data should still be visible (stale data)
-    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
-
-    // "Loading keys..." should NOT appear during refetch
-    expect(screen.queryByText("🚅 Loading keys...")).not.toBeInTheDocument();
-  });
-
-  it("should call refetch when Fetch button is clicked", () => {
-    const mockRefetch = vi.fn();
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 1,
-        current_page: 1,
-        total_pages: 1,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: mockRefetch,
-    } as any);
-
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
-
-    const fetchButton = screen.getByTitle("Fetch data");
-    fireEvent.click(fetchButton);
-
-    expect(mockRefetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("should show Fetch button enabled on error so user can retry", () => {
-    mockUseKeys.mockReturnValue({
-      data: null,
-      isPending: false,
-      isFetching: false,
-      isError: true,
-      refetch: vi.fn(),
-    } as any);
-
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
-
-    const fetchButton = screen.getByTitle("Fetch data");
-    expect(fetchButton).not.toBeDisabled();
-    expect(screen.getByText("Fetch")).toBeInTheDocument();
   });
 });

@@ -2062,8 +2062,7 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_mapped_route = InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
-            if route.startswith(full_mapped_route):
+            if route.startswith(mapped_route):
                 return True
 
         # Fast path: check if any registered route key contains this path
