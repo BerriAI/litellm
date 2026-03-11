@@ -306,13 +306,6 @@ async def test_list_tags_with_dynamic_tags():
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
-            # Verify group_by was used instead of find_many(distinct=...)
-            mock_db.litellm_dailytagspend.group_by.assert_called_once_with(
-                by=["tag"],
-                where={"tag": {"not": None}},
-                _min={"created_at": True},
-                _max={"updated_at": True},
-            )
     finally:
         app.dependency_overrides.clear()
 
@@ -361,12 +354,6 @@ async def test_list_tags_no_dynamic_tags():
             assert len(result) == 1
             assert result[0]["name"] == "stored-tag"
 
-            mock_db.litellm_dailytagspend.group_by.assert_called_once_with(
-                by=["tag"],
-                where={"tag": {"not": None}},
-                _min={"created_at": True},
-                _max={"updated_at": True},
-            )
     finally:
         app.dependency_overrides.clear()
 

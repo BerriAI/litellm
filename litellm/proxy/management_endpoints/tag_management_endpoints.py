@@ -463,8 +463,8 @@ async def list_tags(
                 "name": row["tag"],
                 "description": "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
                 "models": None,
-                "created_at": row.get("_min", {}).get("created_at").isoformat() if row.get("_min", {}).get("created_at") else None,
-                "updated_at": row.get("_max", {}).get("updated_at").isoformat() if row.get("_max", {}).get("updated_at") else None,
+                "created_at": row["_min"]["created_at"].isoformat(),
+                "updated_at": row["_max"]["updated_at"].isoformat(),
             }
             for row in dynamic_tag_rows
             if row["tag"] not in stored_tag_names
