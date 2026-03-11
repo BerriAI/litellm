@@ -156,6 +156,103 @@ async def test_create_user_uses_default_internal_user_params_role(mocker, monkey
 
 
 @pytest.mark.asyncio
+async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeypatch):
+    """
+    Default user role set to 'Internal User' via UI,
+    but SCIM-created users get 'Internal Viewer' instead.
+
+    The UI saves the setting via _update_litellm_setting, which should update
+    litellm.default_internal_user_params in memory. Then SCIM create_user
+    should read that in-memory value and assign the correct role.
+
+    This test simulates the full flow:
+    1. Start with default_internal_user_params = None
+    2. Call update_internal_user_settings (the UI endpoint) to set role to INTERNAL_USER
+    3. Create a user via SCIM
+    4. Assert the user gets INTERNAL_USER (not INTERNAL_USER_VIEW_ONLY)
+    """
+    from litellm.proxy._types import DefaultInternalUserParams
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        _update_litellm_setting,
+    )
+
+    # Step 1: Start with no default params (fresh proxy state)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    # Step 2: Simulate the UI saving "Internal User (Create/Delete/View)" as default role
+    # Mock the proxy_config and store_model_in_db that _update_litellm_setting needs
+    mock_proxy_config = mocker.MagicMock()
+    mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+    mock_proxy_config.save_config = AsyncMock()
+
+    mocker.patch(
+        "litellm.proxy.proxy_server.proxy_config",
+        mock_proxy_config,
+    )
+    mocker.patch(
+        "litellm.proxy.proxy_server.store_model_in_db",
+        True,
+    )
+
+    import litellm
+
+    settings = DefaultInternalUserParams(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    await _update_litellm_setting(
+        settings=settings,
+        settings_key="default_internal_user_params",
+        in_memory_var=litellm.default_internal_user_params,
+        success_message="ok",
+    )
+
+    # Verify the in-memory variable was actually updated
+    assert litellm.default_internal_user_params is not None, (
+        "BUG: _update_litellm_setting did not update litellm.default_internal_user_params in memory. "
+        "The local variable reassignment (in_memory_var = ...) doesn't propagate back."
+    )
+    assert litellm.default_internal_user_params.get("user_role") == LitellmUserRoles.INTERNAL_USER
+
+    # Step 3: Create a user via SCIM
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="idontexist@krakentest.tech",
+        emails=[SCIMUserEmail(value="idontexist@krakentest.tech")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="idontexist@krakentest.tech")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    # Step 4: Verify the user got INTERNAL_USER, not INTERNAL_USER_VIEW_ONLY
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.user_role == LitellmUserRoles.INTERNAL_USER, (
+        f"BUG: SCIM created user with role {called_args.user_role} instead of "
+        f"{LitellmUserRoles.INTERNAL_USER}. The default_internal_user_params "
+        f"in-memory variable was not updated by _update_litellm_setting."
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_existing_user_by_email_no_email(mocker):
     """Should return None when new_user_request has no email"""
     mock_prisma_client = mocker.MagicMock()

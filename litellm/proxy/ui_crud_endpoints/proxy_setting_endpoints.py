@@ -449,6 +449,7 @@ async def _update_litellm_setting(
 
     # Update the in-memory settings
     in_memory_var = settings.model_dump(exclude_none=True)
+    setattr(litellm, settings_key, in_memory_var)
 
     # Load existing config
     config = await proxy_config.get_config()
@@ -457,7 +458,7 @@ async def _update_litellm_setting(
     if "litellm_settings" not in config:
         config["litellm_settings"] = {}
 
-    config["litellm_settings"][settings_key] = settings.model_dump(exclude_none=True)
+    config["litellm_settings"][settings_key] = in_memory_var
 
     # Save the updated config
     await proxy_config.save_config(new_config=config)
