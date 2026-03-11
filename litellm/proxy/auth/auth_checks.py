@@ -410,7 +410,7 @@ async def common_checks(  # noqa: PLR0915
             effective_models=_effective_models,
         ):
             raise ProxyException(
-                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {_effective_models}",
                 type=ProxyErrorTypes.team_model_access_denied,
                 param="model",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -2689,7 +2689,7 @@ def get_effective_team_models(
     from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES_ENABLED
     from litellm.secret_managers.main import str_to_bool
 
-    _team_models = team_models or (team_object.models if team_object else [])
+    _team_models = team_models if team_models is not None else (team_object.models if team_object else [])
 
     if not str_to_bool(LITELLM_TEAM_MODEL_OVERRIDES_ENABLED):
         return _team_models

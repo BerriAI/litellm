@@ -1237,33 +1237,21 @@ async def generate_key_fn(
                 str_to_bool(LITELLM_TEAM_MODEL_OVERRIDES_ENABLED)
                 and data.models
                 and data.team_id
-                and user_api_key_dict.user_id
             ):
                 from litellm.proxy.auth.auth_checks import (
                     get_effective_team_models,
                 )
 
-                # Look up membership for this user+team
-                _membership = await prisma_client.db.litellm_teammembership.find_unique(
-                    where={
-                        "user_id_team_id": {
-                            "user_id": user_api_key_dict.user_id,
-                            "team_id": data.team_id,
-                        }
-                    }
-                )
-                _member_models = (
-                    _membership.models if _membership and _membership.models else []
-                )
-                _team_metadata = (
-                    team_table.metadata
-                    if isinstance(team_table.metadata, dict)
-                    else {}
-                )
                 _effective = get_effective_team_models(
                     team_object=team_table,
-                    team_member_models=_member_models,
-                    team_metadata=_team_metadata,
+                    team_member_models=getattr(
+                        user_api_key_dict, "team_member_models", None
+                    ),
+                    team_metadata=(
+                        team_table.metadata
+                        if isinstance(team_table.metadata, dict)
+                        else {}
+                    ),
                 )
                 if _effective:  # only enforce when effective models is non-empty
                     disallowed = set(data.models) - set(_effective)
