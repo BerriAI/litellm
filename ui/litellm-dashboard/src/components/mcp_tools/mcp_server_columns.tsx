@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
@@ -6,6 +7,82 @@ import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
 import { CheckOutlined } from "@ant-design/icons";
 
+const HealthStatusBadge: React.FC<{
+  server: MCPServer;
+  isLoadingHealth?: boolean;
+  isRechecking?: boolean;
+  onRecheck?: (serverId: string) => void;
+}> = ({ server, isLoadingHealth, isRechecking, onRecheck }) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const status = server.status || "unknown";
+  const lastCheck = server.last_health_check;
+  const error = server.health_check_error;
+
+  if (isLoadingHealth || isRechecking) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-gray-400 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100">
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-pulse"></span>
+        Checking
+      </span>
+    );
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "healthy":
+        return "text-green-700 bg-green-50 border border-green-200";
+      case "unhealthy":
+        return "text-red-700 bg-red-50 border border-red-200";
+      default:
+        return "text-gray-600 bg-gray-50 border border-gray-200";
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "healthy":
+        return "✓";
+      case "unhealthy":
+        return "✗";
+      default:
+        return "?";
+    }
+  };
+
+  const isClickable = !!onRecheck;
+
+  const tooltipContent = (
+    <div className="max-w-xs">
+      <div className="font-semibold mb-1">Health Status: {status}</div>
+      {lastCheck && <div className="text-xs mb-1">Last Check: {new Date(lastCheck).toLocaleString()}</div>}
+      {error && (
+        <div className="text-xs">
+          <div className="font-medium text-red-400 mb-1">Error:</div>
+          <div className="break-words">{error}</div>
+        </div>
+      )}
+      {!lastCheck && !error && <div className="text-xs text-gray-400">No health check data available</div>}
+      {isClickable && <div className="text-xs text-gray-400 mt-1">Click to recheck</div>}
+    </div>
+  );
+
+  return (
+    <Tooltip title={tooltipContent} placement="top">
+      <span
+        className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${getStatusColor(status)} ${isClickable ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onClick={isClickable ? () => onRecheck(server.server_id) : undefined}
+      >
+        <span>{isHovered && isClickable ? "↻" : getStatusIcon(status)}</span>
+        {isHovered && isClickable
+          ? "Recheck"
+          : status.charAt(0).toUpperCase() + status.slice(1)}
+      </span>
+    </Tooltip>
+  );
+};
+
 export const mcpServerColumns = (
   userRole: string,
   onView: (serverId: string) => void,
@@ -13,6 +90,8 @@ export const mcpServerColumns = (
   onDelete: (serverId: string) => void,
   isLoadingHealth?: boolean,
   onByokConnect?: (server: MCPServer) => void,
+  onRecheckHealth?: (serverId: string) => void,
+  recheckingServerIds?: Set<string>,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -81,68 +160,14 @@ export const mcpServerColumns = (
   {
     id: "health_status",
     header: "Health Status",
-    cell: ({ row }) => {
-      const server = row.original;
-      const status = server.status || "unknown";
-      const lastCheck = server.last_health_check;
-      const error = server.health_check_error;
-
-      if (isLoadingHealth) {
-        return (
-          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100">
-            <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-pulse"></span>
-            Checking
-          </span>
-        );
-      }
-
-      const getStatusColor = (status: string) => {
-        switch (status) {
-          case "healthy":
-            return "text-green-700 bg-green-50 border border-green-200";
-          case "unhealthy":
-            return "text-red-700 bg-red-50 border border-red-200";
-          default:
-            return "text-gray-600 bg-gray-50 border border-gray-200";
-        }
-      };
-
-      const getStatusIcon = (status: string) => {
-        switch (status) {
-          case "healthy":
-            return "✓";
-          case "unhealthy":
-            return "✗";
-          default:
-            return "?";
-        }
-      };
-
-      const tooltipContent = (
-        <div className="max-w-xs">
-          <div className="font-semibold mb-1">Health Status: {status}</div>
-          {lastCheck && <div className="text-xs mb-1">Last Check: {new Date(lastCheck).toLocaleString()}</div>}
-          {error && (
-            <div className="text-xs">
-              <div className="font-medium text-red-400 mb-1">Error:</div>
-              <div className="break-words">{error}</div>
-            </div>
-          )}
-          {!lastCheck && !error && <div className="text-xs text-gray-400">No health check data available</div>}
-        </div>
-      );
-
-      return (
-        <Tooltip title={tooltipContent} placement="top">
-          <span
-            className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full cursor-default ${getStatusColor(status)}`}
-          >
-            <span>{getStatusIcon(status)}</span>
-            {status.charAt(0).toUpperCase() + status.slice(1)}
-          </span>
-        </Tooltip>
-      );
-    },
+    cell: ({ row }) => (
+      <HealthStatusBadge
+        server={row.original}
+        isLoadingHealth={isLoadingHealth}
+        isRechecking={recheckingServerIds?.has(row.original.server_id)}
+        onRecheck={onRecheckHealth}
+      />
+    ),
   },
   {
     id: "mcp_access_groups",
