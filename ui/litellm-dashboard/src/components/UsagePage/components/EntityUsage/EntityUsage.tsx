@@ -85,10 +85,9 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
-  timezoneOffset?: number;
 }
 
-const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue, timezoneOffset }) => {
+const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
   const [spendData, setSpendData] = useState<EntitySpendData>({
     results: [],
     metadata: {
@@ -120,7 +119,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else if (entityType === "team") {
@@ -130,7 +128,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else if (entityType === "organization") {
@@ -140,7 +137,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else if (entityType === "customer") {
@@ -150,7 +146,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else if (entityType === "agent") {
@@ -160,7 +155,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else if (entityType === "user") {
@@ -170,7 +164,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         endTime,
         1,
         selectedTags.length > 0 ? selectedTags[0] : null,
-        timezoneOffset,
       );
       setSpendData(data);
     } else {
@@ -180,7 +173,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   useEffect(() => {
     fetchSpendData();
-  }, [accessToken, dateValue, entityId, selectedTags, timezoneOffset]);
+  }, [accessToken, dateValue, entityId, selectedTags]);
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
