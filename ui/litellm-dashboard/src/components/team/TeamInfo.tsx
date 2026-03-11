@@ -791,7 +791,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             children: (
               <>
                 {/* Block/Unblock Card - Separate from settings */}
-                {canEditTeam && accessToken && (
+                {is_proxy_admin && accessToken && (
                   <Card className="mb-4">
                     <BlockToggle
                       entityType="team"
@@ -799,7 +799,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       currentBlockedStatus={info.blocked || false}
                       onToggle={handleBlockToggle}
                       accessToken={accessToken}
-                      userRole={is_proxy_admin ? "proxy_admin" : null}
+                      userRole="proxy_admin"
                     />
                   </Card>
                 )}
