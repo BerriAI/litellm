@@ -326,11 +326,59 @@ li.tabs__item--active {
   background-color: rgba(37, 194, 160, 0.1) !important;
 }
 
-.menu__link--sublist-caret:after {
-  width: 0.7rem;
-  height: 0.7rem;
-  min-width: 0.7rem;
-  background: var(--ifm-menu-link-sublist-icon) 50% / 1.2rem 1.2rem;
+/* ─── Sidebar collapse arrows — uniform size & alignment ────── */
+
+/* 1. Categories WITHOUT a link prop:
+      The button itself holds the text + ::after arrow.
+      Make it flex so the arrow never wraps to a new line. */
+.menu__link--sublist-caret {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 0.5rem;
+}
+
+.menu__link--sublist-caret::after {
+  content: '' !important;
+  display: block !important;
+  flex-shrink: 0 !important;
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  min-width: 1.25rem !important;
+  background: var(--ifm-menu-link-sublist-icon) center / 1.25rem 1.25rem no-repeat !important;
+  margin: 0 !important;
+}
+
+/* 2. Categories WITH a link prop:
+      A separate <a> + <button class="menu__caret"> sit in a flex row. */
+.menu__list-item-collapsible {
+  display: flex !important;
+  align-items: center !important;
+  border-radius: 4px;
+}
+
+.menu__list-item-collapsible > .menu__link {
+  flex: 1 1 auto;
+  min-width: 0; /* allow text to shrink/wrap without pushing arrow */
+}
+
+.menu__caret {
+  flex-shrink: 0 !important;
+  width: 2rem !important;
+  height: 2rem !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.menu__caret::before {
+  content: '' !important;
+  display: block !important;
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  min-width: 1.25rem !important;
+  background: var(--ifm-menu-link-sublist-icon) center / 1.25rem 1.25rem no-repeat !important;
 }
 
 /* Top-level sidebar category labels */
@@ -352,7 +400,29 @@ li.tabs__item--active {
 }
 
 .theme-doc-sidebar-item-category-level-1 {
-  margin-bottom: 1.25rem !important;
+  margin-bottom: 0.25rem !important;
+}
+
+/* Consistent row height for all top-level items */
+.theme-doc-sidebar-item-category-level-1 > .menu__list-item-collapsible,
+.theme-doc-sidebar-item-category-level-1 > .menu__list-item-collapsible--active {
+  min-height: 2.5rem;
+  padding: 0 0.25rem !important;
+  background-color: transparent !important;
+  border-radius: 6px;
+}
+
+.theme-doc-sidebar-item-category-level-1 > .menu__list-item-collapsible:hover {
+  background-color: var(--ifm-menu-color-background-hover) !important;
+}
+
+/* Suppress the auto active-state background so all items look the same height */
+.menu__list-item-collapsible--active {
+  background-color: transparent !important;
+}
+
+.menu__list-item-collapsible--active:hover {
+  background-color: var(--ifm-menu-color-background-hover) !important;
 }
 
 /* Nested menu list */

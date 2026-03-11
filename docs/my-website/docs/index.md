@@ -10,7 +10,7 @@ import NavigationCards from '@site/src/components/NavigationCards';
 import Image from '@theme/IdealImage';
 
 <!-- <div style={{maxWidth: '900px', maxHeight: '600px', margin: '0 0 1.5rem'}}> -->
-<Image img={require('../img/hero.png')} />
+<Image style={{padding: '10px', margin: '0 0 2.5rem'}} img={require('../img/hero.png')} />
 <!-- </div> -->
 
 **LiteLLM** is an open-source library that gives you a single, unified interface to call 100+ LLMs — OpenAI, Anthropic, Vertex AI, Bedrock, and more — using the OpenAI format.
