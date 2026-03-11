@@ -1133,6 +1133,7 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
+            custom_body: Optional[dict] = None,
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -1208,9 +1209,12 @@ def create_pass_through_route(
             )
             if query_params:
                 final_query_params.update(query_params)
-            # Use the body parsed from the raw request
+            # Use the caller-supplied body when present, otherwise fall back to
+            # the body parsed from the raw request.
             final_custom_body: Optional[dict] = None
-            if isinstance(custom_body_data, dict):
+            if isinstance(custom_body, dict):
+                final_custom_body = custom_body
+            elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
             return await pass_through_request(  # type: ignore
@@ -2059,7 +2063,10 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if route.startswith(mapped_route):
+            full_mapped_route = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                mapped_route
+            )
+            if route.startswith(full_mapped_route):
                 return True
 
         # Fast path: check if any registered route key contains this path
