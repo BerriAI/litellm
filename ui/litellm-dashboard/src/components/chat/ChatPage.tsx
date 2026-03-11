@@ -320,8 +320,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           });
         }
       } finally {
-        // Persist MCP events once after the turn ends (single localStorage write).
-        if (accumulatedMCPEvents.length > 0) {
+        // Persist MCP events only when the stream completed cleanly — partial
+        // events from an aborted/errored turn would show incomplete tool calls.
+        if (accumulatedMCPEvents.length > 0 && !abortControllerRef.current?.signal.aborted) {
           updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
         }
         setIsStreaming(false);

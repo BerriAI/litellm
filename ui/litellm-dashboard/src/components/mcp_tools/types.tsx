@@ -1,3 +1,30 @@
+/** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
+export interface MCPEvent {
+  type: string;
+  sequence_number?: number;
+  output_index?: number;
+  item_id?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    server_label?: string;
+    tools?: Array<{
+      name: string;
+      description: string;
+      annotations?: {
+        read_only?: boolean;
+      };
+      input_schema?: unknown;
+    }>;
+    name?: string;
+    arguments?: string;
+    output?: string;
+  };
+  delta?: string;
+  arguments?: string;
+  timestamp?: number;
+}
+
 export interface Team {
   team_id: string;
   team_alias?: string;

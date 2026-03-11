@@ -1,6 +1,6 @@
 import React from "react";
 import { Typography, Collapse } from "antd";
-import type { MCPEvent } from "../../chat/types";
+import type { MCPEvent } from "../../mcp_tools/types";
 
 const { Text } = Typography;
 const { Panel } = Collapse;
