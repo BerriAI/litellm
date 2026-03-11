@@ -1386,7 +1386,7 @@ if MCP_AVAILABLE:
             )
         try:
             await delete_user_credential(prisma_client, user_id, server_id)
-        except Exception:
+        except RecordNotFoundError:
             pass  # Already deleted or didn't exist
         from litellm.proxy._experimental.mcp_server.server import (
             _invalidate_byok_cred_cache,
