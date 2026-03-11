@@ -200,12 +200,55 @@ const sidebars = {
     { type: "doc", id: "index", label: "Getting Started" },
 
     // ════════════════════════════════════════════════════════════
+    // AGENT & MCP GATEWAY
+    // ════════════════════════════════════════════════════════════
+    {
+      type: "category",
+      label: "Agent & MCP Gateway",
+      collapsed: false,
+      link: { type: "doc", id: "agent_mcp_gateway" },
+      items: [
+        {
+          type: "category",
+          label: "A2A Agent Gateway",
+          collapsed: true,
+          link: { type: "doc", id: "a2a" },
+          items: [
+            "a2a_invoking_agents",
+            "a2a_agent_headers",
+            "a2a_cost_tracking",
+            "a2a_agent_permissions",
+            "a2a_iteration_budgets",
+          ],
+        },
+        {
+          type: "category",
+          label: "MCP Gateway",
+          collapsed: true,
+          link: { type: "doc", id: "mcp" },
+          items: [
+            "mcp_usage",
+            "mcp_openapi",
+            "mcp_oauth",
+            "mcp_aws_sigv4",
+            "mcp_public_internet",
+            "mcp_semantic_filter",
+            "mcp_control",
+            "mcp_cost",
+            "mcp_guardrail",
+            "mcp_troubleshoot",
+          ],
+        },
+      ],
+    },
+
+    // ════════════════════════════════════════════════════════════
     // PYTHON SDK
     // ════════════════════════════════════════════════════════════
     {
       type: "category",
       label: "Python SDK",
-      collapsed: false,
+      collapsed: true,
       items: [
         {
           type: "link",
@@ -215,7 +258,7 @@ const sidebars = {
         {
           type: "category",
           label: "Core Functions",
-          collapsed: false,
+          collapsed: true,
           items: [
             { type: "doc", id: "completion/input", label: "completion()" },
             { type: "doc", id: "embedding/supported_embedding", label: "embedding()" },
@@ -241,17 +284,9 @@ const sidebars = {
           label: "Output & Errors",
           collapsed: true,
           items: [
-            "proxy/quick_start",
-            "proxy/cli",
-            "proxy/debugging",
-            "proxy/error_diagnosis",
-            "proxy/deploy",
-            "proxy/health",
-            "proxy/master_key_rotations",
-            "proxy/model_management",
-            "proxy/prod",
-            "proxy/worker_startup_hooks",
-            "proxy/release_cycle",
+            "completion/output",
+            "completion/usage",
+            "exception_mapping",
           ],
         },
         {
@@ -272,7 +307,7 @@ const sidebars = {
     {
       type: "category",
       label: "AI Gateway (Proxy)",
-      collapsed: false,
+      collapsed: true,
       link: {
         type: "generated-index",
         title: "LiteLLM AI Gateway (LLM Proxy)",
@@ -287,12 +322,12 @@ const sidebars = {
         {
           type: "category",
           label: "Setup & Configuration",
-          collapsed: false,
+          collapsed: true,
           items: [
             {
               type: "category",
               label: "Config.yaml",
-              collapsed: false,
+              collapsed: true,
               items: ["proxy/configs", "proxy/config_management", "proxy/config_settings"],
             },
             {
@@ -341,7 +376,7 @@ const sidebars = {
             {
               type: "category",
               label: "Virtual Keys & Auth",
-              collapsed: false,
+              collapsed: true,
               items: [
                 "proxy/virtual_keys",
                 "proxy/token_auth",
@@ -456,7 +491,7 @@ const sidebars = {
             {
               type: "category",
               label: "Logging & Alerting",
-              collapsed: false,
+              collapsed: true,
               items: [
                 "proxy/dynamic_logging",
                 "proxy/logging",
@@ -489,7 +524,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          collapsed: false,
+          collapsed: true,
           items: [
             "proxy/architecture",
             "proxy/multi_tenant_architecture",
@@ -503,9 +538,6 @@ const sidebars = {
             "router_architecture",
           ],
         },
-        { type: "doc", id: "a2a", label: "A2A Agent Gateway" },
-        { type: "doc", id: "mcp", label: "MCP Gateway" },
-
         // ── 5. Admin & Advanced ────────────────────────────────────────
         {
           type: "category",
@@ -515,7 +547,7 @@ const sidebars = {
             {
               type: "category",
               label: "Admin Dashboard",
-              collapsed: false,
+              collapsed: true,
               items: [
                 "proxy/ui",
                 {
@@ -569,161 +601,270 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
+
+        // ── Chat & Text ────────────────────────────────────────────────
         {
           type: "category",
-          label: "/a2a - A2A Agent Gateway",
+          label: "Chat & Text",
+          collapsed: true,
           items: [
-            "a2a",
-            "a2a_invoking_agents",
-            "a2a_agent_headers",
-            "a2a_cost_tracking",
-            "a2a_agent_permissions",
-            "a2a_iteration_budgets"
-          ],
-        },
-        "assistants",
-        "audio_transcription",
-        "text_to_speech",
-        {
-          type: "category",
-          label: "/batches",
-          items: [
-            "batches",
-            "proxy/managed_batches",
-          ]
-        },
-        "containers",
-        "container_files",
-        {
-          type: "category",
-          label: "/chat/completions",
-          link: {
-            type: "generated-index",
-            title: "Chat Completions",
-            description: "Details on the completion() function",
-            slug: "/completion",
-          },
-          items: [
-            "completion/input",
-            "completion/output",
-            "completion/usage",
-            "completion/http_handler_config",
-          ],
-        },
-        "text_completion",
-        "bedrock_converse",
-        "embedding/supported_embedding",
-        {
-          type: "category",
-          label: "/files",
-          items: [
-            "files_endpoints",
-            "proxy/litellm_managed_files",
-          ],
-        },
-        {
-          type: "category",
-          label: "/fine_tuning",
-          items: [
-            "fine_tuning",
-            "proxy/managed_finetuning",
-          ]
-        },
-        "evals_api",
-        "generateContent",
-        "apply_guardrail",
-        "bedrock_invoke",
-        "interactions",
-        "image_edits",
-        "image_generation",
-        "image_variations",
-        "videos",
-        "vector_store_files",
-        "vector_stores/create",
-        "vector_stores/search",
-        {
-          type: "category",
-          label: "/mcp - Model Context Protocol",
-          items: [
-            "mcp",
-            "mcp_usage",
-            "mcp_openapi",
-            "mcp_oauth",
-            "mcp_aws_sigv4",
-            "mcp_public_internet",
-            "mcp_semantic_filter",
-            "mcp_control",
-            "mcp_cost",
-            "mcp_guardrail",
-            "mcp_troubleshoot",
-          ]
-        },
-        {
-          type: "category",
-          label: "/v1/messages",
-          items: [
-            "anthropic_unified/index",
-            "anthropic_unified/structured_output",
-            "anthropic_unified/messages_to_responses_mapping",
-          ]
-        },
-        "anthropic_count_tokens",
-        "moderation",
-        "ocr",
-        {
-          type: "category",
-          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
-          items: [
-            "pass_through/intro",
-            "pass_through/anthropic_completion",
-            "pass_through/assembly_ai",
-            "pass_through/bedrock",
-            "pass_through/azure_passthrough",
-            "pass_through/cohere",
-            "pass_through/cursor",
-            "pass_through/google_ai_studio",
-            "pass_through/langfuse",
-            "pass_through/mistral",
-            "pass_through/openai_passthrough",
             {
               type: "category",
-              label: "Vertex AI",
+              label: "/chat/completions",
+              collapsed: true,
+              link: {
+                type: "generated-index",
+                title: "Chat Completions",
+                description: "Details on the completion() function",
+                slug: "/completion",
+              },
               items: [
-                "pass_through/vertex_ai",
-                "pass_through/vertex_ai_live_websocket",
-                "pass_through/vertex_ai_search_datastores",
-              ]
+                "completion/input",
+                "completion/output",
+                "completion/usage",
+                "completion/http_handler_config",
+              ],
             },
-            "pass_through/vllm",
-            "proxy/pass_through",
-            "proxy/pass_through_guardrails"
-          ]
+            "text_completion",
+            "response_api",
+            "response_api_compact",
+            "bedrock_converse",
+            "generateContent",
+          ],
         },
-        "rag_ingest",
-        "rag_query",
-        "realtime",
-        "rerank",
-        "response_api",
-        "response_api_compact",
+
+        // ── Audio & Speech ─────────────────────────────────────────────
         {
           type: "category",
-          label: "/search",
+          label: "Audio & Speech",
+          collapsed: true,
           items: [
-            "search/index",
-            "search/perplexity",
-            "search/tavily",
-            "search/exa_ai",
-            "search/brave",
-            "search/parallel_ai",
-            "search/google_pse",
-            "search/dataforseo",
-            "search/firecrawl",
-            "search/searxng",
-            "search/linkup",
-            "search/serper",
-          ]
+            "audio_transcription",
+            "text_to_speech",
+            "realtime",
+          ],
         },
-        "skills",
+
+        // ── Images & Video ─────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Images & Video",
+          collapsed: true,
+          items: [
+            "image_generation",
+            "image_edits",
+            "image_variations",
+            "videos",
+          ],
+        },
+
+        // ── Embeddings & Retrieval ─────────────────────────────────────
+        {
+          type: "category",
+          label: "Embeddings & Retrieval",
+          collapsed: true,
+          items: [
+            "embedding/supported_embedding",
+            "rerank",
+            {
+              type: "category",
+              label: "/search",
+              collapsed: true,
+              items: [
+                "search/index",
+                "search/perplexity",
+                "search/tavily",
+                "search/exa_ai",
+                "search/brave",
+                "search/parallel_ai",
+                "search/google_pse",
+                "search/dataforseo",
+                "search/firecrawl",
+                "search/searxng",
+                "search/linkup",
+                "search/serper",
+              ],
+            },
+          ],
+        },
+
+        // ── Vector Stores & RAG ────────────────────────────────────────
+        {
+          type: "category",
+          label: "Vector Stores & RAG",
+          collapsed: true,
+          items: [
+            "vector_store_files",
+            "vector_stores/create",
+            "vector_stores/search",
+            "rag_ingest",
+            "rag_query",
+          ],
+        },
+
+        // ── Files & Storage ────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Files & Storage",
+          collapsed: true,
+          items: [
+            {
+              type: "category",
+              label: "/files",
+              collapsed: true,
+              items: [
+                "files_endpoints",
+                "proxy/litellm_managed_files",
+              ],
+            },
+            "containers",
+            "container_files",
+          ],
+        },
+
+        // ── Assistants & Threads ───────────────────────────────────────
+        {
+          type: "category",
+          label: "Assistants & Threads",
+          collapsed: true,
+          items: [
+            "assistants",
+            "interactions",
+            "skills",
+          ],
+        },
+
+        // ── Batches, Fine-tuning & Evals ───────────────────────────────
+        {
+          type: "category",
+          label: "Batches, Fine-tuning & Evals",
+          collapsed: true,
+          items: [
+            {
+              type: "category",
+              label: "/batches",
+              collapsed: true,
+              items: [
+                "batches",
+                "proxy/managed_batches",
+              ],
+            },
+            {
+              type: "category",
+              label: "/fine_tuning",
+              collapsed: true,
+              items: [
+                "fine_tuning",
+                "proxy/managed_finetuning",
+              ],
+            },
+            "evals_api",
+          ],
+        },
+
+        // ── Agents & MCP ───────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Agents & MCP",
+          collapsed: true,
+          items: [
+            {
+              type: "category",
+              label: "/a2a - A2A Agent Gateway",
+              collapsed: true,
+              items: [
+                "a2a",
+                "a2a_invoking_agents",
+                "a2a_agent_headers",
+                "a2a_cost_tracking",
+                "a2a_agent_permissions",
+                "a2a_iteration_budgets",
+              ],
+            },
+            {
+              type: "category",
+              label: "/mcp - Model Context Protocol",
+              collapsed: true,
+              items: [
+                "mcp",
+                "mcp_usage",
+                "mcp_openapi",
+                "mcp_oauth",
+                "mcp_aws_sigv4",
+                "mcp_public_internet",
+                "mcp_semantic_filter",
+                "mcp_control",
+                "mcp_cost",
+                "mcp_guardrail",
+                "mcp_troubleshoot",
+              ],
+            },
+          ],
+        },
+
+        // ── Safety & Moderation ────────────────────────────────────────
+        {
+          type: "category",
+          label: "Safety & Moderation",
+          collapsed: true,
+          items: [
+            "apply_guardrail",
+            "moderation",
+            "ocr",
+          ],
+        },
+
+        // ── Provider-native & Pass-through ─────────────────────────────
+        {
+          type: "category",
+          label: "Provider-native & Pass-through",
+          collapsed: true,
+          items: [
+            "bedrock_invoke",
+            {
+              type: "category",
+              label: "/v1/messages (Anthropic native)",
+              collapsed: true,
+              items: [
+                "anthropic_unified/index",
+                "anthropic_unified/structured_output",
+                "anthropic_unified/messages_to_responses_mapping",
+              ],
+            },
+            "anthropic_count_tokens",
+            {
+              type: "category",
+              label: "Pass-through Endpoints",
+              collapsed: true,
+              items: [
+                "pass_through/intro",
+                "pass_through/anthropic_completion",
+                "pass_through/assembly_ai",
+                "pass_through/bedrock",
+                "pass_through/azure_passthrough",
+                "pass_through/cohere",
+                "pass_through/cursor",
+                "pass_through/google_ai_studio",
+                "pass_through/langfuse",
+                "pass_through/mistral",
+                "pass_through/openai_passthrough",
+                {
+                  type: "category",
+                  label: "Vertex AI",
+                  collapsed: true,
+                  items: [
+                    "pass_through/vertex_ai",
+                    "pass_through/vertex_ai_live_websocket",
+                    "pass_through/vertex_ai_search_datastores",
+                  ],
+                },
+                "pass_through/vllm",
+                "proxy/pass_through",
+                "proxy/pass_through_guardrails",
+              ],
+            },
+          ],
+        },
 
       ],
     },
@@ -734,70 +875,62 @@ const sidebars = {
       link: {
         type: "generated-index",
         title: "Providers",
-        description:
-          "Learn how to deploy + call models from different providers on LiteLLM",
+        description: "Learn how to deploy + call models from different providers on LiteLLM",
         slug: "/providers",
       },
       items: [
-        {
-          type: "doc",
-          id: "provider_registration/index",
-          label: "Integrate as a Model Provider",
-        },
-        {
-          type: "doc",
-          id: "contributing/adding_openai_compatible_providers",
-          label: "Add OpenAI-Compatible Provider (JSON)",
-        },
-        {
-          type: "doc",
-          id: "provider_registration/add_model_pricing",
-          label: "Add Model Pricing & Context Window",
-        },
+        { type: "doc", id: "provider_registration/index", label: "Integrate as a Model Provider" },
+        { type: "doc", id: "contributing/adding_openai_compatible_providers", label: "Add OpenAI-Compatible Provider (JSON)" },
+        { type: "doc", id: "provider_registration/add_model_pricing", label: "Add Model Pricing & Context Window" },
 
-        // ── Major ──────────────────────────────────────────────────────
+        // ── Popular (quick access) ────────────────────────────────────
         {
           type: "category",
-          label: "Major",
+          label: "Popular",
           collapsed: false,
           items: [
+            "providers/openai",
+            "providers/anthropic",
+            "providers/vertex",
+            "providers/bedrock",
+            "providers/gemini",
+            "providers/azure/azure",
+            "providers/ollama",
+            "providers/openrouter",
+          ],
+        },
+
+        // ── Text & Chat ───────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Text & Chat",
+          collapsed: true,
+          items: [
+            "providers/openai_compatible",
+            "providers/text_completion_openai",
+            "providers/amazon_nova",
+            "providers/anthropic",
+            "providers/aws_sagemaker",
             {
               type: "category",
               label: "Amazon Bedrock",
               collapsed: true,
               items: [
-                "providers/aws_polly",
                 "providers/bedrock",
-                "providers/bedrock_agentcore",
-                "providers/bedrock_agents",
-                "providers/bedrock_batches",
-                "providers/bedrock_embedding",
                 "providers/bedrock_imported",
-                "providers/bedrock_image_gen",
                 "providers/bedrock_mantle",
-                "providers/bedrock_rerank",
-                "providers/bedrock_realtime_with_audio",
-                "providers/bedrock_vector_store",
                 "providers/bedrock_writer",
-              ]
+                "providers/bedrock_batches",
+              ],
             },
-            "providers/amazon_nova",
-            "providers/anthropic",
             {
               type: "category",
               label: "Azure AI",
               collapsed: true,
               items: [
                 "providers/azure_ai",
-                "providers/azure_ai/azure_ai_vector_stores_passthrough",
                 "providers/azure_ai/azure_model_router",
-                "providers/azure_ai_agents",
-                "providers/azure_ai_img",
-                "providers/azure_ai_speech",
-                "providers/azure_ai_vector_stores",
-                "providers/azure_document_intelligence",
-                "providers/azure_ocr",
-              ]
+              ],
             },
             {
               type: "category",
@@ -805,24 +938,17 @@ const sidebars = {
               collapsed: true,
               items: [
                 "providers/azure/azure",
-                "providers/azure/azure_embedding",
                 "providers/azure/azure_responses",
-                "providers/azure/azure_speech",
-                "providers/azure/videos",
-              ]
+              ],
             },
-            "providers/aws_sagemaker",
             {
               type: "category",
               label: "Google AI Studio",
               collapsed: true,
               items: [
                 "providers/gemini",
-                "providers/gemini/videos",
                 "providers/google_ai_studio/files",
-                "providers/google_ai_studio/image_gen",
-                "providers/google_ai_studio/realtime",
-              ]
+              ],
             },
             {
               type: "category",
@@ -831,87 +957,32 @@ const sidebars = {
               items: [
                 "providers/openai",
                 "providers/openai/responses_api",
-                "providers/openai/text_to_speech",
-                "providers/openai/videos",
-              ]
+                "providers/text_completion_openai",
+              ],
             },
-            "providers/openai_compatible",
-            "providers/text_completion_openai",
             {
               type: "category",
               label: "Vertex AI",
               collapsed: true,
               items: [
                 "providers/vertex",
-                "providers/vertex_ai/videos",
-                "providers/vertex_ai_agent_engine",
-                "providers/vertex_batch",
-                "providers/vertex_embedding",
-                "providers/vertex_image",
-                "providers/vertex_ocr",
                 "providers/vertex_partner",
-                "providers/vertex_realtime",
                 "providers/vertex_self_deployed",
-                "providers/vertex_speech",
-              ]
+                "providers/vertex_batch",
+              ],
             },
-          ]
-        },
-
-        // ── OSS/Local ───────────────────────────────────────────────────
-        {
-          type: "category",
-          label: "OSS/Local",
-          collapsed: true,
-          items: [
-            "providers/custom_llm_server",
-            "providers/docker_model_runner",
+            // ── Inference APIs (A–Z) ──────────────────────────────────
             {
               type: "category",
-              label: "HuggingFace",
-              collapsed: true,
-              items: [
-                "providers/huggingface",
-                "providers/huggingface_rerank",
-              ]
-            },
-            "providers/infinity",
-            "providers/lemonade",
-            "providers/llamafile",
-            "providers/lm_studio",
-            "providers/ollama",
-            "providers/petals",
-            "providers/triton-inference-server",
-            {
-              type: "category",
-              label: "vLLM",
-              collapsed: true,
-              items: [
-                "providers/vllm",
-                "providers/vllm_batches",
-              ]
-            },
-            "providers/xinference",
-          ]
-        },
-
-        // ── Other ───────────────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Other",
-          collapsed: true,
-          items: [
-            {
-              type: "category",
-              label: "Inference APIs",
+              label: "Inference APIs (A–Z)",
               collapsed: true,
               items: [
                 "providers/abliteration",
                 "providers/ai21",
-                "providers/aleph_alpha",
                 "providers/aiml",
-                "providers/apertis",
+                "providers/aleph_alpha",
                 "providers/anyscale",
+                "providers/apertis",
                 "providers/baseten",
                 "providers/bytez",
                 "providers/cerebras",
@@ -943,46 +1014,26 @@ const sidebars = {
                 "providers/heroku",
                 "providers/hyperbolic",
                 "providers/lambda_ai",
-                "providers/langgraph",
                 "providers/llamagate",
                 "providers/litellm_proxy",
-                "providers/manus",
                 "providers/meta_llama",
-                "providers/milvus_vector_stores",
                 "providers/minimax",
                 "providers/mistral",
                 "providers/moonshot",
                 "providers/morph",
-                "providers/nebius",
                 "providers/nano-gpt",
+                "providers/nebius",
                 "providers/nlp_cloud",
                 "providers/novita",
                 { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
-                {
-                  type: "category",
-                  label: "Nvidia NIM",
-                  collapsed: true,
-                  items: [
-                    "providers/nvidia_nim",
-                    "providers/nvidia_nim_rerank",
-                  ]
-                },
+                "providers/nvidia_nim",
                 "providers/oci",
                 "providers/openrouter",
                 "providers/ovhcloud",
-                {
-                  type: "category",
-                  label: "Perplexity AI",
-                  collapsed: true,
-                  items: [
-                    "providers/perplexity",
-                    "providers/perplexity_embedding",
-                  ]
-                },
+                "providers/perplexity",
                 "providers/poe",
                 "providers/predibase",
                 "providers/publicai",
-                "providers/pydantic_ai_agent",
                 "providers/ragflow",
                 "providers/replicate",
                 "providers/sambanova",
@@ -996,55 +1047,162 @@ const sidebars = {
                 "providers/vercel_ai_gateway",
                 "providers/volcano",
                 "providers/wandb_inference",
-                {
-                  type: "category",
-                  label: "WatsonX",
-                  collapsed: true,
-                  items: [
-                    "providers/watsonx/audio_transcription",
-                    "providers/watsonx/index",
-                  ]
-                },
-                {
-                  type: "category",
-                  label: "xAI",
-                  collapsed: true,
-                  items: [
-                    "providers/xai",
-                    "providers/xai_realtime",
-                  ]
-                },
+                "providers/watsonx/index",
+                "providers/xai",
                 "providers/xiaomi_mimo",
                 "providers/zai",
-              ]
+              ],
             },
+          ],
+        },
+
+        // ── Audio & Speech ────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Audio & Speech",
+          collapsed: true,
+          items: [
+            "providers/aws_polly",
+            "providers/azure_ai_speech",
+            "providers/azure/azure_speech",
+            "providers/deepgram",
+            "providers/elevenlabs",
+            "providers/openai/text_to_speech",
+            "providers/vertex_speech",
+            "providers/watsonx/audio_transcription",
+          ],
+        },
+
+        // ── Realtime ──────────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Realtime",
+          collapsed: true,
+          items: [
+            "providers/bedrock_realtime_with_audio",
+            "providers/google_ai_studio/realtime",
+            "providers/vertex_realtime",
+            "providers/xai_realtime",
+          ],
+        },
+
+        // ── Image Generation ──────────────────────────────────────────
+        {
+          type: "category",
+          label: "Image Generation",
+          collapsed: true,
+          items: [
+            "providers/azure_ai_img",
+            "providers/bedrock_image_gen",
+            "providers/black_forest_labs",
+            "providers/black_forest_labs_img_edit",
+            "providers/fal_ai",
+            "providers/google_ai_studio/image_gen",
+            "providers/recraft",
+            "providers/runwayml/images",
+            "providers/stability",
+            "providers/vertex_image",
+          ],
+        },
+
+        // ── Video Generation ──────────────────────────────────────────
+        {
+          type: "category",
+          label: "Video Generation",
+          collapsed: true,
+          items: [
+            "providers/azure/videos",
+            "providers/gemini/videos",
+            "providers/openai/videos",
+            "providers/runwayml/videos",
+            "providers/topaz",
+            "providers/vertex_ai/videos",
+          ],
+        },
+
+        // ── Embeddings ────────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Embeddings",
+          collapsed: true,
+          items: [
+            "providers/azure/azure_embedding",
+            "providers/azure_ai_vector_stores",
+            "providers/azure_ai/azure_ai_vector_stores_passthrough",
+            "providers/bedrock_embedding",
+            "providers/bedrock_vector_store",
+            "providers/jina_ai",
+            "providers/milvus_vector_stores",
+            "providers/perplexity_embedding",
+            "providers/vertex_embedding",
+            "providers/voyage",
+          ],
+        },
+
+        // ── Reranking ─────────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Reranking",
+          collapsed: true,
+          items: [
+            "providers/bedrock_rerank",
+            "providers/huggingface_rerank",
+            "providers/nvidia_nim_rerank",
+          ],
+        },
+
+        // ── Agents ────────────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Agents",
+          collapsed: true,
+          items: [
+            "providers/azure_ai_agents",
+            "providers/bedrock_agentcore",
+            "providers/bedrock_agents",
+            "providers/langgraph",
+            "providers/manus",
+            "providers/pydantic_ai_agent",
+            "providers/vertex_ai_agent_engine",
+          ],
+        },
+
+        // ── OCR & Documents ───────────────────────────────────────────
+        {
+          type: "category",
+          label: "OCR & Documents",
+          collapsed: true,
+          items: [
+            "providers/azure_document_intelligence",
+            "providers/azure_ocr",
+            "providers/vertex_ocr",
+          ],
+        },
+
+        // ── OSS / Local ───────────────────────────────────────────────
+        {
+          type: "category",
+          label: "OSS / Local",
+          collapsed: true,
+          items: [
+            "providers/custom_llm_server",
+            "providers/docker_model_runner",
+            "providers/huggingface",
+            "providers/infinity",
+            "providers/lemonade",
+            "providers/llamafile",
+            "providers/lm_studio",
+            "providers/ollama",
+            "providers/petals",
+            "providers/triton-inference-server",
             {
               type: "category",
-              label: "Media & Creative AI",
+              label: "vLLM",
               collapsed: true,
-              items: [
-                "providers/black_forest_labs",
-                "providers/black_forest_labs_img_edit",
-                "providers/deepgram",
-                "providers/elevenlabs",
-                "providers/fal_ai",
-                "providers/jina_ai",
-                "providers/recraft",
-                {
-                  type: "category",
-                  label: "RunwayML",
-                  collapsed: true,
-                  items: [
-                    "providers/runwayml/images",
-                    "providers/runwayml/videos",
-                  ]
-                },
-                "providers/stability",
-                "providers/topaz",
-                "providers/voyage",
-              ]
+              items: ["providers/vllm", "providers/vllm_batches"],
             },
-          ]
+            "providers/xinference",
+          ],
         },
       ],
     },
@@ -1182,77 +1340,65 @@ const guidesSidebar = {
     { type: "doc", id: "guides/index", label: "Overview" },
     {
       type: "category",
-      label: "Guides",
-      collapsible: false,
+      label: "Completion & Messaging",
+      collapsible: true,
+      collapsed: false,
       items: [
-        {
-          type: "category",
-          label: "Completion & Messaging",
-          collapsed: false,
-          items: [
-            "completion/stream",
-            "completion/function_call",
-            "completion/json_mode",
-            "completion/vision",
-            "completion/audio",
-            "completion/document_understanding",
-            "completion/image_generation_chat",
-            "completion/batching",
-            "completion/prefix",
-            "completion/predict_outputs",
-            "completion/provider_specific_params",
-          ],
-        },
-        "troubleshoot/pip_venv_upgrade",
-        "troubleshoot/rollback",
-        "troubleshoot",
+        "completion/stream",
+        "completion/function_call",
+        "completion/json_mode",
+        "completion/vision",
+        "completion/audio",
+        "completion/document_understanding",
+        "completion/image_generation_chat",
+        "completion/batching",
+        "completion/prefix",
+        "completion/predict_outputs",
+        "completion/provider_specific_params",
       ],
     },
     {
       type: "category",
-      label: "Blog",
+      label: "Prompt Engineering",
+      collapsible: true,
+      collapsed: true,
       items: [
-        {
-          type: "category",
-          label: "Prompt Engineering",
-          collapsed: false,
-          items: [
-            "completion/prompt_caching",
-            "completion/prompt_formatting",
-            "completion/message_trimming",
-            "completion/message_sanitization",
-            "completion/model_alias",
-            "completion/mock_requests",
-            "completion/drop_params",
-            "completion/reliable_completions",
-            "reasoning_content",
-          ],
-        },
-        {
-          type: "category",
-          label: "AI Capabilities",
-          collapsed: false,
-          items: [
-            "completion/web_search",
-            "completion/web_fetch",
-            "completion/computer_use",
-            "completion/knowledgebase",
-            "providers/anthropic_tool_search",
-            "guides/code_interpreter",
-            "proxy/veo_video_generation",
-          ],
-        },
-        {
-          type: "category",
-          label: "Models & Customization",
-          collapsed: false,
-          items: [
-            "guides/finetuned_models",
-            "guides/security_settings",
-            "budget_manager",
-            "extras/creating_adapters",
-          ],
-        },
+        "completion/prompt_caching",
+        "completion/prompt_formatting",
+        "completion/message_trimming",
+        "completion/message_sanitization",
+        "completion/model_alias",
+        "completion/mock_requests",
+        "completion/drop_params",
+        "completion/reliable_completions",
+        "reasoning_content",
+      ],
+    },
+    {
+      type: "category",
+      label: "AI Capabilities",
+      collapsible: true,
+      collapsed: true,
+      items: [
+        "completion/web_search",
+        "completion/web_fetch",
+        "completion/computer_use",
+        "completion/knowledgebase",
+        "providers/anthropic_tool_search",
+        "guides/code_interpreter",
+        "proxy/veo_video_generation",
+      ],
+    },
+    {
+      type: "category",
+      label: "Models & Customization",
+      collapsible: true,
+      collapsed: true,
+      items: [
+        "guides/finetuned_models",
+        "guides/security_settings",
+        "budget_manager",
+        "extras/creating_adapters",
       ],
     },
   ],
@@ -1283,21 +1429,18 @@ const tutorialsSidebar = {
           ],
         },
 
-        // ── Provider Tutorials ─────────────────────────────────────────
+        // ── Agent SDKs & Frameworks ────────────────────────────────────
         {
           type: "category",
-          label: "Provider Tutorials",
-          collapsed: false,
+          label: "Agent SDKs & Frameworks",
+          collapsed: true,
           items: [
-            "tutorials/azure_openai",
-            "tutorials/TogetherAI_liteLLM",
-            "tutorials/huggingface_codellama",
-            "tutorials/huggingface_tutorial",
-            "tutorials/finetuned_chat_gpt",
-            "tutorials/gradio_integration",
-            "tutorials/compare_llms",
-            "tutorials/litellm_Test_Multiple_Providers",
-            "tutorials/oobabooga",
+            "tutorials/openai_agents_sdk",
+            "tutorials/claude_agent_sdk",
+            "tutorials/copilotkit_sdk",
+            "tutorials/google_adk",
+            "tutorials/livekit_xai_realtime",
+            "tutorials/instructor",
           ],
         },
 
@@ -1305,7 +1448,7 @@ const tutorialsSidebar = {
         {
           type: "category",
           label: "AI Coding Tools",
-          collapsed: false,
+          collapsed: true,
           items: [
             "tutorials/openweb_ui",
             {
@@ -1336,18 +1479,21 @@ const tutorialsSidebar = {
           ],
         },
 
-        // ── Agent SDKs & Frameworks ────────────────────────────────────
+        // ── Provider Tutorials ─────────────────────────────────────────
         {
           type: "category",
-          label: "Agent SDKs & Frameworks",
-          collapsed: false,
+          label: "Provider Tutorials",
+          collapsed: true,
           items: [
-            "tutorials/openai_agents_sdk",
-            "tutorials/claude_agent_sdk",
-            "tutorials/copilotkit_sdk",
-            "tutorials/google_adk",
-            "tutorials/livekit_xai_realtime",
-            "tutorials/instructor",
+            "tutorials/azure_openai",
+            "tutorials/TogetherAI_liteLLM",
+            "tutorials/huggingface_codellama",
+            "tutorials/huggingface_tutorial",
+            "tutorials/finetuned_chat_gpt",
+            "tutorials/gradio_integration",
+            "tutorials/compare_llms",
+            "tutorials/litellm_Test_Multiple_Providers",
+            "tutorials/oobabooga",
           ],
         },
 

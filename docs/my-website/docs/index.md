@@ -156,6 +156,14 @@ Every response follows the OpenAI Chat Completions format, regardless of provide
 
 ---
 
+## New to LiteLLM?
+
+**Want to get started fast?** Head to [Tutorials](/docs/tutorials) for step-by-step walkthroughs — AI coding tools, agent SDKs, proxy setup, and more.
+
+**Need to understand a specific feature?** Check [Guides](/docs/guides) for streaming, function calling, prompt caching, and other how-tos.
+
+---
+
 ## Choose Your Path
 
 <NavigationCards
@@ -325,6 +333,36 @@ print(response.choices[0].message.content)
 ```
 
 👉 [Full proxy quickstart with Docker →](./proxy/docker_quick_start.md)
+
+---
+
+## Agent & MCP Gateway
+
+LiteLLM is a unified gateway for **LLMs, agents, and MCP** — you don't need a separate agent or MCP gateway. One endpoint for 100+ models, A2A agents, and MCP tools.
+
+<NavigationCards
+columns={2}
+items={[
+{
+icon: "🤖",
+title: "Agent & MCP Gateway",
+description: "What you need to know about adopting A2A or multi-MCP with LiteLLM.",
+to: "./agent_mcp_gateway",
+},
+{
+icon: "🔗",
+title: "A2A Agents",
+description: "Add and invoke A2A agents via the LiteLLM gateway.",
+to: "./a2a",
+},
+{
+icon: "🛠️",
+title: "MCP Gateway",
+description: "Central MCP endpoint with per-key access control.",
+to: "./mcp",
+},
+]}
+/>
 
 ---
 

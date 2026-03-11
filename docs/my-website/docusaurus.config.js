@@ -190,9 +190,9 @@ const config = {
         items: [
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'tutorialsSidebar',
             position: 'left',
-            label: 'Docs',
+            label: 'Tutorials',
           },
           {
             type: 'docSidebar',
@@ -202,9 +202,9 @@ const config = {
           },
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialsSidebar',
+            sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: 'Tutorials',
+            label: 'Docs',
           },
           {
             type: 'docSidebar',

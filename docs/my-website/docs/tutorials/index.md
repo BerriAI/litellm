@@ -5,84 +5,96 @@ sidebar_label: Overview
 
 import NavigationCards from '@site/src/components/NavigationCards';
 
-**Tutorials** are end-to-end walkthroughs for integrating LiteLLM with popular AI tools, agent frameworks, and real-world workflows. Each tutorial is focused on a specific use case you can follow from start to finish.
+**New to LiteLLM? Start here.** Tutorials are end-to-end walkthroughs you can follow from zero to working integration — no prior LiteLLM knowledge required.
 
 ---
 
-## Browse Tutorials
+## Start Here
 
 <NavigationCards
 columns={2}
 items={[
   {
-    icon: "🛠️",
-    title: "AI Coding Tools",
-    description: "Integrate LiteLLM with OpenWebUI, Claude Code, Gemini CLI, OpenAI Codex, Cursor, GitHub Copilot, and more.",
-    to: "/docs/ai_tools",
+    icon: "⚡",
+    title: "First LLM Call",
+    description: "Install LiteLLM and make your first call to OpenAI, Anthropic, Bedrock, or any provider in under 5 minutes.",
+    to: "/docs/tutorials/installation",
+  },
+  {
+    icon: "🖥️",
+    title: "Run the Proxy (LLM Gateway)",
+    description: "Start a local OpenAI-compatible gateway, add a model, and call it — the fastest way to understand what the proxy does.",
+    to: "/docs/tutorials/model_config_proxy",
   },
   {
     icon: "🤖",
-    title: "Agent SDKs",
-    description: "Use LiteLLM with OpenAI Agents SDK, Claude Agent SDK, CopilotKit, Google ADK, and LiveKit.",
-    to: "/docs/agent_sdks",
+    title: "Use with an Agent SDK",
+    description: "Connect LiteLLM to OpenAI Agents SDK, Claude Agent SDK, Google ADK, or CopilotKit.",
+    to: "/docs/tutorials/openai_agents_sdk",
   },
   {
-    icon: "🔑",
-    title: "Authentication & Access",
-    description: "Set up Microsoft SSO, SCIM provisioning, default teams, and tag-based access management.",
-    to: "/docs/tutorials/msft_sso",
-  },
-  {
-    icon: "💸",
-    title: "Prompt Caching & Cost Tracking",
-    description: "Learn to enable prompt caching, track costs for coding tools, and manage spend across teams.",
-    to: "/docs/tutorials/prompt_caching",
-  },
-  {
-    icon: "🛡️",
-    title: "Guardrails & PII Masking",
-    description: "Integrate Aporia guardrails, Presidio PII masking, and content safety filters.",
-    to: "/docs/tutorials/litellm_proxy_aporia",
-  },
-  {
-    icon: "📊",
-    title: "Logging & Observability",
-    description: "Send logs to Elasticsearch, set up Langfuse tracing, and monitor your LLM usage.",
-    to: "/docs/tutorials/elasticsearch_logging",
-  },
-  {
-    icon: "🐍",
-    title: "LiteLLM Python SDK",
-    description: "Step-by-step tutorials for Azure OpenAI, HuggingFace, TogetherAI, model fallbacks, and more.",
-    to: "/docs/tutorials/azure_openai",
-  },
-  {
-    icon: "🎙️",
-    title: "Realtime & Audio",
-    description: "Build real-time audio apps with Gemini and other providers via the LiteLLM proxy.",
-    to: "/docs/tutorials/gemini_realtime_with_audio",
+    icon: "🛠️",
+    title: "Use with a Coding Tool",
+    description: "Point Claude Code, Cursor, GitHub Copilot, or Gemini CLI at LiteLLM to use any model behind your favorite coding tool.",
+    to: "/docs/tutorials/cursor_integration",
   },
 ]}
 />
 
 ---
 
-## What You'll Learn
+## Browse All Tutorials
 
-LiteLLM tutorials are practical and hands-on — each one walks through a real integration or workflow you can apply directly to your project.
-
-### Integrations
-- Connect LiteLLM to coding tools like Claude Code, Cursor, and GitHub Copilot
-- Use LiteLLM as a gateway for agent frameworks like OpenAI Agents SDK and Google ADK
-
-### Operations
-- Set up SSO, SCIM, and team-based access control
-- Track spend, enable prompt caching, and manage budgets per key or team
-
-### Safety & Observability
-- Add guardrails and PII masking to your LLM proxy
-- Route logs to Elasticsearch, Langfuse, and other observability platforms
-
-:::tip
-New to LiteLLM? Start with the [Getting Started](/) guide, then come back here for the integration tutorials that fit your stack.
-:::
+<NavigationCards
+columns={2}
+items={[
+  {
+    icon: "🤖",
+    title: "Agent SDKs & Frameworks",
+    description: "OpenAI Agents SDK, Claude Agent SDK, CopilotKit, Google ADK, LiveKit, Instructor.",
+    to: "/docs/tutorials/openai_agents_sdk",
+  },
+  {
+    icon: "🛠️",
+    title: "AI Coding Tools",
+    description: "Claude Code, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Qwen Code, OpenAI Codex.",
+    to: "/docs/ai_tools",
+  },
+  {
+    icon: "🔑",
+    title: "Proxy & Gateway",
+    description: "Config setup, SSO, SCIM provisioning, default teams, tag-based access, prompt caching.",
+    to: "/docs/tutorials/model_config_proxy",
+  },
+  {
+    icon: "💸",
+    title: "Cost & Spend Tracking",
+    description: "Track costs per key, team, and coding tool. Enable prompt caching to cut spend.",
+    to: "/docs/tutorials/prompt_caching",
+  },
+  {
+    icon: "🛡️",
+    title: "Guardrails & PII Masking",
+    description: "Aporia guardrails, Presidio PII masking, and content safety — step by step.",
+    to: "/docs/tutorials/litellm_proxy_aporia",
+  },
+  {
+    icon: "📊",
+    title: "Logging & Observability",
+    description: "Send logs to Elasticsearch, Langfuse, and other observability platforms.",
+    to: "/docs/tutorials/elasticsearch_logging",
+  },
+  {
+    icon: "🐍",
+    title: "Provider Walkthroughs",
+    description: "Step-by-step guides for Azure OpenAI, HuggingFace, TogetherAI, model fallbacks, and more.",
+    to: "/docs/tutorials/azure_openai",
+  },
+  {
+    icon: "🎙️",
+    title: "Realtime & Audio",
+    description: "Build real-time audio apps with Gemini and xAI via the LiteLLM proxy.",
+    to: "/docs/tutorials/gemini_realtime_with_audio",
+  },
+]}
+/>
