@@ -36,9 +36,9 @@ _SUPPORTED_CALLBACK_PARAMS_FROZEN = frozenset(
 )
 
 # List form for iteration (excludes litellm_logging_obj, environment_variables - config only)
-_supported_callback_params = [
+_supported_callback_params = sorted(
     p for p in _SUPPORTED_CALLBACK_PARAMS_FROZEN if p not in ("litellm_logging_obj", "environment_variables")
-]
+)
 
 
 def scrub_callback_config_params_from_dict(data: Dict) -> Dict:

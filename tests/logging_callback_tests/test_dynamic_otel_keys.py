@@ -65,7 +65,31 @@ def test_scrub_callback_config_params_removes_credentials():
     assert "litellm_logging_obj" not in result
 
 
+def test_scrub_callback_config_params_pattern_matching():
+    """Test suffix-pattern scrubbing for custom integration credentials."""
+    data = {
+        "model": "gpt-4",
+        "temperature": 0.7,
+        "my_custom_service_api_key": "secret-api-key",
+        "some_integration_secret": "s3cr3t",
+        "another_service_secret_key": "sk-xxxx",
+        "keep_this_value": "important_data",
+    }
+    result = scrub_callback_config_params_from_dict(data)
+    
+    # Verify safe values are kept
+    assert "model" in result and result["model"] == "gpt-4"
+    assert "temperature" in result and result["temperature"] == 0.7
+    assert "keep_this_value" in result and result["keep_this_value"] == "important_data"
+    
+    # Verify credentials are scrubbed by suffix patterns
+    assert "my_custom_service_api_key" not in result
+    assert "some_integration_secret" not in result
+    assert "another_service_secret_key" not in result
+
+
 if __name__ == "__main__":
     test_dynamic_key_extraction_from_metadata()
     test_dynamic_key_extraction_from_litellm_params_metadata()
     test_scrub_callback_config_params_removes_credentials()
+    test_scrub_callback_config_params_pattern_matching()

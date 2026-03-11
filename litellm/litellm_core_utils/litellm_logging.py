@@ -527,7 +527,10 @@ class Logging(LiteLLMLoggingBaseClass):
         user: Optional[str] = None,
         **additional_params,
     ):
-        self.optional_params = optional_params
+        sanitized_optional_params = scrub_callback_config_params_from_dict(
+            dict(optional_params)
+        )
+        self.optional_params = sanitized_optional_params
         if model is not None:
             self.model = model
         self.user = user
@@ -540,9 +543,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if _is_debugging_on() or self.litellm_request_debug:
             verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
-        sanitized_optional_params = scrub_callback_config_params_from_dict(
-            dict(optional_params)
-        )
         self.model_call_details.update(
             {
                 "model": self.model,
