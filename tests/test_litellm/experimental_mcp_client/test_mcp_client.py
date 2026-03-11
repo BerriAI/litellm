@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -580,6 +581,85 @@ class TestMCPClientSessionCaching:
         session = await client._get_or_create_session()
 
         assert session is mock_session
+
+    @pytest.mark.asyncio
+    async def test_run_with_cached_session_retries_on_connection_error(self, monkeypatch):
+        """Test run_with_cached_session retries once on connection error and succeeds"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=300.0,
+        )
+
+        mock_session = AsyncMock()
+
+        create_calls = {"count": 0}
+
+        async def fake_create_and_cache_session():
+            create_calls["count"] += 1
+            return mock_session
+
+        def fake_is_connection_error(exc: BaseException) -> bool:
+            return True
+
+        async def fake_cleanup_cached_session() -> None:
+            return None
+
+        op_calls = {"count": 0}
+
+        async def _operation(session):
+            op_calls["count"] += 1
+            if op_calls["count"] == 1:
+                raise RuntimeError("Simulated connection error")
+            return "ok"
+
+        monkeypatch.setattr(client, "_create_and_cache_session", fake_create_and_cache_session)
+        monkeypatch.setattr(client, "_is_connection_error", fake_is_connection_error)
+        monkeypatch.setattr(client, "_cleanup_cached_session", fake_cleanup_cached_session)
+
+        result = await client.run_with_cached_session(_operation)
+
+        assert result == "ok"
+        assert op_calls["count"] == 2
+        assert create_calls["count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_access_uses_single_cached_session(self, monkeypatch):
+        """Test concurrent operations share a single cached session"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=300.0,
+        )
+
+        mock_session = AsyncMock()
+
+        create_calls = {"count": 0}
+
+        async def fake_create_and_cache_session():
+            create_calls["count"] += 1
+            return mock_session
+
+        monkeypatch.setattr(client, "_create_and_cache_session", fake_create_and_cache_session)
+
+        async def _operation(session):
+            await asyncio.sleep(0)
+            return id(session)
+
+        async def run_one():
+            return await client._run_operation(_operation)
+
+        results = await asyncio.gather(
+            run_one(),
+            run_one(),
+            run_one(),
+            run_one(),
+        )
+
+        assert len(set(results)) == 1
+        assert create_calls["count"] >= 1
 
 
 if __name__ == "__main__":
