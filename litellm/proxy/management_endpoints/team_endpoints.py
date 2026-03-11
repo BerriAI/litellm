@@ -3505,6 +3505,15 @@ async def list_team(
         prisma_client, _team_ids, user_id=user_id
     )
 
+    # Batch-fetch all keys for all teams in a single query instead of
+    # issuing one query per team (N+1 problem).
+    _all_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": {"in": _team_ids}}
+    )
+    _keys_by_team: dict[str, list] = {}
+    for _key in _all_keys:
+        _keys_by_team.setdefault(_key.team_id, []).append(_key)
+
     returned_responses: List[TeamListResponseObject] = []
     for team in filtered_response:
         _team_memberships: List[LiteLLM_TeamMembership] = []
@@ -3512,10 +3521,7 @@ async def list_team(
             if tm.team_id == team.team_id:
                 _team_memberships.append(tm)
 
-        # add all keys that belong to the team
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"team_id": team.team_id}
-        )
+        keys = _keys_by_team.get(team.team_id, [])
 
         try:
             returned_responses.append(
