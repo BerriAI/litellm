@@ -2390,7 +2390,6 @@ async def team_member_update(
         data.max_budget_in_team is not None
         or data.tpm_limit is not None
         or data.rpm_limit is not None
-        or identified_budget_id is not None
     )
     async with prisma_client.db.tx() as tx:
         if _has_budget_params:
