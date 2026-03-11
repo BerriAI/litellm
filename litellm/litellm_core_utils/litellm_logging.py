@@ -1651,8 +1651,6 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = None
             if self.call_type in (
                 "responses",
-                "aresponses",
-                "_aresponses_websocket",
                 "anthropic_messages",
             ):
                 model_info = _get_model_info_from_litellm_params(
@@ -1961,8 +1959,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 router_model_id = None
                 if self.call_type in (
                     "responses",
-                    "aresponses",
-                    "_aresponses_websocket",
                     "anthropic_messages",
                 ):
                     model_info = _get_model_info_from_litellm_params(

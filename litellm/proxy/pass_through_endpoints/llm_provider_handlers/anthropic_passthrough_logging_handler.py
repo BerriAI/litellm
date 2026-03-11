@@ -145,6 +145,8 @@ class AnthropicPassthroughLoggingHandler:
             if litellm_params.get("metadata") is not None:
                 logging_metadata = litellm_params.get("metadata") or {}
                 existing_metadata = kwargs["litellm_params"].get("metadata", {}) or {}
+                # Start from logging_obj metadata, let existing pipeline metadata win
+                # for other keys, then restore deployment model_info.
                 merged_metadata = dict(logging_metadata)
                 merged_metadata.update(existing_metadata)
                 if logging_metadata.get("model_info") is not None:

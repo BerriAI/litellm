@@ -553,10 +553,6 @@ class TestResponsesAPICustomPricingCost:
                 for _chunk in response:
                     pass
 
-                deadline = time.time() + 2.0
-                while cost_callback.response_cost is None and time.time() < deadline:
-                    time.sleep(0.01)
-
             assert cost_callback.response_cost is not None, (
                 "response_cost should be set in the callback"
             )
