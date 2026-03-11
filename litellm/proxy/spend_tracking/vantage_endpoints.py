@@ -276,10 +276,13 @@ async def is_vantage_setup_in_db() -> bool:
 
 
 def is_vantage_setup_in_config() -> bool:
-    """Check if Vantage is setup in config.yaml or environment variables."""
-    import litellm
+    """Check if Vantage is setup in config.yaml, environment variables, or programmatically."""
+    from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-    return "vantage" in litellm.callbacks
+    for cb in litellm.callbacks:
+        if cb == "vantage" or isinstance(cb, VantageLogger):
+            return True
+    return False
 
 
 async def is_vantage_setup() -> bool:
@@ -412,6 +415,8 @@ async def vantage_dry_run_export(
             summary=summary,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error performing Vantage dry run export: {str(e)}"
