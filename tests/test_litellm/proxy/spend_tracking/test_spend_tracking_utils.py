@@ -1071,10 +1071,9 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
 
     # When redaction is enabled and response is a dict (not ModelResponse),
-    # perform_redaction redacts content in-place within the choices structure
+    # perform_redaction returns {"text": "redacted-by-litellm"}
     parsed_response = json.loads(response_result)
-    assert parsed_response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-    assert parsed_response["choices"][0]["message"]["role"] == "assistant"
+    assert parsed_response == {"text": "redacted-by-litellm"}
 
 
 @patch("litellm.secret_managers.main.get_secret_bool")

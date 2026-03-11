@@ -10,12 +10,14 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -161,7 +163,12 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
             budget_kv_pairs[field_name] = value
 
     if budget_kv_pairs:
-        return BudgetNewRequest(**budget_kv_pairs)
+        budget_request = BudgetNewRequest(**budget_kv_pairs)
+        if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
+            budget_request.budget_reset_at = datetime.utcnow() + timedelta(
+                seconds=duration_in_seconds(duration=budget_request.budget_duration)
+            )
+        return budget_request
     return None
 
 
