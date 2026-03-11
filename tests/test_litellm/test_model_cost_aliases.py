@@ -118,6 +118,7 @@ class TestExpandModelAliases:
 
         assert len(result) == 1
         assert "model-a" in result
+        assert "aliases" not in result["model-a"]
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +173,7 @@ class TestAliasConflicts:
         # "shared-alias" should point to model-a (first one wins)
         assert "shared-alias" in result
         assert result["shared-alias"]["input_cost_per_token"] == 1e-06
+        assert "alias conflict" in caplog.text.lower()
 
     def test_canonical_entry_not_overwritten_by_alias(self):
         """An alias must never overwrite an existing canonical entry's data."""
