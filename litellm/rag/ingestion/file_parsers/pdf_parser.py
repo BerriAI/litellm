@@ -25,46 +25,52 @@ def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
         # Try pypdf first (most common)
         try:
             from pypdf import PdfReader as PypdfReader
-            
+
             pdf_file = BytesIO(file_content)
             reader = PypdfReader(pdf_file)
-            
+
             text_parts = []
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
                     text_parts.append(text)
-            
+
             if text_parts:
                 extracted_text = "\n\n".join(text_parts)
-                verbose_logger.debug(f"Extracted {len(extracted_text)} characters from PDF using pypdf")
+                verbose_logger.debug(
+                    f"Extracted {len(extracted_text)} characters from PDF using pypdf"
+                )
                 return extracted_text
-                
+
         except ImportError:
             verbose_logger.debug("pypdf not available, trying PyPDF2")
-            
+
         # Fallback to PyPDF2
         try:
             from PyPDF2 import PdfReader as PyPDF2Reader
-            
+
             pdf_file = BytesIO(file_content)
             reader = PyPDF2Reader(pdf_file)
-            
+
             text_parts = []
             for page in reader.pages:
                 text = page.extract_text()
                 if text:
                     text_parts.append(text)
-            
+
             if text_parts:
                 extracted_text = "\n\n".join(text_parts)
-                verbose_logger.debug(f"Extracted {len(extracted_text)} characters from PDF using PyPDF2")
+                verbose_logger.debug(
+                    f"Extracted {len(extracted_text)} characters from PDF using PyPDF2"
+                )
                 return extracted_text
-                
+
         except ImportError:
-            verbose_logger.debug("PyPDF2 not available, PDF extraction requires OCR or pypdf/PyPDF2 library")
-            
+            verbose_logger.debug(
+                "PyPDF2 not available, PDF extraction requires OCR or pypdf/PyPDF2 library"
+            )
+
     except Exception as e:
         verbose_logger.debug(f"PDF text extraction failed: {e}")
-        
+
     return None

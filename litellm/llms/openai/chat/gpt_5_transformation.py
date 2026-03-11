@@ -183,16 +183,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # Use effective_effort (extracted string) for xhigh validation, "none" checks, and
         # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
-        raw_reasoning_effort = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-        )
+        raw_reasoning_effort = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(raw_reasoning_effort)
 
         # Normalize to string for Chat Completions API when dict has only "effort".
         # Preserve full dict (e.g. {"effort": "high", "summary": "detailed"}) for Responses API.
-        if isinstance(raw_reasoning_effort, dict) and set(raw_reasoning_effort.keys()) <= {"effort"}:
-            normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
+        if isinstance(raw_reasoning_effort, dict) and set(
+            raw_reasoning_effort.keys()
+        ) <= {"effort"}:
+            normalized = _normalize_reasoning_effort_for_chat_completion(
+                raw_reasoning_effort
+            )
             if normalized is not None:
                 if "reasoning_effort" in non_default_params:
                     non_default_params["reasoning_effort"] = normalized
@@ -262,7 +265,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (effective_effort == "none" or effective_effort is None):
+                if supports_none and (
+                    effective_effort == "none" or effective_effort is None
+                ):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value

@@ -40,7 +40,7 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP = {
 class AnthropicFilesHandler:
     """
     Handles Anthropic Files API operations.
-    
+
     Currently supports:
     - file_content() for retrieving Anthropic Message Batch results
     """
@@ -58,17 +58,17 @@ class AnthropicFilesHandler:
     ) -> HttpxBinaryResponseContent:
         """
         Async: Retrieve file content from Anthropic.
-        
+
         For batch results, the file_id should be the batch_id.
         This will call Anthropic's /v1/messages/batches/{batch_id}/results endpoint.
-        
+
         Args:
             file_content_request: Contains file_id (batch_id for batch results)
             api_base: Anthropic API base URL
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
-            
+
         Returns:
             HttpxBinaryResponseContent: Binary content wrapped in compatible response format
         """
@@ -102,10 +102,7 @@ class AnthropicFilesHandler:
 
         # Make the request to Anthropic
         async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        anthropic_response = await async_client.get(
-            url=results_url,
-            headers=headers
-        )
+        anthropic_response = await async_client.get(url=results_url, headers=headers)
         anthropic_response.raise_for_status()
 
         # Transform Anthropic batch results to OpenAI format
@@ -124,7 +121,6 @@ class AnthropicFilesHandler:
         # Return the transformed response content
         return HttpxBinaryResponseContent(response=transformed_response)
 
-
     def file_content(
         self,
         _is_async: bool,
@@ -138,10 +134,10 @@ class AnthropicFilesHandler:
     ]:
         """
         Retrieve file content from Anthropic.
-        
+
         For batch results, the file_id should be the batch_id.
         This will call Anthropic's /v1/messages/batches/{batch_id}/results endpoint.
-        
+
         Args:
             _is_async: Whether to run asynchronously
             file_content_request: Contains file_id (batch_id for batch results)
@@ -149,7 +145,7 @@ class AnthropicFilesHandler:
             api_key: Anthropic API key
             timeout: Request timeout
             max_retries: Max retry attempts (unused for now)
-            
+
         Returns:
             HttpxBinaryResponseContent or Coroutine: Binary content wrapped in compatible response format
         """
@@ -176,7 +172,7 @@ class AnthropicFilesHandler:
     ) -> bytes:
         """
         Transform Anthropic batch results JSONL to OpenAI batch results JSONL format.
-        
+
         Anthropic format:
         {
           "custom_id": "...",
@@ -185,7 +181,7 @@ class AnthropicFilesHandler:
             "message": { ... }  // Anthropic message format
           }
         }
-        
+
         OpenAI format:
         {
           "custom_id": "...",
@@ -199,28 +195,30 @@ class AnthropicFilesHandler:
         try:
             anthropic_config = AnthropicConfig()
             transformed_lines = []
-            
+
             # Parse JSONL content
             content_str = anthropic_content.decode("utf-8")
             for line in content_str.strip().split("\n"):
                 if not line.strip():
                     continue
-                
+
                 anthropic_result = json.loads(line)
                 custom_id = anthropic_result.get("custom_id", "")
                 result = anthropic_result.get("result", {})
                 result_type = result.get("type", "")
-                
+
                 # Transform based on result type
                 if result_type == "succeeded":
                     # Transform Anthropic message to OpenAI format
                     anthropic_message = result.get("message", {})
                     if anthropic_message:
-                        openai_response_body = self._transform_anthropic_message_to_openai_format(
-                            anthropic_message=anthropic_message,
-                            anthropic_config=anthropic_config,
+                        openai_response_body = (
+                            self._transform_anthropic_message_to_openai_format(
+                                anthropic_message=anthropic_message,
+                                anthropic_config=anthropic_config,
+                            )
                         )
-                        
+
                         # Create OpenAI batch result format
                         openai_result: OpenAIBatchResult = {
                             "custom_id": custom_id,
@@ -237,9 +235,9 @@ class AnthropicFilesHandler:
                     error_obj = error.get("error", {})
                     error_message = error_obj.get("message", "Unknown error")
                     error_type = error_obj.get("type", "api_error")
-                    
+
                     status_code = ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, 500)
-                    
+
                     error_body_errored: OpenAIErrorBody = {
                         "error": {
                             "message": error_message,
@@ -272,7 +270,7 @@ class AnthropicFilesHandler:
                         },
                     }
                     transformed_lines.append(json.dumps(openai_result_canceled))
-            
+
             # Join lines and encode back to bytes
             transformed_content = "\n".join(transformed_lines)
             if transformed_lines:
@@ -297,7 +295,7 @@ class AnthropicFilesHandler:
                 status_code=200,
                 content=json.dumps(anthropic_message).encode("utf-8"),
             )
-            
+
             # Create a ModelResponse object
             model_response = ModelResponse()
             # Initialize with required fields - will be populated by transform_parsed_response
@@ -308,7 +306,7 @@ class AnthropicFilesHandler:
                     message=litellm.Message(content="", role="assistant"),
                 )
             ]  # type: ignore
-            
+
             # Create a logging object for transformation
             logging_obj = Logging(
                 model=anthropic_message.get("model", "claude-3-5-sonnet-20241022"),
@@ -322,7 +320,7 @@ class AnthropicFilesHandler:
                 kwargs={"optional_params": {}},
             )
             logging_obj.optional_params = {}
-            
+
             # Transform using AnthropicConfig
             transformed_response = anthropic_config.transform_parsed_response(
                 completion_response=anthropic_message,
@@ -331,14 +329,16 @@ class AnthropicFilesHandler:
                 json_mode=False,
                 prefix_prompt=None,
             )
-            
+
             # Convert ModelResponse to OpenAI format dict - it's already in OpenAI format
-            openai_body: OpenAIChatCompletionResponse = transformed_response.model_dump(exclude_none=True)
-            
+            openai_body: OpenAIChatCompletionResponse = transformed_response.model_dump(
+                exclude_none=True
+            )
+
             # Ensure id comes from anthropic_message if not set
             if not openai_body.get("id"):
                 openai_body["id"] = anthropic_message.get("id", "")
-            
+
             return openai_body
         except Exception as e:
             verbose_logger.error(
@@ -364,4 +364,3 @@ class AnthropicFilesHandler:
                 },
             }
             return error_response
-

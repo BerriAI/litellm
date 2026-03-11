@@ -12,7 +12,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-        
 
 
 async def attach_object_permission_to_dict(
@@ -21,30 +20,32 @@ async def attach_object_permission_to_dict(
 ) -> Dict:
     """
     Helper method to attach object_permission to a dictionary if object_permission_id is set.
-    
+
     This function:
     1. Checks if the dictionary has an object_permission_id
     2. If found, queries the database for the corresponding object permission
     3. Converts the object permission to a dictionary format
     4. Attaches it to the input dictionary under the 'object_permission' key
-    
+
     Args:
         data_dict: The dictionary to attach object_permission to
         prisma_client: The database client
-        
+
     Returns:
         Dict: The input dictionary with object_permission attached if found
-        
+
     Raises:
         ValueError: If prisma_client is None
     """
     if prisma_client is None:
         raise ValueError("Prisma client not found")
-        
+
     object_permission_id = data_dict.get("object_permission_id")
     if object_permission_id:
-        object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": object_permission_id},
+        object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": object_permission_id},
+            )
         )
         if object_permission:
             # Convert to dict if needed
@@ -162,21 +163,24 @@ async def _set_object_permission(
     if not isinstance(permission_data, dict):
         data_json.pop("object_permission")
         return data_json
-    
+
     # Clean data: exclude None values and object_permission_id
     clean_data = {
-        k: v for k, v in permission_data.items()
+        k: v
+        for k, v in permission_data.items()
         if v is not None and k != "object_permission_id"
     }
-    
+
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
-        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
-    
+        clean_data["mcp_tool_permissions"] = safe_dumps(
+            clean_data["mcp_tool_permissions"]
+        )
+
     created_permission = await prisma_client.db.litellm_objectpermissiontable.create(
         data=clean_data
     )
-    
+
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
     return data_json
@@ -198,10 +202,10 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
-    access_group_servers: List[str] = (
-        await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            team_object_permission.mcp_access_groups or []
-        )
+    access_group_servers: List[
+        str
+    ] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+        team_object_permission.mcp_access_groups or []
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
     if isinstance(raw_tool_perms, str):

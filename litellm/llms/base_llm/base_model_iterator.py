@@ -150,7 +150,9 @@ class BaseModelResponseIterator:
             except StopIteration:
                 raise StopIteration
             except ValueError as e:
-                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
     # Async iterator
     def __aiter__(self):
@@ -186,7 +188,9 @@ class BaseModelResponseIterator:
             except StopAsyncIteration:
                 raise StopAsyncIteration
             except ValueError as e:
-                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

@@ -302,12 +302,18 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             if model and llm_router:
                 try:
                     # Try to get deployment credentials for this model
-                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+                    deployment_creds = llm_router.get_deployment_credentials(
+                        model_id=model
+                    )
                     if not deployment_creds:
                         # Try by model group name
-                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        deployment = llm_router.get_deployment_by_model_group_name(
+                            model_group_name=model
+                        )
                         if deployment and deployment.litellm_params:
-                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+                            deployment_creds = deployment.litellm_params.model_dump(
+                                exclude_none=True
+                            )
 
                     # If we found credentials, merge them into data (but don't override user-provided values)
                     if deployment_creds:
@@ -433,7 +439,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
                 )
-                
+
                 result = route_a2a_agent_request(data, route_type)
                 if result is not None:
                     return result

@@ -679,9 +679,9 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: Dict[LitellmUserRoles, List[str]] = (
-                ast.literal_eval(generic_role_mappings)
-            )
+            generic_user_role_mappings_data: Dict[
+                LitellmUserRoles, List[str]
+            ] = ast.literal_eval(generic_role_mappings)
             if isinstance(generic_user_role_mappings_data, dict):
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
@@ -1017,9 +1017,9 @@ def apply_user_info_values_to_sso_user_defined_values(
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = (
-                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            )
+            user_defined_values[
+                "user_role"
+            ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
             verbose_proxy_logger.debug(
                 "No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY"
             )
@@ -1447,9 +1447,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -2550,9 +2550,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -2671,9 +2671,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 

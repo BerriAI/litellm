@@ -52,7 +52,9 @@ class VertexBase:
 
         # Try to get supported_regions directly from model_cost
         # Check both with and without vertex_ai/ prefix
-        model_key = f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        model_key = (
+            f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        )
         model_info = litellm.model_cost.get(model_key, {})
         supported_regions = model_info.get("supported_regions")
 
@@ -65,7 +67,10 @@ class VertexBase:
                 verbose_logger.warning(
                     "Vertex AI model '%s' does not support region '%s' "
                     "(supported: %s). Routing to '%s'.",
-                    model, vertex_region, supported_regions, supported_regions[0],
+                    model,
+                    vertex_region,
+                    supported_regions,
+                    supported_regions[0],
                 )
                 return supported_regions[0]
             return vertex_region
@@ -232,7 +237,9 @@ class VertexBase:
     ) -> str:
         if api_base:
             return api_base
-        return get_vertex_base_url(vertex_location or self.get_default_vertex_location())
+        return get_vertex_base_url(
+            vertex_location or self.get_default_vertex_location()
+        )
 
     @staticmethod
     def create_vertex_url(

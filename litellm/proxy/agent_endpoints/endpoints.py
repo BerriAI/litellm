@@ -177,9 +177,10 @@ async def get_agents(
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params[
+                "is_public"
+            ] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
 
         if health_check:
@@ -206,18 +207,18 @@ async def get_agents(
                     AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
                 )
                 health_results = [
-                    {"agent_id": agent.agent_id, "healthy": False, "error": "Health check timed out"}
+                    {
+                        "agent_id": agent.agent_id,
+                        "healthy": False,
+                        "error": "Health check timed out",
+                    }
                     for agent in agents_with_url
                 ]
             healthy_ids = {
-                result["agent_id"]
-                for result in health_results
-                if result["healthy"]
+                result["agent_id"] for result in health_results if result["healthy"]
             }
             returned_agents = [
-                agent
-                for agent in agents_with_url
-                if agent.agent_id in healthy_ids
+                agent for agent in agents_with_url if agent.agent_id in healthy_ids
             ] + agents_without_url
 
         return returned_agents
@@ -236,8 +237,9 @@ async def get_agents(
 
 #### CRUD ENDPOINTS FOR AGENTS ####
 
-from litellm.proxy.agent_endpoints.agent_registry import \
-    global_agent_registry as AGENT_REGISTRY
+from litellm.proxy.agent_endpoints.agent_registry import (
+    global_agent_registry as AGENT_REGISTRY,
+)
 
 
 @router.post(
@@ -376,13 +378,13 @@ async def get_agent_by_id(
                 agent_dict = agent_row.model_dump()
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.model_dump()
-                        )
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.model_dump()
                     except Exception:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.dict()
-                        )
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.dict()
                 agent = AgentResponse(**agent_dict)  # type: ignore
         else:
             # Agent found in memory — refresh spend from DB
@@ -698,8 +700,9 @@ async def make_agent_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Check if user has admin permissions
@@ -814,8 +817,9 @@ async def make_agents_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Load existing config

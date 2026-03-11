@@ -10,31 +10,36 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.constants import (MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-                               REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
-                               REDIS_UPDATE_BUFFER_KEY)
+from litellm.constants import (
+    MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+    REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_UPDATE_BUFFER_KEY,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import (DailyAgentSpendTransaction,
-                                  DailyEndUserSpendTransaction,
-                                  DailyOrganizationSpendTransaction,
-                                  DailyTagSpendTransaction,
-                                  DailyTeamSpendTransaction,
-                                  DailyUserSpendTransaction,
-                                  DBSpendUpdateTransactions)
-from litellm.proxy.db.db_transaction_queue.base_update_queue import \
-    service_logger_obj
-from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import \
-    DailySpendUpdateQueue
-from litellm.proxy.db.db_transaction_queue.spend_update_queue import \
-    SpendUpdateQueue
+from litellm.proxy._types import (
+    DailyAgentSpendTransaction,
+    DailyEndUserSpendTransaction,
+    DailyOrganizationSpendTransaction,
+    DailyTagSpendTransaction,
+    DailyTeamSpendTransaction,
+    DailyUserSpendTransaction,
+    DBSpendUpdateTransactions,
+)
+from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+    DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.caching import (RedisPipelineLpopOperation,
-                                   RedisPipelineRpushOperation)
+from litellm.types.caching import (
+    RedisPipelineLpopOperation,
+    RedisPipelineRpushOperation,
+)
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -66,9 +71,9 @@ class RedisUpdateBuffer:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
         if _use_redis_transaction_buffer is None:
@@ -210,13 +215,41 @@ class RedisUpdateBuffer:
 
         # Build a list of rpush operations, skipping empty/None transaction sets
         _queue_configs: List[Tuple[Any, str, ServiceTypes]] = [
-            (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_SPEND_UPDATE_QUEUE),
-            (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE),
-            (daily_team_spend_update_transactions, REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE),
-            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_ORG_SPEND_UPDATE_QUEUE),
-            (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE),
-            (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE),
-            (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE),
+            (
+                db_spend_update_transactions,
+                REDIS_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_spend_update_transactions,
+                REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_team_spend_update_transactions,
+                REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_org_spend_update_transactions,
+                REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_ORG_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_end_user_spend_update_transactions,
+                REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_agent_spend_update_transactions,
+                REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE,
+            ),
+            (
+                daily_tag_spend_update_transactions,
+                REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+                ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
+            ),
         ]
 
         rpush_list: List[RedisPipelineRpushOperation] = []
@@ -361,13 +394,33 @@ class RedisUpdateBuffer:
             return None, None, None, None, None, None, None
 
         lpop_list: List[RedisPipelineLpopOperation] = [
-            RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(
+                key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
+            RedisPipelineLpopOperation(
+                key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+            ),
         ]
 
         raw_results = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
@@ -399,7 +452,9 @@ class RedisUpdateBuffer:
             db_spend,
             cast(Optional[Dict[str, DailyUserSpendTransaction]], daily_results[0]),
             cast(Optional[Dict[str, DailyTeamSpendTransaction]], daily_results[1]),
-            cast(Optional[Dict[str, DailyOrganizationSpendTransaction]], daily_results[2]),
+            cast(
+                Optional[Dict[str, DailyOrganizationSpendTransaction]], daily_results[2]
+            ),
             cast(Optional[Dict[str, DailyEndUserSpendTransaction]], daily_results[3]),
             cast(Optional[Dict[str, DailyAgentSpendTransaction]], daily_results[4]),
             cast(Optional[Dict[str, DailyTagSpendTransaction]], daily_results[5]),
@@ -455,7 +510,7 @@ class RedisUpdateBuffer:
 
     async def get_all_daily_org_spend_update_transactions_from_redis_buffer(
         self,
-    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]: 
+    ) -> Optional[Dict[str, DailyOrganizationSpendTransaction]]:
         """
         Gets all the daily organization spend update transactions from Redis
         """
@@ -471,7 +526,7 @@ class RedisUpdateBuffer:
             json.loads(transaction) for transaction in list_of_transactions
         ]
         return cast(
-            Dict[str, DailyOrganizationSpendTransaction], 
+            Dict[str, DailyOrganizationSpendTransaction],
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 list_of_daily_spend_update_transactions
             ),
