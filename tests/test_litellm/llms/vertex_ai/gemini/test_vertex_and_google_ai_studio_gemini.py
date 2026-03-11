@@ -2078,6 +2078,35 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["includeThoughts"] is False
 
 
+@pytest.mark.parametrize(
+    "reasoning_effort,expected_thinking_level,expected_include_thoughts",
+    [
+        ("minimal", "minimal", True),
+        ("low", "low", True),
+        ("medium", "medium", True),
+        ("high", "high", True),
+        ("disable", "minimal", False),
+        ("none", "minimal", False),
+    ],
+)
+def test_reasoning_effort_maps_to_thinking_level_gemini_31_flash_lite(
+    reasoning_effort: str,
+    expected_thinking_level: str,
+    expected_include_thoughts: bool,
+):
+    v = VertexGeminiConfig()
+    result = v.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model="gemini-3.1-flash-lite-preview",
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"]["thinkingLevel"] == expected_thinking_level
+    assert result["thinkingConfig"]["includeThoughts"] is expected_include_thoughts
+    assert "thinkingBudget" not in result["thinkingConfig"]
+
+
 def test_reasoning_effort_dict_format_gemini_3():
     """
     Test that reasoning_effort works when passed as dict format from OpenAI Agents SDK.
@@ -3723,4 +3752,3 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
         "Prompt video tokens should be 10240 - 5120 (cached) = 5120"
     assert result.prompt_tokens_details.text_tokens == 9
     assert result.prompt_tokens_details.audio_tokens == 200
-
