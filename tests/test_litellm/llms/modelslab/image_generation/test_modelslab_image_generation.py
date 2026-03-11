@@ -1,0 +1,425 @@
+"""
+Tests for ModelsLab Image Generation transformation
+
+Tests the transformation of OpenAI-compatible requests/responses to ModelsLab format.
+"""
+
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+
+from litellm.llms.modelslab.image_generation import (
+    ModelsLabImageGenerationConfig,
+    get_modelslab_image_generation_config,
+    _redact_sensitive_fields,
+)
+from litellm.types.utils import ImageResponse
+
+
+class TestModelsLabImageGenerationConfig:
+    """Test the ModelsLabImageGenerationConfig class"""
+
+    def setup_method(self):
+        self.config = ModelsLabImageGenerationConfig()
+
+    def test_get_sensitive_request_fields(self):
+        """Test that get_sensitive_request_fields returns the key field."""
+        sensitive_fields = self.config.get_sensitive_request_fields()
+        assert "key" in sensitive_fields
+
+    def test_get_redacted_request(self):
+        """Test that get_redacted_request redacts the API key."""
+        request_data = {
+            "key": "secret-api-key-123",
+            "prompt": "A test prompt",
+            "model_id": "flux",
+        }
+        redacted = self.config.get_redacted_request(request_data)
+
+        assert redacted["key"] == "***REDACTED***"
+        assert redacted["prompt"] == "A test prompt"
+        assert redacted["model_id"] == "flux"
+        # Original should be unchanged
+        assert request_data["key"] == "secret-api-key-123"
+
+    def test_redact_sensitive_fields_function(self):
+        """Test the standalone redaction function."""
+        data = {"key": "test-key", "other": "value"}
+        redacted = _redact_sensitive_fields(data)
+
+        assert redacted["key"] == "***REDACTED***"
+        assert redacted["other"] == "value"
+
+    def test_get_supported_openai_params(self):
+        params = self.config.get_supported_openai_params("modelslab/flux")
+        assert "n" in params
+        assert "size" in params
+
+    @patch(
+        "litellm.llms.modelslab.image_generation.transformation.get_secret_str",
+        return_value=None,
+    )
+    def test_validate_environment_raises_without_api_key(self, _mock_secret):
+        # Patch get_secret_str so the test is deterministic even if
+        # MODELSLAB_API_KEY happens to be set in the environment.
+        with pytest.raises(ValueError) as exc_info:
+            self.config.validate_environment(
+                headers={},
+                model="modelslab/flux",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+            )
+        assert "MODELSLAB_API_KEY" in str(exc_info.value)
+
+    def test_validate_environment_sets_content_type(self):
+        headers = self.config.validate_environment(
+            headers={},
+            model="modelslab/flux",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key="test-key",
+        )
+        assert headers["Content-Type"] == "application/json"
+        # API key should NOT be in headers (it goes in body)
+        assert "Authorization" not in headers
+
+    def test_map_openai_params_n_to_samples(self):
+        non_default_params = {"n": 3}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="modelslab/flux",
+            drop_params=False,
+        )
+
+        assert result["samples"] == 3
+        assert "n" not in result
+
+    def test_map_openai_params_size_invalid_format_raises(self):
+        """Test that invalid size format without 'x' raises a clear error."""
+        non_default_params = {"size": "1024"}
+        optional_params = {}
+
+        with pytest.raises(ValueError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="modelslab/flux",
+                drop_params=False,
+            )
+
+        assert "Invalid size format" in str(exc_info.value)
+        assert "WIDTHxHEIGHT" in str(exc_info.value)
+
+    def test_map_openai_params_size_empty_after_x_raises(self):
+        """Test that empty size after x (e.g., '1024x') raises an error."""
+        non_default_params = {"size": "1024x"}
+        optional_params = {}
+
+        with pytest.raises(ValueError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="modelslab/flux",
+                drop_params=False,
+            )
+
+        assert "Invalid size format" in str(exc_info.value)
+
+    def test_map_openai_params_size_to_width_height(self):
+        non_default_params = {"size": "1024x768"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="modelslab/flux",
+            drop_params=False,
+        )
+
+        assert result["width"] == 1024
+        assert result["height"] == 768
+        assert "size" not in result
+
+    def test_map_openai_params_unsupported_raises_error(self):
+        non_default_params = {"unsupported_param": "value"}
+        optional_params = {}
+
+        with pytest.raises(ValueError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model="modelslab/flux",
+                drop_params=False,
+            )
+
+        assert "unsupported_param" in str(exc_info.value)
+
+    def test_map_openai_params_unsupported_dropped(self):
+        non_default_params = {"unsupported_param": "value", "n": 2}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="modelslab/flux",
+            drop_params=True,
+        )
+
+        assert "unsupported_param" not in result
+        assert result["samples"] == 2
+
+    def test_transform_image_generation_request_includes_key_in_body(self):
+        result = self.config.transform_image_generation_request(
+            model="modelslab/flux",
+            prompt="A beautiful sunset over mountains",
+            optional_params={"samples": 2, "width": 1024, "height": 1024},
+            litellm_params={"api_key": "test-api-key-123"},
+            headers={},
+        )
+
+        assert result["key"] == "test-api-key-123"
+        assert result["prompt"] == "A beautiful sunset over mountains"
+        assert result["model_id"] == "flux"
+        assert result["samples"] == 2
+        assert result["width"] == 1024
+        assert result["height"] == 1024
+
+    def test_transform_request_optional_params_cannot_override_key(self):
+        """Test that optional_params cannot override the critical fields."""
+        result = self.config.transform_image_generation_request(
+            model="modelslab/flux",
+            prompt="Original prompt",
+            optional_params={"key": "hacked-key", "prompt": "hacked-prompt", "model_id": "hacked-model"},
+            litellm_params={"api_key": "real-key"},
+            headers={},
+        )
+
+        # Critical fields should be preserved from litellm_params, not optional_params
+        assert result["key"] == "real-key"
+        assert result["prompt"] == "Original prompt"
+        assert result["model_id"] == "flux"
+
+    def test_transform_image_generation_request_strips_provider_prefix(self):
+        result = self.config.transform_image_generation_request(
+            model="modelslab/sdxl",
+            prompt="test",
+            optional_params={},
+            litellm_params={"api_key": "key"},
+            headers={},
+        )
+
+        assert result["model_id"] == "sdxl"
+
+    def test_get_complete_url_default(self):
+        url = self.config.get_complete_url(
+            api_base=None,
+            api_key="test-key",
+            model="modelslab/flux",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://modelslab.com/api/v6/images/text2img"
+
+    def test_get_complete_url_custom_base(self):
+        url = self.config.get_complete_url(
+            api_base="https://custom.modelslab.com/api/v6",
+            api_key="test-key",
+            model="modelslab/flux",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://custom.modelslab.com/api/v6/images/text2img"
+
+    def test_transform_image_generation_response_success(self):
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "success",
+            "output": [
+                "https://pub-cdn.modelslab.com/image1.png",
+                "https://pub-cdn.modelslab.com/image2.png",
+            ],
+            "generationTime": 2.5,
+            "id": 12345,
+            "meta": {},
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+        mock_logging = MagicMock()
+
+        result = self.config.transform_image_generation_response(
+            model="modelslab/flux",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.data) == 2
+        assert result.data[0].url == "https://pub-cdn.modelslab.com/image1.png"
+        assert result.data[1].url == "https://pub-cdn.modelslab.com/image2.png"
+
+    def test_transform_image_generation_response_processing_polls_and_succeeds(self):
+        """When ModelsLab returns status=processing, it should poll until success."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "processing",
+            "id": 12345,
+            "fetch_result": "https://modelslab.com/api/v6/images/fetch/12345",
+            "eta": 10,
+            "message": "Image generation in progress",
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+        mock_logging = MagicMock()
+
+        # Mock the polling method to return a successful result immediately
+        polled_data = {
+            "status": "success",
+            "output": ["https://pub-cdn.modelslab.com/result.png"],
+            "generationTime": 5.2,
+            "id": 12345,
+        }
+
+        with patch.object(self.config, "_poll_sync", return_value=polled_data) as mock_poll:
+            result = self.config.transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=mock_logging,
+                request_data={"key": "test-key"},
+                optional_params={},
+                litellm_params={"api_key": "test-key"},
+                encoding=None,
+            )
+
+        # Verify polling was triggered with the generation ID
+        mock_poll.assert_called_once()
+        call_kwargs = mock_poll.call_args.kwargs
+        assert call_kwargs["generation_id"] == 12345
+
+        # Verify the final response contains the polled image URL
+        assert len(result.data) == 1
+        assert result.data[0].url == "https://pub-cdn.modelslab.com/result.png"
+
+    @pytest.mark.asyncio
+    async def test_async_transform_image_generation_response_processing_polls_and_succeeds(self):
+        """When ModelsLab returns status=processing, async transform should poll until success."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "processing",
+            "id": 12345,
+            "fetch_result": "https://modelslab.com/api/v6/images/fetch/12345",
+            "eta": 10,
+            "message": "Image generation in progress",
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+        mock_logging = MagicMock()
+
+        # Mock the async polling method to return a successful result immediately
+        polled_data = {
+            "status": "success",
+            "output": ["https://pub-cdn.modelslab.com/async-result.png"],
+            "generationTime": 5.2,
+            "id": 12345,
+        }
+
+        with patch.object(self.config, "_poll_async", return_value=polled_data) as mock_poll:
+            result = await self.config.async_transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=mock_logging,
+                request_data={"key": "test-key"},
+                optional_params={},
+                litellm_params={"api_key": "test-key"},
+                encoding=None,
+            )
+
+        # Verify async polling was triggered with the generation ID
+        mock_poll.assert_called_once()
+        call_kwargs = mock_poll.call_args.kwargs
+        assert call_kwargs["generation_id"] == 12345
+
+        # Verify the final response contains the polled image URL
+        assert len(result.data) == 1
+        assert result.data[0].url == "https://pub-cdn.modelslab.com/async-result.png"
+
+    def test_transform_image_generation_response_processing_missing_id_raises(self):
+        """processing response without an ID should raise immediately."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "processing",
+            # no "id" field
+            "message": "processing",
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+
+        with pytest.raises(Exception):
+            self.config.transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    def test_transform_image_generation_response_error_raises(self):
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "error",
+            "message": "Invalid API key",
+        }
+        mock_response.status_code = 401
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+        mock_logging = MagicMock()
+
+        with pytest.raises(Exception) as exc_info:
+            self.config.transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=mock_logging,
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+        assert "Invalid API key" in str(exc_info.value)
+
+
+class TestFactoryFunction:
+    def test_get_modelslab_image_generation_config(self):
+        config = get_modelslab_image_generation_config("modelslab/flux")
+        assert isinstance(config, ModelsLabImageGenerationConfig)
+
+    def test_factory_returns_config_for_any_model(self):
+        config = get_modelslab_image_generation_config("modelslab/custom-model")
+        assert isinstance(config, ModelsLabImageGenerationConfig)
