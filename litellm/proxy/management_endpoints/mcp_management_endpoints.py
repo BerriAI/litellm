@@ -615,6 +615,46 @@ if MCP_AVAILABLE:
             return "view_all"
         return "restricted"
 
+    async def _get_team_scoped_mcp_server_list(
+        team_id: str,
+    ) -> List[LiteLLM_MCPServerTable]:
+        """
+        Return MCP servers scoped to a team: team's allowed servers + allow_all_keys servers.
+        Used by the Create Key UI to populate the MCP server dropdown.
+        """
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            _get_allow_all_keys_server_ids,
+            _get_team_allowed_mcp_servers,
+        )
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
+        team_server_ids = await _get_team_allowed_mcp_servers(team_obj)
+        allow_all_server_ids = _get_allow_all_keys_server_ids()
+        all_allowed_ids = team_server_ids | allow_all_server_ids
+
+        if not all_allowed_ids:
+            return []
+
+        # Collect servers from registry
+        servers: List[LiteLLM_MCPServerTable] = []
+        for server_id in all_allowed_ids:
+            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if server is not None:
+                mcp_server_table = global_mcp_server_manager._build_mcp_server_table(
+                    server
+                )
+                servers.append(mcp_server_table)
+
+        return _redact_mcp_credentials_list(servers)
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -623,38 +663,52 @@ if MCP_AVAILABLE:
     )
     async def fetch_all_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        team_id: Optional[str] = Query(
+            None,
+            description="Filter MCP servers by team scope. When provided, returns only "
+            "servers the team has access to plus globally available (allow_all_keys) servers. "
+            "Used by the Create Key UI to show team-scoped MCP servers.",
+        ),
     ):
         """
         Get all of the configured mcp servers for the user in the db with their associated teams
         ```
         curl --location 'http://localhost:4000/v1/mcp/server' \
         --header 'Authorization: Bearer your_api_key_here'
+
+        # Filter by team scope (for Create Key UI)
+        curl --location 'http://localhost:4000/v1/mcp/server?team_id=team-123' \
+        --header 'Authorization: Bearer your_api_key_here'
         ```
         """
 
-        user_mcp_management_mode = _get_user_mcp_management_mode()
+        # If team_id is provided, return team-scoped servers + allow_all_keys servers
         is_restricted_virtual_key = _is_restricted_virtual_key_request(
             user_api_key_dict
         )
-
-        if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-            servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+        if team_id is not None and isinstance(team_id, str) and team_id.strip():
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(team_id.strip())
         else:
-            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+            user_mcp_management_mode = _get_user_mcp_management_mode()
 
-            aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-            for auth_context in auth_contexts:
-                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                    user_api_key_auth=auth_context
+            if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
+                servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+            else:
+                auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+                aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+                for auth_context in auth_contexts:
+                    servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                        user_api_key_auth=auth_context
+                    )
+                    for server in servers:
+                        if server.server_id not in aggregated_servers:
+                            aggregated_servers[server.server_id] = server
+
+                redacted_mcp_servers = _redact_mcp_credentials_list(
+                    aggregated_servers.values()
                 )
-                for server in servers:
-                    if server.server_id not in aggregated_servers:
-                        aggregated_servers[server.server_id] = server
-
-            redacted_mcp_servers = _redact_mcp_credentials_list(
-                aggregated_servers.values()
-            )
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
