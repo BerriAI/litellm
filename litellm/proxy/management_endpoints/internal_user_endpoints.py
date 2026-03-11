@@ -2374,7 +2374,6 @@ async def block_user(
 
     """
     from litellm.proxy.proxy_server import (
-        hash_token,
         proxy_logging_obj,
         user_api_key_cache,
     )
@@ -2441,7 +2440,6 @@ async def unblock_user(
 
     """
     from litellm.proxy.proxy_server import (
-        hash_token,
         proxy_logging_obj,
         user_api_key_cache,
     )
