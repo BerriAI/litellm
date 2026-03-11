@@ -62,7 +62,7 @@ class EmbeddingsModules(BaseModel):
 
 class EmbeddingInput(BaseModel):
     text: Union[str, List[str]]
-    type: Literal["text", "document", "query"] = "text"
+    type: Optional[Literal["text", "document", "query"]] = None
 
 class EmbeddingConfig(BaseModel):
     modules: EmbeddingsModules
@@ -73,7 +73,7 @@ class EmbeddingRequest(BaseModel):
 
 
 def validate_dict(data: dict, model) -> dict:
-    return model(**data).model_dump(exclude_none=True, by_alias=True)
+    return model(**data).model_dump(exclude_unset=True, by_alias=True)
 
 
 class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
