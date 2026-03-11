@@ -15,6 +15,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
 from litellm.proxy.management_helpers.audit_logs import (
+    _audit_log_task_done_callback,
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
     create_audit_log_for_update,
@@ -200,6 +201,80 @@ class TestCreateAuditLogForUpdateWithCallbacks:
             await asyncio.sleep(0.1)
 
             mock_logger.async_log_audit_log_event.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatches_even_when_prisma_client_is_none(self):
+        """Callbacks should fire even if DB is unavailable."""
+        mock_logger = MagicMock(spec=CustomLogger)
+        mock_logger.async_log_audit_log_event = AsyncMock()
+        litellm.audit_log_callbacks = [mock_logger]
+
+        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.store_audit_logs", True
+        ), patch("litellm.proxy.proxy_server.prisma_client", None):
+            audit_log = _make_audit_log()
+            await create_audit_log_for_update(audit_log)
+            await asyncio.sleep(0.1)
+
+            # Callback should still be called despite no DB
+            mock_logger.async_log_audit_log_event.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatches_even_when_db_write_fails(self):
+        """Callbacks should fire even if the DB write raises."""
+        mock_logger = MagicMock(spec=CustomLogger)
+        mock_logger.async_log_audit_log_event = AsyncMock()
+        litellm.audit_log_callbacks = [mock_logger]
+
+        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.store_audit_logs", True
+        ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_auditlog.create = AsyncMock(
+                side_effect=RuntimeError("DB connection lost")
+            )
+
+            audit_log = _make_audit_log()
+            await create_audit_log_for_update(audit_log)
+            await asyncio.sleep(0.1)
+
+            # Callback should still be called despite DB failure
+            mock_logger.async_log_audit_log_event.assert_called_once()
+
+
+class TestAuditLogTaskDoneCallback:
+    def test_logs_exception_from_failed_task(self):
+        """Done callback should log task exceptions."""
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.exception.return_value = RuntimeError("callback failed")
+
+        with patch(
+            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
+        ) as mock_logger:
+            _audit_log_task_done_callback(mock_task)
+            mock_logger.error.assert_called_once()
+            assert "callback failed" in str(mock_logger.error.call_args)
+
+    def test_no_log_on_success(self):
+        """Done callback should not log when task succeeds."""
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.exception.return_value = None
+
+        with patch(
+            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
+        ) as mock_logger:
+            _audit_log_task_done_callback(mock_task)
+            mock_logger.error.assert_not_called()
+
+    def test_handles_cancelled_task(self):
+        """Done callback should handle cancelled tasks gracefully."""
+        mock_task = MagicMock(spec=asyncio.Task)
+        mock_task.exception.side_effect = asyncio.CancelledError()
+
+        with patch(
+            "litellm.proxy.management_helpers.audit_logs.verbose_proxy_logger"
+        ) as mock_logger:
+            _audit_log_task_done_callback(mock_task)
+            mock_logger.error.assert_not_called()
 
 
 class TestS3LoggerAuditLogEvent:
