@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+import base64
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -399,7 +401,6 @@ async def store_user_credential(
     credential: str,
 ) -> None:
     """Store a user credential for a BYOK MCP server."""
-    import base64
 
     encoded = base64.urlsafe_b64encode(credential.encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
@@ -421,7 +422,6 @@ async def get_user_credential(
     server_id: str,
 ) -> Optional[str]:
     """Return credential for a user+server pair, or None."""
-    import base64
 
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
@@ -481,9 +481,6 @@ async def store_user_oauth_credential(
     ``credential_b64`` column used by BYOK.  A ``"type": "oauth2"`` key
     differentiates it from plain BYOK API keys.
     """
-    import base64
-    import json
-    from datetime import timedelta
 
     expires_at: Optional[str] = None
     if expires_in is not None:
@@ -523,8 +520,6 @@ async def get_user_oauth_credential(
     server_id: str,
 ) -> Optional[Dict[str, Any]]:
     """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
-    import base64
-    import json
 
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
@@ -547,8 +542,6 @@ async def list_user_oauth_credentials(
     user_id: str,
 ) -> List[Dict[str, Any]]:
     """Return all OAuth2 credential payloads for a user, tagged with server_id."""
-    import base64
-    import json
 
     rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
         where={"user_id": user_id}
