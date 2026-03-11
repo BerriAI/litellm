@@ -31,6 +31,7 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
+
 def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
@@ -244,8 +245,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return any(
             v in model_lower
             for v in (
-                "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
-                "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
+                "opus-4-6",
+                "opus_4_6",
+                "opus-4.6",
+                "opus_4.6",
+                "sonnet-4-6",
+                "sonnet_4_6",
+                "sonnet-4.6",
+                "sonnet_4.6",
             )
         )
 

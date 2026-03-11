@@ -36,7 +36,11 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 def _build_litellm_metadata(kwargs: dict) -> dict:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
     metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
-    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    guardrails = (
+        (kwargs.get("metadata") or {}).get("guardrails")
+        or kwargs.get("guardrails")
+        or []
+    )
     if guardrails:
         metadata["guardrails"] = guardrails
     return metadata
@@ -125,12 +129,8 @@ async def _arealtime(  # noqa: PLR0915
             or get_secret_str("AZURE_API_KEY")
         )
 
-        api_version = (
-            api_version
-            or litellm_params.api_version
-            or "2024-10-01-preview"
-        )
-        
+        api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
+
         realtime_protocol = (
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
@@ -219,11 +219,7 @@ async def _arealtime(  # noqa: PLR0915
             or "https://api.x.ai/v1"
         )
         # set API KEY
-        api_key = (
-            dynamic_api_key
-            or litellm.api_key
-            or get_secret_str("XAI_API_KEY")
-        )
+        api_key = dynamic_api_key or litellm.api_key or get_secret_str("XAI_API_KEY")
 
         await xai_realtime.async_realtime(
             model=model,
@@ -260,7 +256,10 @@ async def _arealtime(  # noqa: PLR0915
             vertex_region=vertex_location, model=model
         )
 
-        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+        (
+            access_token,
+            resolved_project,
+        ) = await vertex_llm_base._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
@@ -325,7 +324,8 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", query_params={"model": model}
+            api_base=api_base or "https://api.openai.com/",
+            query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(
@@ -336,7 +336,10 @@ async def _realtime_health_check(
         resolved_location = vertex_llm_base.get_vertex_region(
             vertex_region=vertex_location, model=model
         )
-        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+        (
+            access_token,
+            resolved_project,
+        ) = await vertex_llm_base._ensure_access_token_async(
             credentials=None,
             project_id=litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT"),
             custom_llm_provider="vertex_ai",

@@ -141,9 +141,7 @@ def _resolve_oauth2_server_for_root_endpoints(
     )
 
     registry = global_mcp_server_manager.get_filtered_registry(client_ip=client_ip)
-    oauth2_servers = [
-        s for s in registry.values() if s.auth_type == MCPAuth.oauth2
-    ]
+    oauth2_servers = [s for s in registry.values() if s.auth_type == MCPAuth.oauth2]
     if len(oauth2_servers) == 1:
         return oauth2_servers[0]
     return None
@@ -197,9 +195,7 @@ async def authorize_with_server(
     parsed_auth_url = urlparse(mcp_server.authorization_url)
     existing_params = dict(parse_qsl(parsed_auth_url.query))
     existing_params.update(params)
-    final_url = urlunparse(
-        parsed_auth_url._replace(query=urlencode(existing_params))
-    )
+    final_url = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
     return RedirectResponse(final_url)
 
 
@@ -498,16 +494,18 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes if mcp_server and mcp_server.scopes else [],
+        "scopes_supported": mcp_server.scopes
+        if mcp_server and mcp_server.scopes
+        else [],
     }
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
-@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
-async def oauth_protected_resource_mcp_standard(
-    request: Request, mcp_server_name: str
-):
+@router.get(
+    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
+)
+async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
 
@@ -526,7 +524,9 @@ async def oauth_protected_resource_mcp_standard(
 
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
-@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp")
+@router.get(
+    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp"
+)
 @router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
@@ -545,6 +545,7 @@ async def oauth_protected_resource_mcp(
         mcp_server_name=mcp_server_name,
         use_standard_pattern=False,
     )
+
 
 """
     https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
@@ -605,17 +606,23 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes if mcp_server and mcp_server.scopes else [],
+        "scopes_supported": mcp_server.scopes
+        if mcp_server and mcp_server.scopes
+        else [],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register",
+        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register"
+        if mcp_server_name
+        else f"{request_base_url}/register",
     }
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
-@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
+@router.get(
+    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
+)
 async def oauth_authorization_server_mcp_standard(
     request: Request, mcp_server_name: str
 ):
@@ -632,7 +639,9 @@ async def oauth_authorization_server_mcp_standard(
 
 
 # LiteLLM legacy pattern and root endpoint
-@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}")
+@router.get(
+    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}"
+)
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
@@ -656,9 +665,7 @@ async def openid_configuration(request: Request):
 
 # Additional legacy pattern support
 @router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
-async def oauth_authorization_server_legacy(
-    request: Request, mcp_server_name: str
-):
+async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
     """
@@ -695,9 +702,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 client_name=data.get("client_name", ""),
                 grant_types=data.get("grant_types", []),
                 response_types=data.get("response_types", []),
-                token_endpoint_auth_method=data.get(
-                    "token_endpoint_auth_method", ""
-                ),
+                token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
             )
         return dummy_return

@@ -257,30 +257,33 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "gpt-oss-120b",
             "gpt-oss-20b",
         ]
-        
+
         # Normalize model name - remove prefix if present
         normalized_model = model
         if model.startswith("fireworks_ai/"):
             normalized_model = model.replace("fireworks_ai/", "")
         if normalized_model.startswith("accounts/fireworks/models/"):
-            normalized_model = normalized_model.replace("accounts/fireworks/models/", "")
-        
+            normalized_model = normalized_model.replace(
+                "accounts/fireworks/models/", ""
+            )
+
         # Check if model supports reasoning
         supports_reasoning_value = any(
-            reasoning_model in normalized_model for reasoning_model in reasoning_supported_models
+            reasoning_model in normalized_model
+            for reasoning_model in reasoning_supported_models
         )
-        
+
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
             "supports_pdf_input": True,  # via document inlining
             "supports_vision": True,  # via document inlining
         }
-        
+
         # Only include supports_reasoning if True
         if supports_reasoning_value:
             provider_specific_model_info["supports_reasoning"] = True
-        
+
         return provider_specific_model_info
 
     def transform_request(

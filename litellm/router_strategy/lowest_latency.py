@@ -31,9 +31,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(
-        self, router_cache: DualCache, routing_args: dict = {}
-    ):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
@@ -96,14 +94,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        
+
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
                             response_seconds = response_ms.total_seconds()
                         else:
                             response_seconds = response_ms
-                            
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+
+                        final_value = safe_divide_seconds(
+                            response_seconds, completion_tokens
+                        )
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
@@ -111,7 +111,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                                ttft_seconds = (
+                                    time_to_first_token_response_time.total_seconds()
+                                )
                             else:
                                 ttft_seconds = time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
@@ -204,7 +206,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         "model_group", None
                     )
 
-                    id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
+                    id = (kwargs["litellm_params"].get("model_info") or {}).get(
+                        "id", None
+                    )
                     if model_group is None or id is None:
                         return
                     elif isinstance(id, int):
@@ -317,14 +321,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        
+
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
                             response_seconds = response_ms.total_seconds()
                         else:
                             response_seconds = response_ms
-                            
-                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+
+                        final_value = safe_divide_seconds(
+                            response_seconds, completion_tokens
+                        )
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
@@ -332,7 +338,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
-                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                                ttft_seconds = (
+                                    time_to_first_token_response_time.total_seconds()
+                                )
                             else:
                                 ttft_seconds = time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
