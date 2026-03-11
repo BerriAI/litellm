@@ -2373,7 +2373,12 @@ async def block_user(
     - The updated user record with blocked=True
 
     """
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -2391,13 +2396,17 @@ async def block_user(
     # Invalidate user cache entry
     user_api_key_cache.delete_cache(key=data.user_id)
 
-    # Invalidate cache for all keys associated with this user
+    # Invalidate cache for all keys associated with this user (both local and Redis)
     user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"user_id": data.user_id}
     )
     
     for key in user_keys:
-        user_api_key_cache.delete_cache(key.token)
+        await _delete_cache_key_object(
+            hashed_token=key.token,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     return record
 
@@ -2431,7 +2440,12 @@ async def unblock_user(
     - The updated user record with blocked=False
 
     """
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -2449,12 +2463,16 @@ async def unblock_user(
     # Invalidate user cache entry
     user_api_key_cache.delete_cache(key=data.user_id)
 
-    # Invalidate cache for all keys associated with this user
+    # Invalidate cache for all keys associated with this user (both local and Redis)
     user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"user_id": data.user_id}
     )
     
     for key in user_keys:
-        user_api_key_cache.delete_cache(key.token)
+        await _delete_cache_key_object(
+            hashed_token=key.token,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     return record
