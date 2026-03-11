@@ -163,7 +163,13 @@ class MCPClient:
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
 
-        # Session caching configuration
+        # Session caching configuration — stdio transport spawns child processes
+        # that can become orphans if not explicitly cleaned up, so disallow caching.
+        if use_session_cache and transport_type == MCPTransport.stdio:
+            raise ValueError(
+                "Session caching is not supported for stdio transport. "
+                "stdio spawns child processes that cannot be safely cached."
+            )
         self.use_session_cache: bool = use_session_cache
         self.session_cache_ttl: float = session_cache_ttl
 
@@ -173,6 +179,7 @@ class MCPClient:
         self._cached_http_client: Optional[httpx.AsyncClient] = None
         self._session_last_used_at: Optional[float] = None
         self._session_lock: asyncio.Lock = asyncio.Lock()
+        self._closed: bool = False
 
         # handle the basic auth value if provided
         if auth_value:
@@ -364,38 +371,6 @@ class MCPClient:
 
         return factory
 
-    def _create_transport_context(self) -> Tuple[Any, Optional[httpx.AsyncClient]]:
-        """Create transport context based on transport type."""
-        http_client: Optional[httpx.AsyncClient] = None
-
-        if self.transport_type == MCPTransport.stdio:
-            if not self.stdio_config:
-                raise ValueError("stdio_config is required for stdio transport")
-            server_params = StdioServerParameters(
-                command=self.stdio_config.get("command", ""),
-                args=self.stdio_config.get("args", []),
-                env=self.stdio_config.get("env", {}),
-            )
-            return stdio_client(server_params), None
-
-        headers = self._get_auth_headers()
-        httpx_client_factory = self._create_httpx_client_factory()
-
-        if self.transport_type == MCPTransport.sse:
-            return sse_client(
-                url=self.server_url,
-                timeout=self.timeout,
-                headers=headers,
-                httpx_client_factory=httpx_client_factory,
-            ), None
-
-        verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
-        http_client = httpx_client_factory(
-            headers=headers,
-            timeout=httpx.Timeout(self.timeout),
-        )
-        return streamable_http_client(url=self.server_url, http_client=http_client), http_client
-
     def _is_session_valid(self) -> bool:
         """Check if the cached session is still valid (not idle too long)."""
         if self._cached_session is None:
@@ -455,7 +430,7 @@ class MCPClient:
         return session
 
     async def _cleanup_cached_session(self) -> None:
-        """Clean up any cached session resources."""
+        """Close and clean up any cached session resources."""
         if self._cached_session is not None:
             try:
                 await self._cached_session.__aexit__(None, None, None)
@@ -482,6 +457,8 @@ class MCPClient:
     async def _get_or_create_session(self) -> ClientSession:
         """Get a cached session or create a new one."""
         async with self._session_lock:
+            if self._closed:
+                raise RuntimeError("MCPClient is closed")
             if self._is_session_valid():
                 verbose_logger.debug(
                     f"MCP client reusing cached session for {self.server_url or 'stdio'}"
@@ -492,10 +469,13 @@ class MCPClient:
 
     def _is_connection_error(self, e: Exception) -> bool:
         """Check if exception indicates a broken/closed connection."""
-        if isinstance(e, (ConnectionError, ConnectionResetError, TimeoutError)):
+        # anyio / MCP-specific exceptions (not subclasses of ConnectionError)
+        type_name = type(e).__name__
+        if type_name in ("BrokenResourceError", "ClosedResourceError", "EndOfStream"):
             return True
-        error_str = str(e).lower()
-        return "broken" in error_str or "closed" in error_str
+        if isinstance(e, ConnectionError):
+            return True
+        return False
 
     async def run_with_cached_session(
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
@@ -512,8 +492,15 @@ class MCPClient:
                     f"MCP client cached session appears broken, retrying: {e}"
                 )
                 async with self._session_lock:
-                    await self._cleanup_cached_session()
-                    session = await self._create_and_cache_session()
+                    if self._cached_session is session:
+                        # First caller to detect failure — replace session
+                        session = await self._create_and_cache_session()
+                    elif self._cached_session is not None:
+                        # Another caller already replaced it — reuse
+                        session = self._cached_session
+                    else:
+                        # Session was closed, create new
+                        session = await self._create_and_cache_session()
                 result = await operation(session)
                 self._session_last_used_at = time.time()
                 return result
@@ -522,6 +509,7 @@ class MCPClient:
     async def close(self) -> None:
         """Close the client and clean up any cached sessions."""
         async with self._session_lock:
+            self._closed = True
             await self._cleanup_cached_session()
         verbose_logger.info(
             f"MCP client closed for {self.server_url or 'stdio'}"
