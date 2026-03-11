@@ -7,7 +7,6 @@ entries, creating shared dict references for alias entries at load time.
 
 import logging
 
-import logging
 
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
 
