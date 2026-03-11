@@ -112,6 +112,18 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
                 gap: 12,
               }}
             >
+              {server.mcp_info?.logo_url && (
+                <img
+                  src={server.mcp_info.logo_url}
+                  alt={`${name} logo`}
+                  style={{
+                    width: 24, height: 24, borderRadius: 6,
+                    objectFit: "contain", flexShrink: 0,
+                    marginTop: 1,
+                  }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{

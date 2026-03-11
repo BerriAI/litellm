@@ -170,9 +170,25 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
         {/* Avatar + name + connect */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
+          {detailServer.mcp_info?.logo_url ? (
+            <img
+              src={detailServer.mcp_info.logo_url}
+              alt={`${name} logo`}
+              style={{
+                width: 64, height: 64, borderRadius: 16,
+                objectFit: "contain", flexShrink: 0,
+                background: "#f9fafb",
+              }}
+              onError={(e) => {
+                const el = e.target as HTMLImageElement;
+                el.style.display = "none";
+                if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
+              }}
+            />
+          ) : null}
           <div style={{
             width: 64, height: 64, borderRadius: 16,
-            background: color, display: "flex",
+            background: color, display: detailServer.mcp_info?.logo_url ? "none" : "flex",
             alignItems: "center", justifyContent: "center",
             color: "#fff", fontWeight: 700, fontSize: 28, flexShrink: 0,
           }}>
@@ -351,9 +367,26 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fafafa"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fff"; }}
               >
+                {server.mcp_info?.logo_url ? (
+                  <img
+                    src={server.mcp_info.logo_url}
+                    alt={`${name} logo`}
+                    style={{
+                      width: 38, height: 38, borderRadius: 10,
+                      objectFit: "contain", flexShrink: 0,
+                      background: "#f9fafb",
+                    }}
+                    onError={(e) => {
+                      const el = e.target as HTMLImageElement;
+                      el.style.display = "none";
+                      if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
+                    }}
+                  />
+                ) : null}
                 <div style={{
                   width: 38, height: 38, borderRadius: 10, background: color,
-                  display: "flex", alignItems: "center", justifyContent: "center",
+                  display: server.mcp_info?.logo_url ? "none" : "flex",
+                  alignItems: "center", justifyContent: "center",
                   color: "#fff", fontWeight: 700, fontSize: 16, flexShrink: 0,
                 }}>
                   {name.charAt(0).toUpperCase()}

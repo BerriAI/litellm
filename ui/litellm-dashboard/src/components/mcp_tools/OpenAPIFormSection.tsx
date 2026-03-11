@@ -12,6 +12,8 @@ interface OpenAPIFormSectionProps {
   onValuesChange: (updates: Record<string, any>) => void;
   /** Called when key tools change (from registry preset selection). */
   onKeyToolsChange?: (tools: OpenAPIKeyTool[]) => void;
+  /** Called when a preset is selected so the parent can set the logo URL from icon_url. */
+  onLogoUrlChange?: (url: string | undefined) => void;
   /** Called when the OAuth docs URL changes (e.g. link to create a GitHub OAuth App). */
   onOAuthDocsUrlChange?: (url: string | null) => void;
 }
@@ -26,6 +28,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
   accessToken,
   onValuesChange,
   onKeyToolsChange,
+  onLogoUrlChange,
   onOAuthDocsUrlChange,
 }) => {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
@@ -33,6 +36,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
   const handlePresetSelect = (entry: OpenAPIRegistryEntry) => {
     setSelectedPreset(entry.name);
     onKeyToolsChange?.(entry.key_tools ?? []);
+    onLogoUrlChange?.(entry.icon_url || undefined);
     const updates: Record<string, any> = {
       spec_path: entry.spec_url,
     };
