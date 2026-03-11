@@ -26,18 +26,20 @@ def _rebuild_exception(cls, message, llm_provider, model, extra_kwargs=None):
         kwargs.update(extra_kwargs)
     try:
         return cls(**kwargs)
-    except TypeError as first_err:
-        try:
-            response = httpx.Response(status_code=500, request=httpx.Request("POST", "https://litellm.ai"))
-            kwargs["response"] = response
-            return cls(**kwargs)
-        except TypeError:
-            raise first_err from None
+    except TypeError:
+        # Some OpenAI base classes require a `response` arg
+        response = httpx.Response(
+            status_code=extra_kwargs.get("status_code", 500) if extra_kwargs else 500,
+            request=httpx.Request("POST", "https://litellm.ai"),
+        )
+        kwargs["response"] = response
+        return cls(**kwargs)
 
 
 def _exception_reduce(self):
     """Allow pickling across process boundaries (e.g. concurrent.futures)."""
     import inspect
+
     extra = {}
     params = inspect.signature(type(self).__init__).parameters
     if "status_code" in params:
