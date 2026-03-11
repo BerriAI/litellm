@@ -993,12 +993,6 @@ class TestAsyncPostCallStreamingIteratorHook:
     async def test_streaming_text_only_with_real_data(self, handler):
         """Test that text-only responses (no tool calls) pass through unmodified."""
 
-        mock_post, _ = create_blocking_mock_post(block_all=False)
-
-        mock_client = AsyncMock()
-        mock_client.post = mock_post
-        handler.tool_blocking_client = mock_client
-
         sample_data_path = Path(__file__).parent / "rubrik_test_sample_data" / "openai_streaming_text_response"
 
         mock_client = AsyncMock()

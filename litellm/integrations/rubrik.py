@@ -456,7 +456,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     yield self._encode_anthropic_chunk_to_sse(explanation_chunk)
 
             # Adjust stop_reason if all tools were blocked
-            if len(blocked_indices) == len(accumulated_tools):
+            if accumulated_tools and len(blocked_indices) == len(accumulated_tools):
                 chunk["delta"]["stop_reason"] = "end_turn"
             yield self._encode_anthropic_chunk_to_sse(chunk)
 
