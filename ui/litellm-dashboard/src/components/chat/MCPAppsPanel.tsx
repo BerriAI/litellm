@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
-import { fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
+import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import { message } from "antd";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
@@ -276,7 +276,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               <Button
                 type="default"
                 danger
-                onClick={() => {
+                onClick={async () => {
+                  try {
+                    await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
+                  } catch (_) {
+                    // Ignore — credential may already be gone; update UI regardless.
+                  }
                   setOauthConnected((prev) => { const n = new Set(prev); n.delete(detailServer.server_id); return n; });
                 }}
                 style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
