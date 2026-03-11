@@ -271,6 +271,26 @@ def test_embed_content_response_processing():
     assert result.data[0].index == 0
     assert result.data[0].object == "embedding"
     assert result.model == "gemini-embedding-2-preview"
+    assert result.usage.prompt_tokens > 0
+
+
+def test_embed_content_response_multimodal_sets_prompt_tokens_zero():
+    """Test that multimodal input sets prompt_tokens=0 (cannot accurately count)."""
+    response_json = {
+        "embedding": {
+            "values": [0.1, 0.2, 0.3, 0.4, 0.5]
+        }
+    }
+    
+    model_response = EmbeddingResponse()
+    result = process_embed_content_response(
+        input=["text", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="],
+        model_response=model_response,
+        model="gemini-embedding-2-preview",
+        response_json=response_json,
+    )
+    
+    assert result.usage.prompt_tokens == 0
 
 
 def test_gemini_multimodal_embedding_e2e():
@@ -455,4 +475,52 @@ def test_multimodal_input_detection_with_gcs():
     assert _is_multimodal_input(["text", "gs://bucket/file.png"]) is True
     assert _is_multimodal_input("gs://bucket/video.mp4") is True
     assert _is_multimodal_input(["just text", "more text"]) is False
+
+
+def test_vertex_ai_text_only_embedding_uses_embed_content():
+    """
+    Test that vertex_ai/gemini-embedding-2-preview with text-only input uses
+    embedContent endpoint (not batchEmbedContents) and returns a single embedding.
+    """
+    client = HTTPHandler()
+    embed_content_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-embedding-2-preview:embedContent"
+
+    def mock_auth_token(*args, **kwargs):
+        return "Bearer test-token", "test-project"
+
+    with patch.object(client, "post") as mock_post, patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._ensure_access_token",
+        side_effect=mock_auth_token,
+    ), patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._get_token_and_url"
+    ) as mock_get_token:
+        mock_get_token.return_value = (
+            {"Authorization": "Bearer test-token"},
+            embed_content_url,
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "embedding": {"values": [0.1, 0.2, 0.3, 0.4, 0.5]}
+        }
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="vertex_ai/gemini-embedding-2-preview",
+            input=["Hello, world!"],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        post_url = call_args.kwargs.get("url", call_args.args[0] if call_args.args else "")
+        assert "embedContent" in str(post_url)
+        data = json.loads(call_args.kwargs["data"])
+        assert "content" in data
+        assert "parts" in data["content"]
+        assert len(data["content"]["parts"]) == 1
+        assert data["content"]["parts"][0]["text"] == "Hello, world!"
+        assert len(response.data) == 1
 
