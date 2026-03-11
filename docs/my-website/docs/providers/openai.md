@@ -675,17 +675,18 @@ To use built-in tools like `web_search_preview` with `mode: chat` models, add th
 # This will FAIL - gpt-4o has mode: chat, uses Chat Completions API
 response = litellm.completion(
     model="gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
     tools=[{"type": "web_search_preview"}],  # Not supported in Chat Completions
-    ...
+    # ... other kwargs
 )
 
 # This will WORK - prefix forces Responses API
 response = litellm.completion(
     model="openai/responses/gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
     tools=[{"type": "web_search_preview"}],  # Supported in Responses API
-    ...
+    # ... other kwargs
 )
-```
 
 ### Examples
 
