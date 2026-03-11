@@ -3175,3 +3175,128 @@ def test_map_openai_params_max_tokens_normalized_to_int():
 
     assert "max_tokens" in result
     assert result["max_tokens"] == 1
+
+
+# ========================================================================
+# Tool schema normalization tests
+# ========================================================================
+
+
+def test_map_tool_helper_enforces_object_type_when_missing():
+    """
+    Anthropic requires input_schema.type to be "object". When an OpenAI tool
+    has parameters without a 'type' field (common with MCP servers), LiteLLM
+    should inject type:"object" before forwarding to Anthropic.
+
+    Without this fix, Anthropic rejects with:
+        tools.N.custom.input_schema.type: Input should be 'object'
+    """
+    config = AnthropicConfig()
+
+    # Tool with parameters that has properties but no 'type' field
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Search for code patterns",
+            "parameters": {
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "properties" in result["input_schema"]
+    assert "query" in result["input_schema"]["properties"]
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_enforces_object_type_when_wrong_type():
+    """
+    If a tool schema has type:"string" or type:"array" at the root level,
+    LiteLLM should normalize it to type:"object" for Anthropic compatibility.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "Echo input",
+            "parameters": {
+                "type": "string",
+                "description": "The input to echo",
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}, (
+        "properties should be injected as {} when schema has non-object type and no properties key"
+    )
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_preserves_valid_object_schema():
+    """
+    When a tool schema already has type:"object", it should be preserved
+    without modification.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                },
+                "required": ["city"],
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "city" in result["input_schema"]["properties"]
+    assert result["input_schema"]["required"] == ["city"]
+
+
+def test_map_tool_helper_empty_parameters_get_default():
+    """
+    When parameters is entirely missing, the existing default should still
+    produce a valid {type:"object", properties:{}} schema.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "no_params_tool",
+            "description": "Tool with no parameters",
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}
