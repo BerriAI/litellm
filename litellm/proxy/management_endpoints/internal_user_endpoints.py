@@ -2373,7 +2373,7 @@ async def block_user(
     - The updated user record with blocked=True
 
     """
-
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -2387,6 +2387,14 @@ async def block_user(
             status_code=404,
             detail={"error": f"User {data.user_id} not found"},
         )
+
+    # Invalidate cache for all keys associated with this user
+    user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"user_id": data.user_id}
+    )
+    
+    for key in user_keys:
+        user_api_key_cache.delete_cache(key.token)
 
     return record
 
@@ -2420,7 +2428,7 @@ async def unblock_user(
     - The updated user record with blocked=False
 
     """
-
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -2434,5 +2442,13 @@ async def unblock_user(
             status_code=404,
             detail={"error": f"User {data.user_id} not found"},
         )
+
+    # Invalidate cache for all keys associated with this user
+    user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"user_id": data.user_id}
+    )
+    
+    for key in user_keys:
+        user_api_key_cache.delete_cache(key.token)
 
     return record
