@@ -2342,3 +2342,97 @@ async def get_user_daily_activity_aggregated(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {str(e)}"},
         )
+
+
+@router.post(
+    "/user/block", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def block_user(
+    data: BlockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Blocks all calls from keys associated with this user.
+
+    Parameters:
+    - user_id: str - Required. The unique identifier of the user to block.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/user/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated user record with blocked=True
+
+    """
+
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id}, data={"blocked": True}  # type: ignore
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+
+    return record
+
+
+@router.post(
+    "/user/unblock", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def unblock_user(
+    data: BlockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Unblocks a user, restoring access for their API keys.
+
+    Parameters:
+    - user_id: str - Required. The unique identifier of the user to unblock.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/user/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated user record with blocked=False
+
+    """
+
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id}, data={"blocked": False}  # type: ignore
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+
+    return record

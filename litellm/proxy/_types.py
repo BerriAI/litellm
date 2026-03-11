@@ -527,6 +527,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/delete",
         "/user/info",
         "/user/list",
+        "/user/block",
+        "/user/unblock",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         # team
@@ -1679,6 +1681,10 @@ class BlockTeamRequest(LiteLLMPydanticObjectBase):
     team_id: str  # required
 
 
+class BlockUserRequest(LiteLLMPydanticObjectBase):
+    user_id: str  # required
+
+
 class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
@@ -2544,6 +2550,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
+    blocked: bool = False
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
     models: list = []

@@ -26,6 +26,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import AgentSelector from "../agent_management/AgentSelector";
+import BlockToggle from "../common_components/BlockToggle";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -567,6 +568,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
+  const handleBlockToggle = async (newBlockedStatus: boolean) => {
+    // Refresh team data after block/unblock to get updated state
+    try {
+      if (!accessToken) return;
+      const response = await teamInfoCall(accessToken, teamId);
+      setTeamData(response);
+      onUpdate(response);
+    } catch (error) {
+      console.error("Error refreshing team data:", error);
+      NotificationsManager.fromBackend("Failed to refresh team data");
+    }
+  };
+
   if (loading) {
     return <div className="p-4">Loading...</div>;
   }
@@ -775,13 +789,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             key: TEAM_INFO_TAB_KEYS.SETTINGS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS],
             children: (
-              <Card className="overflow-y-auto max-h-[65vh]">
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Team Settings</Title>
-                  {canEditTeam && !isEditing && (
-                    <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>Edit Settings</Button>
-                  )}
-                </div>
+              <>
+                {/* Block/Unblock Card - Separate from settings */}
+                {canEditTeam && accessToken && (
+                  <Card className="mb-4">
+                    <BlockToggle
+                      entityType="team"
+                      entityId={teamId}
+                      currentBlockedStatus={info.blocked || false}
+                      onToggle={handleBlockToggle}
+                      accessToken={accessToken}
+                      userRole={is_proxy_admin ? "proxy_admin" : null}
+                    />
+                  </Card>
+                )}
+
+                {/* Settings Card - Separate */}
+                <Card className="overflow-y-auto max-h-[65vh]">
+                  <div className="flex justify-between items-center mb-4">
+                    <Title>Team Settings</Title>
+                    {canEditTeam && !isEditing && (
+                      <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>Edit Settings</Button>
+                    )}
+                  </div>
 
                 {isEditing ? (
                   <Form
@@ -1241,6 +1271,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                 )}
               </Card>
+              </>
             ),
           },
         ].filter(tab => visibleTabs.includes(tab.key))}

@@ -10,7 +10,7 @@ import {
   getProxyBaseUrl,
 } from "../networking";
 import { Button as AntdButton } from "antd";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { rolesWithWriteAccess, isProxyAdminRole } from "../../utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -18,6 +18,7 @@ import { CopyIcon, CheckIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import BlockToggle from "../common_components/BlockToggle";
 
 interface UserInfoViewProps {
   userId: string;
@@ -44,6 +45,7 @@ interface UserInfo {
     metadata: Record<string, any> | null;
     created_at: string | null;
     updated_at: string | null;
+    blocked?: boolean | null;
   };
   keys: any[] | null;
   teams: any[] | null;
@@ -165,6 +167,18 @@ export default function UserInfoView({
     }
   };
 
+  const handleBlockToggle = async (newBlockedStatus: boolean) => {
+    // Refresh user data after block/unblock to get updated state
+    try {
+      if (!accessToken) return;
+      const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
+      setUserData(data);
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+      NotificationsManager.fromBackend("Failed to refresh user data");
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-4">
@@ -204,7 +218,14 @@ export default function UserInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             Back to Users
           </Button>
-          <Title>{userData.user_info?.user_email || "User"}</Title>
+          <div className="flex items-center gap-3">
+            <Title>{userData.user_info?.user_email || "User"}</Title>
+            {userData.user_info?.blocked && (
+              <Badge color="red" size="xs">
+                BLOCKED
+              </Badge>
+            )}
+          </div>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
             <AntdButton
@@ -347,6 +368,22 @@ export default function UserInfoView({
 
           {/* Details Panel */}
           <TabPanel>
+            {/* Block/Unblock Card - Separate from settings */}
+            {userRole && isProxyAdminRole(userRole) && accessToken && !isProxyAdminRole(userData.user_info?.user_role || "") && (
+              <Card className="mb-4">
+                <BlockToggle
+                  entityType="user"
+                  entityId={userData.user_id}
+                  currentBlockedStatus={userData.user_info?.blocked || false}
+                  onToggle={handleBlockToggle}
+                  accessToken={accessToken}
+                  baseUrl={baseUrl || ""}
+                  userRole="proxy_admin"
+                />
+              </Card>
+            )}
+
+            {/* Settings Card - Separate */}
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>User Settings</Title>

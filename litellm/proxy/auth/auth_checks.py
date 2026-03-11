@@ -363,21 +363,22 @@ async def common_checks(  # noqa: PLR0915
     """
     Common checks across jwt + key-based auth.
 
-    1. If team is blocked
-    1.1. If project is blocked
-    2. If team can call model
-    2.2 If project can call model
-    3. If team is in budget
-    3.0.2. If project is in budget
-    3.0.3. If project is over soft budget (alert only)
-    4. If user passed in (JWT or key.user_id) - is in budget
-    5. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
-    6. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
-    7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    8. [OPTIONAL] If guardrails modified - is request allowed to change this
-    9. Check if request body is safe
-    10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
-    11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
+    1. If user is blocked
+    2. If team is blocked
+    2.1. If project is blocked
+    3. If team can call model
+    3.1 If project can call model
+    4. If team is in budget
+    4.1. If project is in budget
+    4.2. If project is over soft budget (alert only)
+    5. If user passed in (JWT or key.user_id) - is in budget
+    6. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
+    7. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
+    8. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
+    9. [OPTIONAL] If guardrails modified - is request allowed to change this
+    10. Check if request body is safe
+    11. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
+    12. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -385,13 +386,19 @@ async def common_checks(  # noqa: PLR0915
         request_body, route
     )
 
-    # 1. If team is blocked
+    # 1. If user is blocked
+    if user_object is not None and user_object.blocked is True:
+        raise Exception(
+            f"User={user_object.user_id} is blocked. Update via `/user/unblock` if you're an admin."
+        )
+
+    # 2. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
 
-    # 2. If team can call model
+    # 3. If team can call model
     if _model and team_object:
         if not await can_team_access_model(
             model=_model,

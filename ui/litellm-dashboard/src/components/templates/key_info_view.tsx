@@ -12,17 +12,19 @@ import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
+import BlockToggle from "../common_components/BlockToggle";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
-import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall, keyInfoV1Call } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
+import { transformKeyInfo } from "../key_team_helpers/transform_key_info";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -366,6 +368,22 @@ export default function KeyInfoView({
     });
   };
 
+  const handleBlockToggle = async (newBlockedStatus: boolean) => {
+    // Refresh key data after block/unblock to get updated state
+    try {
+      if (!accessToken) return;
+      const keyInfo = await keyInfoV1Call(accessToken, currentKeyData.token || currentKeyData.token_id);
+      const transformedKeyData = transformKeyInfo(keyInfo);
+      setCurrentKeyData(transformedKeyData);
+      if (onKeyDataUpdate) {
+        onKeyDataUpdate(transformedKeyData);
+      }
+    } catch (error) {
+      console.error("Error refreshing key data:", error);
+      NotificationManager.fromBackend("Failed to refresh key data");
+    }
+  };
+
   return (
     <div className="w-full h-screen p-4">
       <KeyInfoHeader
@@ -585,6 +603,21 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabPanel>
+            {/* Block/Unblock Card - Separate from settings */}
+            {isProxyAdminRole(userRole || "") && accessToken && (
+              <Card className="mb-4">
+                <BlockToggle
+                  entityType="key"
+                  entityId={currentKeyData.token || currentKeyData.token_id}
+                  currentBlockedStatus={currentKeyData.blocked || false}
+                  onToggle={handleBlockToggle}
+                  accessToken={accessToken}
+                  userRole="proxy_admin"
+                />
+              </Card>
+            )}
+
+            {/* Settings Card - Separate */}
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
