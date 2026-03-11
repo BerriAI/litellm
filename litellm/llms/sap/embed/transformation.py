@@ -160,7 +160,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
-        if optional_params.get("timeout", None):
+        if optional_params.get("timeout", None) is not None:
             model_dict["timeout"] = optional_params.get("timeout")
         if optional_params.get("max_retries", None) is not None:
             model_dict["max_retries"] = optional_params.get("max_retries")
