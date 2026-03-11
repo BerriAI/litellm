@@ -51,8 +51,6 @@ def test_sap_fetch_creds_from_arg_service_key(monkeypatch):
 
 def test_fetch_creds_from_env_vcap_service(monkeypatch):
     _prep_env(monkeypatch)
-    for var in ("AICORE_CLIENT_ID", "AICORE_CLIENT_SECRET", "AICORE_AUTH_URL", "AICORE_BASE_URL", "AICORE_CERT_URL"):
-        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("VCAP_SERVICES", json.dumps(mock_sap_vcap_service_key_dict))
     creds = sap_credentials.fetch_credentials()
     assert creds['client_id'] == "vcap-clientid"
