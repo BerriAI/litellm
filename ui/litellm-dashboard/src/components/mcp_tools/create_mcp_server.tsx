@@ -11,6 +11,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
+import MCPLogoSelector from "./MCPLogoSelector";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -70,6 +71,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
@@ -101,6 +103,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           allowedTools,
           searchValue,
           aliasManuallyEdited,
+          logoUrl,
         }),
       );
     } catch (err) {
@@ -201,6 +204,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (typeof parsed.aliasManuallyEdited === "boolean") {
         setAliasManuallyEdited(parsed.aliasManuallyEdited);
+      }
+      if (parsed.logoUrl) {
+        setLogoUrl(parsed.logoUrl);
       }
     } catch (err) {
       console.error("Failed to restore MCP create state", err);
@@ -357,6 +363,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_info: {
           server_name: restValues.server_name || restValues.url,
           description: restValues.description,
+          logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
@@ -394,6 +401,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         clearTools();
         setAllowedTools([]);
         setAliasManuallyEdited(false);
+        setLogoUrl(undefined);
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -414,6 +422,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     clearTools();
     setAllowedTools([]);
     setAliasManuallyEdited(false);
+    setLogoUrl(undefined);
     setModalVisible(false);
   };
 
@@ -590,6 +599,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               />
             </Form.Item>
 
+            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
+
             <Form.Item
               label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
               name="source_url"
@@ -645,6 +656,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   setFormValues((prev) => ({ ...prev, ...updates }))
                 }
                 onKeyToolsChange={setKeyTools}
+                onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
               />
             )}
