@@ -797,6 +797,157 @@ class TestListMCPServers:
             assert result.status == "healthy"
 
 
+class TestTeamScopedMCPServerAccess:
+    """Tests for cross-team information disclosure and restricted key bypass fixes."""
+
+    @pytest.mark.asyncio
+    async def test_non_member_cannot_query_foreign_team(self):
+        """Non-admin user who is NOT a member of the target team should get 403."""
+        from litellm.proxy._types import Member
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="attacker_user",
+        )
+
+        # Team with a different member
+        mock_team_obj = MagicMock()
+        mock_team_obj.members_with_roles = [
+            Member(user_id="legitimate_user", role="admin"),
+        ]
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                AsyncMock(return_value=mock_team_obj),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            with pytest.raises(HTTPException) as exc_info:
+                await fetch_all_mcp_servers(
+                    user_api_key_dict=mock_user_auth, team_id="foreign-team-id"
+                )
+            assert exc_info.value.status_code == 403
+            assert "permission" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_team_member_can_query_own_team(self):
+        """User who IS a member of the team should be able to query it."""
+        from litellm.proxy._types import Member
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="team_member",
+        )
+
+        mock_team_obj = MagicMock()
+        mock_team_obj.members_with_roles = [
+            Member(user_id="team_member", role="user"),
+        ]
+        mock_team_obj.object_permission = MagicMock(mcp_servers=["server-1"])
+
+        mock_server = generate_mock_mcp_server_config_record(
+            server_id="server-1", name="Team Server"
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        mock_manager._build_mcp_server_table = MagicMock(
+            return_value=generate_mock_mcp_server_db_record(server_id="server-1")
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                AsyncMock(return_value=mock_team_obj),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                AsyncMock(
+                    return_value=[
+                        generate_mock_mcp_server_db_record(server_id="server-1")
+                    ]
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id="my-team-id"
+            )
+            assert len(result) == 1
+            assert result[0].server_id == "server-1"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_query_any_team(self):
+        """Proxy admins should be able to query any team's MCP servers."""
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                AsyncMock(
+                    return_value=[
+                        generate_mock_mcp_server_db_record(server_id="server-1")
+                    ]
+                ),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            # Admin should NOT need to be a team member
+            result = await fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id="any-team-id"
+            )
+            assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_restricted_virtual_key_cannot_use_team_id_filter(self):
+        """Restricted virtual keys must not bypass access limits via team_id."""
+        mock_user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="vkey_user",
+            api_key="sk-restricted",
+            allowed_routes=["mcp_routes"],
+        )
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            fetch_all_mcp_servers,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id="some-team"
+            )
+        assert exc_info.value.status_code == 403
+        assert "Restricted virtual key" in str(exc_info.value.detail)
+
+
 class TestTemporaryMCPSessionEndpoints:
     def test_inherit_credentials_from_existing_server(self):
         payload = NewMCPServerRequest(
