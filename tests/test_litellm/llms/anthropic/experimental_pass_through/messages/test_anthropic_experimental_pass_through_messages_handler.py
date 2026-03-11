@@ -190,6 +190,50 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
 
 
+def test_chatgpt_model_with_thinking_converts_to_reasoning():
+    """
+    Test that ChatGPT OAuth models use the same Anthropic /v1/messages ->
+    Responses API bridge as OpenAI models.
+
+    This ensures Claude Code can target `chatgpt/...` models through LiteLLM
+    without falling back to the chat/completions adapter.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.litellm.get_llm_provider",
+        return_value=("gpt-5.4", "chatgpt", None, None),
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.ProviderConfigManager.get_provider_anthropic_messages_config",
+        return_value=None,
+    ), patch("litellm.responses", return_value="test-response") as mock_responses:
+        try:
+            anthropic_messages_handler(
+                max_tokens=4096,
+                messages=[{"role": "user", "content": "What is 2+2?"}],
+                model="chatgpt/gpt-5.4",
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 6000,
+                },
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_responses.assert_called_once()
+
+        call_kwargs = mock_responses.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "chatgpt"
+        assert call_kwargs["model"] == "gpt-5.4"
+        assert call_kwargs["reasoning"] == {
+            "effort": "medium",
+            "summary": "detailed",
+        }
+        assert "thinking" not in call_kwargs
+
+
 class TestThinkingParameterTransformation:
     """Core tests for thinking parameter transformation logic."""
 

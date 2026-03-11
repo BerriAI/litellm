@@ -30,7 +30,11 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
-_RESPONSES_API_PROVIDERS = frozenset({"openai"})
+#
+# `chatgpt` uses OpenAI's OAuth-backed Responses API path, so Anthropic
+# /v1/messages requests for ChatGPT models need to take the same bridge as
+# native OpenAI responses-capable models.
+_RESPONSES_API_PROVIDERS = frozenset({"openai", "chatgpt"})
 
 
 def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
