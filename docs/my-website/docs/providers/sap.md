@@ -698,9 +698,9 @@ Required parameters:
 - `messages`
 
 Optional parameters: 
-- `filterings`
-- `groundings`
-- `translations`
+- `filtering`
+- `grounding`
+- `translation`
 - `masking`
 - `tools`
 
