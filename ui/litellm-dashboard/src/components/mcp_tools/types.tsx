@@ -39,6 +39,7 @@ export const AUTH_TYPE = {
   TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
+  AWS_SIGV4: "aws_sigv4",
 };
 
 export const OAUTH_FLOW = {
