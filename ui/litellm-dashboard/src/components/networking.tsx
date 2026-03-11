@@ -1698,6 +1698,7 @@ const buildDailyActivityUrl = (
   endTime: Date,
   page: number,
   extraQueryParams?: Record<string, DailyActivityQueryValue>,
+  timezoneOffset?: number,
 ) => {
   const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
@@ -1708,7 +1709,8 @@ const buildDailyActivityUrl = (
   params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
   params.append("page", page.toString());
   // Send timezone offset so backend can adjust date range for UTC storage
-  params.append("timezone", new Date().getTimezoneOffset().toString());
+  const tz = timezoneOffset !== undefined ? timezoneOffset : new Date().getTimezoneOffset();
+  params.append("timezone", tz.toString());
 
   if (extraQueryParams) {
     Object.entries(extraQueryParams).forEach(([key, value]) => {
@@ -1727,6 +1729,7 @@ type DailyActivityCallOptions = {
   endTime: Date;
   page?: number;
   extraQueryParams?: Record<string, DailyActivityQueryValue>;
+  timezoneOffset?: number;
 };
 
 const fetchDailyActivity = async ({
@@ -1736,9 +1739,10 @@ const fetchDailyActivity = async ({
   endTime,
   page = 1,
   extraQueryParams,
+  timezoneOffset,
 }: DailyActivityCallOptions) => {
   try {
-    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
+    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams, timezoneOffset);
 
     const response = await fetch(url, {
       method: "GET",
@@ -1763,7 +1767,7 @@ const fetchDailyActivity = async ({
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1, userId: string | null = null) => {
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1, userId: string | null = null, timezoneOffset?: number) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1776,6 +1780,7 @@ export const userDailyActivityCall = async (accessToken: string, startTime: Date
     extraQueryParams: {
       user_id: userId,
     },
+    timezoneOffset,
   });
 };
 
@@ -1785,6 +1790,7 @@ export const tagDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   tags: string[] | null = null,
+  timezoneOffset?: number,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1798,6 +1804,7 @@ export const tagDailyActivityCall = async (
     extraQueryParams: {
       tags,
     },
+    timezoneOffset,
   });
 };
 
@@ -1807,6 +1814,7 @@ export const teamDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   teamIds: string[] | null = null,
+  timezoneOffset?: number,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1821,6 +1829,7 @@ export const teamDailyActivityCall = async (
       team_ids: teamIds,
       exclude_team_ids: "litellm-dashboard",
     },
+    timezoneOffset,
   });
 };
 
@@ -1830,6 +1839,7 @@ export const organizationDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   organizationIds: string[] | null = null,
+  timezoneOffset?: number,
 ) => {
   return fetchDailyActivity({
     accessToken,
@@ -1840,6 +1850,7 @@ export const organizationDailyActivityCall = async (
     extraQueryParams: {
       organization_ids: organizationIds,
     },
+    timezoneOffset,
   });
 };
 
@@ -1849,6 +1860,7 @@ export const customerDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   customerIds: string[] | null = null,
+  timezoneOffset?: number,
 ) => {
   return fetchDailyActivity({
     accessToken,
@@ -1859,6 +1871,7 @@ export const customerDailyActivityCall = async (
     extraQueryParams: {
       end_user_ids: customerIds,
     },
+    timezoneOffset,
   });
 };
 
@@ -1868,6 +1881,7 @@ export const agentDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   agentIds: string[] | null = null,
+  timezoneOffset?: number,
 ) => {
   return fetchDailyActivity({
     accessToken,
@@ -1878,6 +1892,7 @@ export const agentDailyActivityCall = async (
     extraQueryParams: {
       agent_ids: agentIds,
     },
+    timezoneOffset,
   });
 };
 
@@ -3181,7 +3196,7 @@ export const keyAliasesCall = async (
   }
 };
 
-export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
+export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null, timezoneOffset?: number) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
@@ -3198,7 +3213,8 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     // Send timezone offset so backend can adjust date range for UTC storage
-    queryParams.append("timezone", new Date().getTimezoneOffset().toString());
+    const tz = timezoneOffset !== undefined ? timezoneOffset : new Date().getTimezoneOffset();
+    queryParams.append("timezone", tz.toString());
     if (userId) {
       queryParams.append("user_id", userId);
     }
