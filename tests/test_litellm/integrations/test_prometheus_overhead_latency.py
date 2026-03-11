@@ -1,8 +1,9 @@
 """
-Unit tests for Prometheus overhead latency metric visibility.
+Unit tests for Prometheus metric visibility with zero/falsy values.
 
-Verifies that litellm_overhead_latency_metric is observed for every request
-where litellm_overhead_time_ms is present, including when the value is 0.
+Verifies that numeric Prometheus metrics are emitted even when their value
+is 0 — the original code used Python truthiness checks that silently
+dropped observations for any falsy numeric value.
 """
 
 import os
@@ -28,8 +29,20 @@ def prometheus_logger():
     return PrometheusLogger()
 
 
-def _build_request_kwargs(overhead_time_ms):
-    """Build request_kwargs with the given overhead time."""
+def _build_request_kwargs(
+    overhead_time_ms=None,
+    remaining_requests=None,
+    remaining_tokens=None,
+):
+    """Build request_kwargs with the given metric values."""
+    additional_headers = None
+    if remaining_requests is not None or remaining_tokens is not None:
+        additional_headers = {}
+        if remaining_requests is not None:
+            additional_headers["x_ratelimit_remaining_requests"] = remaining_requests
+        if remaining_tokens is not None:
+            additional_headers["x_ratelimit_remaining_tokens"] = remaining_tokens
+
     return {
         "model": "gpt-3.5-turbo",
         "litellm_params": {
@@ -43,7 +56,7 @@ def _build_request_kwargs(overhead_time_ms):
             "custom_llm_provider": "openai",
             "response_cost": 0.001,
             "hidden_params": {
-                "additional_headers": None,
+                "additional_headers": additional_headers,
                 "litellm_overhead_time_ms": overhead_time_ms,
             },
             "metadata": {
@@ -170,3 +183,72 @@ class TestOverheadLatencyMetricVisibility:
         )
 
         prometheus_logger.litellm_overhead_latency_metric.labels.assert_not_called()
+
+
+class TestRemainingRequestsMetricVisibility:
+    """
+    The litellm_remaining_requests_metric and litellm_remaining_tokens_metric
+    gauges must be set even when their value is 0, which means the rate limit
+    is exhausted — a critical signal to report, not suppress.
+    """
+
+    def _setup_mocks(self, prometheus_logger):
+        prometheus_logger.litellm_overhead_latency_metric = MagicMock()
+        prometheus_logger.litellm_remaining_requests_metric = MagicMock()
+        prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
+        prometheus_logger.litellm_deployment_success_responses = MagicMock()
+        prometheus_logger.litellm_deployment_total_requests = MagicMock()
+        prometheus_logger.litellm_deployment_latency_per_output_token = MagicMock()
+        prometheus_logger.set_deployment_healthy = MagicMock()
+
+    def test_should_set_remaining_requests_when_zero(self, prometheus_logger):
+        """remaining_requests=0 means rate limit exhausted — must be reported."""
+        self._setup_mocks(prometheus_logger)
+        request_kwargs = _build_request_kwargs(remaining_requests=0)
+
+        prometheus_logger.set_llm_deployment_success_metrics(
+            request_kwargs=request_kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now() + timedelta(seconds=1),
+            output_tokens=10.0,
+            enum_values=_build_enum_values(),
+        )
+
+        prometheus_logger.litellm_remaining_requests_metric.labels.assert_called_once()
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            0
+        )
+
+    def test_should_set_remaining_tokens_when_zero(self, prometheus_logger):
+        """remaining_tokens=0 means token budget exhausted — must be reported."""
+        self._setup_mocks(prometheus_logger)
+        request_kwargs = _build_request_kwargs(remaining_tokens=0)
+
+        prometheus_logger.set_llm_deployment_success_metrics(
+            request_kwargs=request_kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now() + timedelta(seconds=1),
+            output_tokens=10.0,
+            enum_values=_build_enum_values(),
+        )
+
+        prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once()
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            0
+        )
+
+    def test_should_not_set_remaining_metrics_when_none(self, prometheus_logger):
+        """When headers are absent, remaining metrics must not be set."""
+        self._setup_mocks(prometheus_logger)
+        request_kwargs = _build_request_kwargs()
+
+        prometheus_logger.set_llm_deployment_success_metrics(
+            request_kwargs=request_kwargs,
+            start_time=datetime.now(),
+            end_time=datetime.now() + timedelta(seconds=1),
+            output_tokens=10.0,
+            enum_values=_build_enum_values(),
+        )
+
+        prometheus_logger.litellm_remaining_requests_metric.labels.assert_not_called()
+        prometheus_logger.litellm_remaining_tokens_metric.labels.assert_not_called()
