@@ -127,6 +127,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
+  const [tempTimezone, setTempTimezone] = useState<number | undefined>(timezoneOffset);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
 
   // Custom date inputs only - removed time inputs
@@ -294,6 +295,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const handleApply = () => {
     if (tempValue.from && tempValue.to && validation.isValid) {
+      // Commit timezone change on Apply, not on every dropdown selection
+      if (onTimezoneChange && tempTimezone !== undefined) {
+        onTimezoneChange(tempTimezone);
+      }
+
       // First call with immediate value for UI responsiveness
       onValueChange(tempValue);
 
@@ -313,6 +319,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const handleCancel = () => {
     // Reset to original value
     setTempValue(value);
+    setTempTimezone(timezoneOffset);
 
     // Reset form inputs
     if (value.from) {
@@ -406,8 +413,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                       <label className="text-sm text-gray-700 mb-1 block">Timezone</label>
                       <Select
                         showSearch
-                        value={timezoneOffset !== undefined ? timezoneOffset : getLocalTimezoneOffset()}
-                        onChange={(val) => onTimezoneChange(val)}
+                        value={tempTimezone !== undefined ? tempTimezone : getLocalTimezoneOffset()}
+                        onChange={(val) => setTempTimezone(val)}
                         options={timezoneOptions}
                         popupMatchSelectWidth={false}
                         listHeight={200}
