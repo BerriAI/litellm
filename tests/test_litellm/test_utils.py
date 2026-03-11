@@ -1225,14 +1225,14 @@ class TestProxyFunctionCalling:
             ),
             # Anthropic models (Claude supports function calling)
             (
-                "claude-3-5-sonnet-20240620",
-                "litellm_proxy/claude-3-5-sonnet-20240620",
+                "claude-sonnet-4-6",
+                "litellm_proxy/claude-sonnet-4-6",
                 True,
             ),
             # Google models
-            ("gemini-pro", "litellm_proxy/gemini-pro", True),
-            ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
-            ("gemini/gemini-1.5-flash", "litellm_proxy/gemini/gemini-1.5-flash", True),
+            ("gemini-2.5-pro", "litellm_proxy/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
