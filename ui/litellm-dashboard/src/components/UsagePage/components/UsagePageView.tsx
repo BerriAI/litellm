@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined, LoadingOutlined } from "@ant-design/icons";
+import { DownOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -148,6 +148,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -640,47 +641,59 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               )}
                             </Text>
                           </Card>
-                          <Card>
-                            <Title>Total Tokens</Title>
+                          <Card
+                            className="cursor-pointer hover:bg-gray-50 transition-colors"
+                            onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Title>Total Tokens</Title>
+                              {showTokenBreakdown ? (
+                                <DownOutlined className="text-gray-400 text-xs" />
+                              ) : (
+                                <RightOutlined className="text-gray-400 text-xs" />
+                              )}
+                            </div>
                             <Text className="text-2xl font-bold mt-2">
                               {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
                             </Text>
                           </Card>
                         </Grid>
-                        <div className="flex justify-center gap-4 mt-4">
-                          <div className="flex-1 max-w-[20%]">
-                            <Card>
-                              <Title>Input Tokens</Title>
-                              <Text className="text-2xl font-bold mt-2 text-blue-600">
-                                {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
+                        {showTokenBreakdown && (
+                          <div className="flex justify-center gap-4 mt-4">
+                            <div className="flex-1 max-w-[20%]">
+                              <Card>
+                                <Title>Input Tokens</Title>
+                                <Text className="text-2xl font-bold mt-2 text-blue-600">
+                                  {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                            </div>
+                            <div className="flex-1 max-w-[20%]">
+                              <Card>
+                                <Title>Output Tokens</Title>
+                                <Text className="text-2xl font-bold mt-2 text-cyan-600">
+                                  {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                            </div>
+                            <div className="flex-1 max-w-[20%]">
+                              <Card>
+                                <Title>Cache Read Tokens</Title>
+                                <Text className="text-2xl font-bold mt-2 text-green-600">
+                                  {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                            </div>
+                            <div className="flex-1 max-w-[20%]">
+                              <Card>
+                                <Title>Cache Write Tokens</Title>
+                                <Text className="text-2xl font-bold mt-2 text-purple-600">
+                                  {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                                </Text>
+                              </Card>
+                            </div>
                           </div>
-                          <div className="flex-1 max-w-[20%]">
-                            <Card>
-                              <Title>Output Tokens</Title>
-                              <Text className="text-2xl font-bold mt-2 text-cyan-600">
-                                {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                          </div>
-                          <div className="flex-1 max-w-[20%]">
-                            <Card>
-                              <Title>Cache Read Tokens</Title>
-                              <Text className="text-2xl font-bold mt-2 text-green-600">
-                                {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                          </div>
-                          <div className="flex-1 max-w-[20%]">
-                            <Card>
-                              <Title>Cache Write Tokens</Title>
-                              <Text className="text-2xl font-bold mt-2 text-purple-600">
-                                {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
-                              </Text>
-                            </Card>
-                          </div>
-                        </div>
+                        )}
                       </Card>
                     </Col>
 
