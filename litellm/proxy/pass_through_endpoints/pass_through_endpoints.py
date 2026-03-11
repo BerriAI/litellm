@@ -404,7 +404,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 headers=headers,
                 params=requested_query_params,
             )
-        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True:
+        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True and not _parsed_body:
+            # Only use multipart handler if we don't have a parsed body
+            # (parsed body means it was JSON despite multipart content-type header)
             return await HttpPassThroughEndpointHelpers.make_multipart_http_request(
                 request=request,
                 async_client=async_client,
@@ -677,8 +679,15 @@ async def pass_through_request(  # noqa: PLR0915
             str(url)
         )
 
+        # Skip body parsing for multipart requests - make_multipart_http_request will handle it
+        # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
+        is_multipart = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
+        
         if custom_body:
             _parsed_body = custom_body
+        elif is_multipart:
+            # Don't parse multipart body here - it will be handled by make_multipart_http_request
+            _parsed_body = {}
         else:
             _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
@@ -1043,30 +1052,22 @@ async def _parse_request_data_by_content_type(
             # Handle requests with no body (e.g., DELETE requests)
             pass
     elif "multipart/form-data" in content_type:
-        # ✅ Handle multipart form-data
-        form = await request.form()
-        if "query_params" in form:
-            form_value = form["query_params"]
-            if isinstance(form_value, str):
-                try:
-                    query_params_data = json.loads(form_value)
-                except Exception:
-                    query_params_data = form_value
-            else:
-                query_params_data = form_value
-
-        if "custom_body" in form:
-            form_value = form["custom_body"]
-            if isinstance(form_value, str):
-                try:
-                    custom_body_data = json.loads(form_value)
-                except Exception:
-                    custom_body_data = form_value
-            else:
-                custom_body_data = form_value
-
-        if "file" in form:
-            file_data = form["file"]  # this is a Starlette UploadFile object
+        # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
+        # If that fails, skip parsing - pass_through_request will handle actual multipart
+        try:
+            body = await request.json()
+            # Successfully parsed as JSON - treat as JSON body
+            query_params_data = body.get("query_params")
+            custom_body_data = body.get("custom_body")
+            stream = body.get("stream")
+            # If custom_body is not set, use the entire body
+            if custom_body_data is None and body:
+                custom_body_data = body
+        except (json.JSONDecodeError, Exception):
+            # Not JSON - this is actual multipart data
+            # Skip parsing here to avoid consuming the request body stream
+            # make_multipart_http_request will handle it
+            pass
 
     elif "application/x-www-form-urlencoded" in content_type:
         # ✅ Handle URL-encoded form data
@@ -1132,7 +1133,6 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
-            custom_body: Optional[dict] = None,
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -1208,12 +1208,9 @@ def create_pass_through_route(
             )
             if query_params:
                 final_query_params.update(query_params)
-            # When a caller (e.g. bedrock_proxy_route) supplies a pre-built
-            # body, use it instead of the body parsed from the raw request.
+            # Use the body parsed from the raw request
             final_custom_body: Optional[dict] = None
-            if custom_body is not None:
-                final_custom_body = custom_body
-            elif isinstance(custom_body_data, dict):
+            if isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
             return await pass_through_request(  # type: ignore
@@ -2062,8 +2059,7 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_mapped_route = InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
-            if route.startswith(full_mapped_route):
+            if route.startswith(mapped_route):
                 return True
 
         # Fast path: check if any registered route key contains this path

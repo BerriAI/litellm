@@ -105,7 +105,10 @@ class TestSnowflakeToolTransformation:
 
     def test_transform_request_with_string_tool_choice(self):
         """
-        Test that string tool_choice values pass through unchanged.
+        Test that string tool_choice values are transformed to Snowflake object format.
+
+        Snowflake requires tool_choice to be an object, not a string.
+        Ref: https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/reference/cortex-inference#post--api-v2-cortex-inference-complete-req-body-schema
         """
         config = SnowflakeConfig()
 
@@ -120,7 +123,8 @@ class TestSnowflakeToolTransformation:
                 headers={},
             )
 
-            assert transformed_request["tool_choice"] == value
+            # Snowflake requires object format: {"type": "auto"} not string "auto"
+            assert transformed_request["tool_choice"] == {"type": value}
 
     def test_transform_response_with_tool_calls(self):
         """
