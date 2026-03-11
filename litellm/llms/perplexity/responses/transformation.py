@@ -9,7 +9,7 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
-from typing import Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -58,6 +58,21 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         return f"{api_base.rstrip('/')}/v1/responses"
 
+    def _ensure_message_type(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, List[Dict[str, Any]]]:
+        """Ensure list input items have type='message' (required by Perplexity)."""
+        if isinstance(input, str):
+            return input
+        if isinstance(input, list):
+            result = []
+            for item in input:
+                if isinstance(item, dict) and "type" not in item:
+                    item = {**item, "type": "message"}
+                result.append(item)
+            return result
+        return input
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -67,6 +82,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         headers: dict,
     ) -> Dict:
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
+        input = self._ensure_message_type(input)
         if model.startswith("preset/"):
             input = self._validate_input_param(input)
             data: Dict = {
