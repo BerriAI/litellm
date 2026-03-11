@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 
@@ -13,7 +12,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import ServerToolUse
 
 
 def test_response_format_transformation_unit_test():
@@ -1662,7 +1661,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1964,7 +1963,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
 
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
-    assert usage.completion_tokens_details.reasoning_tokens is 0
+    assert usage.completion_tokens_details.reasoning_tokens == 0
     assert usage.completion_tokens_details.text_tokens == 248
     assert usage.completion_tokens == 248
     assert usage.prompt_tokens == 37
@@ -2008,16 +2007,22 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
 
 def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
     """
-    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models.
-
-    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to {"type": "adaptive"}
-    regardless of the effort level specified.
+    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models,
+    and also sets output_config with the effort level.
     """
     config = AnthropicConfig()
 
+    effort_map = {
+        "low": "low",
+        "minimal": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "max",
+    }
+
     # Test with different reasoning_effort values - all should map to adaptive
     for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
-        for effort in ["low", "medium", "high", "minimal"]:
+        for effort in ["low", "medium", "high", "minimal", "max"]:
             non_default_params = {"reasoning_effort": effort}
             optional_params = {}
 
@@ -2035,6 +2040,9 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert "budget_tokens" not in result["thinking"]
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
+            # Should set output_config with the mapped effort value
+            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert result["output_config"]["effort"] == effort_map[effort]
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
@@ -2117,6 +2125,139 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         assert result["thinking"]["budget_tokens"] == expected_budget
         # reasoning_effort should not be in the result (it's transformed to thinking)
         assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_sets_output_config_for_46_models():
+    """
+    Test that reasoning_effort generates output_config for Claude 4.6 models.
+
+    For Claude 4.6 models, reasoning_effort should produce both adaptive
+    thinking AND output_config with the mapped effort level.
+    """
+    config = AnthropicConfig()
+
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        for effort in ["low", "medium", "high"]:
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+            assert "output_config" in result, (
+                f"output_config missing for {model} with effort={effort}"
+            )
+            assert result["output_config"]["effort"] == effort
+
+
+def test_reasoning_effort_minimal_maps_to_low_output_config_for_46():
+    """
+    Test that reasoning_effort='minimal' maps to output_config effort='low'
+    for 4.6 models, since 'minimal' has no Anthropic equivalent.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="claude-opus-4-6-20250514",
+        drop_params=False,
+    )
+
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_reasoning_effort_does_not_set_output_config_for_older_models():
+    """
+    Test that reasoning_effort does NOT generate output_config for pre-4.6 models.
+    """
+    config = AnthropicConfig()
+
+    for model in [
+        "claude-sonnet-4-5-20250929",
+        "claude-3-7-sonnet-20250219",
+        "claude-opus-4-5-20251101",
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+        assert "output_config" not in result, (
+            f"output_config should not be set for {model}"
+        )
+
+
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports max)."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+        config.transform_request(
+            model="claude-sonnet-4-6-20260219",
+            messages=messages,
+            optional_params={"output_config": {"effort": "max"}},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_max_effort_accepted_for_opus_46():
+    """Test that effort='max' works for Opus 4.6."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-6-20250514",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_effort_beta_header_not_injected_for_46_models():
+    """
+    Test that is_effort_used returns False for Claude 4.6 models.
+
+    Claude 4.6 models use output_config as a stable API feature —
+    no beta header should be injected.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        # Even with output_config present, should return False for 4.6 models
+        result = model_info.is_effort_used(
+            optional_params={"output_config": {"effort": "high"}},
+            model=model,
+        )
+        assert result is False, (
+            f"is_effort_used should return False for {model}"
+        )
+
+
+def test_effort_beta_header_still_injected_for_older_models():
+    """
+    Test that is_effort_used still returns True for pre-4.6 models
+    when output_config is present.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    result = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}},
+        model="claude-opus-4-5-20251101",
+    )
+    assert result is True
 
 
 def test_code_execution_tool_results_extraction():
@@ -2719,6 +2860,83 @@ def test_map_openai_params_with_context_management():
     assert result["context_management"] == non_default_params_anthropic["context_management"]
 
 
+def test_cache_control_in_supported_params():
+    """
+    Test that cache_control is listed as a supported OpenAI param for Anthropic.
+    """
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "cache_control" in params
+
+
+def test_map_openai_params_with_cache_control():
+    """
+    Test that map_openai_params correctly passes through top-level cache_control
+    for Anthropic's automatic prompt caching.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": {"type": "ephemeral"}
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
+def test_map_openai_params_cache_control_ignored_when_not_dict():
+    """
+    Test that cache_control is ignored when it is not a dict.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": "ephemeral"
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" not in result
+
+
+def test_transform_request_includes_cache_control():
+    """
+    Test that transform_request includes top-level cache_control in the request body.
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "max_tokens": 100,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
@@ -2833,7 +3051,6 @@ def test_fast_mode_cost_calculation():
     Test that fast mode applies the 'fast' multiplier from provider_specific_entry
     on top of the base model cost (1.1x for claude-opus-4-6).
     """
-    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
@@ -2873,7 +3090,6 @@ def test_fast_mode_with_inference_geo():
     Test that fast mode + inference_geo both apply their multipliers from
     provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
-    from unittest.mock import patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
@@ -2959,3 +3175,128 @@ def test_map_openai_params_max_tokens_normalized_to_int():
 
     assert "max_tokens" in result
     assert result["max_tokens"] == 1
+
+
+# ========================================================================
+# Tool schema normalization tests
+# ========================================================================
+
+
+def test_map_tool_helper_enforces_object_type_when_missing():
+    """
+    Anthropic requires input_schema.type to be "object". When an OpenAI tool
+    has parameters without a 'type' field (common with MCP servers), LiteLLM
+    should inject type:"object" before forwarding to Anthropic.
+
+    Without this fix, Anthropic rejects with:
+        tools.N.custom.input_schema.type: Input should be 'object'
+    """
+    config = AnthropicConfig()
+
+    # Tool with parameters that has properties but no 'type' field
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Search for code patterns",
+            "parameters": {
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "properties" in result["input_schema"]
+    assert "query" in result["input_schema"]["properties"]
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_enforces_object_type_when_wrong_type():
+    """
+    If a tool schema has type:"string" or type:"array" at the root level,
+    LiteLLM should normalize it to type:"object" for Anthropic compatibility.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "Echo input",
+            "parameters": {
+                "type": "string",
+                "description": "The input to echo",
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}, (
+        "properties should be injected as {} when schema has non-object type and no properties key"
+    )
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_preserves_valid_object_schema():
+    """
+    When a tool schema already has type:"object", it should be preserved
+    without modification.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                },
+                "required": ["city"],
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "city" in result["input_schema"]["properties"]
+    assert result["input_schema"]["required"] == ["city"]
+
+
+def test_map_tool_helper_empty_parameters_get_default():
+    """
+    When parameters is entirely missing, the existing default should still
+    produce a valid {type:"object", properties:{}} schema.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "no_params_tool",
+            "description": "Tool with no parameters",
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}

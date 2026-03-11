@@ -107,6 +107,7 @@ from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
@@ -131,6 +132,7 @@ from litellm.utils import (
     create_tokenizer,
     get_api_key,
     get_llm_provider,
+    get_model_info,
     get_non_default_completion_params,
     get_non_default_transcription_params,
     get_optional_params_embeddings,
@@ -418,6 +420,8 @@ async def acompletion(  # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -562,6 +566,7 @@ async def acompletion(  # noqa: PLR0915
         "thinking": thinking,
         "web_search_options": web_search_options,
         "shared_session": shared_session,
+        "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -996,6 +1001,32 @@ def _drop_input_examples_from_tools(
     return cleaned_tools
 
 
+def _build_custom_pricing_entry(
+    custom_llm_provider: str,
+    kwargs: dict,
+    model_info: Optional[dict] = None,
+) -> dict:
+    """Build a complete model cost entry from kwargs and model_info.
+
+    Collects all CustomPricingLiteLLMParams fields present in kwargs and
+    merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
+    so that register_model() receives the full pricing configuration.
+    """
+    entry: dict = {"litellm_provider": custom_llm_provider}
+
+    for field_name in CustomPricingLiteLLMParams.model_fields:
+        value = kwargs.get(field_name)
+        if value is not None:
+            entry[field_name] = value
+
+    if model_info and isinstance(model_info, dict):
+        for key in ("mode", "supports_prompt_caching", "max_tokens"):
+            if key in model_info and model_info[key] is not None:
+                entry.setdefault(key, model_info[key])
+
+    return entry
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1047,6 +1078,8 @@ def completion(  # type: ignore # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1167,6 +1200,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 thinking=thinking,
                 web_search_options=web_search_options,
                 shared_session=shared_session,
+                enable_json_schema_validation=enable_json_schema_validation,
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
@@ -1351,27 +1385,16 @@ def completion(  # type: ignore # noqa: PLR0915
             timeout = float(timeout)  # type: ignore
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-        if input_cost_per_token is not None and output_cost_per_token is not None:
+        if (
+            input_cost_per_token is not None and output_cost_per_token is not None
+        ) or input_cost_per_second is not None:
             litellm.register_model(
                 {
-                    f"{custom_llm_provider}/{model}": {
-                        "input_cost_per_token": input_cost_per_token,
-                        "output_cost_per_token": output_cost_per_token,
-                        "litellm_provider": custom_llm_provider,
-                    }
-                }
-            )
-        elif (
-            input_cost_per_second is not None
-        ):  # time based pricing just needs cost in place
-            output_cost_per_second = output_cost_per_second
-            litellm.register_model(
-                {
-                    f"{custom_llm_provider}/{model}": {
-                        "input_cost_per_second": input_cost_per_second,
-                        "output_cost_per_second": output_cost_per_second,
-                        "litellm_provider": custom_llm_provider,
-                    }
+                    f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=kwargs,
+                        model_info=model_info,
+                    )
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -2217,6 +2240,32 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=_get_encoding(),
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
+        elif custom_llm_provider == "bedrock_mantle":
+            api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+            api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
+            headers = headers or litellm.headers
+            config = litellm.BedrockMantleChatConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
                 client=client,
             )
         elif custom_llm_provider == "a2a":
@@ -4644,7 +4693,6 @@ def embedding(  # noqa: PLR0915
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
     input_cost_per_second = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second = kwargs.get("output_cost_per_second", None)
     openai_params = [
         "user",
         "dimensions",
@@ -4694,25 +4742,16 @@ def embedding(  # noqa: PLR0915
     )
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if input_cost_per_token is not None and output_cost_per_token is not None:
+    if (
+        input_cost_per_token is not None and output_cost_per_token is not None
+    ) or input_cost_per_second is not None:
         litellm.register_model(
             {
-                f"{custom_llm_provider}/{model}": {
-                    "input_cost_per_token": input_cost_per_token,
-                    "output_cost_per_token": output_cost_per_token,
-                    "litellm_provider": custom_llm_provider,
-                }
-            }
-        )
-    if input_cost_per_second is not None:  # time based pricing just needs cost in place
-        output_cost_per_second = output_cost_per_second or 0.0
-        litellm.register_model(
-            {
-                f"{custom_llm_provider}/{model}": {
-                    "input_cost_per_second": input_cost_per_second,
-                    "output_cost_per_second": output_cost_per_second,
-                    "litellm_provider": custom_llm_provider,
-                }
+                f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                    model_info=kwargs.get("model_info"),
+                )
             }
         )
 
@@ -5152,13 +5191,37 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("VERTEX_API_BASE")
             )
 
-            if (
+            try:
+                model_info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+                uses_embed_content = model_info.get("uses_embed_content", False)
+            except Exception:
+                uses_embed_content = False
+
+            if uses_embed_content:
+                response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                    model=model,
+                    input=input,
+                    encoding=_get_encoding(),
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                    custom_llm_provider="vertex_ai",
+                    api_key=None,
+                    api_base=api_base,
+                    client=client,
+                    extra_headers=headers,
+                )
+            elif (
                 "image" in optional_params
                 or "video" in optional_params
                 or model
                 in vertex_multimodal_embedding.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
             ):
-                # multimodal embedding is supported on vertex httpx
                 response = vertex_multimodal_embedding.multimodal_embedding(
                     model=model,
                     input=input,
@@ -5626,6 +5689,21 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+            )
+        elif custom_llm_provider == "perplexity":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
             )
         else:
             raise LiteLLMUnknownProvider(
@@ -6244,18 +6322,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
             )
 
-        # Calculate and add duration if response is missing it
+        # Store duration in _hidden_params for cost calculation without
+        # exposing it in the response body. Adding duration to the response
+        # tricks the OpenAI SDK's "best match deserialization" into thinking
+        # a plain Transcription is a TranscriptionVerbose/Diarized type.
         if (
             response is not None
             and not isinstance(response, Coroutine)
             and file is not None
         ):
-            # Check if response is missing duration
             existing_duration = getattr(response, "duration", None)
             if existing_duration is None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    setattr(response, "duration", calculated_duration)
+                    response._hidden_params["audio_transcription_duration"] = calculated_duration
 
         return response
     except Exception as e:
@@ -6471,14 +6551,14 @@ def transcription(
             shared_session=shared_session,
         )
 
-    # Calculate and add duration if response is missing it
+    # Store duration in _hidden_params for cost calculation without
+    # exposing it in the response body (see sync path comment above).
     if response is not None and not isinstance(response, Coroutine):
-        # Check if response is missing duration
         existing_duration = getattr(response, "duration", None)
         if existing_duration is None:
             calculated_duration = calculate_request_duration(file)
             if calculated_duration is not None:
-                setattr(response, "duration", calculated_duration)
+                response._hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
@@ -7510,6 +7590,111 @@ def stream_chunk_builder(  # noqa: PLR0915
             llm_provider="",
             model="",
         )
+
+
+########## Token Counting API ##########
+
+
+async def acount_tokens(
+    model: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    system: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+) -> "TokenCountResponse":
+    """
+    Count tokens for a given model and messages using provider-specific APIs.
+
+    Routes to the appropriate provider's token counting API (OpenAI, Anthropic, etc.)
+    for exact token counts. Falls back to local tiktoken-based counting for unsupported providers.
+
+    Args:
+        model: The model identifier (e.g., "openai/gpt-4o", "anthropic/claude-3-5-sonnet-20241022")
+        messages: The messages to count tokens for (standard chat format)
+        tools: Optional tools/functions to include in token count
+        system: Optional system message/instructions
+        api_key: Optional API key (falls back to environment variable)
+        api_base: Optional custom API base URL
+
+    Returns:
+        TokenCountResponse with total_tokens and metadata
+    """
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.types.utils import LlmProviders, TokenCountResponse
+    from litellm.utils import ProviderConfigManager
+
+    # Determine provider from model string
+    resolved_model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+        get_llm_provider(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    )
+
+    # Use dynamic key/base if not explicitly provided
+    if api_key is None:
+        api_key = dynamic_api_key
+    if api_base is None:
+        api_base = dynamic_api_base
+
+    # Build deployment dict for the token counter
+    deployment: Dict[str, Any] = {
+        "litellm_params": {
+            "model": model,
+            "api_key": api_key,
+            "api_base": api_base,
+        }
+    }
+
+    # Try to get provider-specific token counter
+    try:
+        llm_provider_enum = LlmProviders(custom_llm_provider)
+        provider_model_info = ProviderConfigManager.get_provider_model_info(
+            model=model, provider=llm_provider_enum
+        )
+
+        if provider_model_info is not None:
+            token_counter_instance = provider_model_info.get_token_counter()
+            if (
+                token_counter_instance is not None
+                and token_counter_instance.should_use_token_counting_api(
+                    custom_llm_provider
+                )
+            ):
+                result = await token_counter_instance.count_tokens(
+                    model_to_use=resolved_model,
+                    messages=messages,
+                    contents=None,
+                    deployment=deployment,
+                    request_model=model,
+                    tools=tools,
+                    system=system,
+                )
+                if result is not None and not result.error:
+                    return result
+    except Exception as e:
+        verbose_logger.debug(
+            f"Provider token counting failed for model={model}, falling back to local: {e}"
+        )
+
+    # Fallback to local tiktoken-based token counting
+    fallback_messages = messages or []
+    if system and fallback_messages:
+        fallback_messages = [{"role": "system", "content": system}] + fallback_messages
+    local_count = litellm.token_counter(
+        model=model,
+        messages=fallback_messages,
+        tools=tools,
+    )
+
+    return TokenCountResponse(
+        total_tokens=local_count,
+        request_model=model,
+        model_used=resolved_model,
+        tokenizer_type="local_tokenizer",
+    )
 
 
 # Cache for encoding to avoid repeated __getattr__ calls

@@ -96,6 +96,19 @@ def test_supports_function_calling_github_anthropic_alias():
     )
 
 
+def test_supports_function_calling_deepinfra_llama():
+    """Test that deepinfra Llama models correctly report function calling support.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22619
+    """
+    assert (
+        litellm.utils.supports_function_calling(
+            model="deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+        )
+        is True
+    )
+
+
 def test_supports_function_calling_unknown_github_alias_returns_false():
     assert (
         litellm.utils.supports_function_calling(
@@ -494,12 +507,15 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "output_cost_per_image_token_batches",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
         "output_cost_per_token_above_128k_tokens",
         "input_cost_per_token_above_200k_tokens",
         "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens",
         "input_cost_per_character_above_128k_tokens",
         "output_cost_per_character_above_128k_tokens",
         "input_cost_per_image_above_128k_tokens",
@@ -590,8 +606,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -604,16 +622,20 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -663,6 +685,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "video_generation",
                         "moderation",
                         "rerank",
+                        "realtime",
                         "responses",
                         "ocr",
                         "search",
@@ -674,11 +697,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
                     "type": "number"
@@ -702,6 +727,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_code_execution": {"type": "boolean"},
+                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
@@ -715,6 +742,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_none_reasoning_effort": {"type": "boolean"},
+                "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
@@ -737,6 +766,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/vertex_ai/live",
                         ],
                     },
                 },
@@ -1139,20 +1169,25 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         provider_config=provider_config,
     )
     print(processed_non_default_params)
+    # Vertex AI / Gemini uses Pydantic's model_json_schema() which doesn't
+    # include additionalProperties: False (Gemini rejects it).  Other
+    # providers use OpenAI's to_strict_json_schema() which does.
+    expected_schema = {
+        "properties": {
+            "x": {"title": "X", "type": "string"},
+            "y": {"title": "Y", "type": "string"},
+        },
+        "required": ["x", "y"],
+        "title": "ResponseFormat",
+        "type": "object",
+    }
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta", "gemini"):
+        expected_schema["additionalProperties"] = False
     assert processed_non_default_params == {
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "schema": {
-                    "properties": {
-                        "x": {"title": "X", "type": "string"},
-                        "y": {"title": "Y", "type": "string"},
-                    },
-                    "required": ["x", "y"],
-                    "title": "ResponseFormat",
-                    "type": "object",
-                    "additionalProperties": False,
-                },
+                "schema": expected_schema,
                 "name": "ResponseFormat",
                 "strict": True,
             },
@@ -2377,6 +2412,64 @@ def test_register_model_with_scientific_notation():
     _invalidate_model_cost_lowercase_map()
 
 
+def test_register_model_openrouter_without_slash():
+    """
+    Test that register_model handles openrouter models without '/' in the name.
+
+    Fixes https://github.com/BerriAI/litellm/issues/18936
+
+    Previously, the code did `split_string[1]` which would fail with IndexError
+    when the model name didn't contain '/'. Now it uses `split_string[-1]` which
+    always works.
+    """
+    # Clear any existing entries
+    litellm.openrouter_models.discard("my-custom-alias")
+    litellm.openrouter_models.discard("gpt-4")
+    litellm.openrouter_models.discard("openai/gpt-4")
+
+    # Test 1: Model name without '/' (this was the bug - would raise IndexError)
+    litellm.register_model(
+        {
+            "my-custom-alias": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "my-custom-alias" in litellm.openrouter_models
+
+    # Test 2: Model name with single '/' (openrouter/model format)
+    litellm.register_model(
+        {
+            "openrouter/gpt-4": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "gpt-4" in litellm.openrouter_models
+
+    # Test 3: Model name with double '/' (openrouter/provider/model format)
+    litellm.register_model(
+        {
+            "openrouter/openai/gpt-4-turbo": {
+                "max_tokens": 8192,
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        }
+    )
+    assert "openai/gpt-4-turbo" in litellm.openrouter_models
+
+
 def test_reasoning_content_preserved_in_text_completion_wrapper():
     """Ensure reasoning_content is copied from delta to text_choices."""
     chunk = ModelResponseStream(
@@ -2849,6 +2942,38 @@ class TestIsCachedMessage:
     def test_empty_list_content_returns_false(self):
         """Empty list content should return False."""
         message = {"role": "user", "content": []}
+        assert is_cached_message(message) is False
+
+    def test_message_level_cache_control_returns_true(self):
+        """Message with string content and message-level cache_control should return True.
+
+        This is the format injected by the cache_control_injection_points hook
+        when the message content is a string (common for system messages).
+        Fixes GitHub issue #18519 - Gemini models ignoring cache_control_injection_points.
+        """
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        assert is_cached_message(message) is True
+
+    def test_message_level_cache_control_wrong_type_returns_false(self):
+        """Message-level cache_control with non-ephemeral type should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "permanent"},
+        }
+        assert is_cached_message(message) is False
+
+    def test_message_level_cache_control_non_dict_returns_false(self):
+        """Message-level cache_control that's not a dict should return False."""
+        message = {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+            "cache_control": "ephemeral",
+        }
         assert is_cached_message(message) is False
 
 
@@ -3381,6 +3506,53 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestGetOptionalParamsDeepSeek:
+    """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
+
+    def test_deepseek_supports_thinking_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts the 'thinking' param,
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled"},
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_supports_reasoning_effort_param(self):
+        """
+        Verify that get_optional_params for deepseek accepts 'reasoning_effort',
+        which is only supported by DeepSeekChatConfig, not OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            reasoning_effort="high",
+        )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_deepseek_thinking_strips_budget_tokens(self):
+        """
+        DeepSeekChatConfig strips budget_tokens from thinking param.
+        This would not happen with OpenAIConfig.
+        """
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="deepseek-reasoner",
+            custom_llm_provider="deepseek",
+            thinking={"type": "enabled", "budget_tokens": 5000},
+        )
+        assert "budget_tokens" not in result.get("thinking", {})
+        assert result.get("thinking") == {"type": "enabled"}
 
 
 class TestIsStreamingRequest:
