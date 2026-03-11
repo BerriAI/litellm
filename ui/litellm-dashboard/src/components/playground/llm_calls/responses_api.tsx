@@ -110,7 +110,7 @@ export async function makeOpenAIResponsesRequest(
 
           tools.push({
             type: "mcp",
-            server_label: "litellm",
+            server_label: serverName, // unique label per server so tool calls route correctly
             server_url: `${proxyBaseUrl}/mcp/${serverName}`,
             require_approval: "never",
             ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
