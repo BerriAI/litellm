@@ -35,6 +35,46 @@ def _is_file_reference(s: str) -> bool:
     return isinstance(s, str) and s.startswith("files/")
 
 
+def _is_gcs_url(s: str) -> bool:
+    """Check if string is a GCS URL (gs://...)."""
+    return isinstance(s, str) and s.startswith("gs://")
+
+
+def _infer_mime_type_from_gcs_url(gcs_url: str) -> str:
+    """
+    Infer MIME type from GCS URL file extension.
+    
+    Args:
+        gcs_url: GCS URL like gs://bucket/path/to/file.png
+    
+    Returns:
+        str: Inferred MIME type
+    
+    Raises:
+        ValueError: If file extension is not supported
+    """
+    extension_to_mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".pdf": "application/pdf",
+    }
+    
+    gcs_url_lower = gcs_url.lower()
+    for ext, mime_type in extension_to_mime.items():
+        if gcs_url_lower.endswith(ext):
+            return mime_type
+    
+    raise ValueError(
+        f"Unable to infer MIME type from GCS URL: {gcs_url}. "
+        f"Supported extensions: {', '.join(extension_to_mime.keys())}"
+    )
+
+
 def _parse_data_url(data_url: str) -> Tuple[str, str]:
     """
     Parse a data URL to extract the media type and base64 data.
@@ -76,13 +116,13 @@ def _parse_data_url(data_url: str) -> Tuple[str, str]:
 
 def _is_multimodal_input(input: EmbeddingInput) -> bool:
     """
-    Check if the input contains multimodal data (data URIs or file references).
+    Check if the input contains multimodal data (data URIs, file references, or GCS URLs).
     
     Args:
         input: EmbeddingInput (str or List[str])
     
     Returns:
-        bool: True if any element is a data URI or file reference
+        bool: True if any element is a data URI, file reference, or GCS URL
     """
     if isinstance(input, str):
         input_list = [input]
@@ -94,6 +134,8 @@ def _is_multimodal_input(input: EmbeddingInput) -> bool:
             if element.startswith("data:") and ";base64," in element:
                 return True
             if _is_file_reference(element):
+                return True
+            if _is_gcs_url(element):
                 return True
     
     return False
@@ -166,15 +208,22 @@ def transform_openai_input_gemini_embed_content(
             mime_type, base64_data = _parse_data_url(element)
             blob: BlobType = {"mime_type": mime_type, "data": base64_data}
             parts.append(PartType(inline_data=blob))
+        elif _is_gcs_url(element):
+            mime_type = _infer_mime_type_from_gcs_url(element)
+            file_data: FileDataType = {
+                "mime_type": mime_type,
+                "file_uri": element,
+            }
+            parts.append(PartType(file_data=file_data))
         elif _is_file_reference(element):
             if element not in resolved_files:
                 raise ValueError(f"File reference {element} not resolved")
             file_info = resolved_files[element]
-            file_data: FileDataType = {
+            file_data_ref: FileDataType = {
                 "mime_type": file_info["mime_type"],
                 "file_uri": file_info["uri"],
             }
-            parts.append(PartType(file_data=file_data))
+            parts.append(PartType(file_data=file_data_ref))
         else:
             parts.append(PartType(text=element))
     
