@@ -51,8 +51,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.utils import ModelResponse, Message
 
-import newrelic.agent
-
 
 # Global state for supportability metric emission
 # Protected by _metric_lock to ensure thread-safe access
@@ -103,6 +101,7 @@ class NewRelicLogger(CustomLogger):
         else:
             # Validate that newrelic package is available
             try:
+                import newrelic.agent
                 newrelic.agent.register_application()
 
                 self.enabled = True
@@ -171,6 +170,7 @@ class NewRelicLogger(CustomLogger):
         global _last_metric_emission_time
 
         try:
+            import newrelic.agent
             litellm_version = self._get_litellm_version()
             metric_name = f"Supportability/Python/ML/LiteLLM/{litellm_version}"
 
@@ -562,6 +562,7 @@ class NewRelicLogger(CustomLogger):
             messages: List of message dicts to record
         """
         try:
+            import newrelic.agent
             app = newrelic.agent.application()
 
             for message in messages:
@@ -603,6 +604,7 @@ class NewRelicLogger(CustomLogger):
     def _record_error_metric(self):
         """Record error metric to New Relic."""
         try:
+            import newrelic.agent
             newrelic.agent.record_custom_metric("LLM/LiteLLM/Error", 1)
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
