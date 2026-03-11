@@ -95,6 +95,22 @@ class MCPCredentials(TypedDict, total=False):
     OAuth 2.0 scopes to request when exchanging the client credentials
     """
 
+    # AWS SigV4 fields
+    aws_access_key_id: Optional[str]
+    """AWS access key ID for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_secret_access_key: Optional[str]
+    """AWS secret access key for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_session_token: Optional[str]
+    """AWS session token for temporary STS credentials. Optional."""
+
+    aws_region_name: Optional[str]
+    """AWS region for SigV4 signing (e.g., 'us-east-1'). Not a secret — stored unencrypted."""
+
+    aws_service_name: Optional[str]
+    """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
+
 
 class MCPServerCostInfo(TypedDict, total=False):
     default_cost_per_query: Optional[float]
