@@ -44,9 +44,7 @@ class QohashGuardrail(GenericGuardrailAPI):
         request_data["body"]. We check both so this works regardless of call path.
         """
         requested_guardrails = self.get_guardrail_from_metadata(request_data)
-        for guardrail in requested_guardrails:
-            if isinstance(guardrail, dict) and self.guardrail_name in guardrail:
-                return guardrail[self.guardrail_name].get("extra_body", {})
+                return (guardrail[self.guardrail_name] or {}).get("extra_body", {})
         return {}
 
     async def apply_guardrail(
