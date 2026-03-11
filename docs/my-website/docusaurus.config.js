@@ -2,9 +2,9 @@
 // Note: type annotations allow type checking and IDEs autocompletion
 
 // @ts-ignore
-const lightCodeTheme = require('prism-react-renderer/themes/github');
+const lightCodeTheme = require('prism-react-renderer/themes/vsLight');
 // @ts-ignore
-const darkCodeTheme = require('prism-react-renderer/themes/dracula');
+const darkCodeTheme = require('prism-react-renderer/themes/nightOwl');
 
 const inkeepConfig = {
   baseSettings: {
@@ -196,18 +196,20 @@ const config = {
           { to: '/blog', label: 'Blog', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
-            label: '💸 LLM Model Cost Map',
+            label: '💸 Cost Map',
             position: 'right',
           },
           {
             href: 'https://github.com/BerriAI/litellm',
-            label: 'GitHub',
             position: 'right',
+            className: 'header-github-link',
+            'aria-label': 'GitHub repository',
           },
           {
             href: 'https://www.litellm.ai/support',
-            label: 'Slack/Discord',
             position: 'right',
+            className: 'header-discord-link',
+            'aria-label': 'Discord / Slack community',
           }
         ],
       },

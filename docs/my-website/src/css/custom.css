@@ -1,10 +1,16 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Global CSS overrides for LiteLLM docs.
+ * Infima (Docusaurus CSS framework) variables + custom styling.
  */
 
-/* You can override the default Infima variables here. */
+/* =========================================
+   FONTS
+   ========================================= */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* =========================================
+   ROOT — Light Mode Variables
+   ========================================= */
 :root {
   --ifm-color-primary: #2e8555;
   --ifm-color-primary-dark: #29784c;
@@ -13,11 +19,19 @@
   --ifm-color-primary-light: #33925d;
   --ifm-color-primary-lighter: #359962;
   --ifm-color-primary-lightest: #3cad6e;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --ifm-code-font-size: 85%;
+  --ifm-menu-color: #6b7280;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --ifm-heading-font-weight: 600;
+  --ifm-font-size-base: 15px;
+  --ifm-line-height-base: 1.65;
+  --ifm-border-radius: 6px;
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
+/* =========================================
+   DARK MODE Variables
+   ========================================= */
 [data-theme='dark'] {
   --ifm-color-primary: #25c2a0;
   --ifm-color-primary-dark: #21af90;
@@ -26,10 +40,475 @@
   --ifm-color-primary-light: #29d5b0;
   --ifm-color-primary-lighter: #32d8b4;
   --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --ifm-background-color: #0d1117;
+  --ifm-background-surface-color: #161b22;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.07);
 }
 
-/* Levo logo sizing and theme switching */
+/* =========================================
+   TYPOGRAPHY
+   ========================================= */
+.theme-doc-markdown h1 {
+  font-size: 2.2rem;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.theme-doc-markdown h2 {
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.theme-doc-markdown h3 {
+  font-size: 1.25rem;
+  line-height: 1.4;
+}
+
+.theme-doc-markdown p,
+.theme-doc-markdown ul,
+.theme-doc-markdown ol {
+  font-size: 0.9rem;
+}
+
+.theme-doc-markdown table {
+  font-size: 0.875rem;
+}
+
+.theme-doc-markdown td {
+  font-size: 0.85rem;
+}
+
+/* =========================================
+   NAVBAR
+   ========================================= */
+[data-theme='light'] .navbar {
+  background-color: #ffffff;
+  box-shadow: 0 1px 0 0 #e5e7eb;
+}
+
+[data-theme='dark'] .navbar {
+  background-color: var(--ifm-background-color);
+  border-bottom: 1px solid #21262d;
+  box-shadow: none;
+}
+
+.navbar__link {
+  font-weight: 400 !important;
+  font-size: 14px !important;
+  border-bottom: 2px solid transparent !important;
+  padding-bottom: 2px;
+}
+
+.navbar__link--active {
+  font-weight: 500 !important;
+  border-bottom: 2px solid var(--ifm-color-primary) !important;
+}
+
+@media (max-width: 1330px) {
+  .navbar__link {
+    font-size: 13px !important;
+  }
+}
+
+/* =========================================
+   ALERTS / ADMONITIONS
+   ========================================= */
+.alert {
+  padding: 0.75rem 1rem;
+  font-size: 14px;
+  border-radius: var(--ifm-border-radius);
+  border-left-width: 3px;
+}
+
+/* Light mode */
+.alert--info {
+  --ifm-alert-background-color: #f0f7ff !important;
+  --ifm-alert-border-color: #2264ab !important;
+}
+
+.alert--success {
+  --ifm-alert-background-color: #f0fff8 !important;
+  --ifm-alert-border-color: #09bda8 !important;
+}
+
+.alert--secondary {
+  --ifm-alert-background-color: #f8fafc !important;
+  --ifm-alert-border-color: #64748b !important;
+}
+
+.alert--danger {
+  --ifm-alert-background-color: #fff0f5 !important;
+  --ifm-alert-border-color: #e11d48 !important;
+}
+
+.alert--warning {
+  --ifm-alert-background-color: #fffbeb !important;
+  --ifm-alert-border-color: #d97706 !important;
+}
+
+/* Dark mode */
+[data-theme='dark'] .alert--info {
+  --ifm-alert-background-color: #0c1e30 !important;
+  --ifm-alert-border-color: #3b82f6 !important;
+  color: #bfdbfe !important;
+}
+
+[data-theme='dark'] .alert--success {
+  --ifm-alert-background-color: #022c22 !important;
+  --ifm-alert-border-color: #10b981 !important;
+}
+
+[data-theme='dark'] .alert--secondary {
+  --ifm-alert-background-color: #0f172a !important;
+  --ifm-alert-border-color: #475569 !important;
+}
+
+[data-theme='dark'] .alert--danger {
+  --ifm-alert-background-color: #2d0a14 !important;
+  --ifm-alert-border-color: #f43f5e !important;
+}
+
+[data-theme='dark'] .alert--warning {
+  --ifm-alert-background-color: #1c1200 !important;
+  --ifm-alert-border-color: #f59e0b !important;
+}
+
+/* =========================================
+   COLLAPSIBLE / DETAILS
+   ========================================= */
+details {
+  color: #1d232e;
+  background-color: #ffffff;
+  border: 1px solid #e9eef2 !important;
+  border-radius: var(--ifm-border-radius) !important;
+  padding: 0.75rem !important;
+  margin-bottom: 1rem !important;
+  margin-top: 1.5rem !important;
+  box-shadow: 0 1px 4px 0 rgba(0, 0, 0, 0.05) !important;
+}
+
+details summary {
+  font-weight: 600 !important;
+}
+
+details [class*='collapsibleContent'] {
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+details [class*='collapsibleContent'] p,
+details [class*='collapsibleContent'] ul {
+  font-size: 13px !important;
+  line-height: 1.75;
+}
+
+[data-theme='dark'] details {
+  background-color: #1c2130 !important;
+  color: #e5e7eb !important;
+  border: 1px solid #2d3748 !important;
+  box-shadow: 0 1px 6px 0 rgba(0, 0, 0, 0.3) !important;
+}
+
+[data-theme='dark'] details summary {
+  color: #f3f4f6 !important;
+}
+
+[data-theme='dark'] details [class*='collapsibleContent'] {
+  border-top: 1px solid #2d3748 !important;
+}
+
+/* =========================================
+   TABS
+   ========================================= */
+.tabs-container > div {
+  padding: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--ifm-border-radius);
+}
+
+/* Remove styling from nested tabs containers */
+.tabs-container .tabs-container > div {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+}
+
+[data-theme='dark'] .tabs-container > div {
+  border-color: #2d3748;
+}
+
+ul.tabs {
+  border-bottom: 1px solid #e2e8f0 !important;
+  column-gap: 0.5rem !important;
+}
+
+[data-theme='dark'] ul.tabs {
+  border-bottom-color: #2d3748 !important;
+}
+
+li.tabs__item {
+  padding: 0.5rem !important;
+  font-weight: 500 !important;
+  font-size: 14px !important;
+  border-bottom: 2px solid transparent !important;
+}
+
+li.tabs__item--active {
+  border-bottom: 2px solid var(--ifm-color-primary) !important;
+}
+
+/* =========================================
+   CODE BLOCKS
+   ========================================= */
+.prism-code {
+  border-radius: var(--ifm-border-radius);
+  font-size: 12.5px !important;
+  line-height: 1.6;
+}
+
+[data-theme='dark'] .prism-code {
+  border: 1px solid #21262d;
+}
+
+[class*='codeLineNumber']::before {
+  font-size: 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+[class*='codeBlockTitle'] {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  padding: 0.5rem 1rem !important;
+  border-bottom: 1px solid #334155 !important;
+}
+
+.theme-code-block-highlighted-line {
+  background-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+[data-theme='dark'] .theme-code-block-highlighted-line {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.theme-code-block-highlighted-line > span {
+  background-color: transparent !important;
+}
+
+/* =========================================
+   SIDEBAR / MENU
+   ========================================= */
+.menu {
+  font-weight: 400;
+  background-image: radial-gradient(rgba(0, 0, 0, 0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+[data-theme='dark'] .menu {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.menu__link {
+  font-size: 14px;
+  padding-top: 0.22rem !important;
+  padding-bottom: 0.22rem !important;
+  border-radius: 4px;
+}
+
+.menu__link--active {
+  font-weight: 600 !important;
+  background-color: rgba(46, 133, 85, 0.08) !important;
+}
+
+[data-theme='dark'] .menu__link--active {
+  background-color: rgba(37, 194, 160, 0.1) !important;
+}
+
+.menu__link--sublist-caret:after {
+  width: 0.7rem;
+  height: 0.7rem;
+  min-width: 0.7rem;
+  background: var(--ifm-menu-link-sublist-icon) 50% / 1.2rem 1.2rem;
+}
+
+/* Top-level sidebar category labels */
+.theme-doc-sidebar-item-category-level-1
+  > .menu__list-item-collapsible
+  > .menu__link:first-of-type {
+  color: #111827;
+  font-weight: 600 !important;
+  font-size: 14px;
+}
+
+[data-theme='dark']
+  .theme-doc-sidebar-item-category-level-1
+  > .menu__list-item-collapsible
+  > .menu__link:first-of-type {
+  color: #f9fafb;
+  font-weight: 600 !important;
+  font-size: 14px;
+}
+
+.theme-doc-sidebar-item-category-level-1 {
+  margin-bottom: 1.25rem !important;
+}
+
+/* Nested menu list */
+.menu__list .menu__list {
+  padding-left: 4px !important;
+}
+
+/* Nested sidebar border line */
+[class*='sidebar-item-'] ul:not(:first-child) {
+  margin-left: 16px !important;
+  border-left: 1px solid #e5e7eb;
+}
+
+[data-theme='dark'] [class*='sidebar-item-'] ul:not(:first-child) {
+  border-left-color: #2d3748;
+}
+
+/* =========================================
+   TABLE OF CONTENTS
+   ========================================= */
+.table-of-contents {
+  font-size: 13px;
+}
+
+.table-of-contents__link {
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.table-of-contents__link:hover {
+  color: var(--ifm-color-primary);
+}
+
+.table-of-contents__link--active {
+  font-weight: 600;
+  color: var(--ifm-color-primary);
+}
+
+[data-theme='dark'] .table-of-contents__link {
+  color: #9ca3af;
+}
+
+/* =========================================
+   IMAGES & MEDIA
+   ========================================= */
+img,
+video {
+  border-radius: var(--ifm-border-radius);
+}
+
+/* =========================================
+   FOOTER
+   ========================================= */
+.footer {
+  background: #0d1117;
+}
+
+.footer__copyright {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.footer__link-item {
+  color: #8b949e;
+  font-size: 14px;
+}
+
+.footer__link-item:hover {
+  text-decoration: none;
+  color: #c9d1d9;
+}
+
+.footer__title {
+  color: #f0f6fc;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.footer__bottom {
+  margin: 40px auto 10px auto;
+}
+
+/* =========================================
+   AVATAR
+   ========================================= */
+.avatar__name > a {
+  color: inherit;
+}
+
+/* =========================================
+   NAVBAR ICON LINKS (GitHub, Discord)
+   ========================================= */
+.header-github-link,
+.header-discord-link {
+  display: flex;
+  align-items: center;
+}
+
+.header-github-link:hover,
+.header-discord-link:hover {
+  opacity: 0.65;
+}
+
+/* Hide text label, show only the icon */
+.header-github-link::before,
+.header-discord-link::before {
+  content: '';
+  width: 22px;
+  height: 22px;
+  display: flex;
+}
+
+.header-github-link::before {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+}
+
+[data-theme='dark'] .header-github-link::before {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='white' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+}
+
+/* Discord icon */
+.header-discord-link::before {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23111' d='M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+}
+
+[data-theme='dark'] .header-discord-link::before {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z'/%3E%3C/svg%3E")
+    no-repeat center / contain;
+}
+
+/* =========================================
+   SEARCH BAR — hide from navbar (it lives in sidebar)
+   ========================================= */
+[class^='navbarSearchContainer'],
+[class*='navbarSearchContainer'] {
+  display: none !important;
+}
+
+/* =========================================
+   INKEEP AI CHAT BUTTON — minimal floating style
+   ========================================= */
+.ikp-chat-button__button {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 50% !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18) !important;
+  margin-right: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+/* =========================================
+   LOGO (existing logo toggle logic)
+   ========================================= */
 .levo-logo-container {
   position: relative;
 }
@@ -42,7 +521,6 @@
   height: auto !important;
 }
 
-/* Show light logo by default, hide dark logo */
 .levo-logo-dark {
   display: none !important;
 }
@@ -51,7 +529,6 @@
   display: block !important;
 }
 
-/* In dark mode, hide light logo and show dark logo */
 [data-theme='dark'] .levo-logo-light {
   display: none !important;
 }
