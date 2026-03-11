@@ -8,6 +8,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import MCPLogoSelector from "./MCPLogoSelector";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -20,7 +21,7 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
@@ -38,7 +39,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const transportType = Form.useWatch("transport", form) as string | undefined;
   const isStdioTransport = transportType === "stdio";
@@ -50,6 +54,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
 
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+
+  // Watch form fields that affect tool fetching
+  const currentUrl = Form.useWatch("url", form);
+  const currentSpecPath = Form.useWatch("spec_path", form);
+  const currentServerName = Form.useWatch("server_name", form);
+  const currentAuthType = Form.useWatch("auth_type", form);
+  const currentStaticHeaders = Form.useWatch("static_headers", form);
+  const currentCredentials = Form.useWatch("credentials", form);
+  const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
+  const currentTokenUrl = Form.useWatch("token_url", form);
+  const currentRegistrationUrl = Form.useWatch("registration_url", form);
 
   const persistEditUiState = () => {
     if (typeof window === "undefined") {
@@ -184,11 +199,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Initialize allowed tools from existing server data
+  // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
     if (mcpServer.allowed_tools) {
       setAllowedTools(mcpServer.allowed_tools);
     }
+    setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
+    setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
   }, [mcpServer]);
 
   useEffect(() => {
@@ -523,6 +540,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcp_info: {
           server_name: mcpInfoServerName,
           description: restValues.description,
+          logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
@@ -530,6 +548,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
+        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
@@ -587,6 +607,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <Form.Item label="Description" name="description">
               <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
+            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
                 <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
@@ -641,6 +662,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
                 </Select>
@@ -879,16 +901,26 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 oauthAccessToken={oauthAccessToken}
                 formValues={{
                   server_id: mcpServer.server_id,
-                  server_name: mcpServer.server_name,
-                  url: mcpServer.url,
-                  transport: mcpServer.transport,
-                  auth_type: mcpServer.auth_type,
+                  server_name: currentServerName ?? mcpServer.server_name,
+                  url: currentUrl ?? mcpServer.url,
+                  spec_path: currentSpecPath ?? mcpServer.spec_path,
+                  transport: transportType ?? mcpServer.transport,
+                  auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type: (currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  static_headers: currentStaticHeaders ?? mcpServer.static_headers,
+                  credentials: currentCredentials,
+                  authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
+                  token_url: currentTokenUrl ?? mcpServer.token_url,
+                  registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
                 }}
                 allowedTools={allowedTools}
                 existingAllowedTools={mcpServer.allowed_tools || null}
                 onAllowedToolsChange={setAllowedTools}
+                toolNameToDisplayName={toolNameToDisplayName}
+                toolNameToDescription={toolNameToDescription}
+                onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                onToolNameToDescriptionChange={setToolNameToDescription}
               />
             </div>
 

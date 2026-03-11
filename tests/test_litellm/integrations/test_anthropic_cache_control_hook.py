@@ -903,3 +903,75 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                 if isinstance(item, dict) and "cachePoint" in item
             )
             assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_string_negative_index():
+    """
+    Test that string negative indices like "-1" are handled correctly.
+
+    When cache_control_injection_points are stored in DB/config as JSON, indices
+    like -1 become the string "-1". Previously, str.isdigit() returned False for
+    "-1" so the cache control was silently skipped. This tests the fix.
+    """
+    with patch.dict(
+        os.environ,
+        {
+            "AWS_ACCESS_KEY_ID": "fake_access_key_id",
+            "AWS_SECRET_ACCESS_KEY": "fake_secret_access_key",
+            "AWS_REGION_NAME": "us-west-2",
+        },
+    ):
+        anthropic_cache_control_hook = AnthropicCacheControlHook()
+        litellm.callbacks = [anthropic_cache_control_hook]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": "Response",
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 50,
+                "totalTokens": 150,
+            },
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            await litellm.acompletion(
+                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                messages=[
+                    {"role": "user", "content": "First message"},
+                    {"role": "assistant", "content": "First response"},
+                    {"role": "user", "content": "Second message"},
+                ],
+                # index is a string "-1" (as stored in DB/config JSON)
+                cache_control_injection_points=[
+                    {"location": "message", "index": "-1"},
+                ],
+                client=client,
+            )
+
+            mock_post.assert_called_once()
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            # The last user message should have cache control applied
+            last_message = request_body["messages"][-1]
+            last_message_content = last_message["content"]
+            assert isinstance(last_message_content, list), (
+                f"Expected list content, got {type(last_message_content)}"
+            )
+            has_cache_point = any(
+                isinstance(item, dict) and "cachePoint" in item
+                for item in last_message_content
+            )
+            assert has_cache_point, (
+                f"Expected cachePoint in last message content, got: {last_message_content}. "
+                "String index '-1' was not parsed correctly (str.isdigit() returns False for negative strings)."
+            )

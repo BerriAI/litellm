@@ -35,6 +35,14 @@ deploymentLabels: {}
 podAnnotations: {}
 podLabels: {}
 
+# -- Deployment strategy configuration
+# Example:
+#   type: RollingUpdate
+#   rollingUpdate:
+#     maxUnavailable: 0
+#     maxSurge: 1
+strategy: {}
+
 terminationGracePeriodSeconds: 90
 topologySpreadConstraints:
   []

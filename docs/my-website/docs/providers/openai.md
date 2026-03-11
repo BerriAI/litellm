@@ -191,8 +191,13 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5.2 | `response = completion(model="gpt-5.2", messages=messages)` |
 | gpt-5.2-2025-12-11 | `response = completion(model="gpt-5.2-2025-12-11", messages=messages)` |
 | gpt-5.2-chat-latest | `response = completion(model="gpt-5.2-chat-latest", messages=messages)` |
+| gpt-5.3-chat-latest | `response = completion(model="gpt-5.3-chat-latest", messages=messages)` |
+| gpt-5.4 | `response = completion(model="gpt-5.4", messages=messages)` |
+| gpt-5.4-2026-03-05 | `response = completion(model="gpt-5.4-2026-03-05", messages=messages)` |
 | gpt-5.2-pro | `response = completion(model="gpt-5.2-pro", messages=messages)` |
 | gpt-5.2-pro-2025-12-11 | `response = completion(model="gpt-5.2-pro-2025-12-11", messages=messages)` |
+| gpt-5.4-pro | `response = completion(model="gpt-5.4-pro", messages=messages)` |
+| gpt-5.4-pro-2026-03-05 | `response = completion(model="gpt-5.4-pro-2026-03-05", messages=messages)` |
 | gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
 | gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
 | gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
@@ -627,7 +632,22 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## OpenAI Chat Completion to Responses API Bridge
 
-Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
+Call any Responses API model from OpenAI's `/chat/completions` endpoint.
+
+:::tip gpt-5.4 + reasoning_effort + function tools
+
+OpenAI does not support `reasoning_effort` with function tools for `gpt-5.4` in `/v1/chat/completions`. Use the responses bridge instead:
+
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5.4",  # routes to /v1/responses
+    messages=[{"role": "user", "content": "What's the weather?"}],
+    tools=[...],
+    reasoning_effort="low",
+)
+```
+
+:::
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
