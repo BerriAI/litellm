@@ -74,6 +74,7 @@ interface MCPServerData {
   server_id: string;
   name: string;
   alias?: string | null;
+  description?: string | null;
   server_name: string;
   url: string;
   transport: string;
@@ -894,10 +895,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     },
     {
       header: "Description",
-      accessorKey: "mcp_info.description",
+      accessorKey: "description",
       enableSorting: false,
       cell: ({ row }) => {
-        const description = row.original.mcp_info?.description || "-";
+        const description =
+          row.original.description ||
+          row.original.mcp_info?.description ||
+          "-";
         const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
         return (
           <Tooltip title={description}>
@@ -1879,7 +1883,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                   </div>
                   <div className="col-span-2">
                     <Text className="font-medium">Description:</Text>
-                    <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
+                    <Text>{selectedMcpServer.description || selectedMcpServer.mcp_info?.description || "-"}</Text>
                   </div>
                   <div className="col-span-2">
                     <Text className="font-medium">URL:</Text>

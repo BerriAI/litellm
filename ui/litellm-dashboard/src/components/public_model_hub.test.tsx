@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import PublicModelHub from "./public_model_hub";
 
 vi.mock("next/navigation", () => ({
@@ -63,6 +63,45 @@ describe("PublicModelHub", () => {
   it("renders", () => {
     const { container } = render(<PublicModelHub />);
     expect(container).toBeInTheDocument();
+  });
+
+  it("should prefer server.description over mcp_info.description for MCP hub display", async () => {
+    const networkingModule = await import("./networking");
+
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([
+      {
+        server_id: "server-1",
+        server_name: "github",
+        name: "github",
+        description: "sample description",
+        url: "https://api.githubcopilot.com/mcp/",
+        transport: "sse",
+        auth_type: "bearer_token",
+        mcp_info: {
+          server_name: "github",
+          description: "Manage repos, issues, PRs, and workflows through natural language",
+        },
+      } as any,
+    ]);
+
+    render(<PublicModelHub />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "MCP Hub" })).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "MCP Hub" }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Available MCP Servers")).toBeInTheDocument();
+    });
+
+    // Table should display the user-edited description (top-level field)
+    await waitFor(() => {
+      expect(screen.getByText("sample description")).toBeInTheDocument();
+    });
   });
 
   it("displays health status correctly for models with health check information", async () => {

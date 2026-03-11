@@ -28,6 +28,112 @@ from litellm.proxy.management_endpoints.mcp_management_endpoints import (
 TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
 
 
+@pytest.mark.asyncio
+async def test_update_mcp_server_syncs_description_into_mcp_info():
+    """
+    Regression test: when updating only top-level description, keep mcp_info.description in sync.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+
+    server_id = str(uuid.uuid4())
+
+    existing = LiteLLM_MCPServerTable(
+        server_id=server_id,
+        alias="Existing Server",
+        url="https://example.com/mcp",
+        transport=MCPTransport.sse,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        teams=[],
+    )
+    existing.mcp_info = {
+        "server_name": "github",
+        "description": "old discovery description",
+        "mcp_server_cost_info": {"default_cost_per_query": 0},
+    }
+
+    updated = generate_mcpserver_record(url="https://example.com/mcp", transport=MCPTransport.sse)
+    updated.server_id = server_id
+
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_mcpservertable = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=updated)
+
+    payload = UpdateMCPServerRequest(
+        server_id=server_id,
+        description="sample description",
+    )
+
+    await update_mcp_server(prisma_client=prisma_client, data=payload, touched_by="test-user")
+
+    # Verify update() was called with mcp_info whose description was synced
+    _kwargs = prisma_client.db.litellm_mcpservertable.update.call_args.kwargs
+    data_dict = _kwargs["data"]
+    assert "mcp_info" in data_dict
+
+    mcp_info_json = data_dict["mcp_info"]
+    mcp_info = json.loads(mcp_info_json)
+    assert mcp_info["description"] == "sample description"
+    assert mcp_info["server_name"] == "github"
+    assert mcp_info["mcp_server_cost_info"] == {"default_cost_per_query": 0}
+
+
+@pytest.mark.asyncio
+async def test_update_mcp_server_merges_description_into_caller_mcp_info():
+    """
+    When callers send both description and mcp_info together, merge description into
+    mcp_info.description without losing other caller-supplied fields (including explicit nulls).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+
+    server_id = str(uuid.uuid4())
+
+    # Existing record is not consulted in this branch (mcp_info provided),
+    # but we still need a stub for the update() return value.
+    existing = generate_mcpserver_record(url="https://example.com/mcp", transport=MCPTransport.sse)
+    existing.server_id = server_id
+
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_mcpservertable = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=existing)
+
+    payload = UpdateMCPServerRequest(
+        server_id=server_id,
+        description="user-facing description",
+        mcp_info={
+            "server_name": "github",
+            "description": "caller-supplied discovery description",
+            "mcp_server_cost_info": None,
+        },
+    )
+
+    await update_mcp_server(prisma_client=prisma_client, data=payload, touched_by="test-user")
+
+    _kwargs = prisma_client.db.litellm_mcpservertable.update.call_args.kwargs
+    data_dict = _kwargs["data"]
+    assert "mcp_info" in data_dict
+
+    mcp_info_json = data_dict["mcp_info"]
+    mcp_info = json.loads(mcp_info_json)
+
+    # description is replaced with the authoritative top-level description
+    assert mcp_info["description"] == "user-facing description"
+    # other fields from caller mcp_info are preserved, including explicit nulls
+    assert mcp_info["server_name"] == "github"
+    assert "mcp_server_cost_info" in mcp_info
+    assert mcp_info["mcp_server_cost_info"] is None
+
+
 def generate_mcpserver_record(
     url: Optional[str] = None, transport: Optional[MCPTransportType] = None
 ) -> LiteLLM_MCPServerTable:

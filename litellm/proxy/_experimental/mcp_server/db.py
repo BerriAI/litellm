@@ -350,8 +350,71 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
     # Use helper to prepare data with proper JSON serialization
     data_dict = _prepare_mcp_server_data(data)
+
+    # Keep user-editable description consistent across the record.
+    #
+    # The API has a top-level `description` column and a nested `mcp_info.description`
+    # (discovered/metadata). UIs may read either field. Whenever the caller explicitly
+    # sets `description`, sync it into `mcp_info.description` so downstream consumers
+    # reading `mcp_info` do not see stale data.
+    #
+    # NOTE: The branch that reads existing `mcp_info` from the DB is a
+    # read–modify–write sequence (find_unique → mutate → update) and therefore
+    # not atomic. A concurrent update that touches `mcp_info` between the read
+    # and write can be overwritten by the stale snapshot. For the low-traffic
+    # management endpoints that call this helper the practical risk is small,
+    # but callers should be aware this is not a transactional merge.
+    if data.description is not None:
+        if data.mcp_info is not None:
+            # Caller supplied mcp_info — merge description in without a DB round-trip.
+            # Use model_dump() (without exclude_none) to match _prepare_mcp_server_data
+            # / safe_dumps behaviour and preserve explicit nulls.
+            if isinstance(data.mcp_info, dict):
+                merged: Dict[str, Any] = dict(data.mcp_info)
+            else:
+                merged = data.mcp_info.model_dump()  # type: ignore[call-arg]
+            merged["description"] = data.description
+            data_dict["mcp_info"] = safe_dumps(merged)
+        else:
+            existing = await prisma_client.db.litellm_mcpservertable.find_unique(
+                where={"server_id": data.server_id}
+            )
+            existing_mcp_info: Dict[str, Any] = {}
+            if existing is not None and getattr(existing, "mcp_info", None):
+                # Prisma returns JSON fields as dict-like objects
+                existing_mcp_info = cast(Dict[str, Any], existing.mcp_info)
+
+            updated_mcp_info = dict(existing_mcp_info)
+            updated_mcp_info["description"] = data.description
+            data_dict["mcp_info"] = safe_dumps(updated_mcp_info)
+    elif data.mcp_info is not None:
+        # Caller is updating only mcp_info. To keep it consistent with the
+        # authoritative top-level description column, merge the current
+        # description from the DB back into mcp_info.description.
+        #
+        # This ensures that discovery refreshes which send new mcp_info metadata
+        # do not silently overwrite the last user-edited description that was
+        # previously synced into mcp_info.
+        existing = await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={"server_id": data.server_id}
+        )
+        existing_description: Optional[str] = None
+        if existing is not None:
+            existing_description = getattr(existing, "description", None)
+
+        # Only override mcp_info.description when we have an authoritative
+        # top-level description to sync; otherwise preserve caller-supplied value.
+        if existing_description is not None:
+            if isinstance(data.mcp_info, dict):
+                merged_info: Dict[str, Any] = dict(data.mcp_info)
+            else:
+                merged_info = data.mcp_info.model_dump()  # type: ignore[call-arg]
+            merged_info["description"] = existing_description
+            data_dict["mcp_info"] = safe_dumps(merged_info)
 
     # Add audit fields
     data_dict["updated_by"] = touched_by
