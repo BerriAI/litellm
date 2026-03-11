@@ -197,7 +197,14 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
 
 def _get_function_to_resolve_old_documented_and_correct_service_key(
         service_key: Union[str, dict], cv: CredentialsValue):
-
+    if isinstance(service_key, str):
+        try:
+            service_key = json.loads(service_key)
+        except json.JSONDecodeError:
+            verbose_logger.warning(
+                "SAP service key or VCAP service is a string but not valid JSON."
+            )
+            return None
     if service_key is not None and "credentials" in service_key:
         return _str_or_none(
         _get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
