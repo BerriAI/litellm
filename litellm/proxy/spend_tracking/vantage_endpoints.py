@@ -155,7 +155,7 @@ async def get_vantage_settings(
         if not settings:
             return VantageSettingsView(
                 api_key_masked=None,
-                integration_token=None,
+                integration_token_masked=None,
                 base_url=None,
                 status=None,
             )
@@ -164,7 +164,7 @@ async def get_vantage_settings(
 
         return VantageSettingsView(
             api_key_masked=masked_settings.get("api_key"),
-            integration_token=settings.get("integration_token"),
+            integration_token_masked=masked_settings.get("integration_token"),
             base_url=settings.get("base_url"),
             status="configured",
         )
