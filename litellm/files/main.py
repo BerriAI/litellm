@@ -18,7 +18,6 @@ import litellm
 from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.files.handler import AnthropicFilesHandler
 from litellm.llms.azure.common_utils import get_azure_credentials
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
@@ -54,7 +53,6 @@ openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
-anthropic_files_instance = AnthropicFilesHandler()
 #################################################
 
 
