@@ -392,13 +392,14 @@ async def vantage_dry_run_export(
         usage_sample = data.head(min(50, len(data))).to_dicts() if not data.is_empty() else []
         normalized_sample = normalized.head(min(50, len(normalized))).to_dicts() if not normalized.is_empty() else []
 
-        # Compute summary from the FOCUS-normalized DataFrame.
-        # These use post-transform column names specific to this endpoint.
+        # Use the same pre-transform column names as
+        # FocusExportEngine.dry_run_export_usage_data for consistency.
         summary = {
             "total_records": len(normalized),
-            "total_spend": FocusExportEngine._sum_column(normalized, "BilledCost"),
-            "unique_teams": FocusExportEngine._count_unique(normalized, "SubAccountId"),
-            "unique_models": FocusExportEngine._count_unique(normalized, "ResourceType"),
+            "total_spend": FocusExportEngine._sum_column(data, "spend"),
+            "total_tokens": FocusExportEngine._sum_column(data, "total_tokens"),
+            "unique_teams": FocusExportEngine._count_unique(data, "team_id"),
+            "unique_models": FocusExportEngine._count_unique(data, "model"),
         }
 
         dry_run_result = {

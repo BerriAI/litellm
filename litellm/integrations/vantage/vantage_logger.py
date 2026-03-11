@@ -83,7 +83,7 @@ class VantageLogger(FocusLogger):
 
         verbose_logger.debug(
             "VantageLogger initialized (integration_token=%s)",
-            resolved_token[:8] + "..." if resolved_token else "None",
+            resolved_token[:4] + "***" if resolved_token and len(resolved_token) > 4 else "***",
         )
 
     @staticmethod

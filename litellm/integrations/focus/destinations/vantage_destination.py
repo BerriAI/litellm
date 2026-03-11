@@ -88,7 +88,15 @@ class FocusVantageDestination(FocusDestination):
             headers=headers,
             files={"file": (filename, csv_bytes, "text/csv")},
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            verbose_logger.error(
+                "Vantage destination: upload failed for %s — %s",
+                filename,
+                e,
+            )
+            raise
 
         verbose_logger.debug(
             "Vantage destination: uploaded %d bytes (%s)",
