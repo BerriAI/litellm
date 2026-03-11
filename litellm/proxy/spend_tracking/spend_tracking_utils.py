@@ -430,6 +430,17 @@ def get_logging_payload(  # noqa: PLR0915
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
+        # For anthropic_messages, prioritize standard_logging_payload tokens
+        # (which exclude cached tokens per Anthropic convention)
+        if call_type == "anthropic_messages" and standard_logging_prompt_tokens is not None:
+            db_prompt_tokens = standard_logging_prompt_tokens
+            db_completion_tokens = standard_logging_completion_tokens or 0
+            db_total_tokens = standard_logging_total_tokens or 0
+        else:
+            db_prompt_tokens = usage.get("prompt_tokens", standard_logging_prompt_tokens or 0)
+            db_completion_tokens = usage.get("completion_tokens", standard_logging_completion_tokens or 0)
+            db_total_tokens = usage.get("total_tokens", standard_logging_total_tokens or 0)
+
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
             call_type=call_type or "",
@@ -445,11 +456,9 @@ def get_logging_payload(  # noqa: PLR0915
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
-            total_tokens=standard_logging_total_tokens if standard_logging_total_tokens is not None else usage.get("total_tokens", 0),
-            prompt_tokens=standard_logging_prompt_tokens if standard_logging_prompt_tokens is not None else usage.get("prompt_tokens", 0),
-            completion_tokens=standard_logging_completion_tokens if standard_logging_completion_tokens is not None else usage.get(
-                "completion_tokens", 0
-            ),
+            total_tokens=db_total_tokens,
+            prompt_tokens=db_prompt_tokens,
+            completion_tokens=db_completion_tokens,
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=litellm_params.get("api_base", ""),
