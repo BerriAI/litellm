@@ -5,6 +5,16 @@ name: "LiteLLM CodeQL config"
 queries:
   - uses: security-extended
 
+# These two queries are security queries included in security-extended that
+# individually produce result sets > 2 GiB on this codebase, causing fatal
+# OOM failures. Exclude them as a safety net until CI confirms they no longer
+# OOM; drop these exclusions in a follow-up once verified.
+query-filters:
+  - exclude:
+      id: py/clear-text-logging-sensitive-data  # CWE-312 — > 2 GiB result set
+  - exclude:
+      id: py/polynomial-redos                   # CWE-730 — > 2 GiB result set
+
 paths-ignore:
   - tests
   - docs
