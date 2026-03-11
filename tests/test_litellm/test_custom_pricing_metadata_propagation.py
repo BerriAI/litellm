@@ -97,6 +97,21 @@ def _make_router_with_custom_pricing(backend_model: str, api_key: str = "fake-ke
     )
 
 
+def _merge_metadata_preserving_deployment_model_info(
+    litellm_metadata: Optional[dict], user_metadata: Optional[dict]
+) -> dict:
+    """
+    Match the fixed merge behavior used by /v1/responses and /v1/messages:
+    user metadata is merged in, but deployment model_info keeps precedence.
+    """
+    merged_metadata = dict(litellm_metadata or {})
+    deployment_model_info = merged_metadata.pop("model_info", None)
+    merged_metadata.update(user_metadata or {})
+    if deployment_model_info:
+        merged_metadata["model_info"] = deployment_model_info
+    return merged_metadata
+
+
 @pytest.fixture(autouse=True)
 def cleanup_model_cost():
     """Remove test deployment entries from litellm.model_cost between tests."""
@@ -302,11 +317,9 @@ class TestRouterMetadataPropagation:
         )
 
         metadata = {"user_field": "present"}
-        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
-        deployment_model_info = metadata_for_callbacks.pop("model_info", None)
-        metadata_for_callbacks.update(metadata)
-        if deployment_model_info:
-            metadata_for_callbacks["model_info"] = deployment_model_info
+        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+            kwargs.get("litellm_metadata"), metadata
+        )
 
         model_info = metadata_for_callbacks.get("model_info", {})
         assert model_info.get("input_cost_per_token") == CUSTOM_INPUT_COST, (
@@ -333,48 +346,23 @@ class TestRouterMetadataPropagation:
             function_name="_ageneric_api_call_with_fallbacks",
         )
 
-        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
         user_metadata = {
             "user_field": "present",
             "model_info": {"id": "user-supplied", "input_cost_per_token": 0.0},
         }
-        deployment_model_info = metadata_for_callbacks.pop("model_info", None)
-        metadata_for_callbacks.update(user_metadata)
-        if deployment_model_info:
-            metadata_for_callbacks["model_info"] = deployment_model_info
+        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+            kwargs.get("litellm_metadata"), user_metadata
+        )
 
         model_info = metadata_for_callbacks.get("model_info", {})
         assert model_info.get("id") == DEPLOYMENT_MODEL_ID
         assert model_info.get("input_cost_per_token") == CUSTOM_INPUT_COST
         assert metadata_for_callbacks["user_field"] == "present"
 
-    def test_messages_api_metadata_resolves_via_litellm_metadata(self):
-        """
-        For /v1/messages, the handler should merge litellm_metadata with explicit
-        metadata so model_info with custom pricing survives.
-        """
-        router = _make_router_with_custom_pricing("anthropic/claude-sonnet-4-20250514")
-        deployment = router.model_list[0]
-
-        kwargs: dict = {}
-        router._update_kwargs_with_deployment(
-            deployment=deployment,
-            kwargs=kwargs,
-            function_name="_ageneric_api_call_with_fallbacks",
-        )
-
-        kwargs["metadata"] = {"user_field": "present"}
-        metadata_from_handler = dict(kwargs.get("litellm_metadata") or {})
-        metadata_from_handler.update(kwargs.get("metadata") or {})
-        litellm_params = {"metadata": metadata_from_handler}
-
-        assert metadata_from_handler["user_field"] == "present"
-        assert use_custom_pricing_for_model(litellm_params) is True
-
     def test_messages_api_user_model_info_does_not_override_deployment(self):
         """
-        User metadata should not overwrite router-provided model_info for
-        anthropic passthrough pricing calculation.
+        For /v1/messages, the handler should preserve router-provided model_info
+        even if the request metadata includes its own model_info payload.
         """
         router = _make_router_with_custom_pricing("anthropic/claude-sonnet-4-20250514")
         deployment = router.model_list[0]
@@ -386,20 +374,20 @@ class TestRouterMetadataPropagation:
             function_name="_ageneric_api_call_with_fallbacks",
         )
 
-        metadata_from_handler = dict(kwargs.get("litellm_metadata") or {})
-        user_metadata = {
+        kwargs["metadata"] = {
             "user_field": "present",
             "model_info": {"id": "user-supplied", "output_cost_per_token": 0.0},
         }
-        deployment_model_info = metadata_from_handler.pop("model_info", None)
-        metadata_from_handler.update(user_metadata)
-        if deployment_model_info:
-            metadata_from_handler["model_info"] = deployment_model_info
+        metadata_from_handler = _merge_metadata_preserving_deployment_model_info(
+            kwargs.get("litellm_metadata"), kwargs.get("metadata")
+        )
+        litellm_params = {"metadata": metadata_from_handler}
 
         model_info = metadata_from_handler.get("model_info", {})
         assert model_info.get("id") == DEPLOYMENT_MODEL_ID
         assert model_info.get("output_cost_per_token") == CUSTOM_OUTPUT_COST
         assert metadata_from_handler["user_field"] == "present"
+        assert use_custom_pricing_for_model(litellm_params) is True
 
     def test_use_custom_pricing_detects_top_level_model_info(self):
         """Custom pricing detection should work when model_info is top-level."""
