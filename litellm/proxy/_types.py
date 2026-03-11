@@ -1117,6 +1117,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     env: Dict[str, str] = Field(default_factory=dict)
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
@@ -1188,6 +1189,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     env: Dict[str, str] = Field(default_factory=dict)
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
@@ -1251,6 +1253,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     env: Dict[str, str] = Field(default_factory=dict)
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True

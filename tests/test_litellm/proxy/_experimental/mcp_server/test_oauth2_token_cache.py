@@ -31,6 +31,13 @@ def _server(**overrides) -> MCPServer:
         token_url="https://auth.example.com/token",
     )
     defaults.update(overrides)
+    if (
+        "oauth2_flow" not in overrides
+        and defaults.get("client_id")
+        and defaults.get("client_secret")
+        and defaults.get("token_url")
+    ):
+        defaults["oauth2_flow"] = "client_credentials"
     return MCPServer(**defaults)
 
 

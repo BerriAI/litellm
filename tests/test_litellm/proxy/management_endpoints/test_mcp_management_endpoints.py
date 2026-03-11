@@ -961,6 +961,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
         existing_server.scopes = ["scope:a", "scope:b"]
+        existing_server.oauth2_flow = "client_credentials"
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -981,6 +982,7 @@ class TestTemporaryMCPSessionEndpoints:
             "client_secret": "secret-xyz",
             "scopes": ["scope:a", "scope:b"],
         }
+        assert updated_payload.oauth2_flow == "client_credentials"
         mock_manager.get_mcp_server_by_id.assert_called_once_with("server-123")
 
     def test_cache_temporary_mcp_server_stores_entry_with_ttl(self):

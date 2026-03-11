@@ -13,6 +13,15 @@ from litellm.proxy._types import NewMCPServerRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 
+try:
+    from builtins import BaseExceptionGroup
+except ImportError:
+    class BaseExceptionGroup(BaseException):
+        def __new__(cls, message, exceptions):
+            instance = BaseException.__new__(cls, message, exceptions)
+            instance.exceptions = tuple(exceptions)
+            return instance
+
 
 def _build_request(
     headers: Optional[Dict[str, str]] = None,
@@ -209,6 +218,7 @@ class TestExecuteWithMcpClient:
         assert server.client_secret == "my-secret"
         assert server.token_url == "https://auth.example.com/token"
         assert server.scopes == ["read", "write"]
+        assert server.oauth2_flow == "client_credentials"
         assert server.has_client_credentials is True
 
     @pytest.mark.asyncio

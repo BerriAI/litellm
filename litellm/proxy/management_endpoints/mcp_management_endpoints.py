@@ -391,6 +391,22 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
 
+    def _get_optional_mcp_server_str(server: Any, attr_name: str) -> Optional[str]:
+        value = getattr(server, attr_name, None)
+        return value if isinstance(value, str) and value else None
+
+    def _get_optional_mcp_server_scopes(server: Any) -> Optional[List[str]]:
+        value = getattr(server, "scopes", None)
+        return value if isinstance(value, list) and value else None
+
+    def _get_optional_mcp_server_oauth2_flow(
+        server: Any,
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        value = getattr(server, "oauth2_flow", None)
+        if value in ("client_credentials", "authorization_code"):
+            return value
+        return None
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
@@ -404,31 +420,60 @@ if MCP_AVAILABLE:
             return payload
 
         inherited_credentials: MCPCredentials = {}
-        if existing_server.authentication_token:
-            inherited_credentials["auth_value"] = existing_server.authentication_token
-        if existing_server.client_id:
-            inherited_credentials["client_id"] = existing_server.client_id
-        if existing_server.client_secret:
-            inherited_credentials["client_secret"] = existing_server.client_secret
-        if existing_server.scopes:
-            inherited_credentials["scopes"] = existing_server.scopes
+        authentication_token = _get_optional_mcp_server_str(
+            existing_server, "authentication_token"
+        )
+        if authentication_token:
+            inherited_credentials["auth_value"] = authentication_token
+        client_id = _get_optional_mcp_server_str(existing_server, "client_id")
+        if client_id:
+            inherited_credentials["client_id"] = client_id
+        client_secret = _get_optional_mcp_server_str(existing_server, "client_secret")
+        if client_secret:
+            inherited_credentials["client_secret"] = client_secret
+        scopes = _get_optional_mcp_server_scopes(existing_server)
+        if scopes:
+            inherited_credentials["scopes"] = scopes
         # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        aws_access_key_id = _get_optional_mcp_server_str(
+            existing_server, "aws_access_key_id"
+        )
+        if aws_access_key_id:
+            inherited_credentials["aws_access_key_id"] = aws_access_key_id
+        aws_secret_access_key = _get_optional_mcp_server_str(
+            existing_server, "aws_secret_access_key"
+        )
+        if aws_secret_access_key:
+            inherited_credentials["aws_secret_access_key"] = aws_secret_access_key
+        aws_session_token = _get_optional_mcp_server_str(
+            existing_server, "aws_session_token"
+        )
+        if aws_session_token:
+            inherited_credentials["aws_session_token"] = aws_session_token
+        aws_region_name = _get_optional_mcp_server_str(
+            existing_server, "aws_region_name"
+        )
+        if aws_region_name:
+            inherited_credentials["aws_region_name"] = aws_region_name
+        aws_service_name = _get_optional_mcp_server_str(
+            existing_server, "aws_service_name"
+        )
+        if aws_service_name:
+            inherited_credentials["aws_service_name"] = aws_service_name
 
-        if not inherited_credentials:
+        oauth2_flow = _get_optional_mcp_server_oauth2_flow(existing_server)
+
+        if not inherited_credentials and oauth2_flow is None:
             return payload
 
+        payload_updates: Dict[str, Any] = {}
+        if inherited_credentials:
+            payload_updates["credentials"] = inherited_credentials
+        if oauth2_flow is not None:
+            payload_updates["oauth2_flow"] = oauth2_flow
+
         try:
-            return payload.model_copy(update={"credentials": inherited_credentials})
+            return payload.model_copy(update=payload_updates)
         except AttributeError:
             pass
 
@@ -437,7 +482,7 @@ if MCP_AVAILABLE:
             payload_dict = payload.model_dump()  # type: ignore[attr-defined]
         except AttributeError:
             payload_dict = payload.dict()  # type: ignore[attr-defined]
-        payload_dict["credentials"] = inherited_credentials
+        payload_dict.update(payload_updates)
         return NewMCPServerRequest(**payload_dict)
 
     def _build_temporary_mcp_server_record(
@@ -471,6 +516,7 @@ if MCP_AVAILABLE:
             env=payload.env,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
+            oauth2_flow=payload.oauth2_flow,
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,

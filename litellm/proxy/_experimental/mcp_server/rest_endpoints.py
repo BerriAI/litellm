@@ -571,14 +571,29 @@ if MCP_AVAILABLE:
         Extract OAuth credentials from the nested ``request.credentials`` dict.
 
         Returns:
-            (client_id, client_secret, scopes) — any value may be ``None``.
+            (client_id, client_secret, scopes, oauth2_flow) — any value may be ``None``.
         """
         creds = request.credentials if isinstance(request.credentials, dict) else {}
         client_id: Optional[str] = creds.get("client_id")
         client_secret: Optional[str] = creds.get("client_secret")
         scopes_raw = creds.get("scopes")
         scopes: Optional[List[str]] = scopes_raw if isinstance(scopes_raw, list) else None
-        return client_id, client_secret, scopes
+        oauth2_flow = request.oauth2_flow
+
+        # Temporary MCP test/session payloads submit client credentials directly via
+        # request.credentials. Treat that as an explicit M2M signal unless the caller
+        # already selected a different OAuth2 flow.
+        if (
+            oauth2_flow is None
+            and request.auth_type == MCPAuth.oauth2
+            and client_id
+            and client_secret
+            and request.token_url
+            and not creds.get("auth_value")
+        ):
+            oauth2_flow = "client_credentials"
+
+        return client_id, client_secret, scopes, oauth2_flow
 
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
@@ -606,7 +621,9 @@ if MCP_AVAILABLE:
             The dict returned by *operation*, or an error dict on failure.
         """
         try:
-            client_id, client_secret, scopes = _extract_credentials(request)
+            client_id, client_secret, scopes, oauth2_flow = _extract_credentials(
+                request
+            )
 
             server_model = MCPServer(
                 server_id=request.server_id or "",
@@ -622,6 +639,7 @@ if MCP_AVAILABLE:
                 client_id=client_id,
                 client_secret=client_secret,
                 token_url=request.token_url,
+                oauth2_flow=oauth2_flow,
                 scopes=scopes,
                 authorization_url=request.authorization_url,
                 registration_url=request.registration_url,
