@@ -7516,6 +7516,15 @@ def is_cached_message(message: AllMessageValues) -> bool:
     if litellm.disable_anthropic_gemini_context_caching_transform is True:
         return False
 
+    # Check message-level cache_control (set by cache_control_injection_points hook for string content)
+    message_level_cache_control = message.get("cache_control")
+    if (
+        message_level_cache_control is not None
+        and isinstance(message_level_cache_control, dict)
+        and message_level_cache_control.get("type") == "ephemeral"
+    ):
+        return True
+
     if "content" not in message:
         return False
 
@@ -8322,6 +8331,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.audio_transcription.transformation import (
+                MistralAudioTranscriptionConfig,
+            )
+
+            return MistralAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8720,6 +8735,12 @@ class ProviderConfigManager:
             )
 
             return get_runwayml_image_generation_config(model)
+        elif LlmProviders.BLACK_FOREST_LABS == provider:
+            from litellm.llms.black_forest_labs.image_generation import (
+                get_black_forest_labs_image_generation_config,
+            )
+
+            return get_black_forest_labs_image_generation_config(model)
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_generation import (
                 get_vertex_ai_image_generation_config,
@@ -8805,6 +8826,12 @@ class ProviderConfigManager:
             )
 
             return RecraftImageEditConfig()
+        elif LlmProviders.BLACK_FOREST_LABS == provider:
+            from litellm.llms.black_forest_labs.image_edit.transformation import (
+                BlackForestLabsImageEditConfig,
+            )
+
+            return BlackForestLabsImageEditConfig()
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 
