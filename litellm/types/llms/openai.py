@@ -287,6 +287,7 @@ OpenAIFilesPurpose = Literal[
     "fine-tune-results",
     "vision",
     "user_data",
+    "messages",
 ]
 
 
@@ -352,7 +353,7 @@ class OpenAIFileObject(BaseModel):
             return self.dict()
 
 
-CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
+CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune", "messages"]
 
 
 # File expiration policy
@@ -373,11 +374,11 @@ class FileExpiresAfter(TypedDict):
 class CreateFileRequest(TypedDict, total=False):
     """
     CreateFileRequest
-    Used by Assistants API, Batches API, and Fine-Tunes API
+    Used by Assistants API, Batches API, Fine-Tunes API, and Anthropic Files API
 
     Required Params:
         file: FileTypes
-        purpose: Literal['assistants', 'batch', 'fine-tune']
+        purpose: Literal['assistants', 'batch', 'fine-tune', 'messages']
 
     Optional Params:
         expires_after: Optional[FileExpiresAfter] - The expiration policy for a file
