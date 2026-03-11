@@ -53,7 +53,15 @@ class VantageLogger(FocusLogger):
         ).lower()
 
         raw_interval = interval_seconds or os.getenv("VANTAGE_EXPORT_INTERVAL_SECONDS")
-        resolved_interval = int(raw_interval) if raw_interval is not None else None
+        resolved_interval: Optional[int] = None
+        if raw_interval is not None:
+            try:
+                resolved_interval = int(raw_interval)
+            except (ValueError, TypeError):
+                verbose_logger.warning(
+                    "Invalid VANTAGE_EXPORT_INTERVAL_SECONDS value: %s, ignoring",
+                    raw_interval,
+                )
 
         destination_config: Dict[str, Any] = {}
         if resolved_api_key:

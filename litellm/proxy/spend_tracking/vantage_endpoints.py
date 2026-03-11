@@ -12,6 +12,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.types.proxy.vantage_endpoints import (
+    VantageDryRunRequest,
     VantageExportRequest,
     VantageExportResponse,
     VantageInitRequest,
@@ -356,7 +357,7 @@ async def init_vantage_settings(
     response_model=VantageExportResponse,
 )
 async def vantage_dry_run_export(
-    request: VantageExportRequest,
+    request: VantageDryRunRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -365,7 +366,7 @@ async def vantage_dry_run_export(
     Returns the data that would be exported without actually sending it to Vantage.
 
     Parameters:
-    - limit: Optional limit on number of records to process (default: 500)
+    - limit: Limit on number of records to preview (default: 500)
 
     Only admin users can perform Vantage exports.
     """
