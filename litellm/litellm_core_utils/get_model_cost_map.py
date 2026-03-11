@@ -201,6 +201,13 @@ def _expand_model_aliases(model_cost: dict) -> dict:
         if aliases is None:
             continue
         keys_with_aliases.append(model_name)
+        if not isinstance(aliases, list):
+            verbose_logger.warning(
+                "LiteLLM model alias field for '%s' is not a list (got %s) — skipping.",
+                model_name,
+                type(aliases).__name__,
+            )
+            continue
         if not aliases:
             continue
         for alias in aliases:

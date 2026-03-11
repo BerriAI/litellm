@@ -7,17 +7,7 @@ entries, creating shared dict references for alias entries at load time.
 
 import logging
 
-
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_model_cost(**entries) -> dict:
-    """Build a small model_cost dict from keyword args (model_name → info)."""
-    return dict(entries)
 
 
 # ---------------------------------------------------------------------------
