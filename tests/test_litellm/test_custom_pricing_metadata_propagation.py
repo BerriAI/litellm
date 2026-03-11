@@ -516,6 +516,61 @@ class TestResponsesAPICustomPricingCost:
         finally:
             litellm.callbacks = []
 
+    def test_sync_streaming_responses_uses_custom_pricing(self):
+        """Sync streaming /v1/responses should use custom pricing for cost."""
+        cost_callback = CostCapturingCallback()
+        litellm.callbacks = [cost_callback]
+
+        try:
+            router = _make_router_with_custom_pricing("openai/gpt-4o")
+
+            sse_events = [
+                'data: {"type":"response.created","response":{"id":"resp_test","object":"response","created_at":1741476542,"status":"in_progress","model":"gpt-4o","output":[],"usage":null}}',
+                'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_test","status":"in_progress","role":"assistant","content":[]}}',
+                'data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}',
+                'data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello!"}',
+                'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"Hello!"}',
+                'data: {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"Hello!","annotations":[]}}',
+                'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello!","annotations":[]}]}}',
+                f'data: {{"type":"response.completed","response":{json.dumps(RESPONSES_API_MOCK)}}}',
+                "data: [DONE]",
+            ]
+
+            mock_stream_response = MockStreamingHTTPResponse(sse_events)
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+                new_callable=MagicMock,
+            ) as mock_post:
+                mock_post.return_value = mock_stream_response
+
+                response = router.responses(
+                    model="test-custom-pricing",
+                    input="Hello, how are you?",
+                    stream=True,
+                )
+
+                for _chunk in response:
+                    pass
+
+                deadline = time.time() + 2.0
+                while cost_callback.response_cost is None and time.time() < deadline:
+                    time.sleep(0.01)
+
+            assert cost_callback.response_cost is not None, (
+                "response_cost should be set in the callback"
+            )
+
+            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
+            assert cost_callback.response_cost == pytest.approx(
+                expected_custom_cost, rel=0.01
+            ), (
+                f"Sync streaming cost should use custom pricing ({expected_custom_cost}), "
+                f"got {cost_callback.response_cost}"
+            )
+        finally:
+            litellm.callbacks = []
+
     @pytest.mark.asyncio
     async def test_streaming_responses_with_user_metadata_uses_custom_pricing(self):
         """Streaming /v1/responses should preserve custom pricing when metadata is also passed."""

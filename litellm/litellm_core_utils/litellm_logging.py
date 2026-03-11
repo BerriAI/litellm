@@ -1955,12 +1955,26 @@ class Logging(LiteLLMLoggingBaseClass):
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
                 )
-                self.model_call_details[
-                    "complete_streaming_response"
-                ] = complete_streaming_response
-                self.model_call_details[
-                    "response_cost"
-                ] = self._response_cost_calculator(result=complete_streaming_response)
+                self.model_call_details["complete_streaming_response"] = (
+                    complete_streaming_response
+                )
+                router_model_id = None
+                if self.call_type in (
+                    "responses",
+                    "aresponses",
+                    "_aresponses_websocket",
+                    "anthropic_messages",
+                ):
+                    model_info = _get_model_info_from_litellm_params(
+                        self.model_call_details.get("litellm_params", {}) or {}
+                    )
+                    router_model_id = model_info.get("id")
+                self.model_call_details["response_cost"] = (
+                    self._response_cost_calculator(
+                        result=complete_streaming_response,
+                        router_model_id=router_model_id,
+                    )
+                )
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details[
                     "standard_logging_object"
