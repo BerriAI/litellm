@@ -1,8 +1,11 @@
 import Image from '@theme/IdealImage';
 
-# What is New Relic?
+# Prerequisite
+In order to use LiteLLM with New Relic, you will need to have a New Relic account and [license key](https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/).
 
-# New Relic Extension in LiteLLM
+This page covers using New Relic with LiteLLM in proxy mode. You can also use New Relic with the LiteLLM SDK by including the New Relic Python Agent in your application. Please refer to the New Relic AI Monitoring [documentation](https://docs.newrelic.com/docs/ai-monitoring/intro-to-ai-monitoring/).
+
+# Quick Start
 
 ## Enable New Relic Python Agent instrumentation
 
@@ -16,7 +19,7 @@ USE_NEWRELIC=true
 
 ## Enable New Relic LiteLLM Extension
 
-The New Relic LiteLLM extension is implemented as a callback. A common way to enable the callback is via the config.yaml definition. In order to enable the New Relic extension, add a callback configuration similar to the following in your config.yaml. The callbacks can include a number of different extensions. As long as ”newrelic” is included in the list, the New Relic LiteLLM extension will be invoked.
+The New Relic LiteLLM extension is implemented as a callback. A common way to enable the callback is via the `config.yaml` definition. In order to enable the New Relic extension, add a callback configuration similar to the following in your `config.yaml`. The callbacks can include a number of different extensions. As long as ”newrelic” is included in the list, the New Relic LiteLLM extension will be invoked.
 
 ```yaml
 litellm_settings:
@@ -27,9 +30,9 @@ litellm_settings:
 
 In order for the New Relic Python Agent to report telemetry to New Relic, there are a few environment variables that should be set.
 
-The NEW_RELIC_APP_NAME should have a value for the name that you wish the LiteLLM server to appear as in New Relic’s UI. The NEW_RELIC_LICENSE_KEY value is a license key for the New Relic account you want the telemetry to be reported to.
+The `NEW_RELIC_APP_NAME` environment variable should have a value for the name that you wish the LiteLLM server to appear as in New Relic’s UI. The `NEW_RELIC_LICENSE_KEY` environment variable value is a license key for the New Relic account you want the telemetry to be reported to.
 
-The USE_NEWRELIC is required in order to enable the New Relic Python Agent with the LiteLLM proxy. This must be sent in order for the New Relic Python Agent to report telemetry to New Relic.
+The `USE_NEWRELIC` is required in order to enable the New Relic Python Agent with the LiteLLM proxy. This must be sent in order for the New Relic Python Agent to report telemetry to New Relic.
 
 ```shell
 NEW_RELIC_APP_NAME=<app name>
@@ -38,13 +41,13 @@ NEW_RELIC_LICENSE_KEY=<license key>
 USE_NEWRELIC=true
 ```
 
-## Optional Configuration
+# Advanced Configuration
 
-### Disable sending LLM messages to New Relic
+## Disable sending LLM messages to New Relic
 
 There are two options to disable sending LLM messages to New Relic. Using either of these options will disable sending LLM messages to New Relic; you do not need to set both.
 
-The config.yaml file can be used to set a flag that will disable sending LLM messages to New Relic. As you might want LLM messages to be sent elsewhere (logs) but not to New Relic, there is a New Relic specific configuration value that can be set. Adding the following to your config.yaml will prevent LLM messages from being sent to New Relic.
+The `config.yaml` file can be used to set a flag that will disable sending LLM messages to New Relic. As you might want LLM messages to be sent elsewhere (logs) but not to New Relic, there is a New Relic specific configuration value that can be set. Adding the following to your `config.yaml` will prevent LLM messages from being sent to New Relic.
 
 ```yaml
 litellm_settings:
@@ -61,7 +64,7 @@ NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED=false
 
 ### New Relic Agent Configuration
 
-The New Relic Python Agent has a (number of ways)[https://docs.newrelic.com/docs/apm/agents/python-agent/configuration/python-agent-configuration/] to accept configuration. As shown above, environment variables can be used to set various optional configuration within the agent.
+The New Relic Python Agent has a [number of ways](https://docs.newrelic.com/docs/apm/agents/python-agent/configuration/python-agent-configuration/) to accept configuration. As shown above, environment variables can be used to set various optional configuration within the agent.
 
 There is also an agent configuration file that could be used instead of environment variables. If you prefer to use the configuration file, you’ll need to ensure the configuration file is accessible. You should also set the following environment variable to point to your configuration file.
 
@@ -75,5 +78,5 @@ The New Relic LiteLLM Extension will send telemetry to New Relic so that the mes
 
 ```shell
 NEW_RELIC_CUSTOM_INSIGHTS_EVENTS_MAX_ATTRIBUTE_VALUE=4095
-NEW_RELIC_EVENT_HARVEST_CONFIG_HARVEST_LIMITS_CUSTOM_EVENT_DATA=100000
+NEW_RELIC_CUSTOM_INSIGHTS_EVENTS_MAX_SAMPLES_STOREDA=100000
 ```
