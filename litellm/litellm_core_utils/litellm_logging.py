@@ -1648,12 +1648,20 @@ class Logging(LiteLLMLoggingBaseClass):
             # handlers like Gemini/Vertex which call completion_cost directly)
             pass
         else:
-            model_info = _get_model_info_from_litellm_params(
-                self.model_call_details.get("litellm_params", {}) or {}
-            )
+            router_model_id = None
+            if self.call_type in (
+                "responses",
+                "aresponses",
+                "_aresponses_websocket",
+                "anthropic_messages",
+            ):
+                model_info = _get_model_info_from_litellm_params(
+                    self.model_call_details.get("litellm_params", {}) or {}
+                )
+                router_model_id = model_info.get("id")
             self.model_call_details["response_cost"] = self._response_cost_calculator(
                 result=logging_result,
-                router_model_id=model_info.get("id"),
+                router_model_id=router_model_id,
             )
 
         self.model_call_details[
@@ -2472,14 +2480,22 @@ class Logging(LiteLLMLoggingBaseClass):
                     _get_base_model_from_metadata(
                         model_call_details=self.model_call_details
                     )
-                    # base_model defaults to None if not set on model_info
-                    model_info = _get_model_info_from_litellm_params(
-                        self.model_call_details.get("litellm_params", {}) or {}
-                    )
+                    router_model_id = None
+                    if self.call_type in (
+                        "responses",
+                        "aresponses",
+                        "_aresponses_websocket",
+                        "anthropic_messages",
+                    ):
+                        # base_model defaults to None if not set on model_info
+                        model_info = _get_model_info_from_litellm_params(
+                            self.model_call_details.get("litellm_params", {}) or {}
+                        )
+                        router_model_id = model_info.get("id")
                     self.model_call_details["response_cost"] = (
                         self._response_cost_calculator(
                             result=complete_streaming_response,
-                            router_model_id=model_info.get("id"),
+                            router_model_id=router_model_id,
                         )
                     )
 

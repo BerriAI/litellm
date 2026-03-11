@@ -143,9 +143,12 @@ class AnthropicPassthroughLoggingHandler:
             kwargs["model"] = model
             kwargs.setdefault("litellm_params", {})
             if litellm_params.get("metadata") is not None:
+                logging_metadata = litellm_params.get("metadata") or {}
                 existing_metadata = kwargs["litellm_params"].get("metadata", {}) or {}
-                merged_metadata = dict(existing_metadata)
-                merged_metadata.update(litellm_params.get("metadata") or {})
+                merged_metadata = dict(logging_metadata)
+                merged_metadata.update(existing_metadata)
+                if logging_metadata.get("model_info") is not None:
+                    merged_metadata["model_info"] = logging_metadata["model_info"]
                 kwargs["litellm_params"]["metadata"] = merged_metadata
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")

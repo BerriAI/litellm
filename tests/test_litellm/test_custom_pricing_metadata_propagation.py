@@ -303,7 +303,10 @@ class TestRouterMetadataPropagation:
 
         metadata = {"user_field": "present"}
         metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
+        deployment_model_info = metadata_for_callbacks.pop("model_info", None)
         metadata_for_callbacks.update(metadata)
+        if deployment_model_info:
+            metadata_for_callbacks["model_info"] = deployment_model_info
 
         model_info = metadata_for_callbacks.get("model_info", {})
         assert model_info.get("input_cost_per_token") == CUSTOM_INPUT_COST, (
@@ -706,6 +709,7 @@ class TestAnthropicPassthroughLoggingPayload:
                         "output_cost_per_token": CUSTOM_OUTPUT_COST,
                     },
                     "new_field": "from-logging-obj",
+                    "shared_field": "from-logging-obj",
                 },
                 "stream_response": {"should": "not-overwrite"},
             },
@@ -721,7 +725,10 @@ class TestAnthropicPassthroughLoggingPayload:
                 model="claude-sonnet-4-20250514",
                 kwargs={
                     "litellm_params": {
-                        "metadata": {"existing_field": "preserved"},
+                        "metadata": {
+                            "existing_field": "preserved",
+                            "shared_field": "from-existing",
+                        },
                         "stream_response": {"keep": "existing"},
                     }
                 },
@@ -732,6 +739,7 @@ class TestAnthropicPassthroughLoggingPayload:
 
         assert kwargs["litellm_params"]["metadata"]["existing_field"] == "preserved"
         assert kwargs["litellm_params"]["metadata"]["new_field"] == "from-logging-obj"
+        assert kwargs["litellm_params"]["metadata"]["shared_field"] == "from-existing"
         assert (
             kwargs["litellm_params"]["metadata"]["model_info"]["id"]
             == DEPLOYMENT_MODEL_ID
