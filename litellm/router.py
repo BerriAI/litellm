@@ -2108,7 +2108,7 @@ class Router:
         - litellm_trace_id
         - metadata
         """
-        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
         model_group_alias: Optional[str] = None
         if self._get_model_from_alias(model=model):
@@ -2848,7 +2848,7 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
@@ -2907,7 +2907,7 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -3270,7 +3270,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
@@ -3414,7 +3414,7 @@ class Router:
             kwargs["model"] = model
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4011,7 +4011,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -4280,7 +4280,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             metadata_variable_name = _get_router_metadata_variable_name(
                 function_name="_acreate_batch"
             )
@@ -4514,7 +4514,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["original_function"] = self._acancel_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs["num_retries"] = kwargs.get("num_retries") if kwargs.get("num_retries") is not None else self.num_retries
             metadata_variable_name = _get_router_metadata_variable_name(
                 function_name="_acancel_batch"
             )
@@ -5383,7 +5383,9 @@ class Router:
             "model_group_retry_policy", self.model_group_retry_policy
         )
         model_group: Optional[str] = kwargs.get("model")
-        num_retries = kwargs.pop("num_retries")
+        num_retries = kwargs.pop("num_retries", self.num_retries)
+        if num_retries is None:
+            num_retries = self.num_retries
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
         _metadata: dict = kwargs.get("litellm_metadata", kwargs.get("metadata")) or {}
