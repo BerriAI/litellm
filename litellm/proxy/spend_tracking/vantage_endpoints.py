@@ -386,18 +386,35 @@ async def vantage_dry_run_export(
         database = FocusLiteLLMDatabase()
         transformer = FocusTransformer()
 
+        import polars as pl
+
         data = await database.get_usage_data(limit=request.limit)
         normalized = transformer.transform(data)
 
-        usage_sample = data.head(min(50, len(data))).to_dicts() if not data.is_empty() else []
-        normalized_sample = normalized.head(min(50, len(normalized))).to_dicts() if not normalized.is_empty() else []
+        def _to_json_safe_dicts(frame: pl.DataFrame) -> list:
+            """Cast Decimal columns to Float64 so .to_dicts() produces
+            JSON-serializable float values instead of decimal.Decimal."""
+            decimal_cols = [
+                col for col, dtype in zip(frame.columns, frame.dtypes)
+                if isinstance(dtype, pl.Decimal)
+            ]
+            if decimal_cols:
+                frame = frame.with_columns(
+                    [pl.col(c).cast(pl.Float64) for c in decimal_cols]
+                )
+            return frame.to_dicts()
+
+        usage_sample = _to_json_safe_dicts(data.head(min(50, len(data)))) if not data.is_empty() else []
+        normalized_sample = _to_json_safe_dicts(normalized.head(min(50, len(normalized)))) if not normalized.is_empty() else []
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
+        total_spend = FocusExportEngine._sum_column(data, "spend")
+        total_tokens = FocusExportEngine._sum_column(data, "total_tokens")
         summary = {
             "total_records": len(normalized),
-            "total_spend": FocusExportEngine._sum_column(data, "spend"),
-            "total_tokens": FocusExportEngine._sum_column(data, "total_tokens"),
+            "total_spend": float(total_spend) if total_spend is not None else 0,
+            "total_tokens": float(total_tokens) if total_tokens is not None else 0,
             "unique_teams": FocusExportEngine._count_unique(data, "team_id"),
             "unique_models": FocusExportEngine._count_unique(data, "model"),
         }
