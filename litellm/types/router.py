@@ -87,6 +87,8 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    always_include_stream_usage: Optional[bool] = None
+    """When True, always append a usage chunk at the end of every streaming response."""
 
     model_config = ConfigDict(protected_namespaces=())
 

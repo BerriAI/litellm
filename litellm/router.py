@@ -8259,6 +8259,7 @@ class Router:
             "context_window_fallbacks",
             "model_group_retry_policy",
             "model_group_alias",
+            "always_include_stream_usage",
         ]
 
         _int_settings = [

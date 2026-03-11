@@ -653,8 +653,12 @@ class ProxyBaseLLMRequestProcessing:
         ### AUTO STREAM USAGE TRACKING ###
         # If always_include_stream_usage is enabled and this is a streaming request
         # automatically add stream_options={'include_usage': True} if not already set
+        # Check both general_settings and router-level setting (set via Router Settings UI)
+        _router_always_include = False
+        if llm_router is not None:
+            _router_always_include = getattr(llm_router, "always_include_stream_usage", False) or False
         if (
-            general_settings.get("always_include_stream_usage", False) is True
+            (general_settings.get("always_include_stream_usage", False) is True or _router_always_include is True)
             and self.data.get("stream", False) is True
         ):
             # Only set if stream_options is not already provided by the client
