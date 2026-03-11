@@ -95,3 +95,10 @@ class VantageSettingsUpdate(BaseModel):
         None, description="New Vantage integration token"
     )
     base_url: Optional[str] = Field(None, description="New Vantage API base URL")
+
+    @field_validator("api_key", "integration_token")
+    @classmethod
+    def must_be_non_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
