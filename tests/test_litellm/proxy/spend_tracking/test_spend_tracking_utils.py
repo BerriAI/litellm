@@ -29,6 +29,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _is_master_key,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
@@ -1440,3 +1441,30 @@ def test_get_logging_payload_includes_request_duration_ms():
         )
 
     assert payload["request_duration_ms"] == 3000
+
+
+class TestIsMasterKey:
+    """Tests for _is_master_key handling None inputs without raising TypeError."""
+
+    def test_none_api_key_returns_false(self):
+        """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
+        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+
+    def test_none_master_key_returns_false(self):
+        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+
+    def test_both_none_returns_false(self):
+        assert _is_master_key(api_key=None, _master_key=None) is False
+
+    def test_matching_key_returns_true(self):
+        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+
+    def test_non_matching_key_returns_false(self):
+        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+
+    def test_hashed_key_returns_true(self):
+        from litellm.proxy.utils import hash_token
+
+        master = "sk-master-key-123"
+        hashed = hash_token(master)
+        assert _is_master_key(api_key=hashed, _master_key=master) is True
