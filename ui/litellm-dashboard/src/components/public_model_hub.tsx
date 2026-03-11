@@ -894,10 +894,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     },
     {
       header: "Description",
-      accessorKey: "mcp_info.description",
+      accessorKey: "description",
       enableSorting: false,
       cell: ({ row }) => {
-        const description = row.original.mcp_info?.description || "-";
+        const description =
+          row.original.description ||
+          row.original.mcp_info?.description ||
+          "-";
         const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
         return (
           <Tooltip title={description}>
