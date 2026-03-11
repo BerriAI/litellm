@@ -15962,6 +15962,26 @@
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
+    "gemini-embedding-2": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/embedding-2"
+    },
+    "gemini-embedding-2-preview": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/embedding-2"
+    },
     "gemini-flash-experimental": {
         "input_cost_per_character": 0,
         "input_cost_per_token": 0,
@@ -16037,6 +16057,30 @@
         "output_vector_size": 3072,
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
+        "tpm": 10000000
+    },
+    "gemini/gemini-embedding-2": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "rpm": 10000,
+        "source": "https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2-preview",
+        "tpm": 10000000
+    },
+    "gemini/gemini-embedding-2-preview": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "rpm": 10000,
+        "source": "https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2-preview",
         "tpm": 10000000
     },
     "gemini/gemini-1.5-flash": {
