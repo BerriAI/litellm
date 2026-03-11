@@ -25,7 +25,6 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.types.tag_management import (
-    LiteLLM_DailyTagSpendTable,
     TagConfig,
     TagDeleteRequest,
     TagInfoRequest,
@@ -444,25 +443,30 @@ async def list_tags(
             list_of_tags.append(tag_dict)
 
         ## QUERY DYNAMIC TAGS ##
-        dynamic_tags = await prisma_client.db.litellm_dailytagspend.find_many(
-            distinct=["tag"],
+        # Use group_by instead of find_many(distinct=["tag"]).
+        # Prisma's distinct fetches all columns for all rows and deduplicates
+        # in application code, which is extremely slow on large tables.
+        # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
+        dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
+            by=["tag"],
+            where={"tag": {"not": None}},
+            # The old find_many(distinct=...) returned arbitrary timestamps from
+            # whichever row Prisma happened to pick. MIN/MAX give more meaningful
+            # values: earliest appearance and most recent activity.
+            _min={"created_at": True},
+            _max={"updated_at": True},
         )
-
-        dynamic_tags_list = [
-            LiteLLM_DailyTagSpendTable(**dynamic_tag.model_dump())
-            for dynamic_tag in dynamic_tags
-        ]
 
         dynamic_tag_config = [
             {
-                "name": tag.tag,
+                "name": row["tag"],
                 "description": "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
                 "models": None,
-                "created_at": tag.created_at.isoformat(),
-                "updated_at": tag.updated_at.isoformat(),
+                "created_at": row["_min"]["created_at"].isoformat(),
+                "updated_at": row["_max"]["updated_at"].isoformat(),
             }
-            for tag in dynamic_tags_list
-            if tag.tag not in stored_tag_names
+            for row in dynamic_tag_rows
+            if row["tag"] not in stored_tag_names
         ]
 
         return list_of_tags + dynamic_tag_config
