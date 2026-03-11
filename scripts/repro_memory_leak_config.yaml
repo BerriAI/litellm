@@ -1,0 +1,38 @@
+model_list:
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  # Match customer: postgres callbacks (we'll skip actual DB but keep the callback registered)
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+
+  # Disable caching (matches customer)
+  cache: false
+
+  # Set request timeout (10 minutes, matches customer)
+  request_timeout: 600
+
+  callbacks: ["prometheus"]
+
+# Router settings matching customer
+router_settings:
+  num_retries: 2
+  allowed_fails: 2
+  retry_policy:
+    TimeoutErrorRetries: 3
+    RateLimitErrorRetries: 3
+    InternalServerErrorRetries: 4
+
+general_settings:
+  master_key: sk-1234
+  allow_cors: true
+  docs_enabled: true
