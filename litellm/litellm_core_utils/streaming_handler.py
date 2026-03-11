@@ -43,6 +43,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
+    _coerce_provider_specific_fields,
 )
 
 from ..exceptions import OpenAIError
@@ -758,8 +759,9 @@ class CustomStreamWrapper:
             original_chunk, "provider_specific_fields", None
         )
         if provider_specific_fields is not None:
-            model_response.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
+            coerced = _coerce_provider_specific_fields(provider_specific_fields)
+            model_response.provider_specific_fields = coerced
+            for k, v in coerced.items():
                 setattr(model_response, k, v)
         return model_response
 
@@ -1137,9 +1139,10 @@ class CustomStreamWrapper:
                     "provider_specific_fields" in anthropic_response_obj
                     and anthropic_response_obj["provider_specific_fields"] is not None
                 ):
-                    for key, value in anthropic_response_obj[
-                        "provider_specific_fields"
-                    ].items():
+                    coerced_fields = _coerce_provider_specific_fields(
+                        anthropic_response_obj["provider_specific_fields"]
+                    )
+                    for key, value in coerced_fields.items():
                         setattr(model_response, key, value)
 
                 response_obj = cast(Dict[str, Any], anthropic_response_obj)

@@ -1082,12 +1082,35 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 """
 
 
+def _coerce_provider_specific_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump() if hasattr(value, "model_dump") else value.dict()
+    if isinstance(value, dict):
+        return {k: _coerce_provider_specific_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_provider_specific_value(v) for v in value]
+    return value
+
+
+def _coerce_provider_specific_fields(
+    provider_specific_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        k: _coerce_provider_specific_value(v)
+        for k, v in provider_specific_fields.items()
+    }
+
+
 def add_provider_specific_fields(
     object: BaseModel, provider_specific_fields: Optional[Dict[str, Any]]
 ):
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
-    setattr(object, "provider_specific_fields", provider_specific_fields)
+    setattr(
+        object,
+        "provider_specific_fields",
+        _coerce_provider_specific_fields(provider_specific_fields),
+    )
 
 
 class Message(SafeAttributeModel, OpenAIObject):
@@ -1360,7 +1383,12 @@ class Choices(SafeAttributeModel, OpenAIObject):
         if enhancements is not None:
             self.enhancements = enhancements
 
-        self.provider_specific_fields = provider_specific_fields
+        if provider_specific_fields is not None:
+            self.provider_specific_fields = _coerce_provider_specific_fields(
+                provider_specific_fields
+            )
+        else:
+            self.provider_specific_fields = None
 
         if self.logprobs is None:
             del self.logprobs
@@ -1776,7 +1804,12 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["id"] = id
         kwargs["created"] = created
         kwargs["object"] = "chat.completion.chunk"
-        kwargs["provider_specific_fields"] = provider_specific_fields
+        if provider_specific_fields is not None:
+            kwargs["provider_specific_fields"] = _coerce_provider_specific_fields(
+                provider_specific_fields
+            )
+        else:
+            kwargs["provider_specific_fields"] = None
 
         super().__init__(**kwargs)
 

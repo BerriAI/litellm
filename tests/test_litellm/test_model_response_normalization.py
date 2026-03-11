@@ -9,6 +9,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    _coerce_provider_specific_fields,
 )
 
 
@@ -126,3 +127,110 @@ def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
     assert pydantic_warnings == [], (
         f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
     )
+
+
+def test_coerce_provider_specific_fields_converts_basemodel_to_dict() -> None:
+    msg = Message(content="test", role="assistant")
+    result = _coerce_provider_specific_fields({"message": msg})
+    assert isinstance(result["message"], dict)
+    assert result["message"]["content"] == "test"
+    assert result["message"]["role"] == "assistant"
+
+
+def test_coerce_provider_specific_fields_handles_nested_structures() -> None:
+    msg = Message(content="nested", role="user")
+    result = _coerce_provider_specific_fields({
+        "items": [msg, {"plain": "dict"}],
+        "nested_dict": {"inner": msg},
+        "scalar": 42,
+    })
+    assert isinstance(result["items"][0], dict)
+    assert result["items"][0]["content"] == "nested"
+    assert result["items"][1] == {"plain": "dict"}
+    assert isinstance(result["nested_dict"]["inner"], dict)
+    assert result["scalar"] == 42
+
+
+def test_coerce_provider_specific_fields_passthrough_plain_values() -> None:
+    result = _coerce_provider_specific_fields({
+        "text": "hello",
+        "count": 5,
+        "flag": True,
+        "nested": {"key": "value"},
+    })
+    assert result == {
+        "text": "hello",
+        "count": 5,
+        "flag": True,
+        "nested": {"key": "value"},
+    }
+
+
+def test_streaming_provider_specific_fields_with_basemodel_no_warnings() -> None:
+    msg = Message(content="provider-data", role="assistant")
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+        provider_specific_fields={"message": msg},
+    )
+
+    assert isinstance(response.provider_specific_fields["message"], dict)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        _ = response.model_dump()
+        _ = response.model_dump_json()
+
+    pydantic_warnings = [
+        w
+        for w in captured
+        if "PydanticSerializationUnexpectedValue" in str(w.message)
+        or "Pydantic serializer warnings" in str(w.message)
+    ]
+    assert pydantic_warnings == [], (
+        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
+    )
+
+
+def test_choices_provider_specific_fields_with_basemodel_no_warnings() -> None:
+    msg = Message(content="extra-data", role="assistant")
+    choice = Choices(
+        finish_reason="stop",
+        index=0,
+        message=Message(content="main", role="assistant"),
+        provider_specific_fields={"extra": msg},
+    )
+
+    assert isinstance(choice.provider_specific_fields["extra"], dict)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        response = ModelResponse(model="test", choices=[choice])
+        _ = response.model_dump()
+        _ = response.model_dump_json()
+
+    pydantic_warnings = [
+        w
+        for w in captured
+        if "PydanticSerializationUnexpectedValue" in str(w.message)
+        or "Pydantic serializer warnings" in str(w.message)
+    ]
+    assert pydantic_warnings == [], (
+        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
+    )
+
+
+def test_delta_provider_specific_fields_with_basemodel_coerced() -> None:
+    msg = Message(content="delta-data", role="assistant")
+    delta = Delta(
+        content="hi",
+        role="assistant",
+        provider_specific_fields={"msg": msg},
+    )
+    assert isinstance(delta.provider_specific_fields["msg"], dict)
+    assert delta.provider_specific_fields["msg"]["content"] == "delta-data"
