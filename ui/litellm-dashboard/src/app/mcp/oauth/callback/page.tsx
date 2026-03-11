@@ -36,6 +36,10 @@ const McpOAuthCallbackContent = () => {
       type: "litellm-mcp-oauth",
       code: searchParams.get("code"),
       state: searchParams.get("state"),
+      // Forward OAuth provider error params so the hook can surface the real
+      // reason (e.g. "access_denied") instead of a generic "code missing" error.
+      error: searchParams.get("error"),
+      error_description: searchParams.get("error_description"),
     };
   }, [searchParams]);
 

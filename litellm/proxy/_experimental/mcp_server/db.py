@@ -506,17 +506,17 @@ async def store_user_oauth_credential(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if existing is not None:
+        _byok_error = ValueError(
+            f"A non-OAuth2 credential already exists for user {user_id} "
+            f"and server {server_id}. Refusing to overwrite."
+        )
         try:
             raw = json.loads(base64.urlsafe_b64decode(existing.credential_b64).decode())
-            if raw.get("type") != "oauth2":
-                raise ValueError(
-                    f"A non-OAuth2 credential already exists for user {user_id} "
-                    f"and server {server_id}. Refusing to overwrite."
-                )
-        except (ValueError, KeyError):
-            raise
         except Exception:
-            pass  # Malformed existing record — allow overwrite
+            # Credential is not base64+JSON — it's a plain-text BYOK key.
+            raise _byok_error
+        if raw.get("type") != "oauth2":
+            raise _byok_error
 
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
