@@ -183,7 +183,8 @@ class TestModelSpecificFeatures:
             )
             assert model_info["max_output_tokens"] < model_info["max_input_tokens"], (
                 f"max_output_tokens ({model_info['max_output_tokens']}) must be less "
-                f"than max_input_tokens ({model_info['max_input_tokens']})"
+                f"than max_input_tokens ({model_info['max_input_tokens']}) to satisfy "
+                f"Bedrock constraint: input_tokens + max_tokens <= context_window"
             )
 
         # Also check the bare model entry (bedrock_converse provider)
