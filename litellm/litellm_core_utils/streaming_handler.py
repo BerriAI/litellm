@@ -981,6 +981,9 @@ class CustomStreamWrapper:
                         completion_obj["provider_specific_fields"] = response_obj[
                             "provider_specific_fields"
                         ]
+                        # Extract reasoning_content so Delta() receives it as a named argument
+                        if "reasoning_content" in response_obj["provider_specific_fields"]:
+                            completion_obj["reasoning_content"] = response_obj["provider_specific_fields"]["reasoning_content"]
                     model_response.choices[0].delta = Delta(**completion_obj)
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
