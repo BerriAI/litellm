@@ -33,7 +33,7 @@ class TestSAPTransformationIntegration:
             model, messages, optional_params, {}, {}
         )
 
-        model_params = result["config"]["modules"][0]["prompt_templating"]["model"]["params"]
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
         assert "temperature" in model_params
         assert "frequency_penalty" in model_params
@@ -41,10 +41,10 @@ class TestSAPTransformationIntegration:
         assert "model_version" not in model_params
         assert "tools" not in model_params
 
-        model_version = result["config"]["modules"][0]["prompt_templating"]["model"]["version"]
+        model_version = result["config"]["modules"]["prompt_templating"]["model"]["version"]
         assert model_version == "v1.5"
 
-        prompt = result["config"]["modules"][0]["prompt_templating"]["prompt"]
+        prompt = result["config"]["modules"]["prompt_templating"]["prompt"]
         if "tools" in prompt:
             assert isinstance(prompt["tools"], list)
 
@@ -100,7 +100,7 @@ class TestSAPTransformationIntegration:
                 model, messages, test_case["params"], {}, {}
             )
             if result and "config" in result:
-                model_params = result["config"]["modules"][0]["prompt_templating"]["model"]["params"]
+                model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
                 for excluded_param in test_case["expected_excluded"]:
                     assert excluded_param not in model_params, (
@@ -109,7 +109,7 @@ class TestSAPTransformationIntegration:
 
     def test_config_transform_with_response_format_json_object(self, mock_config):
         expected_dict = {'config':
-                             {'modules':[
+                             {'modules':
                                   {'prompt_templating':
                                        {'prompt':
                                             {'template':
@@ -117,7 +117,7 @@ class TestSAPTransformationIntegration:
                                              'response_format': {'type': 'json_object'}},
                                         'model': {'name': 'gpt-4o', 'params': {}, 'version': 'latest'}
                                         }
-                                   }],
+                                   },
                               'stream': {}
                               }
                          }
@@ -169,13 +169,13 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["response_format"] == expected_response_format
-        assert len(config["config"]["modules"][0]["prompt_templating"]["model"]["params"]) == 0
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["response_format"] == expected_response_format
+        assert len(config["config"]["modules"]["prompt_templating"]["model"]["params"]) == 0
 
     def test_config_transform_with_stream(self, mock_config):
         expected_dict = {
             'config': {
-                'modules': [{
+                'modules': {
                     'prompt_templating': {
                         'prompt': {
                             'template': [{'role': 'user', 'content': 'Hello, how are you?'}]
@@ -186,7 +186,7 @@ class TestSAPTransformationIntegration:
                             'version': 'latest'
                         }
                     }
-                }],
+                },
                 'stream': {'chunk_size': 10}
             }
         }
@@ -215,9 +215,9 @@ class TestSAPTransformationIntegration:
             headers={}
         )
 
-        assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["defaults"] == {
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] == {
             "user_query": "default value"}
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_placeholder_values(self, mock_config):
         placeholder_values = {"user_query": "Some text"}
@@ -233,7 +233,7 @@ class TestSAPTransformationIntegration:
         )
 
         assert config["placeholder_values"] == placeholder_values
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_grounding(self, mock_config):
         grounding_config = {
@@ -262,9 +262,9 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["grounding"] == grounding_config
+        assert config["config"]["modules"]["grounding"] == grounding_config
         assert config["placeholder_values"] == placeholder_values
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_filtering(self, mock_config):
         filtering_config_azure = {
@@ -327,8 +327,8 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["filtering"] == filtering_config_azure
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["filtering"] == filtering_config_azure
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
         config = mock_config.transform_request(
             model="gpt-4o",
@@ -338,8 +338,8 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["filtering"] == filtering_config_llama
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["filtering"] == filtering_config_llama
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_masking(self, mock_config):
         masking_config = {
@@ -367,8 +367,8 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["masking"] == masking_config
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["masking"] == masking_config
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_translation(self, mock_config):
         translation_config = {
@@ -394,8 +394,8 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"][0]["translation"] == translation_config
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+        assert config["config"]["modules"]["translation"] == translation_config
+        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_multiple_modules(self, mock_config):
         translation_config = {
