@@ -68,6 +68,18 @@ def _build_audit_log_payload(
     )
 
 
+def _audit_log_task_done_callback(task: asyncio.Task) -> None:
+    """Log exceptions from audit log callback tasks so they don't slip through silently."""
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        verbose_proxy_logger.error(
+            "Audit log callback task failed: %s", exc, exc_info=exc
+        )
+
+
 async def _dispatch_audit_log_to_callbacks(
     request_data: LiteLLM_AuditLogs,
 ) -> None:
@@ -89,7 +101,10 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                asyncio.create_task(resolved.async_log_audit_log_event(payload))
+                task = asyncio.create_task(
+                    resolved.async_log_audit_log_event(payload)
+                )
+                task.add_done_callback(_audit_log_task_done_callback)
         except Exception as e:
             verbose_proxy_logger.error(
                 "Failed dispatching audit log to callback: %s", e
@@ -160,9 +175,6 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     if premium_user is not True:
         return
 
-    if prisma_client is None:
-        raise Exception("prisma_client is None, no DB connected")
-
     verbose_proxy_logger.debug("creating audit log for %s", request_data)
 
     if isinstance(request_data.updated_values, dict):
@@ -170,6 +182,15 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     if isinstance(request_data.before_value, dict):
         request_data.before_value = json.dumps(request_data.before_value)
+
+    # Dispatch to external audit log callbacks regardless of DB availability
+    await _dispatch_audit_log_to_callbacks(request_data)
+
+    if prisma_client is None:
+        verbose_proxy_logger.error(
+            "prisma_client is None, cannot write audit log to DB"
+        )
+        return
 
     _request_data = request_data.model_dump(exclude_none=True)
 
@@ -182,6 +203,3 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     except Exception as e:
         # [Non-Blocking Exception. Do not allow blocking LLM API call]
         verbose_proxy_logger.error(f"Failed Creating audit log {e}")
-
-    # Dispatch to external audit log callbacks
-    await _dispatch_audit_log_to_callbacks(request_data)
