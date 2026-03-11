@@ -1,7 +1,9 @@
+"use client";
 // hooks/useDisableShowPrompts.ts
 import { useSyncExternalStore } from "react";
 import { getLocalStorageItem } from "@/utils/localStorageUtils";
 import { LOCAL_STORAGE_EVENT } from "@/utils/localStorageUtils";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 function subscribe(callback: () => void) {
   const onStorage = (e: StorageEvent) => {
@@ -26,10 +28,21 @@ function subscribe(callback: () => void) {
   };
 }
 
-function getSnapshot() {
-  return getLocalStorageItem("disableShowPrompts") === "true";
+function getSnapshot(): string | null {
+  return getLocalStorageItem("disableShowPrompts");
 }
 
-export function useDisableShowPrompts() {
-  return useSyncExternalStore(subscribe, getSnapshot);
+function getServerSnapshot(): string | null {
+  return null;
+}
+
+export function useDisableShowPrompts(): boolean {
+  const { premiumUser } = useAuthorized();
+  const storedRaw = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  // Non-premium users always see prompts regardless of stored preference
+  if (!premiumUser) return false;
+
+  // Premium users: absent (null) or explicitly "true" means hidden; "false" means explicitly shown
+  return storedRaw === "true" || storedRaw === null;
 }
