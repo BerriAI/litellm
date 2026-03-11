@@ -1760,7 +1760,7 @@ async def _process_single_key_update(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(
+async def update_key_fn(  # noqa: PLR0915
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

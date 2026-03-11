@@ -111,6 +111,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
+    TokenCountResponse,
 )
 from litellm.utils import (
     Choices,
@@ -7621,7 +7622,7 @@ async def acount_tokens(
         TokenCountResponse with total_tokens and metadata
     """
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.types.utils import LlmProviders, TokenCountResponse
+    from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
     # Determine provider from model string
