@@ -105,7 +105,6 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2316,7 +2315,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
-        self._metrics_collector: Optional[PrismaMetricsCollector] = None
+        self._metrics_collector: Optional["PrismaMetricsCollector"] = None  # type: ignore[name-defined]
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -4078,6 +4077,8 @@ class PrismaClient:
             verbose_proxy_logger.debug(
                 "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
             )
+            from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
+
             if PrismaMetricsCollector.should_enable():
                 verbose_proxy_logger.warning(
                     "prometheus_system is enabled but PRISMA_HEALTH_WATCHDOG_ENABLED=false — "
@@ -4097,6 +4098,8 @@ class PrismaClient:
             self._db_watchdog_reconnect_timeout_seconds,
         )
         await self._start_engine_watcher()
+
+        from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
 
         if PrismaMetricsCollector.should_enable() and self._metrics_collector is None:
             self._metrics_collector = PrismaMetricsCollector(self)

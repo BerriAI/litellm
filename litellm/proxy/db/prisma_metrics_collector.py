@@ -7,8 +7,6 @@ import asyncio
 import os
 from typing import Optional, Set
 
-from prometheus_client import REGISTRY, Counter, Gauge
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 
@@ -18,7 +16,9 @@ def _get_or_create_gauge(
     description: str,
     labelnames: Optional[list] = None,
     multiprocess_mode: str = "max",
-) -> Gauge:
+):
+    from prometheus_client import REGISTRY, Gauge
+
     names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
     if names_to_collectors is not None and name in names_to_collectors:
         return names_to_collectors[name]
@@ -29,7 +29,9 @@ def _get_or_create_gauge(
     return Gauge(name, description, multiprocess_mode=multiprocess_mode)
 
 
-def _get_or_create_counter(name: str, description: str) -> Counter:
+def _get_or_create_counter(name: str, description: str):
+    from prometheus_client import REGISTRY, Counter
+
     names_to_collectors = getattr(REGISTRY, "_names_to_collectors", None)
     if names_to_collectors is not None and name in names_to_collectors:
         return names_to_collectors[name]
