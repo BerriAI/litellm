@@ -800,6 +800,7 @@ describe("UsagePage", () => {
         expect.any(Date),
         expect.any(Date),
         null,
+        expect.any(Number),
       );
     });
   });
@@ -855,6 +856,7 @@ describe("UsagePage", () => {
           expect.any(Date),
           expect.any(Date),
           "user-123",
+          0,
         );
       });
     });
@@ -935,6 +937,7 @@ describe("UsagePage", () => {
         expect.any(Date),
         1,
         null,
+        0,
       );
 
       // Verify second page call
@@ -944,6 +947,7 @@ describe("UsagePage", () => {
         expect.any(Date),
         2,
         null,
+        0,
       );
     });
   });
