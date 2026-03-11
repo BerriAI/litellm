@@ -229,8 +229,21 @@ async def add_new_member(
             "models": models or [],
         }
         _returned_team_membership = (
-            await prisma_client.db.litellm_teammembership.create(
-                data=_create_data,
+            await prisma_client.db.litellm_teammembership.upsert(
+                where={
+                    "user_id_team_id": {
+                        "user_id": returned_user.user_id,
+                        "team_id": team_id,
+                    }
+                },
+                data={
+                    "create": _create_data,
+                    "update": {
+                        k: v
+                        for k, v in _create_data.items()
+                        if k not in ("team_id", "user_id") and v is not None
+                    },
+                },
                 include={"litellm_budget_table": True},
             )
         )

@@ -2932,6 +2932,8 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
+                        if response.get("team_member_models") is None:
+                            response["team_member_models"] = []
 
                         team_member: Optional[Member] = None
                         if (
