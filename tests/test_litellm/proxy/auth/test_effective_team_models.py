@@ -96,6 +96,17 @@ class TestGetEffectiveTeamModelsDefaultsPlusOverrides:
         assert result == ["o1-pro"]
 
     @patch(FLAG_PATH, "true")
+    def test_empty_defaults_no_overrides_falls_back_to_team(self):
+        """Empty team_default_models + no member overrides must NOT grant all-model access."""
+        result = get_effective_team_models(
+            team_models=["gpt-4", "claude-3"],
+            team_member_models=[],
+            team_metadata={"team_default_models": []},
+        )
+        # Should fall back to team_models, not return [] (which would mean unrestricted)
+        assert result == ["gpt-4", "claude-3"]
+
+    @patch(FLAG_PATH, "true")
     def test_no_overrides_defaults_only(self):
         result = get_effective_team_models(
             team_models=["gpt-4", "claude-3", "o1-pro"],

@@ -2711,7 +2711,10 @@ def get_effective_team_models(
 
     member_models = team_member_models or []
     effective = list(dict.fromkeys(team_default + member_models))
-    return effective
+    # An empty effective set would be interpreted as "no restrictions" by
+    # _check_model_access_helper, granting all-model access.  Fall back to
+    # the full team model list to maintain team-level restrictions.
+    return effective if effective else _team_models
 
 
 async def can_team_access_model(
