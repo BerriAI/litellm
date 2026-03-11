@@ -54,7 +54,6 @@ type StoredFlowState = {
   redirectUri: string;
   clientId?: string;
   clientSecret?: string;
-  accessToken: string;
   scopes?: string[];
 };
 
@@ -175,7 +174,6 @@ export const useUserMcpOAuthFlow = ({
         redirectUri,
         clientId,
         clientSecret,
-        accessToken,
         scopes,
       };
 
@@ -240,7 +238,8 @@ export const useUserMcpOAuthFlow = ({
       });
 
       // Persist the token for this user via the backend.
-      await storeMCPOAuthUserCredential(flowState.accessToken, flowState.serverId, {
+      // accessToken comes from props — it is never stored in sessionStorage.
+      await storeMCPOAuthUserCredential(accessToken, flowState.serverId, {
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_in: token.expires_in,
@@ -260,7 +259,7 @@ export const useUserMcpOAuthFlow = ({
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => { processingRef.current = false; }, 1000);
     }
-  }, [onSuccess]);
+  }, [accessToken, onSuccess]);
 
   useEffect(() => {
     resumeOAuthFlow();
