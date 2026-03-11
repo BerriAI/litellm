@@ -36,6 +36,11 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
+try:
+    from prisma.errors import RecordNotFoundError
+except ImportError:
+    RecordNotFoundError = Exception  # type: ignore
+
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
@@ -84,9 +89,13 @@ if MCP_AVAILABLE:
         delete_user_credential,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_mcp_servers,
         get_mcp_submissions,
+        get_user_oauth_credential,
+        list_user_oauth_credentials,
         reject_mcp_server,
         store_user_credential,
+        store_user_oauth_credential,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -106,7 +115,10 @@ if MCP_AVAILABLE:
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
+        MCPOAuthUserCredentialRequest,
+        MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
+        MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
         NewMCPServerRequest,
@@ -1475,13 +1487,195 @@ if MCP_AVAILABLE:
             )
         try:
             await delete_user_credential(prisma_client, user_id, server_id)
-        except Exception:
+        except RecordNotFoundError:
             pass  # Already deleted or didn't exist
         from litellm.proxy._experimental.mcp_server.server import (
             _invalidate_byok_cred_cache,
         )
         _invalidate_byok_cred_cache(user_id, server_id)
         return MCPUserCredentialResponse(server_id=server_id, has_credential=False)
+
+    # ── OAuth2 user-credential endpoints ──────────────────────────────────────
+
+    @router.post(
+        "/server/{server_id}/oauth-user-credential",
+        description="Store the calling user's OAuth2 token for an OpenAPI MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPOAuthUserCredentialStatus,
+    )
+    @management_endpoint_wrapper
+    async def store_mcp_oauth_user_credential(
+        server_id: str,
+        payload: MCPOAuthUserCredentialRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Persist the OAuth2 access token obtained by the calling user."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        mcp_server = await get_mcp_server(prisma_client, server_id)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        await store_user_oauth_credential(
+            prisma_client,
+            user_id,
+            server_id,
+            payload.access_token,
+            refresh_token=payload.refresh_token,
+            expires_in=payload.expires_in,
+            scopes=payload.scopes,
+        )
+        # Read back the persisted record so the response reflects the stored
+        # expires_at rather than recomputing it here (which could diverge by
+        # milliseconds or if the storage logic ever adds a grace period).
+        stored = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        expires_at: Optional[str] = stored.get("expires_at") if stored else None
+        return MCPOAuthUserCredentialStatus(
+            server_id=server_id,
+            has_credential=True,
+            expires_at=expires_at,
+            is_expired=False,
+        )
+
+    @router.delete(
+        "/server/{server_id}/oauth-user-credential",
+        description="Revoke the calling user's stored OAuth2 token for an MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPOAuthUserCredentialStatus,
+    )
+    @management_endpoint_wrapper
+    async def delete_mcp_oauth_user_credential(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Revoke/delete the user's OAuth2 credential."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        # Only delete if the stored credential is actually an OAuth2 token.
+        # This prevents accidentally deleting a BYOK credential if one exists
+        # for the same (user_id, server_id) pair.
+        cred_to_delete = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        if cred_to_delete is not None:
+            try:
+                await delete_user_credential(prisma_client, user_id, server_id)
+            except RecordNotFoundError:
+                pass  # Already gone — treat as a successful delete
+        return MCPOAuthUserCredentialStatus(
+            server_id=server_id,
+            has_credential=False,
+            is_expired=False,
+        )
+
+    @router.get(
+        "/server/{server_id}/oauth-user-credential/status",
+        description="Check whether the calling user has a stored OAuth2 credential for this MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPOAuthUserCredentialStatus,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_oauth_user_credential_status(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Return credential status (has_credential, expiry) without exposing the token."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        if cred is None:
+            return MCPOAuthUserCredentialStatus(
+                server_id=server_id, has_credential=False, is_expired=False
+            )
+        expires_at: Optional[str] = cred.get("expires_at")
+        is_expired = False
+        if expires_at:
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                is_expired = exp < datetime.now(timezone.utc)
+            except Exception:
+                pass
+        return MCPOAuthUserCredentialStatus(
+            server_id=server_id,
+            has_credential=True,
+            expires_at=expires_at,
+            is_expired=is_expired,
+            connected_at=cred.get("connected_at"),
+        )
+
+    @router.get(
+        "/user-credentials",
+        description="List all OAuth2 MCP credentials stored for the calling user",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=List[MCPUserCredentialListItem],
+    )
+    @management_endpoint_wrapper
+    async def list_mcp_user_credentials(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Return all servers the calling user has connected via OAuth2."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        oauth_creds = await list_user_oauth_credentials(prisma_client, user_id)
+        if not oauth_creds:
+            return []
+        # Fetch server metadata for display names — single batch query instead of N+1.
+        server_ids = [c["server_id"] for c in oauth_creds]
+        servers = {
+            srv.server_id: srv
+            for srv in await get_mcp_servers(prisma_client, server_ids)
+        }
+        items: List[MCPUserCredentialListItem] = []
+        for cred in oauth_creds:
+            sid = cred["server_id"]
+            srv = servers.get(sid)
+            expires_at: Optional[str] = cred.get("expires_at")
+            is_expired = False
+            if expires_at:
+                try:
+                    is_expired = datetime.fromisoformat(expires_at) < datetime.now(timezone.utc)
+                except Exception:
+                    pass
+            items.append(
+                MCPUserCredentialListItem(
+                    server_id=sid,
+                    server_name=getattr(srv, "server_name", None) if srv else None,
+                    alias=getattr(srv, "alias", None) if srv else None,
+                    credential_type="oauth2",
+                    has_credential=True,
+                    expires_at=expires_at,  # always pass the raw timestamp; client computes expiry state
+                    connected_at=cred.get("connected_at"),
+                )
+            )
+        return items
 
     @router.put(
         "/server",

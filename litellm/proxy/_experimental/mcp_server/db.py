@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+import base64
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -495,7 +497,6 @@ async def store_user_credential(
     credential: str,
 ) -> None:
     """Store a user credential for a BYOK MCP server."""
-    import base64
 
     encoded = base64.urlsafe_b64encode(credential.encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
@@ -517,7 +518,6 @@ async def get_user_credential(
     server_id: str,
 ) -> Optional[str]:
     """Return credential for a user+server pair, or None."""
-    import base64
 
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
@@ -557,6 +557,120 @@ async def delete_user_credential(
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
+
+
+# ── OAuth2 user-credential helpers ────────────────────────────────────────────
+
+
+async def store_user_oauth_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    access_token: str,
+    refresh_token: Optional[str] = None,
+    expires_in: Optional[int] = None,
+    scopes: Optional[List[str]] = None,
+) -> None:
+    """Persist an OAuth2 access token for a user+server pair.
+
+    The payload is JSON-serialised and stored base64-encoded in the same
+    ``credential_b64`` column used by BYOK.  A ``"type": "oauth2"`` key
+    differentiates it from plain BYOK API keys.
+    """
+
+    expires_at: Optional[str] = None
+    if expires_in is not None:
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        ).isoformat()
+
+    payload: Dict[str, Any] = {
+        "type": "oauth2",
+        "access_token": access_token,
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if refresh_token:
+        payload["refresh_token"] = refresh_token
+    if expires_at:
+        payload["expires_at"] = expires_at
+    if scopes:
+        payload["scopes"] = scopes
+
+    # Guard against silently overwriting a BYOK credential with an OAuth token.
+    # BYOK credentials lack a "type" field (or use a non-"oauth2" type).
+    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if existing is not None:
+        _byok_error = ValueError(
+            f"A non-OAuth2 credential already exists for user {user_id} "
+            f"and server {server_id}. Refusing to overwrite."
+        )
+        try:
+            raw = json.loads(base64.urlsafe_b64decode(existing.credential_b64).decode())
+        except Exception:
+            # Credential is not base64+JSON — it's a plain-text BYOK key.
+            raise _byok_error
+        if raw.get("type") != "oauth2":
+            raise _byok_error
+
+    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    await prisma_client.db.litellm_mcpusercredentials.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        data={
+            "create": {
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": encoded,
+            },
+            "update": {"credential_b64": encoded},
+        },
+    )
+
+
+async def get_user_oauth_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(row.credential_b64).decode()
+        parsed = json.loads(decoded)
+        if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
+            return parsed
+        # Row exists but is a BYOK (plain string), not an OAuth token
+        return None
+    except Exception:
+        return None
+
+
+async def list_user_oauth_credentials(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> List[Dict[str, Any]]:
+    """Return all OAuth2 credential payloads for a user, tagged with server_id."""
+
+    rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
+        where={"user_id": user_id}
+    )
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            decoded = base64.urlsafe_b64decode(row.credential_b64).decode()
+            parsed = json.loads(decoded)
+            if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
+                parsed["server_id"] = row.server_id
+                results.append(parsed)
+        except Exception:
+            pass  # Skip non-OAuth rows (BYOK plain strings)
+    return results
 
 
 async def approve_mcp_server(
