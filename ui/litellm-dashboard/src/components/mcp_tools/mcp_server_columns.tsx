@@ -31,6 +31,23 @@ export const mcpServerColumns = (
     accessorKey: "server_name",
     header: "Name",
     enableSorting: true,
+    cell: ({ row }) => {
+      const logoUrl = row.original.mcp_info?.logo_url;
+      const name = row.original.server_name;
+      return (
+        <div className="flex items-center gap-2">
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={`${name ?? "MCP"} logo`}
+              className="h-5 w-5 rounded object-contain flex-shrink-0"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : null}
+          <span>{name}</span>
+        </div>
+      );
+    },
   },
   {
     accessorKey: "alias",
