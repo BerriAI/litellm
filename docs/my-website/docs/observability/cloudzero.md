@@ -65,6 +65,52 @@ Start your LiteLLM proxy with the configuration:
 litellm --config /path/to/config.yaml
 ```
 
+## Setup on UI
+
+1\. Click "Settings"
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/5ac36280-c688-41a3-8d0e-23e19c6a470b/ascreenshot.jpeg?tl_px=0,332&br_px=1308,1064&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=119,444)
+
+
+2\. Click "Logging & Alerts"
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/13f76b09-e0c4-4738-ba05-2d5111c6ad3e/ascreenshot.jpeg?tl_px=0,332&br_px=1308,1064&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=58,507)
+
+
+3\. Click "CloudZero Cost Tracking"
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/f96cc1e5-7bc0-4d7c-9aeb-5cbbec549b12/ascreenshot.jpeg?tl_px=0,0&br_px=1308,731&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=389,56)
+
+
+4\. Click "Add CloudZero Integration"
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/04fbc748-0e6f-43bb-8a57-dd2e83dbfcb5/ascreenshot.jpeg?tl_px=0,90&br_px=1308,821&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=616,277)
+
+
+5\. Enter your CloudZero API Key.
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/080e82f1-f94f-4ed7-8014-e495380336f3/ascreenshot.jpeg?tl_px=0,0&br_px=1308,731&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=506,129)
+
+
+6\. Enter your CloudZero Connection ID.
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/af417aa2-67a8-4dee-a014-84b1892dc07e/ascreenshot.jpeg?tl_px=0,0&br_px=1308,731&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=488,213)
+
+
+7\. Click "Create"
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/647e672f-9a4a-4754-a7b0-abf1397abad4/ascreenshot.jpeg?tl_px=0,88&br_px=1308,819&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=711,277)
+
+
+8\. Test your payload with "Run Dry Run Simulation" 
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/7447cbe0-3450-4be5-bdc4-37fb8280aa58/ascreenshot.jpeg?tl_px=0,125&br_px=1308,856&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=334,277)
+
+
+10\. Click "Export Data Now" to export to CLoudZero
+
+![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-22/7be9bd48-6e27-4c68-bc75-946f3ab593d9/ascreenshot.jpeg?tl_px=0,130&br_px=1308,861&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=518,277)
+
 ## Testing Your Setup
 
 ### Dry Run Export

@@ -255,5 +255,58 @@ def test_azure_assistant_features_integrated_cost_tracking():
     assert abs(cost - expected_cost) < 0.01, f"Expected ~{expected_cost}, got {cost}"
 
 
+def test_completion_cost_includes_web_search_without_standard_built_in_tools_params():
+    """
+    Test that completion_cost includes web search cost even when
+    standard_built_in_tools_params is None.
+
+    Regression test: the early-exit guard `if standard_built_in_tools_params:`
+    in completion_cost was skipping get_cost_for_built_in_tools entirely,
+    causing under-counted costs for providers like Vertex AI Gemini that
+    report web search usage via usage.prompt_tokens_details.web_search_requests.
+    """
+    from litellm.types.utils import Choices, Message, PromptTokensDetailsWrapper, Usage
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="test", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="gemini-2.5-flash",
+        object="chat.completion",
+    )
+    response.usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    web_search_cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-2.5-flash",
+        usage=response.usage,
+        response_object=response,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert web_search_cost > 0, "Web search cost should be non-zero"
+    assert cost >= web_search_cost, (
+        f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
+    )
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage

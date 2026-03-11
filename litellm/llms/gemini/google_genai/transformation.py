@@ -75,6 +75,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             "seed",
             "response_mime_type",
             "response_schema",
+            "response_json_schema", 
             "routing_config",
             "model_selection_config",
             "safety_settings",
@@ -88,6 +89,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             "audio_timestamp",
             "automatic_function_calling",
             "thinking_config",
+            "image_config",
         ]
 
     def map_generate_content_optional_params(
@@ -105,13 +107,37 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Mapped parameters for the provider
         """
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _camel_to_snake,
+            _snake_to_camel,
+        )
+        
         _generate_content_config_dict: Dict[str, Any] = {}
         supported_google_genai_params = (
             self.get_supported_generate_content_optional_params(model)
         )
+        # Create a set with both camelCase and snake_case versions for faster lookup
+        supported_params_set = set(supported_google_genai_params)
+        supported_params_set.update(_snake_to_camel(p) for p in supported_google_genai_params)
+        supported_params_set.update(_camel_to_snake(p) for p in supported_google_genai_params if "_" not in p)
+        
         for param, value in generate_content_config_dict.items():
-            if param in supported_google_genai_params:
-                _generate_content_config_dict[param] = value
+            # Google GenAI API expects camelCase, so we'll always output in camelCase
+            # Check if param (or its variants) is supported
+            param_snake = _camel_to_snake(param)
+            param_camel = _snake_to_camel(param)
+            
+            # Check if param is supported in any format
+            is_supported = (
+                param in supported_google_genai_params or
+                param_snake in supported_google_genai_params or
+                param_camel in supported_google_genai_params
+            )
+            
+            if is_supported:
+                # Always output in camelCase for Google GenAI API
+                output_key = param_camel if param != param_camel else param
+                _generate_content_config_dict[output_key] = value
         return _generate_content_config_dict
 
     def validate_environment(
@@ -128,7 +154,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         gemini_api_key = api_key or self._get_google_ai_studio_api_key(
             dict(litellm_params or {})
         )
-        if gemini_api_key is not None:
+        if isinstance(gemini_api_key, dict):
+            default_headers.update(gemini_api_key)
+        elif gemini_api_key is not None:
             default_headers[self.XGOOGLE_API_KEY] = gemini_api_key
         if headers is not None:
             default_headers.update(headers)
@@ -287,7 +315,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         request_dict = cast(dict, typed_generate_content_request)
-
+        
+        if system_instruction is not None:
+            request_dict["systemInstruction"] = system_instruction
         return request_dict
 
     def transform_generate_content_response(

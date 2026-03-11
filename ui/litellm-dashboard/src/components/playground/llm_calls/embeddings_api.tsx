@@ -1,5 +1,5 @@
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -7,6 +7,7 @@ export async function makeOpenAIEmbeddingsRequest(
   selectedModel: string,
   accessToken: string,
   tags?: string[],
+  customBaseUrl?: string,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -18,7 +19,7 @@ export async function makeOpenAIEmbeddingsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -33,7 +34,7 @@ export async function makeOpenAIEmbeddingsRequest(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         ...headers,
       },
       body: JSON.stringify({

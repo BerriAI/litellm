@@ -40,7 +40,9 @@ class ScimTransformations:
         user_updated_at = user.updated_at.isoformat() if user.updated_at else None
 
         emails = []
-        if user.user_email:
+        # Only add email if it's a valid email address (contains @)
+        # user_email can be a UUID when users are created without an email
+        if user.user_email and "@" in user.user_email:
             emails.append(SCIMUserEmail(value=user.user_email, primary=True))
 
         return SCIMUser(
@@ -126,7 +128,7 @@ class ScimTransformations:
         for member in team.members_with_roles or []:
             if isinstance(member, dict):
                 member = Member(**member)
-            
+
             scim_members.append(
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),
@@ -161,7 +163,7 @@ class ScimTransformations:
         elif hasattr(member, "user_id"):
             return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
         return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
-    
+
     @staticmethod
     def _get_scim_member_display(member: Member) -> str:
         """

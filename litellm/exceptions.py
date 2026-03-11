@@ -16,6 +16,21 @@ import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
 
+_MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
+
+
+def _get_minimal_error_response() -> httpx.Response:
+    """Get a cached minimal httpx.Response object for error cases."""
+    global _MINIMAL_ERROR_RESPONSE
+    if _MINIMAL_ERROR_RESPONSE is None:
+        _MINIMAL_ERROR_RESPONSE = httpx.Response(
+            status_code=400,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),
+        )
+    return _MINIMAL_ERROR_RESPONSE
+
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(
@@ -125,16 +140,21 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        response = httpx.Response(
-            status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
-        )
         self.max_retries = max_retries
         self.num_retries = num_retries
+        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
+        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
+        if (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
+        ):
+            self.response = response
+        else:
+            self.response = _get_minimal_error_response()
         super().__init__(
-            self.message, response=response, body=body
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -368,13 +388,11 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
@@ -451,24 +469,22 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         provider_specific_fields: Optional[dict] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
         self.provider_specific_fields = provider_specific_fields
-        
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
-    
 
     def __str__(self):
         return self._transform_error_to_string()
@@ -898,9 +914,15 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
-    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+    def __init__(
+        self,
+        guardrail_name: Optional[str] = None,
+        message: str = "",
+        should_wrap_with_default_message: bool = True,
+    ):
+        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
-        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
 
@@ -933,7 +955,8 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        self.status_code = 503  # Service Unavailable
+        original_status = getattr(original_exception, "status_code", None)
+        self.status_code = int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
@@ -956,7 +979,14 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         else:
             self.response = response
 
-        # Call the parent constructor
+        # Save the original attributes before they are overridden by ServiceUnavailableError
+        _saved_response = self.response
+        _saved_request = getattr(self.response, "request", None) or httpx.Request(
+            method="POST", url=f"https://{llm_provider}.com/v1/"
+        )
+        _saved_message = self.message
+
+        # Call the parent constructor (which hardcodes status_code=503 and modifies the response object)
         super().__init__(
             message=self.message,
             llm_provider=llm_provider,
@@ -966,6 +996,13 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
             max_retries=self.max_retries,
             num_retries=self.num_retries,
         )
+        
+        # Restore the propagated status and original response/request objects
+        self.status_code = int(original_status) if original_status is not None else 503
+        self.response = _saved_response
+        self.request = _saved_request
+        self.message = _saved_message
+        self.args = (_saved_message,)
 
     def __str__(self):
         _message = self.message

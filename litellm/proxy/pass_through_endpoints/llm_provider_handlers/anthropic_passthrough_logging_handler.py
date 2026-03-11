@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Union, cast
 
 import httpx
 
@@ -19,8 +19,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
-    from ..success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    from ..success_handler import PassThroughEndpointLogging
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -223,36 +224,79 @@ class AnthropicPassthroughLoggingHandler:
         }
 
     @staticmethod
+    def _split_sse_chunk_into_events(chunk: Union[str, bytes]) -> List[str]:
+        """
+        Split a chunk that may contain multiple SSE events into individual events.
+
+        SSE format: "event: type\ndata: {...}\n\n"
+        Multiple events in a single chunk are separated by double newlines.
+
+        Args:
+            chunk: Raw chunk string that may contain multiple SSE events
+
+        Returns:
+            List of individual SSE event strings (each containing "event: X\ndata: {...}")
+        """
+        # Handle bytes input
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode("utf-8")
+
+        # Split on double newlines to separate SSE events
+        # Filter out empty strings
+        events = [event.strip() for event in chunk.split("\n\n") if event.strip()]
+
+        return events
+
+    @staticmethod
     def _build_complete_streaming_response(
-        all_chunks: List[str],
+        all_chunks: Sequence[Union[str, bytes]],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Builds complete response from raw Anthropic chunks
 
+        - Splits multi-event chunks into individual SSE events
         - Converts str chunks to generic chunks
         - Converts generic chunks to litellm chunks (OpenAI format)
         - Builds complete response from litellm chunks
         """
+        verbose_proxy_logger.debug(
+            "Building complete streaming response from %d chunks", len(all_chunks)
+        )
         anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
         )
         all_openai_chunks = []
-        for _chunk_str in all_chunks:
-            try:
-                transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
-                    chunk=_chunk_str
-                )
-                if transformed_openai_chunk is not None:
-                    all_openai_chunks.append(transformed_openai_chunk)
 
-            except (StopIteration, StopAsyncIteration):
-                break
+        # Process each chunk - a chunk may contain multiple SSE events
+        for _chunk_str in all_chunks:
+            # Split chunk into individual SSE events
+            individual_events = (
+                AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(
+                    _chunk_str
+                )
+            )
+
+            # Process each individual event
+            for event_str in individual_events:
+                try:
+                    transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
+                        chunk=event_str
+                    )
+                    if transformed_openai_chunk is not None:
+                        all_openai_chunks.append(transformed_openai_chunk)
+
+                except (StopIteration, StopAsyncIteration):
+                    break
+
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,
             logging_obj=litellm_logging_obj,
+        )
+        verbose_proxy_logger.debug(
+            "Complete streaming response built: %s", complete_streaming_response
         )
         return complete_streaming_response
 
@@ -352,7 +396,7 @@ class AnthropicPassthroughLoggingHandler:
                 
                 # Add batch-specific metadata to indicate this is a pending batch job
                 litellm_model_response.choices = [Choices(
-                    finish_reason="batch_pending",
+                    finish_reason="stop",
                     index=0,
                     message={
                         "role": "assistant",
@@ -394,7 +438,7 @@ class AnthropicPassthroughLoggingHandler:
                 
                 # Add error-specific metadata
                 litellm_model_response.choices = [Choices(
-                    finish_reason="batch_error",
+                    finish_reason="stop",
                     index=0,
                     message={
                         "role": "assistant",
@@ -428,7 +472,7 @@ class AnthropicPassthroughLoggingHandler:
             
             # Add error-specific metadata
             litellm_model_response.choices = [Choices(
-                finish_reason="batch_error",
+                finish_reason="stop",
                 index=0,
                 message={
                     "role": "assistant",

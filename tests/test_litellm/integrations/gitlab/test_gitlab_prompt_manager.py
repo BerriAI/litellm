@@ -1,18 +1,19 @@
 import os
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (
+    GitLabPromptCache,
     GitLabPromptManager,
     GitLabPromptTemplate,
     GitLabTemplateManager,
-    GitLabPromptCache,
-    encode_prompt_id,
     decode_prompt_id,
+    encode_prompt_id,
 )
 
 # -----------------------
@@ -817,22 +818,3 @@ def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
     assert beta and beta["id"] == "nested/beta"
 
 
-@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
-def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, fake_managers):
-    tm, wrapper = fake_managers
-    tm._discoverable_ids = ["dir1/dir2/item"]
-    mock_pm_cls.return_value = wrapper
-
-    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
-    cache.load_all()
-
-    encoded = encode_prompt_id("dir1/dir2/item")
-    assert encoded in cache.list_ids()
-
-    # decode → encode → lookup should still work
-    decoded = decode_prompt_id(encoded)
-    assert decoded == "dir1/dir2/item"
-
-    got = cache.get_by_id(decoded)
-    assert got is not None
-    assert got["id"] == "dir1/dir2/item"

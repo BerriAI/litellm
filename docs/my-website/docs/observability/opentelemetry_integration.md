@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # OpenTelemetry - Tracing LLMs with any observability tool
 
-OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop and others.
+OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop, Levo AI and others.
 
 <Image img={require('../../img/traceloop_dash.png')} />
 
@@ -12,7 +12,9 @@ OpenTelemetry is a CNCF standard for observability. It connects to any observabi
 
 From v1.81.0, the request/response will be set as attributes on the parent "Received Proxy Server Request" span by default. This allows you to see the request/response in the parent span in your observability tool.
 
-To use the older behavior with nested "litellm_request" spans, set the following environment variable:
+**Note:** When making multiple LLM calls within an external OTEL span context, the last call's attributes will overwrite previous calls' attributes on the parent span.
+
+To use the older behavior with nested "litellm_request" spans (which creates separate spans for each call), set the following environment variable:
 
 ```shell
 USE_OTEL_LITELLM_REQUEST_SPAN=true
@@ -61,6 +63,8 @@ OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
 
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+
 </TabItem>
 
 <TabItem value="laminar" label="Log to Laminar">
@@ -70,6 +74,8 @@ OTEL_EXPORTER="otlp_grpc"
 OTEL_ENDPOINT="https://api.lmnr.ai:8443"
 OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
+
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
 
 </TabItem>
 

@@ -20,11 +20,13 @@ from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
+        # Clear the LLM client cache to prevent test pollution from cached clients
+        litellm.in_memory_llm_clients_cache.flush_cache()
         return {
             "model": "azure/o3-mini",
-            "api_key": os.getenv("AZURE_O3_API_KEY"),
-            "api_base": os.getenv("AZURE_O3_API_BASE"),
-            "api_version": "2025-01-01-preview"
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "api_version": "2024-12-01-preview"
         }
 
     def get_client(self):

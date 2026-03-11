@@ -13,11 +13,13 @@ import litellm
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server.server import (
-   mcp_server_tool_call,
+    mcp_server_tool_call,
+    set_auth_context,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-   MCPServerManager,
+    MCPServerManager,
 )
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.utils import HiddenParams
 from mcp.types import Tool as MCPTool, CallToolResult, TextContent
@@ -33,6 +35,20 @@ class TestMCPLogger(CustomLogger):
         self.standard_logging_payload = kwargs.get("standard_logging_object", None)
         print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
     
+
+def _set_authorized_user(server_ids):
+    """Configure auth context with permission to call the specified servers."""
+    server_list = list(server_ids)
+    user_auth = UserAPIKeyAuth(
+        api_key="test",
+        user_id="test_user",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="mcp-test-permissions",
+            mcp_servers=server_list,
+        ),
+    )
+    set_auth_context(user_api_key_auth=user_auth, mcp_servers=server_list)
+
 
 @pytest.mark.asyncio
 async def test_mcp_cost_tracking():
@@ -86,6 +102,8 @@ async def test_mcp_cost_tracking():
         # Patch the global manager in both modules where it's used
         with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager', local_mcp_server_manager), \
              patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', local_mcp_server_manager):
+
+            _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print("tool_name_to_mcp_server_name_mapping", local_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
 
@@ -196,6 +214,8 @@ async def test_mcp_cost_tracking_per_tool():
         # Patch the global manager in both modules where it's used
         with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager', local_mcp_server_manager), \
              patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', local_mcp_server_manager):
+
+            _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print("tool_name_to_mcp_server_name_mapping", local_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
 
@@ -326,6 +346,8 @@ async def test_mcp_tool_call_hook():
         # Patch the global manager in both modules where it's used
         with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager', local_mcp_server_manager), \
              patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', local_mcp_server_manager):
+
+            _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print("tool_name_to_mcp_server_name_mapping", local_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
 

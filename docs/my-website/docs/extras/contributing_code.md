@@ -1,27 +1,36 @@
 # Contributing Code
 
-## **Checklist before submitting a PR**
+## Checklist before submitting a PR
 
-Here are the core requirements for any PR submitted to LiteLLM
+Here are the core requirements for any PR submitted to LiteLLM:
 
-- [ ] Sign the Contributor License Agreement (CLA) - [see details](#contributor-license-agreement-cla)
-- [ ] Add testing, **Adding at least 1 test is a hard requirement** - [see details](#2-adding-testing-to-your-pr)
-- [ ] Ensure your PR passes the following tests:
-  - [ ] [Unit Tests](#3-running-unit-tests)
-  - [ ] [Formatting / Linting Tests](#35-running-linting-tests)
-- [ ] Keep scope as isolated as possible. As a general rule, your changes should address 1 specific problem at a time
+- [ ] Sign the [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
+- [ ] Keep scope as isolated as possible — your changes should address **one specific problem** at a time
 
-## **Contributor License Agreement (CLA)**
+### Proxy (Backend) PRs
+
+- [ ] Add testing — **at least 1 test is a hard requirement** ([details](#2-adding-tests))
+- [ ] Ensure your PR passes:
+  - [ ] [Unit Tests](#3-running-unit-tests) — `make test-unit`
+  - [ ] [Formatting / Linting Tests](#4-running-linting-tests) — `make lint`
+
+### UI PRs
+
+- [ ] Ensure the UI builds successfully — `npm run build`
+- [ ] Ensure all UI unit tests pass — `npm run test`
+- [ ] If you are adding a **new component** or **new logic**, add corresponding tests
+
+## Contributor License Agreement (CLA)
 
 Before contributing code to LiteLLM, you must sign our [Contributor License Agreement (CLA)](https://cla-assistant.io/BerriAI/litellm). This is a legal requirement for all contributions to be merged into the main repository. The CLA helps protect both you and the project by clearly defining the terms under which your contributions are made.
 
-**Important:** We strongly recommend reviewing and signing the CLA before starting work on your contribution to avoid any delays in the PR process. You can find the CLA [here](https://cla-assistant.io/BerriAI/litellm) and sign it through our CLA management system when you submit your first PR.
+**Important:** We strongly recommend signing the CLA **before** starting work on your contribution to avoid delays in the review process. You can find and sign the CLA [here](https://cla-assistant.io/BerriAI/litellm).
 
-## Quick start
+---
 
-## 1. Setup your local dev environment
+## Proxy (Backend)
 
-Here's how to modify the repo locally:
+### 1. Setting up your local dev environment
 
 Step 1: Clone the repo
 
@@ -29,56 +38,53 @@ Step 1: Clone the repo
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Install dev dependencies:
+Step 2: Install dev dependencies
 
 ```shell
 poetry install --with dev --extras proxy
 ```
 
-That's it, your local dev environment is ready!
+### 2. Adding tests
 
-## 2. Adding Testing to your PR
+- Add your tests to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm).
+- This directory mirrors the `litellm/` directory 1:1 and should **only** contain mocked tests.
+- **Do not** add real LLM API calls to this directory.
 
-- Add your test to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
+#### File naming convention for `tests/test_litellm/`
 
-- This directory 1:1 maps the the `litellm/` directory, and can only contain mocked tests.
-- Do not add real llm api calls to this directory.
+The test directory follows the same structure as `litellm/`:
 
-### 2.1 File Naming Convention for `tests/test_litellm/`
-
-The `tests/test_litellm/` directory follows the same directory structure as `litellm/`.
-
-- `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 - `test_{filename}.py` maps to `litellm/{filename}.py`
+- `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 
-## 3. Running Unit Tests
+### 3. Running unit tests
 
-run the following command on the root of the litellm directory
+Run the following command from the root of the `litellm` directory:
 
 ```shell
 make test-unit
 ```
 
-## 3.5 Running Linting Tests
+### 4. Running linting tests
 
-run the following command on the root of the litellm directory
+Run the following command from the root of the `litellm` directory:
 
 ```shell
 make lint
 ```
 
-LiteLLM uses mypy for linting. On ci/cd we also run `black` for formatting.
+LiteLLM uses `mypy` for type checking. CI/CD also runs `black` for formatting.
 
-## 4. Submit a PR with your changes!
+### 5. Submit a PR
 
-- push your fork to your GitHub repo
-- submit a PR from there
+- Push your changes to your fork on GitHub
+- Open a Pull Request from your fork
 
-## Advanced
+---
 
-### Building LiteLLM Docker Image
+## UI
 
-Some people might want to build the LiteLLM docker image themselves. Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
+### 1. Setting up your local dev environment
 
 Step 1: Clone the repo
 
@@ -86,17 +92,72 @@ Step 1: Clone the repo
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Build the Docker Image
+Step 2: Navigate to the UI dashboard directory
 
-Build using Dockerfile.non_root
+```shell
+cd ui/litellm-dashboard
+```
+
+Step 3: Install dependencies
+
+```shell
+npm install
+```
+
+Step 4: Start the development server
+
+```shell
+npm run dev
+```
+
+### 2. Adding tests
+
+If you are adding a **new component** or **new logic**, you must add corresponding tests.
+
+### 3. Running UI unit tests
+
+```shell
+npm run test
+```
+
+### 4. Building the UI
+
+Ensure the UI builds successfully before submitting your PR:
+
+```shell
+npm run build
+```
+
+### 5. Submit a PR
+
+- Push your changes to your fork on GitHub
+- Open a Pull Request from your fork
+
+---
+
+## Advanced
+
+### Building the LiteLLM Docker Image
+
+Follow these instructions if you want to build and run the LiteLLM Docker image yourself.
+
+Step 1: Clone the repo
+
+```shell
+git clone https://github.com/BerriAI/litellm.git
+```
+
+Step 2: Build the Docker image
+
+Build using `Dockerfile.non_root`:
 
 ```shell
 docker build -f docker/Dockerfile.non_root -t litellm_test_image .
 ```
 
-Step 3: Run the Docker Image
+Step 3: Run the Docker image
 
-Make sure config.yaml is present in the root directory. This is your litellm proxy config file.
+Make sure `config.yaml` is present in the root directory. This is your LiteLLM proxy config file.
 
 ```shell
 docker run \
@@ -107,15 +168,16 @@ docker run \
     litellm_test_image \
     --config /app/config.yaml --detailed_debug
 ```
-### Running LiteLLM Proxy Locally
 
-1. cd into the `proxy/` directory
+### Running the LiteLLM Proxy Locally
 
-```
+1. Navigate to the `proxy/` directory:
+
+```shell
 cd litellm/litellm/proxy
 ```
 
-2. Run the proxy
+2. Run the proxy:
 
 ```shell
 python3 proxy_cli.py --config /path/to/config.yaml

@@ -23,9 +23,11 @@ class TestGeminiTTSTransformation:
         """Test that TTS models are correctly identified"""
         config = GoogleAIStudioGeminiConfig()
         
-        # Test TTS models
+        # Test TTS models (both preview and non-preview versions)
         assert config.is_model_gemini_audio_model("gemini-2.5-flash-preview-tts") == True
         assert config.is_model_gemini_audio_model("gemini-2.5-pro-preview-tts") == True
+        assert config.is_model_gemini_audio_model("gemini-2.5-flash-tts") == True
+        assert config.is_model_gemini_audio_model("gemini-2.5-pro-tts") == True
         
         # Test non-TTS models
         assert config.is_model_gemini_audio_model("gemini-2.5-flash") == False
@@ -215,6 +217,127 @@ def test_gemini_tts_completion_mock():
         
         assert response is not None
         assert response.choices[0].message.content is not None
+
+
+class TestGeminiTTSSpeechConfigInRequestBody:
+    """Test that speechConfig is properly included in the final request body.
+    
+    This tests the full transformation pipeline, not just map_openai_params().
+    Previously, speechConfig was created but filtered out because it was missing
+    from the GenerationConfig TypedDict.
+    """
+
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("gemini-2.5-flash-tts", "vertex_ai"),
+            ("gemini-2.5-flash-tts", "gemini"),
+            ("gemini-2.5-flash-preview-tts", "vertex_ai"),
+            ("gemini-2.5-flash-preview-tts", "gemini"),
+            ("gemini-2.5-pro-tts", "vertex_ai"),
+        ],
+    )
+    def test_speechconfig_in_generation_config_transform_request_body(self, model, custom_llm_provider):
+        """Test that speechConfig is included in generationConfig after _transform_request_body()"""
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _transform_request_body,
+        )
+        
+        # Simulate optional_params after map_openai_params() has run
+        optional_params = {
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": "Kore"
+                    }
+                }
+            },
+            "responseModalities": ["AUDIO"],
+        }
+        
+        messages = [{"role": "user", "content": "Say hello"}]
+        
+        # Call _transform_request_body which applies the filtering
+        request_body = _transform_request_body(
+            messages=messages,
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={},
+            cached_content=None,
+        )
+        
+        # Verify speechConfig is in generationConfig (not filtered out)
+        assert "generationConfig" in request_body
+        generation_config = request_body["generationConfig"]
+        assert "speechConfig" in generation_config, (
+            f"speechConfig was filtered out of generationConfig for model={model}, provider={custom_llm_provider}. "
+            "Ensure speechConfig is in the GenerationConfig TypedDict."
+        )
+        assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("gemini-2.5-flash-tts", "vertex_ai"),
+            ("gemini-2.5-flash-tts", "gemini"),
+            ("gemini-2.5-flash-preview-tts", "vertex_ai"),
+        ],
+    )
+    def test_speechconfig_end_to_end_mapping(self, model, custom_llm_provider):
+        """Test full pipeline: audio param -> map_openai_params -> _transform_request_body"""
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _transform_request_body,
+        )
+        
+        config = VertexGeminiConfig()
+        
+        # Step 1: Map OpenAI audio param to speechConfig
+        non_default_params = {
+            "audio": {
+                "voice": "Puck",
+                "format": "pcm16"
+            }
+        }
+        optional_params = {}
+        
+        mapped_params = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=False
+        )
+        
+        # Verify map_openai_params creates speechConfig
+        assert "speechConfig" in mapped_params
+        
+        messages = [{"role": "user", "content": "Hello world"}]
+        
+        # Step 2: Transform to request body (this is where the bug was)
+        request_body = _transform_request_body(
+            messages=messages,
+            model=model,
+            optional_params=mapped_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={},
+            cached_content=None,
+        )
+        
+        # Verify speechConfig survives the transformation
+        assert "generationConfig" in request_body
+        generation_config = request_body["generationConfig"]
+        assert "speechConfig" in generation_config, (
+            f"speechConfig was filtered out during _transform_request_body() for model={model}, provider={custom_llm_provider}. "
+            "This breaks Gemini TTS - speechConfig must be in GenerationConfig TypedDict."
+        )
+        assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Puck"
+        
+        # Also verify responseModalities is present
+        assert "responseModalities" in generation_config
+        assert "AUDIO" in generation_config["responseModalities"]
 
 
 if __name__ == "__main__":

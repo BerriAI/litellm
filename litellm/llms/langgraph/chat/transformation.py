@@ -148,7 +148,7 @@ class LangGraphConfig(BaseConfig):
         OpenAI format: {"role": "user", "content": "..."}
         LangGraph format: {"role": "human", "content": "..."}
         """
-        langgraph_messages = []
+        langgraph_messages: List[Dict[str, str]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -166,6 +166,10 @@ class LangGraphConfig(BaseConfig):
             # Handle content that might be a list
             if isinstance(content, list):
                 content = convert_content_list_to_str(msg)
+            
+            # Ensure content is a string
+            if not isinstance(content, str):
+                content = str(content)
 
             langgraph_messages.append({"role": langgraph_role, "content": content})
 

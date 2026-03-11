@@ -8,6 +8,7 @@
 import asyncio
 import json
 import os
+import warnings
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -41,6 +42,7 @@ from litellm.main import stream_chunk_builder
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    CallTypes,
     CallTypesLiteral,
     EmbeddingResponse,
     GuardrailStatus,
@@ -57,6 +59,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 # Type aliases
 MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
+_LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -111,6 +114,17 @@ class NomaGuardrail(CustomGuardrail):
         anonymize_input: Optional[bool] = None,
         **kwargs,
     ):
+        global _LEGACY_NOMA_DEPRECATION_WARNED
+        if not _LEGACY_NOMA_DEPRECATION_WARNED:
+            warnings.warn(
+                "Guardrail provider 'noma' is deprecated. "
+                "Please migrate to 'noma_v2'. "
+                "The legacy 'noma' API will no longer be supported after March 31, 2026.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            _LEGACY_NOMA_DEPRECATION_WARNED = True
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -119,9 +133,7 @@ class NomaGuardrail(CustomGuardrail):
         self.api_base = api_base or os.environ.get(
             "NOMA_API_BASE", NomaGuardrail._DEFAULT_API_BASE
         )
-        self.application_id = application_id or os.environ.get(
-            "NOMA_APPLICATION_ID"
-        )
+        self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
         self.default_application_id = "litellm"
 
         if monitor_mode is None:
@@ -163,6 +175,7 @@ class NomaGuardrail(CustomGuardrail):
         self,
         request_data: dict,
         user_auth: UserAPIKeyAuth,
+        event_type: Optional[GuardrailEventHooks] = None,
     ) -> Optional[str]:
         """Shared logic for processing user message checks"""
         start_time = datetime.now()
@@ -213,6 +226,7 @@ class NomaGuardrail(CustomGuardrail):
             start_time=start_time.timestamp(),
             end_time=end_time.timestamp(),
             duration=duration,
+            event_type=event_type,
         )
 
         if self.monitor_mode:
@@ -242,6 +256,7 @@ class NomaGuardrail(CustomGuardrail):
         request_data: dict,
         response: LLMResponse,
         user_auth: UserAPIKeyAuth,
+        event_type: Optional[GuardrailEventHooks] = None,
     ) -> Optional[str]:
         """Shared logic for processing LLM response checks"""
 
@@ -293,6 +308,7 @@ class NomaGuardrail(CustomGuardrail):
             start_time=start_time.timestamp(),
             end_time=end_time.timestamp(),
             duration=duration,
+            event_type=event_type,
         )
 
         if self.monitor_mode:
@@ -578,15 +594,13 @@ class NomaGuardrail(CustomGuardrail):
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
-
         verbose_proxy_logger.debug("Running Noma pre-call hook")
 
-        if (
-            self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.pre_call
-            )
-            is False
-        ):
+        event_type = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
+
+        if self.should_run_guardrail(data=data, event_type=event_type) is False:
             return data
 
         # In monitor mode, run Noma check in background and return immediately
@@ -602,7 +616,9 @@ class NomaGuardrail(CustomGuardrail):
             return data
 
         try:
-            return await self._check_user_message(data, user_api_key_dict)
+            return await self._check_user_message(
+                data, user_api_key_dict, GuardrailEventHooks.pre_call
+            )
         except NomaBlockedMessage:
             # Blocked requests were already logged in _process_user_message_check with "blocked" status
             raise
@@ -619,6 +635,7 @@ class NomaGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
+                event_type=GuardrailEventHooks.pre_call,
             )
 
             verbose_proxy_logger.error(f"Noma pre-call hook failed: {str(e)}")
@@ -634,6 +651,9 @@ class NomaGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
+
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
@@ -650,7 +670,9 @@ class NomaGuardrail(CustomGuardrail):
             return data
 
         try:
-            return await self._check_user_message(data, user_api_key_dict)
+            return await self._check_user_message(
+                data, user_api_key_dict, GuardrailEventHooks.during_call
+            )
         except NomaBlockedMessage:
             # Blocked requests were already logged in _process_user_message_check with "blocked" status
             raise
@@ -667,6 +689,7 @@ class NomaGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
+                event_type=GuardrailEventHooks.during_call,
             )
 
             verbose_proxy_logger.error(f"Noma moderation hook failed: {str(e)}")
@@ -700,7 +723,9 @@ class NomaGuardrail(CustomGuardrail):
             return response
 
         try:
-            return await self._check_llm_response(data, response, user_api_key_dict)
+            return await self._check_llm_response(
+                data, response, user_api_key_dict, GuardrailEventHooks.post_call
+            )
         except NomaBlockedMessage:
             # Blocked requests were already logged in _process_llm_response_check with "blocked" status
             raise
@@ -717,6 +742,7 @@ class NomaGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
+                event_type=GuardrailEventHooks.post_call,
             )
 
             verbose_proxy_logger.error(f"Noma post-call hook failed: {str(e)}")
@@ -728,9 +754,12 @@ class NomaGuardrail(CustomGuardrail):
         self,
         request_data: dict,
         user_auth: UserAPIKeyAuth,
+        event_type: Optional[GuardrailEventHooks] = None,
     ) -> Union[Exception, str, dict, None]:
         """Check user message for policy violations"""
-        user_message = await self._process_user_message_check(request_data, user_auth)
+        user_message = await self._process_user_message_check(
+            request_data, user_auth, event_type
+        )
         if not user_message:
             return request_data
 
@@ -741,10 +770,11 @@ class NomaGuardrail(CustomGuardrail):
         request_data: dict,
         response: LLMResponse,
         user_auth: UserAPIKeyAuth,
+        event_type: Optional[GuardrailEventHooks] = None,
     ) -> Any:
         """Check LLM response for policy violations"""
         content = await self._process_llm_response_check(
-            request_data, response, user_auth
+            request_data, response, user_auth, event_type
         )
         if not content:
             return response
@@ -858,7 +888,10 @@ class NomaGuardrail(CustomGuardrail):
         if isinstance(assembled_model_response, ModelResponse):
             try:
                 processed_response = await self._check_llm_response(
-                    request_data, assembled_model_response, user_api_key_dict
+                    request_data,
+                    assembled_model_response,
+                    user_api_key_dict,
+                    GuardrailEventHooks.post_call,
                 )
             except NomaBlockedMessage:
                 raise

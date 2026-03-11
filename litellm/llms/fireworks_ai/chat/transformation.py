@@ -25,7 +25,11 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderSpecificModelInfo,
 )
-from litellm.utils import supports_function_calling, supports_tool_choice
+from litellm.utils import (
+    supports_function_calling,
+    supports_reasoning,
+    supports_tool_choice,
+)
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import FireworksAIException
@@ -51,6 +55,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
     response_format: Optional[dict] = None
     user: Optional[str] = None
     logprobs: Optional[int] = None
+    reasoning_effort: Optional[str] = None
 
     # Non OpenAI parameters - Fireworks AI only params
     prompt_truncate_length: Optional[int] = None
@@ -71,6 +76,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         response_format: Optional[dict] = None,
         user: Optional[str] = None,
         logprobs: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
         prompt_truncate_length: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
@@ -110,6 +116,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
+
+        # Only add reasoning_effort for models that support it
+        if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+            supported_params.append("reasoning_effort")
 
         return supported_params
 
@@ -226,16 +236,51 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
+            # Remove fields not permitted by FireworksAI that may cause:
+            # "Not permitted, field: 'messages[n].provider_specific_fields'"
+            if isinstance(message, dict) and "provider_specific_fields" in message:
+                cast(dict, message).pop("provider_specific_fields", None)
 
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        provider_specific_model_info = ProviderSpecificModelInfo(
-            supports_function_calling=True,
-            supports_prompt_caching=True,  # https://docs.fireworks.ai/guides/prompt-caching
-            supports_pdf_input=True,  # via document inlining
-            supports_vision=True,  # via document inlining
+        # Models that support reasoning_effort
+        reasoning_supported_models = [
+            "qwen3-8b",
+            "qwen3-32b",
+            "qwen3-coder-480b-a35b-instruct",
+            "deepseek-v3p1",
+            "deepseek-v3p2",
+            "glm-4p5",
+            "glm-4p5-air",
+            "glm-4p6",
+            "gpt-oss-120b",
+            "gpt-oss-20b",
+        ]
+        
+        # Normalize model name - remove prefix if present
+        normalized_model = model
+        if model.startswith("fireworks_ai/"):
+            normalized_model = model.replace("fireworks_ai/", "")
+        if normalized_model.startswith("accounts/fireworks/models/"):
+            normalized_model = normalized_model.replace("accounts/fireworks/models/", "")
+        
+        # Check if model supports reasoning
+        supports_reasoning_value = any(
+            reasoning_model in normalized_model for reasoning_model in reasoning_supported_models
         )
+        
+        provider_specific_model_info: ProviderSpecificModelInfo = {
+            "supports_function_calling": True,
+            "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
+            "supports_pdf_input": True,  # via document inlining
+            "supports_vision": True,  # via document inlining
+        }
+        
+        # Only include supports_reasoning if True
+        if supports_reasoning_value:
+            provider_specific_model_info["supports_reasoning"] = True
+        
         return provider_specific_model_info
 
     def transform_request(

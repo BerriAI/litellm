@@ -59,7 +59,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
   return (
     <Modal
       title="Edit Budget"
-      visible={isModalVisible}
+      open={isModalVisible}
       width={800}
       footer={null}
       onOk={handleOk}

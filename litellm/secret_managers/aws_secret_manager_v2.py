@@ -3,7 +3,8 @@ This is a file for the AWS Secret Manager Integration
 
 Handles Async Operations for:
 - Read Secret
-- Write Secret
+- Write Secret (CreateSecret)
+- Update Secret (PutSecretValue) - for in-place rotation when alias is preserved
 - Delete Secret
 
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
@@ -42,11 +43,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_profile_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
-        
+
         # Store AWS authentication settings
         self.aws_region_name = aws_region_name
         self.aws_role_name = aws_role_name
@@ -61,7 +62,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         # AWS_REGION_NAME is only strictly required if not using a profile or role
         # When using IAM roles, the region can come from multiple sources
         if (
-            "AWS_REGION_NAME" not in os.environ 
+            "AWS_REGION_NAME" not in os.environ
             and "AWS_REGION" not in os.environ
             and "AWS_DEFAULT_REGION" not in os.environ
         ):
@@ -83,22 +84,36 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             return
         try:
             cls.validate_environment()
-            
+
             # Extract AWS settings from key_management_settings if provided
             aws_kwargs = {}
             if key_management_settings is not None:
                 aws_kwargs = {
-                    "aws_region_name": getattr(key_management_settings, "aws_region_name", None),
-                    "aws_role_name": getattr(key_management_settings, "aws_role_name", None),
-                    "aws_session_name": getattr(key_management_settings, "aws_session_name", None),
-                    "aws_external_id": getattr(key_management_settings, "aws_external_id", None),
-                    "aws_profile_name": getattr(key_management_settings, "aws_profile_name", None),
-                    "aws_web_identity_token": getattr(key_management_settings, "aws_web_identity_token", None),
-                    "aws_sts_endpoint": getattr(key_management_settings, "aws_sts_endpoint", None),
+                    "aws_region_name": getattr(
+                        key_management_settings, "aws_region_name", None
+                    ),
+                    "aws_role_name": getattr(
+                        key_management_settings, "aws_role_name", None
+                    ),
+                    "aws_session_name": getattr(
+                        key_management_settings, "aws_session_name", None
+                    ),
+                    "aws_external_id": getattr(
+                        key_management_settings, "aws_external_id", None
+                    ),
+                    "aws_profile_name": getattr(
+                        key_management_settings, "aws_profile_name", None
+                    ),
+                    "aws_web_identity_token": getattr(
+                        key_management_settings, "aws_web_identity_token", None
+                    ),
+                    "aws_sts_endpoint": getattr(
+                        key_management_settings, "aws_sts_endpoint", None
+                    ),
                 }
                 # Remove None values
                 aws_kwargs = {k: v for k, v in aws_kwargs.items() if v is not None}
-            
+
             litellm.secret_manager_client = cls(**aws_kwargs)
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
 
@@ -246,13 +261,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
-            self,
-            secret_name: str,
-            secret_value: str,
-            description: Optional[str] = None,
-            optional_params: Optional[dict] = None,
-            timeout: Optional[Union[float, httpx.Timeout]] = None,
-            tags: Optional[Union[dict, list]] = None
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None,
     ) -> dict:
         """
         Async function to write a secret to AWS Secrets Manager
@@ -311,6 +326,94 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
+
+    async def async_put_secret_value(
+        self,
+        secret_name: str,
+        secret_value: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to update an existing secret's value in AWS Secrets Manager.
+
+        Uses PutSecretValue to update in place. Use this when rotating a secret
+        that keeps the same name (current_secret_name == new_secret_name).
+
+        Args:
+            secret_name: Name of the existing secret to update
+            secret_value: New value to store
+            optional_params: Additional AWS parameters
+            timeout: Request timeout
+
+        Returns:
+            dict: Response from AWS Secrets Manager containing update details
+        """
+        from litellm._uuid import uuid
+
+        data: Dict[str, Any] = {
+            "SecretId": secret_name,
+            "SecretString": secret_value,
+            "ClientRequestToken": str(uuid.uuid4()),
+        }
+
+        endpoint_url, headers, body = self._prepare_request(
+            action="PutSecretValue",
+            secret_name=secret_name,
+            secret_value=secret_value,
+            optional_params=optional_params,
+            request_data=data,
+        )
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            response = await async_client.post(
+                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+
+    async def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Rotate a secret. When current_secret_name == new_secret_name (in-place
+        update), uses PutSecretValue instead of create+delete to avoid
+        ResourceExistsException.
+        """
+        if current_secret_name == new_secret_name:
+            # Same alias: update in place via PutSecretValue
+            verbose_logger.info(
+                "Secret rotated in-place (PutSecretValue): secret_name=%s",
+                current_secret_name,
+            )
+            return await self.async_put_secret_value(
+                secret_name=current_secret_name,
+                secret_value=new_secret_value,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        # Different names: create new, delete old (base class logic)
+        return await super().async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value=new_secret_value,
+            optional_params=optional_params,
+            timeout=timeout,
+        )
 
     async def async_delete_secret(
         self,
@@ -375,7 +478,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}
-        
+
         # Build optional_params from instance settings if not provided
         # This allows the IAM role settings to be used for Secret Manager calls
         if not optional_params.get("aws_role_name") and self.aws_role_name:
@@ -388,11 +491,14 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params["aws_external_id"] = self.aws_external_id
         if not optional_params.get("aws_profile_name") and self.aws_profile_name:
             optional_params["aws_profile_name"] = self.aws_profile_name
-        if not optional_params.get("aws_web_identity_token") and self.aws_web_identity_token:
+        if (
+            not optional_params.get("aws_web_identity_token")
+            and self.aws_web_identity_token
+        ):
             optional_params["aws_web_identity_token"] = self.aws_web_identity_token
         if not optional_params.get("aws_sts_endpoint") and self.aws_sts_endpoint:
             optional_params["aws_sts_endpoint"] = self.aws_sts_endpoint
-        
+
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(
             optional_params
         )
@@ -431,12 +537,3 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         prepped = request.prepare()
 
         return endpoint_url, prepped.headers, body
-
-
-# if __name__ == "__main__":
-#     print("loading aws secret manager v2")
-#     aws_secret_manager_v2 = AWSSecretsManagerV2()
-#     import asyncio
-#     print("writing secret to aws secret manager v2")
-#     asyncio.run(aws_secret_manager_v2.async_write_secret(secret_name="test_secret_3", secret_value="test_value_2"))
-#     print("reading secret from aws secret manager v2")

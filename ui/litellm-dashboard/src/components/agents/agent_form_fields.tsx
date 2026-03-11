@@ -4,17 +4,21 @@ import { Button as AntButton } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 
+import CostConfigFields from "./cost_config_fields";
+
 const { Panel } = Collapse;
 
 interface AgentFormFieldsProps {
   showAgentName?: boolean;
+  visiblePanels?: string[];
 }
 
 /**
  * Reusable form fields component for agent forms
  * Uses shared configuration from agent_config.ts
  */
-const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true }) => {
+const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true, visiblePanels }) => {
+  const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
   return (
     <>
       {showAgentName && (
@@ -30,6 +34,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
 
       <Collapse defaultActiveKey={['basic']} style={{ marginBottom: 16 }}>
         {/* Basic Information */}
+        {shouldShow(AGENT_FORM_CONFIG.basic.key) && (
         <Panel header={`${AGENT_FORM_CONFIG.basic.title} (Required)`} key={AGENT_FORM_CONFIG.basic.key}>
           {AGENT_FORM_CONFIG.basic.fields.map((field) => (
             <Form.Item
@@ -47,8 +52,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
 
         {/* Skills */}
+        {shouldShow(AGENT_FORM_CONFIG.skills.key) && (
         <Panel header={`${AGENT_FORM_CONFIG.skills.title} (Required)`} key={AGENT_FORM_CONFIG.skills.key}>
           <Form.List name="skills">
             {(fields, { add, remove }) => (
@@ -125,8 +132,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             )}
           </Form.List>
         </Panel>
+        )}
 
         {/* Capabilities */}
+        {shouldShow(AGENT_FORM_CONFIG.capabilities.key) && (
         <Panel header={AGENT_FORM_CONFIG.capabilities.title} key={AGENT_FORM_CONFIG.capabilities.key}>
           {AGENT_FORM_CONFIG.capabilities.fields.map((field) => (
             <Form.Item
@@ -139,8 +148,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
 
         {/* Optional Settings */}
+        {shouldShow(AGENT_FORM_CONFIG.optional.key) && (
         <Panel header={AGENT_FORM_CONFIG.optional.title} key={AGENT_FORM_CONFIG.optional.key}>
           {AGENT_FORM_CONFIG.optional.fields.map((field) => (
             <Form.Item
@@ -153,8 +164,17 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
+
+        {/* Cost Configuration */}
+        {shouldShow(AGENT_FORM_CONFIG.cost.key) && (
+        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
+          <CostConfigFields />
+        </Panel>
+        )}
 
         {/* LiteLLM Parameters */}
+        {shouldShow(AGENT_FORM_CONFIG.litellm.key) && (
         <Panel header={AGENT_FORM_CONFIG.litellm.title} key={AGENT_FORM_CONFIG.litellm.key}>
           {AGENT_FORM_CONFIG.litellm.fields.map((field) => (
             <Form.Item
@@ -167,6 +187,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
             </Form.Item>
           ))}
         </Panel>
+        )}
       </Collapse>
     </>
   );

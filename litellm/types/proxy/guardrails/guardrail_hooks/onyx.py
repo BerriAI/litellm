@@ -16,6 +16,11 @@ class OnyxGuardrailConfigModel(GuardrailConfigModel):
         description="The API key for the Onyx Guard server. If not provided, the `ONYX_API_KEY` environment variable is checked.",
     )
 
+    timeout: Optional[float] = Field(
+        default=None,
+        description="The timeout for the Onyx Guard server in seconds. If not provided, the `ONYX_TIMEOUT` environment variable is checked.",
+    )
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "Onyx Guardrail"

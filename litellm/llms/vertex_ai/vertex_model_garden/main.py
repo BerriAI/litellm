@@ -20,6 +20,7 @@ from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
 from ..common_utils import VertexAIError, get_vertex_base_model_name
@@ -34,8 +35,8 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex garden models"""
-    #  f"https://{self.endpoint.location}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{self.endpoint.location}"
-    return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
+    base_url = get_vertex_base_url(vertex_location)
+    return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
 class VertexAIModelGardenModels(VertexBase):

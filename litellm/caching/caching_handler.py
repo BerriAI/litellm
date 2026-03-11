@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 from litellm.types.caching import CachedEmbedding
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
@@ -727,6 +728,12 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
+        elif (
+            call_type == "aresponses"
+            or call_type == "responses"
+        ) and isinstance(cached_result, dict):
+            # Convert cached dict back to ResponsesAPIResponse object
+            cached_result = ResponsesAPIResponse(**cached_result)
 
         if (
             hasattr(cached_result, "_hidden_params")
@@ -826,6 +833,7 @@ class LLMCachingHandler:
                 or isinstance(result, litellm.EmbeddingResponse)
                 or isinstance(result, TranscriptionResponse)
                 or isinstance(result, RerankResponse)
+                or isinstance(result, ResponsesAPIResponse)
             ):
                 if (
                     isinstance(result, EmbeddingResponse)

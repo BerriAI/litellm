@@ -68,6 +68,7 @@ environment_variables:
     ARIZE_API_KEY: "141a****"
     ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
     ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT or Neither (defaults to https://otlp.arize.com/v1 on grpc)
+    ARIZE_PROJECT_NAME: "my-litellm-project" # OPTIONAL - sets the arize project name
 ```
 
 2. Start the proxy

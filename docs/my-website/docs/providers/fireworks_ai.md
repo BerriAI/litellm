@@ -300,6 +300,51 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+## Reasoning Effort
+
+The `reasoning_effort` parameter is supported on select Fireworks AI models. Supported models include:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/qwen3-8b",
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    reasoning_effort="low",
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "fireworks_ai/accounts/fireworks/models/qwen3-8b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Supported Models - ALL Fireworks AI Models Supported!
 
 :::info

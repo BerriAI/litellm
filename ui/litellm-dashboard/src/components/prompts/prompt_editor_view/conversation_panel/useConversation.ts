@@ -3,7 +3,7 @@ import NotificationsManager from "../../../molecules/notifications_manager";
 import { TokenUsage } from "../../../playground/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 import { convertToDotPrompt, extractVariables } from "../utils";
-import { getProxyBaseUrl } from "../../../networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../../networking";
 
 export const useConversation = (prompt: any, accessToken: string | null) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -91,7 +91,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
       const response = await fetch(`${proxyBaseUrl}/prompts/test`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),

@@ -216,6 +216,95 @@ class TestNovaTransformationRequest:
         
         params = request["singleEmbeddingParams"]
         assert params["embeddingDimension"] == 3072
+    
+    def test_data_url_image_parsing(self):
+        """Test that data URL images are properly parsed and transformed."""
+        config = AmazonNovaEmbeddingConfig()
+        
+        # Test with JPEG image data URL
+        jpeg_data_url = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD"
+        
+        request = config._transform_request(
+            input=jpeg_data_url,
+            inference_params={"dimensions": 1024},
+            async_invoke_route=False,
+        )
+        
+        params = request["singleEmbeddingParams"]
+        assert "image" in params
+        assert params["image"]["format"] == "jpeg"
+        assert "source" in params["image"]
+        assert params["image"]["source"]["bytes"] == "/9j/4AAQSkZJRgABAQAASABIAAD"
+        assert params["embeddingDimension"] == 1024
+        assert params["embeddingPurpose"] == "GENERIC_INDEX"
+        
+    def test_data_url_png_image_parsing(self):
+        """Test that data URL PNG images are properly parsed."""
+        config = AmazonNovaEmbeddingConfig()
+        
+        # Test with PNG image data URL
+        png_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        
+        request = config._transform_request(
+            input=png_data_url,
+            inference_params={},
+            async_invoke_route=False,
+        )
+        
+        params = request["singleEmbeddingParams"]
+        assert "image" in params
+        assert params["image"]["format"] == "png"
+        assert params["image"]["source"]["bytes"] == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        
+    def test_data_url_jpg_format_conversion(self):
+        """Test that jpg format is converted to jpeg."""
+        config = AmazonNovaEmbeddingConfig()
+        
+        # Test with jpg (should be converted to jpeg)
+        jpg_data_url = "data:image/jpg;base64,/9j/4AAQSkZJRg"
+        
+        request = config._transform_request(
+            input=jpg_data_url,
+            inference_params={},
+            async_invoke_route=False,
+        )
+        
+        params = request["singleEmbeddingParams"]
+        assert params["image"]["format"] == "jpeg"  # Should be converted from jpg to jpeg
+        
+    def test_data_url_video_parsing(self):
+        """Test that data URL videos are properly parsed."""
+        config = AmazonNovaEmbeddingConfig()
+        
+        video_data_url = "data:video/mp4;base64,AAAAIGZ0eXBpc29t"
+        
+        request = config._transform_request(
+            input=video_data_url,
+            inference_params={},
+            async_invoke_route=False,
+        )
+        
+        params = request["singleEmbeddingParams"]
+        assert "video" in params
+        assert params["video"]["format"] == "mp4"
+        assert params["video"]["source"]["bytes"] == "AAAAIGZ0eXBpc29t"
+        
+    def test_data_url_audio_parsing(self):
+        """Test that data URL audio files are properly parsed."""
+        config = AmazonNovaEmbeddingConfig()
+        
+        audio_data_url = "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAA"
+        
+        request = config._transform_request(
+            input=audio_data_url,
+            inference_params={},
+            async_invoke_route=False,
+        )
+        
+        params = request["singleEmbeddingParams"]
+        assert "audio" in params
+        assert params["audio"]["format"] == "mp3"
+        assert params["audio"]["source"]["bytes"] == "SUQzBAAAAAAAI1RTU0UAAAA"
 
 
 class TestNovaTransformationResponse:
@@ -300,6 +389,109 @@ class TestNovaTransformationResponse:
         assert len(result.data) == 2
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
         assert result.data[1].embedding == [0.4, 0.5, 0.6]
+
+    def test_image_embedding_response_with_image_count(self):
+        """Test that Nova image embedding response populates image_count for cost tracking."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "IMAGE",
+                        "embedding": [0.1, 0.2, 0.3],
+                    }
+                ]
+            }
+        ]
+
+        # Simulate batch_data with image in singleEmbeddingParams
+        batch_data = [
+            {
+                "schemaVersion": "nova-multimodal-embed-v1",
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": 3072,
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": "/9j/4AAQSkZJRg=="},
+                    },
+                },
+            }
+        ]
+
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+            batch_data=batch_data,
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens_details is not None
+        assert result.usage.prompt_tokens_details.image_count == 1
+
+    def test_text_embedding_response_no_image_count(self):
+        """Test that Nova text embedding response does not set image_count."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "TEXT",
+                        "embedding": [0.1, 0.2, 0.3],
+                        "truncatedCharLength": 20,
+                    }
+                ]
+            }
+        ]
+
+        batch_data = [
+            {
+                "schemaVersion": "nova-multimodal-embed-v1",
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": 3072,
+                    "text": {"value": "hello world", "truncationMode": "END"},
+                },
+            }
+        ]
+
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+            batch_data=batch_data,
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens_details is None
+
+    def test_nova_embedding_backward_compat_no_batch_data(self):
+        """Test that Nova transformer works without batch_data (backward compatibility)."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "TEXT",
+                        "embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
+                    }
+                ]
+            }
+        ]
+
+        # Call without batch_data — should not break
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+        )
+
+        assert result.usage is not None
+        assert result.usage.total_tokens > 0
+        assert result.usage.prompt_tokens_details is None
 
     def test_async_invoke_response(self):
         """Test async invoke response transformation."""

@@ -1,3 +1,5 @@
+import { Member, Team } from "@/components/networking";
+
 // Define admin roles and permissions
 export const old_admin_roles = ["Admin", "Admin Viewer"];
 export const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_admin"];
@@ -14,4 +16,18 @@ export const isAdminRole = (role: string): boolean => {
 
 export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
+};
+
+export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string): boolean => {
+  if (teams == null) {
+    return false;
+  }
+  return teams.some((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID));
+};
+
+export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | null, userID: string): boolean => {
+  if (teamMemberWithRoles == null) {
+    return false;
+  }
+  return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };

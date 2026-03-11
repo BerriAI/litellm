@@ -1072,3 +1072,693 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
         # Verify the result
         assert result["user_id"] == "test_user_1"
         assert result["user_object"] == user_object
+
+
+def test_get_team_id_from_header():
+    """Test get_team_id_from_header returns team when valid, None when missing, raises on invalid."""
+    from fastapi import HTTPException
+
+    # Valid team in allowed list
+    result = JWTAuthManager.get_team_id_from_header(
+        request_headers={"x-litellm-team-id": "team-1"},
+        allowed_team_ids={"team-1", "team-2"},
+    )
+    assert result == "team-1"
+
+    # No header returns None
+    result = JWTAuthManager.get_team_id_from_header(
+        request_headers={"authorization": "Bearer token"},
+        allowed_team_ids={"team-1"},
+    )
+    assert result is None
+
+    # Invalid team raises 403
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.get_team_id_from_header(
+            request_headers={"x-litellm-team-id": "invalid-team"},
+            allowed_team_ids={"team-1", "team-2"},
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_uses_team_from_header_e2e():
+    """Test auth_builder e2e flow: selects team from x-litellm-team-id header."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+        ),
+    )
+
+    team_object = LiteLLM_TeamTable(team_id="team-2")
+    user_object = LiteLLM_UserTable(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt, \
+         patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock), \
+         patch.object(JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None), \
+         patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock) as mock_get_team, \
+         patch.object(JWTAuthManager, "get_objects", new_callable=AsyncMock, return_value=(user_object, None, None, None)), \
+         patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock), \
+         patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock):
+
+        mock_auth_jwt.return_value = {"sub": "user-1", "scope": "", "groups": ["team-1", "team-2"]}
+        mock_get_team.return_value = team_object
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="jwt-token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={},
+            route="/chat/completions",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            request_headers={"x-litellm-team-id": "team-2"},
+        )
+
+        assert result["team_id"] == "team-2"
+        assert result["team_object"] == team_object
+
+
+@pytest.mark.asyncio
+async def test_get_team_alias_with_nested_fields():
+    """
+    Test get_team_alias() method with nested JWT fields
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+    
+    # Test token with nested team name
+    nested_token = {
+        "organization": {
+            "team": {
+                "name": "engineering-team"
+            }
+        },
+        "team_name": "flat-team"
+    }
+    
+    # Test nested access
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_alias_jwt_field="organization.team.name")
+    assert jwt_handler.get_team_alias(nested_token, None) == "engineering-team"
+    
+    # Test flat access (backward compatibility)
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_alias_jwt_field="team_name")
+    assert jwt_handler.get_team_alias(nested_token, None) == "flat-team"
+    
+    # Test missing field returns default
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_alias_jwt_field="nonexistent.field")
+    assert jwt_handler.get_team_alias(nested_token, "default-team") == "default-team"
+    
+    # Test with team_alias_jwt_field not configured
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()  # team_alias_jwt_field is None
+    assert jwt_handler.get_team_alias(nested_token, "default") is None
+
+
+@pytest.mark.asyncio
+async def test_is_required_team_id_with_team_alias_field():
+    """
+    Test that is_required_team_id() returns True when team_alias_jwt_field is set
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+    
+    # Neither field set - should return False
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    assert jwt_handler.is_required_team_id() is False
+    
+    # Only team_id_jwt_field set - should return True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
+    assert jwt_handler.is_required_team_id() is True
+    
+    # Only team_alias_jwt_field set - should return True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_alias_jwt_field="team_name")
+    assert jwt_handler.is_required_team_id() is True
+    
+    # Both fields set - should return True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_id_jwt_field="team_id",
+        team_alias_jwt_field="team_name"
+    )
+    assert jwt_handler.is_required_team_id() is True
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_with_team_alias():
+    """
+    Test that find_and_validate_specific_team_id resolves team by name when team_id is not found
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_alias_jwt_field="team_alias"
+        ),
+    )
+    
+    # Token with team name (no team_id)
+    jwt_token = {
+        "sub": "user-1",
+        "team_alias": "my-team"
+    }
+    
+    # Mock team object returned by get_team_object_by_alias
+    team_object = LiteLLM_TeamTable(team_id="resolved-team-id", team_alias="my-team")
+    
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+        new_callable=AsyncMock
+    ) as mock_get_by_alias:
+        mock_get_by_alias.return_value = team_object
+        
+        team_id, result_team = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        
+        # Should have resolved team_id from team name
+        assert team_id == "resolved-team-id"
+        assert result_team == team_object
+        mock_get_by_alias.assert_called_once_with(
+            team_alias="my-team",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_team_id_takes_precedence_over_name():
+    """
+    Test that team_id_jwt_field takes precedence over team_alias_jwt_field
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_alias_jwt_field="team_alias"
+        ),
+    )
+    
+    # Token with both team_id and team name
+    jwt_token = {
+        "sub": "user-1",
+        "team_id": "direct-team-id",
+        "team_alias": "my-team"
+    }
+    
+    # Mock team object returned by get_team_object (by ID)
+    team_object = LiteLLM_TeamTable(team_id="direct-team-id")
+    
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object",
+        new_callable=AsyncMock
+    ) as mock_get_by_id, patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+        new_callable=AsyncMock
+    ) as mock_get_by_alias:
+        mock_get_by_id.return_value = team_object
+        
+        team_id, result_team = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        
+        # Should use team_id directly, not resolve by name
+        assert team_id == "direct-team-id"
+        assert result_team == team_object
+        mock_get_by_id.assert_called_once()
+        mock_get_by_alias.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_raises_when_required_team_not_found():
+    """
+    Test that an exception is raised when team is required but neither team_id nor team_name is found
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_alias_jwt_field="team_alias"  # Required, but not in token
+        ),
+    )
+    
+    # Token without team info
+    jwt_token = {
+        "sub": "user-1"
+    }
+    
+    with pytest.raises(Exception) as exc_info:
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    
+    assert "No team found in token" in str(exc_info.value)
+    assert "team_alias field 'team_alias'" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_org_alias_with_nested_fields():
+    """
+    Test get_org_alias() method with nested JWT fields
+    """
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+    
+    # Test token with nested org name
+    nested_token = {
+        "company": {
+            "organization": {
+                "name": "acme-corp"
+            }
+        },
+        "org_name": "flat-org"
+    }
+    
+    # Test nested access
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(org_alias_jwt_field="company.organization.name")
+    assert jwt_handler.get_org_alias(nested_token, None) == "acme-corp"
+    
+    # Test flat access
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(org_alias_jwt_field="org_name")
+    assert jwt_handler.get_org_alias(nested_token, None) == "flat-org"
+    
+    # Test missing field returns default
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(org_alias_jwt_field="nonexistent.field")
+    assert jwt_handler.get_org_alias(nested_token, "default-org") == "default-org"
+    
+    # Test with org_alias_jwt_field not configured
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    assert jwt_handler.get_org_alias(nested_token, "default") is None
+
+
+@pytest.mark.asyncio
+async def test_get_objects_resolves_org_by_name():
+    """
+    Test that get_objects resolves organization by name when org_id is not provided
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            org_alias_jwt_field="org_alias"
+        ),
+    )
+    
+    # Mock org object returned by get_org_object_by_alias
+    org_object = LiteLLM_OrganizationTable(
+        organization_id="resolved-org-id",
+        organization_alias="my-org",
+        budget_id="budget-1",
+        created_by="admin",
+        updated_by="admin",
+        models=[]
+    )
+    
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_org_object_by_alias",
+        new_callable=AsyncMock
+    ) as mock_get_by_alias:
+        mock_get_by_alias.return_value = org_object
+        
+        (
+            result_user_obj,
+            result_org_obj,
+            result_end_user_obj,
+            result_team_membership,
+        ) = await JWTAuthManager.get_objects(
+            user_id=None,
+            user_email=None,
+            org_id=None,  # No org_id provided
+            end_user_id=None,
+            team_id=None,
+            valid_user_email=None,
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            route="/chat/completions",
+            org_alias="my-org",
+        )
+        
+        # Should resolve org by alias - org_id can be derived from org_object.organization_id
+        assert result_org_obj == org_object
+        assert result_org_obj.organization_id == "resolved-org-id"
+        mock_get_by_alias.assert_called_once_with(
+            org_alias="my-org",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: OIDC discovery URL resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_jwks_url_passthrough_for_direct_jwks_url():
+    """Non-discovery URLs are returned unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    url = "https://login.microsoftonline.com/common/discovery/keys"
+    result = await handler._resolve_jwks_url(url)
+    assert result == url
+
+
+@pytest.mark.asyncio
+async def test_resolve_jwks_url_resolves_oidc_discovery_document():
+    """
+    A .well-known/openid-configuration URL should be fetched and its
+    jwks_uri returned.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = JWTHandler()
+    cache = DualCache()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    discovery_url = "https://login.microsoftonline.com/tenant/.well-known/openid-configuration"
+    jwks_url = "https://login.microsoftonline.com/tenant/discovery/keys"
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"jwks_uri": jwks_url, "issuer": "https://..."}
+
+    mock_get = AsyncMock(return_value=mock_response)
+    handler.http_handler.get = mock_get
+
+    result = await handler._resolve_jwks_url(discovery_url)
+
+    assert result == jwks_url
+    mock_get.assert_called_once_with(discovery_url)
+
+
+@pytest.mark.asyncio
+async def test_resolve_jwks_url_caches_resolved_jwks_uri():
+    """Resolved jwks_uri is cached — second call does not hit the network."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = JWTHandler()
+    cache = DualCache()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    discovery_url = "https://login.microsoftonline.com/tenant/.well-known/openid-configuration"
+    jwks_url = "https://login.microsoftonline.com/tenant/discovery/keys"
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"jwks_uri": jwks_url}
+
+    mock_get = AsyncMock(return_value=mock_response)
+    handler.http_handler.get = mock_get
+
+    first = await handler._resolve_jwks_url(discovery_url)
+    second = await handler._resolve_jwks_url(discovery_url)
+
+    assert first == jwks_url
+    assert second == jwks_url
+    # Network should only be hit once
+    assert mock_get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_jwks_url_raises_if_no_jwks_uri_in_discovery_doc():
+    """Raise a helpful error if the discovery document has no jwks_uri."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    discovery_url = "https://example.com/.well-known/openid-configuration"
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"issuer": "https://example.com"}  # no jwks_uri
+
+    handler.http_handler.get = AsyncMock(return_value=mock_response)
+
+    with pytest.raises(Exception, match="jwks_uri"):
+        await handler._resolve_jwks_url(discovery_url)
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: handle array values in team_id_jwt_field (e.g. AAD "roles" claim)
+# ---------------------------------------------------------------------------
+
+
+def _make_jwt_handler(team_id_jwt_field: str) -> JWTHandler:
+    from litellm.caching.dual_cache import DualCache
+
+    handler = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(team_id_jwt_field=team_id_jwt_field),
+    )
+    return handler
+
+
+def test_get_team_id_returns_first_element_when_roles_is_list():
+    """
+    AAD sends roles as a list.  get_team_id() must return the first string
+    element rather than the raw list (which would later crash with
+    'unhashable type: list').
+    """
+    handler = _make_jwt_handler("roles")
+    token = {"oid": "user-oid", "roles": ["team1"]}
+    result = handler.get_team_id(token=token, default_value=None)
+    assert result == "team1"
+
+
+def test_get_team_id_returns_first_element_from_multi_value_roles_list():
+    """When roles has multiple entries, the first one is used."""
+    handler = _make_jwt_handler("roles")
+    token = {"roles": ["team2", "team1"]}
+    result = handler.get_team_id(token=token, default_value=None)
+    assert result == "team2"
+
+
+def test_get_team_id_returns_default_when_roles_list_is_empty():
+    """Empty list should fall back to default_value."""
+    handler = _make_jwt_handler("roles")
+    token = {"roles": []}
+    result = handler.get_team_id(token=token, default_value="fallback")
+    assert result == "fallback"
+
+
+def test_get_team_id_still_works_with_string_value():
+    """String values (non-array) continue to work as before."""
+    handler = _make_jwt_handler("appid")
+    token = {"appid": "my-team-id"}
+    result = handler.get_team_id(token=token, default_value=None)
+    assert result == "my-team-id"
+
+
+def test_get_team_id_list_result_is_hashable():
+    """
+    The value returned by get_team_id() must be hashable so it can be
+    added to a set (the operation that previously crashed).
+    """
+    handler = _make_jwt_handler("roles")
+    token = {"roles": ["team1"]}
+    result = handler.get_team_id(token=token, default_value=None)
+    # This must not raise TypeError
+    s: set = set()
+    s.add(result)
+    assert "team1" in s
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: helpful error message for dot-notation array indexing (roles.0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_hints_bracket_notation():
+    """
+    When team_id_jwt_field is set to 'roles.0' (unsupported dot-notation for
+    array indexing) and no team is found, the exception message should suggest
+    using 'roles' instead (and explain LiteLLM auto-unwraps list values).
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = _make_jwt_handler("roles.0")
+    # token has roles as a list — dot-notation won't find anything
+    token = {"roles": ["team1"]}
+
+    with pytest.raises(Exception) as exc_info:
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=handler,
+            jwt_valid_token=token,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    error_msg = str(exc_info.value)
+    # Should mention the bad field name and suggest the fix
+    assert "roles.0" in error_msg, f"Expected field name in: {error_msg}"
+    assert "roles" in error_msg and "list" in error_msg, (
+        f"Expected hint about using 'roles' instead: {error_msg}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_hints_bracket_index_notation():
+    """
+    When team_id_jwt_field is set to 'roles[0]' (bracket indexing, also unsupported
+    in get_nested_value) the error message should suggest using 'roles' instead.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = _make_jwt_handler("roles[0]")
+    token = {"roles": ["team1"]}
+
+    with pytest.raises(Exception) as exc_info:
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=handler,
+            jwt_valid_token=token,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    error_msg = str(exc_info.value)
+    assert "roles[0]" in error_msg, f"Expected field name in: {error_msg}"
+    assert "roles" in error_msg and "list" in error_msg, (
+        f"Expected hint about using 'roles' instead: {error_msg}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
+    """
+    When team_id_jwt_field is a normal field name (no dot-notation) the
+    error message should not contain a spurious bracket-notation hint.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    handler = _make_jwt_handler("appid")
+    token = {}  # no appid — triggers the "no team found" path
+
+    with pytest.raises(Exception) as exc_info:
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=handler,
+            jwt_valid_token=token,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    error_msg = str(exc_info.value)
+    assert "Hint" not in error_msg
+

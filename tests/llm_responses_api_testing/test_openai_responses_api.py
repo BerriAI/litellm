@@ -36,6 +36,9 @@ class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
             "model": "openai/gpt-5-mini",
         }
 
+    def get_advanced_model_for_shell_tool(self):
+        return "openai/gpt-5.2"
+
 
 class TestCustomLogger(CustomLogger):
     def __init__(
@@ -1814,3 +1817,49 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_compact_responses_api(sync_mode):
+    """
+    Test the compact_responses API for OpenAI.
+
+    This test verifies that the compact_responses endpoint works correctly
+    for compressing conversation history.
+    """
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
+
+    input_messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm doing well, thank you for asking!"},
+        {"role": "user", "content": "What is the weather like today?"},
+    ]
+
+    try:
+        if sync_mode:
+            response = litellm.compact_responses(
+                model="openai/gpt-4o",
+                input=input_messages,
+                instructions="Be helpful and concise",
+            )
+        else:
+            response = await litellm.acompact_responses(
+                model="openai/gpt-4o",
+                input=input_messages,
+                instructions="Be helpful and concise",
+            )
+    except litellm.InternalServerError:
+        pytest.skip("Skipping test due to InternalServerError")
+    except litellm.BadRequestError as e:
+        # compact_responses may not be available for all models/accounts
+        pytest.skip(f"Skipping test due to BadRequestError: {e}")
+
+    print("compact_responses response=", json.dumps(response, indent=4, default=str))
+
+    # Validate response structure
+    assert response is not None
+    assert "id" in response, "Response should have an 'id' field"
+    assert "output" in response, "Response should have an 'output' field"
+    assert isinstance(response["output"], list), "Output should be a list"

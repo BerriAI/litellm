@@ -138,3 +138,35 @@ def test_non_standard_dict_keys_complex():
 
         traceback.print_exc()
         raise e
+
+
+def test_pydantic_base_model():
+    from pydantic import BaseModel
+
+    class InnerModel(BaseModel):
+        value: int
+        label: str
+
+    class OuterModel(BaseModel):
+        name: str
+        inner: InnerModel
+        tags: list
+
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
+
+    # Test a pydantic model at the top level
+    result = json.loads(safe_dumps(outer))
+    assert result["name"] == "test"
+    assert result["inner"] == {"value": 42, "label": "hello"}
+    assert result["tags"] == ["a", "b"]
+
+    # Test pydantic models nested inside dicts and lists
+    data = {
+        "healthy_endpoints": [outer, InnerModel(value=1, label="one")],
+        "count": 2,
+    }
+    result = json.loads(safe_dumps(data))
+    assert result["count"] == 2
+    assert len(result["healthy_endpoints"]) == 2
+    assert result["healthy_endpoints"][0]["name"] == "test"
+    assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}

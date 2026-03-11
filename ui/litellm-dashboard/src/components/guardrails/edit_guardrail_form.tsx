@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Form, Typography, Select, Input, Switch, Modal } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from "./guardrail_info_helpers";
-import { getGuardrailUISettings } from "../networking";
+import { getGuardrailUISettings, getGlobalLitellmHeaderName } from "../networking";
 import PiiConfiguration from "./pii_configuration";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -183,7 +183,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       const response = await fetch(url, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(guardrailData),

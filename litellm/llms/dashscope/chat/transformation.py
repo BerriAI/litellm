@@ -4,9 +4,6 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
-)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -32,10 +29,6 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
-        """
-        DashScope does not support content in list format.
-        """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True

@@ -2,26 +2,39 @@
 Integration tests for Vertex AI rerank functionality.
 These tests demonstrate end-to-end usage of the Vertex AI rerank feature.
 """
-import os
-from unittest.mock import MagicMock, patch
+import importlib
+from unittest.mock import MagicMock
 
 import httpx
-import pytest
-
-from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 
 
 class TestVertexAIRerankIntegration:
     def setup_method(self):
-        self.config = VertexAIRerankConfig()
+        # Reload modules to ensure fresh references after conftest reloads litellm.
+        # This ensures the class being patched is the same one used by the tests.
+        import litellm.llms.vertex_ai.rerank.transformation as rerank_transformation_module
+        importlib.reload(rerank_transformation_module)
+
+        # Re-import after reload to get the fresh class
+        from litellm.llms.vertex_ai.rerank.transformation import (
+            VertexAIRerankConfig as FreshConfig,
+        )
+        self.config = FreshConfig()
         self.model = "semantic-ranker-default@latest"
 
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_end_to_end_rerank_flow(self, mock_ensure_access_token):
-        """Test complete rerank flow from request to response."""
-        # Mock authentication
-        mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-        
+    def test_end_to_end_rerank_flow(self):
+        """
+        Test complete rerank flow from request to response.
+
+        Uses instance-level mocking to avoid class-reference issues caused by
+        importlib.reload(litellm) in conftest.py.
+        """
+        # Mock authentication at instance level
+        mock_ensure_access_token = MagicMock(
+            return_value=("test-access-token", "test-project-123")
+        )
+        self.config._ensure_access_token = mock_ensure_access_token
+
         # Test documents
         documents = [
             "Gemini is a cutting edge large language model created by Google.",
@@ -30,43 +43,40 @@ class TestVertexAIRerankIntegration:
             "Google's Gemini AI model represents a significant advancement in artificial intelligence technology."
         ]
         query = "What is Google Gemini?"
-        
+
         # Step 1: Test request transformation
-        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None), \
-             patch.object(self.config, 'get_vertex_ai_project', return_value="test-project-123"):
-            
-            # Validate environment
-            headers = self.config.validate_environment(
-                headers={},
-                model=self.model,
-                api_key=None
-            )
-            
-            # Transform request
-            request_data = self.config.transform_rerank_request(
-                model=self.model,
-                optional_rerank_params={
-                    "query": query,
-                    "documents": documents,
-                    "top_n": 2,
-                    "return_documents": True
-                },
-                headers=headers
-            )
-            
-            # Verify request structure
-            assert request_data["model"] == self.model
-            assert request_data["query"] == query
-            assert request_data["topN"] == 2
-            assert request_data["ignoreRecordDetailsInResponse"] == False
-            assert len(request_data["records"]) == 4
-            
-            # Verify record structure
-            for i, record in enumerate(request_data["records"]):
-                assert record["id"] == str(i)  # 0-based indexing
-                assert "title" in record
-                assert "content" in record
-                assert record["content"] == documents[i]
+        # Validate environment
+        headers = self.config.validate_environment(
+            headers={},
+            model=self.model,
+            api_key=None
+        )
+
+        # Transform request
+        request_data = self.config.transform_rerank_request(
+            model=self.model,
+            optional_rerank_params={
+                "query": query,
+                "documents": documents,
+                "top_n": 2,
+                "return_documents": True
+            },
+            headers=headers
+        )
+
+        # Verify request structure
+        assert request_data["model"] == self.model
+        assert request_data["query"] == query
+        assert request_data["topN"] == 2
+        assert request_data["ignoreRecordDetailsInResponse"] == False
+        assert len(request_data["records"]) == 4
+
+        # Verify record structure
+        for i, record in enumerate(request_data["records"]):
+            assert record["id"] == str(i)  # 0-based indexing
+            assert "title" in record
+            assert "content" in record
+            assert record["content"] == documents[i]
         
         # Step 2: Test response transformation
         # Mock Vertex AI Discovery Engine response

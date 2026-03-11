@@ -100,7 +100,7 @@ In cases where encounter other errors when apply Zscaler AI Guard, return exampl
    }
 }
 ```
-## 6. Sending User Information to Zscaler AI Guard for Analysis (Optional)
+## 6. Sending User Information to Zscaler AI Guard (Optional)
 If you need to send end-user information to Zscaler AI Guard for analysis, you can set the configuration in the environment variables to True and include the relevant information in custom_headers on Zscaler AI Guard.
 
 - To send user_api_key_alias:
@@ -133,4 +133,30 @@ curl -i http://localhost:8165/v1/chat/completions \
       "zguard_policy_id": <the custom policy id>
     }
   }'
+```
+
+## 8. Set Custom Zscaler AI Guard Policy on Litellm Team OR Key Metadata (Optional)
+In addition to setting `zguard_policy_id` in a request or the configuration file, you can also set it in the metadata for LiteLLM Team or Key. The `zguard_policy_id` is determined using the following order of precedence: request, Key, Team, config file. This logic is illustrated below:
+```
+user_api_key_metadata = metadata.get("user_api_key_metadata", {}) or {}
+team_metadata = metadata.get("team_metadata", {}) or {}
+policy_id = (
+                metadata.get("zguard_policy_id")
+                if "zguard_policy_id" in metadata
+                else (
+                    user_api_key_metadata.get("zguard_policy_id")
+                    if "zguard_policy_id" in user_api_key_metadata
+                    else (
+                        team_metadata.get("zguard_policy_id")
+                        if "zguard_policy_id" in team_metadata
+                        else self.policy_id
+                    )
+                )
+            )
+```
+You can leverage this feature to apply multiple policies configured on the Zscaler AI Guard (ZGuard) to traffic from different applications. (Note: It is recommended to map policies using either Team or Key metadata, but not a mix of both.)
+
+Example set in Team/Key Metadata, you can set From UI:
+```
+{"zguard_policy_id": 100}
 ```

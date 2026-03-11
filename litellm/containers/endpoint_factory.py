@@ -216,6 +216,8 @@ _generated_endpoints = generate_container_endpoints()
 # Export generated functions dynamically
 list_container_files = _generated_endpoints.get("list_container_files")
 alist_container_files = _generated_endpoints.get("alist_container_files")
+upload_container_file = _generated_endpoints.get("upload_container_file")
+aupload_container_file = _generated_endpoints.get("aupload_container_file")
 retrieve_container_file = _generated_endpoints.get("retrieve_container_file")
 aretrieve_container_file = _generated_endpoints.get("aretrieve_container_file")
 delete_container_file = _generated_endpoints.get("delete_container_file")

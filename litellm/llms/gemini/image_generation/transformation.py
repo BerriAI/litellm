@@ -11,7 +11,12 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -73,6 +78,33 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
+    
+    def _transform_image_usage(self, usage_metadata: dict) -> ImageUsage:
+        """
+        Transform Gemini usageMetadata to ImageUsage format
+        """
+        input_tokens_details = ImageUsageInputTokensDetails(
+            image_tokens=0,
+            text_tokens=0,
+        )
+        
+        # Extract detailed token counts from promptTokensDetails
+        tokens_details = usage_metadata.get("promptTokensDetails", [])
+        for details in tokens_details:
+            if isinstance(details, dict):
+                modality = details.get("modality")
+                token_count = details.get("tokenCount", 0)
+                if modality == "TEXT":
+                    input_tokens_details.text_tokens = token_count
+                elif modality == "IMAGE":
+                    input_tokens_details.image_tokens = token_count
+        
+        return ImageUsage(
+            input_tokens=usage_metadata.get("promptTokenCount", 0),
+            input_tokens_details=input_tokens_details,
+            output_tokens=usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=usage_metadata.get("totalTokenCount", 0),
+        )
 
     def get_complete_url(
         self,
@@ -223,10 +255,16 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     if "inlineData" in part:
                         inline_data = part["inlineData"]
                         if "data" in inline_data:
+                            thought_sig = part.get("thoughtSignature")
                             model_response.data.append(ImageObject(
                                 b64_json=inline_data["data"],
                                 url=None,
+                                provider_specific_fields={"thought_signature": thought_sig} if thought_sig else None,
                             ))
+            
+            # Extract usage metadata for Gemini models
+            if "usageMetadata" in response_data:
+                model_response.usage = self._transform_image_usage(response_data["usageMetadata"])
         else:
             # Original Imagen format - predictions with generated images
             predictions = response_data.get("predictions", [])

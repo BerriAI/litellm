@@ -9,6 +9,10 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.integrations.braintrust_mock_client import (
+    should_use_braintrust_mock,
+    create_mock_braintrust_client,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -34,6 +38,10 @@ class BraintrustLogger(CustomLogger):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> None:
         super().__init__()
+        self.is_mock_mode = should_use_braintrust_mock()
+        if self.is_mock_mode:
+            create_mock_braintrust_client()
+            verbose_logger.info("[BRAINTRUST MOCK] Braintrust logger initialized in mock mode")
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
@@ -225,10 +233,13 @@ class BraintrustLogger(CustomLogger):
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "metadata": standard_logging_object,
-                "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
-            
+
+            # Braintrust cannot specify 'tags' for non-root spans 
+            if dynamic_metadata.get("root_span_id") is None:
+                request_data["tags"] = tags
+
             # Only add those that are not None (or falsy)
             for key, value in span_attributes.items():
                 if value:
@@ -251,6 +262,8 @@ class BraintrustLogger(CustomLogger):
                     json={"events": [request_data]},
                     headers=self.headers,
                 )
+                if self.is_mock_mode:
+                    print_verbose("[BRAINTRUST MOCK] Sync event successfully mocked")
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
@@ -351,21 +364,41 @@ class BraintrustLogger(CustomLogger):
             # Allow metadata override for span name
             span_name = dynamic_metadata.get("span_name", "Chat Completion")
 
+            # Span parents is a special case
+            span_parents = dynamic_metadata.get("span_parents")
+
+            # Convert comma-separated string to list if present
+            if span_parents:
+                span_parents = [s.strip() for s in span_parents.split(",") if s.strip()]
+
+            # Add optional span attributes only if present
+            span_attributes = {
+                "span_id": dynamic_metadata.get("span_id"),
+                "root_span_id": dynamic_metadata.get("root_span_id"),
+                "span_parents": span_parents,
+            }
+
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,
                 "metadata": standard_logging_object,
-                "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
+
+            # Braintrust cannot specify 'tags' for non-root spans 
+            if dynamic_metadata.get("root_span_id") is None:
+                request_data["tags"] = tags
+
+            # Only add those that are not None (or falsy)
+            for key, value in span_attributes.items():
+                if value:
+                    request_data[key] = value
+
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
             else:
                 request_data["output"] = output
-
-            if metrics is not None:
-                request_data["metrics"] = metrics
 
             if metrics is not None:
                 request_data["metrics"] = metrics
@@ -376,6 +409,8 @@ class BraintrustLogger(CustomLogger):
                     json={"events": [request_data]},
                     headers=self.headers,
                 )
+                if self.is_mock_mode:
+                    print_verbose("[BRAINTRUST MOCK] Async event successfully mocked")
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:

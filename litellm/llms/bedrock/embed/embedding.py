@@ -158,6 +158,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model: str,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         is_async_invoke: Optional[bool] = False,
+        batch_data: Optional[List[dict]] = None,
     ) -> Optional[EmbeddingResponse]:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -212,7 +213,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if model == "amazon.titan-embed-image-v1":
                 returned_response = (
                     AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
-                        response_list=response_list, model=model
+                        response_list=response_list, model=model, batch_data=batch_data
                     )
                 )
             elif model == "amazon.titan-embed-text-v1":
@@ -231,7 +232,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 )
             elif provider == "nova":
                 returned_response = AmazonNovaEmbeddingConfig()._transform_response(
-                    response_list=response_list, model=model
+                    response_list=response_list, model=model, batch_data=batch_data
                 )
 
         ##########################################################
@@ -286,11 +287,12 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = self._make_sync_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -309,6 +311,7 @@ class BedrockEmbedding(BaseAWSLLM):
             model=model,
             provider=provider,
             is_async_invoke=is_async_invoke,
+            batch_data=batch_data,
         )
 
     async def _async_single_func_embeddings(
@@ -352,11 +355,14 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+            # This ensures custom headers are properly forwarded, especially with IAM roles and custom api_base
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = await self._make_async_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -375,6 +381,7 @@ class BedrockEmbedding(BaseAWSLLM):
             model=model,
             provider=provider,
             is_async_invoke=is_async_invoke,
+            batch_data=batch_data,
         )
 
     def embeddings(  # noqa: PLR0915
@@ -562,6 +569,8 @@ class BedrockEmbedding(BaseAWSLLM):
         )
 
         ## ROUTING ##
+        # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+        headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
         return cohere_embedding(
             model=model,
             input=input,
@@ -575,7 +584,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aembedding=aembedding,
             timeout=timeout,
             client=client,
-            headers=prepped.headers,  # type: ignore
+            headers=headers_for_request,
         )
 
     async def _get_async_invoke_status(

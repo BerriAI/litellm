@@ -5,9 +5,9 @@ Provides an all-in-one API for document ingestion:
 Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 """
 
-from litellm.rag.main import aingest, ingest
+from litellm.rag.main import aingest, aquery, ingest, query
 
-__all__ = ["ingest", "aingest"]
+__all__ = ["ingest", "aingest", "query", "aquery"]
 
 
 # Expose at litellm.rag level for convenience

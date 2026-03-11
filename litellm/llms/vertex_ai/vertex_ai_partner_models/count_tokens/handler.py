@@ -8,6 +8,7 @@ their respective publisher-specific count-tokens endpoints.
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -65,10 +66,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Use custom api_base if provided, otherwise construct default
         if api_base:
             base_url = api_base
-        elif vertex_location == "global":
-            base_url = "https://aiplatform.googleapis.com"
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict
@@ -108,6 +107,11 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
+        # Map empty location/cluade models to a supported region for count-tokens endpoint
+        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        if not vertex_location or "claude" in model.lower():
+            vertex_location = "us-central1"
+
         # Get access token and resolved project ID
         access_token, project_id = await self._ensure_access_token_async(
             credentials=vertex_credentials,
@@ -119,7 +123,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         endpoint_url = self._build_count_tokens_endpoint(
             model=model,
             project_id=project_id,
-            vertex_location=vertex_location or "us-central1",
+            vertex_location=vertex_location,
             api_base=litellm_params.get("api_base"),
         )
 

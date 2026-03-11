@@ -15,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to input prompts (non-streaming only) |
-| Supported Providers | OpenAI, Azure, Google AI Studio, Vertex AI, AWS Bedrock, Recraft, Xinference, Nscale | |
+| Supported Providers | OpenAI, Azure, Google AI Studio, Vertex AI, AWS Bedrock, Recraft, OpenRouter, Xinference, Nscale | |
 
 ## Quick Start
 
@@ -238,6 +238,27 @@ print(response)
 
 See Recraft usage with LiteLLM [here](./providers/recraft.md#image-generation)
 
+## OpenRouter Image Generation Models
+
+Use this for image generation models available through OpenRouter (e.g., Google Gemini image generation models)
+
+#### Usage
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['OPENROUTER_API_KEY'] = "your-api-key"
+
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A beautiful sunset over a calm ocean",
+    size="1024x1024",
+    quality="high",
+)
+print(response)
+```
+
 ## OpenAI Compatible Image Generation Models
 Use this for calling `/image_generation` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference
 
@@ -301,5 +322,6 @@ print(f"response: {response}")
 | Vertex AI | [Vertex AI Image Generation →](./providers/vertex_image) |
 | AWS Bedrock | [Bedrock Image Generation →](./providers/bedrock) |
 | Recraft | [Recraft Image Generation →](./providers/recraft#image-generation) |
+| OpenRouter | [OpenRouter Image Generation →](./providers/openrouter#image-generation) |
 | Xinference | [Xinference Image Generation →](./providers/xinference#image-generation) |
 | Nscale | [Nscale Image Generation →](./providers/nscale#image-generation) | 

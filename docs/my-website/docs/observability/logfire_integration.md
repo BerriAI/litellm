@@ -40,6 +40,10 @@ import os
 # from https://logfire.pydantic.dev/
 os.environ["LOGFIRE_TOKEN"] = ""
 
+# Optionally customize the base url
+# from https://logfire.pydantic.dev/
+os.environ["LOGFIRE_BASE_URL"] = ""
+
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 

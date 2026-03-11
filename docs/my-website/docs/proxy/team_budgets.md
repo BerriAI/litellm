@@ -8,7 +8,6 @@ import TabItem from '@theme/TabItem';
 # Pre-Requisites
 
 - You must set up a Postgres database (e.g. Supabase, Neon, etc.)
-- To enable team member rate limits, set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` **before starting the proxy server**. Without this, team member rate limits will not be enforced.
 
 
 ## Default Budget for Auto-Generated JWT Teams

@@ -67,7 +67,7 @@ docker run --rm \
   -e PANGEA_AI_GUARD_TOKEN=$PANGEA_AI_GUARD_TOKEN \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:main-latest \
+  docker.litellm.ai/berriai/litellm:main-latest \
   --config /app/config.yaml
 ```
 

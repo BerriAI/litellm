@@ -524,6 +524,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
 
+        # Special case: Check for "nova" in model name first (before "amazon")
+        # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
+        if "nova" in model.lower():
+            if "nova" in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
+
         _split_model = model.split(".")[0]
         if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
@@ -532,10 +538,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         provider = AmazonInvokeConfig._get_provider_from_model_path(model)
         if provider is not None:
             return provider
-
-        # check if provider == "nova"
-        if "nova" in model:
-            return "nova"
 
         for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             if provider in model:

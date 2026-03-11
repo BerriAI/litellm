@@ -198,7 +198,7 @@ async def get_predict_spend_logs(session):
             {
                 "date": "2024-03-09",
                 "spend": 200000,
-                "api_key": "f19bdeb945164278fc11c1020d8dfd70465bffd931ed3cb2e1efa6326225b8b7",
+                "api_key": "sk-test-mock-api-key-456",
             }
         ]
     }

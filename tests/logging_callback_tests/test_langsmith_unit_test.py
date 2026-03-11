@@ -47,6 +47,19 @@ async def test_get_credentials_from_env():
     credentials = logger.get_credentials_from_env()
     assert credentials["LANGSMITH_BASE_URL"] == "https://api.smith.langchain.com"
 
+    # Test with tenant_id
+    credentials = logger.get_credentials_from_env(
+        langsmith_tenant_id="test-tenant-id"
+    )
+    assert credentials["LANGSMITH_TENANT_ID"] == "test-tenant-id"
+
+    # Test tenant_id from environment variable
+    import os
+    os.environ["LANGSMITH_TENANT_ID"] = "env-tenant-id"
+    credentials = logger.get_credentials_from_env()
+    assert credentials["LANGSMITH_TENANT_ID"] == "env-tenant-id"
+    del os.environ["LANGSMITH_TENANT_ID"]
+
 
 @pytest.mark.asyncio
 async def test_group_batches_by_credentials():
@@ -60,6 +73,7 @@ async def test_group_batches_by_credentials():
             "LANGSMITH_API_KEY": "key1",
             "LANGSMITH_PROJECT": "proj1",
             "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": None,
         },
     )
 
@@ -69,6 +83,7 @@ async def test_group_batches_by_credentials():
             "LANGSMITH_API_KEY": "key1",
             "LANGSMITH_PROJECT": "proj1",
             "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": None,
         },
     )
 
@@ -95,6 +110,7 @@ async def test_group_batches_by_credentials_multiple_credentials():
             "LANGSMITH_API_KEY": "key1",
             "LANGSMITH_PROJECT": "proj1",
             "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": None,
         },
     )
 
@@ -104,6 +120,7 @@ async def test_group_batches_by_credentials_multiple_credentials():
             "LANGSMITH_API_KEY": "key2",  # Different API key
             "LANGSMITH_PROJECT": "proj1",
             "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": None,
         },
     )
 
@@ -113,6 +130,7 @@ async def test_group_batches_by_credentials_multiple_credentials():
             "LANGSMITH_API_KEY": "key1",
             "LANGSMITH_PROJECT": "proj2",  # Different project
             "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": None,
         },
     )
 
@@ -125,6 +143,57 @@ async def test_group_batches_by_credentials_multiple_credentials():
     for key, batch_group in grouped.items():
         assert isinstance(key, CredentialsKey)
         assert len(batch_group.queue_objects) == 1  # Each group should have one object
+
+
+@pytest.mark.asyncio
+async def test_group_batches_by_credentials_with_tenant_id():
+
+    # Test that different tenant_ids create separate groups
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+
+    queue_obj1 = LangsmithQueueObject(
+        data={"test": "data1"},
+        credentials={
+            "LANGSMITH_API_KEY": "key1",
+            "LANGSMITH_PROJECT": "proj1",
+            "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": "tenant1",
+        },
+    )
+
+    queue_obj2 = LangsmithQueueObject(
+        data={"test": "data2"},
+        credentials={
+            "LANGSMITH_API_KEY": "key1",
+            "LANGSMITH_PROJECT": "proj1",
+            "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": "tenant2",  # Different tenant_id
+        },
+    )
+
+    queue_obj3 = LangsmithQueueObject(
+        data={"test": "data3"},
+        credentials={
+            "LANGSMITH_API_KEY": "key1",
+            "LANGSMITH_PROJECT": "proj1",
+            "LANGSMITH_BASE_URL": "url1",
+            "LANGSMITH_TENANT_ID": "tenant1",  # Same as queue_obj1
+        },
+    )
+
+    logger.log_queue = [queue_obj1, queue_obj2, queue_obj3]
+
+    grouped = logger._group_batches_by_credentials()
+
+    # Should have two groups: one for tenant1 (queue_obj1 and queue_obj3), one for tenant2 (queue_obj2)
+    assert len(grouped) == 2
+    for key, batch_group in grouped.items():
+        assert isinstance(key, CredentialsKey)
+        assert key.tenant_id in ["tenant1", "tenant2"]
+        if key.tenant_id == "tenant1":
+            assert len(batch_group.queue_objects) == 2
+        else:
+            assert len(batch_group.queue_objects) == 1
 
 
 # Test make_dot_order
@@ -201,20 +270,63 @@ async def test_async_send_batch():
     call_args = logger.async_httpx_client.post.call_args
     assert "runs/batch" in call_args[1]["url"]
     assert "x-api-key" in call_args[1]["headers"]
+    # tenant_id should not be in headers if not provided
+    assert "x-tenant-id" not in call_args[1]["headers"]
 
 
 @pytest.mark.asyncio
-async def test_langsmith_key_based_logging(mocker):
+async def test_async_send_batch_with_tenant_id():
+    logger = LangsmithLogger(
+        langsmith_api_key="test-key",
+        langsmith_tenant_id="test-tenant-id"
+    )
+
+    # Mock the httpx client
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.post.return_value = mock_response
+
+    # Add test data to queue
+    logger.log_queue = [
+        LangsmithQueueObject(
+            data={"test": "data"}, credentials=logger.default_credentials
+        )
+    ]
+
+    await logger.async_send_batch()
+
+    # Verify the API call includes tenant_id header
+    logger.async_httpx_client.post.assert_called_once()
+    call_args = logger.async_httpx_client.post.call_args
+    assert "runs/batch" in call_args[1]["url"]
+    assert "x-api-key" in call_args[1]["headers"]
+    assert "x-tenant-id" in call_args[1]["headers"]
+    assert call_args[1]["headers"]["x-tenant-id"] == "test-tenant-id"
+
+
+@pytest.mark.asyncio
+async def test_langsmith_key_based_logging():
     """
     In key based logging langsmith_api_key and langsmith_project are passed directly to litellm.acompletion
     """
     try:
         # Mock the httpx post request
-        mock_post = mocker.patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+        # We need to mock get_async_httpx_client to return a mock AsyncHTTPHandler
+        # because LangsmithLogger creates its own instance
+        mock_async_httpx_handler = AsyncMock()
+        mock_response = MagicMock()  # Use MagicMock for response to allow sync methods
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()  # raise_for_status is sync in httpx
+        mock_response.text = ""
+        mock_async_httpx_handler.post = AsyncMock(return_value=mock_response)
+        
+        mock_get_client = patch(
+            "litellm.integrations.langsmith.get_async_httpx_client",
+            return_value=mock_async_httpx_handler
         )
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.raise_for_status = lambda: None
+        mock_get_client.start()
+        
         litellm.set_verbose = True
         litellm.DEFAULT_FLUSH_INTERVAL_SECONDS = 1
 
@@ -234,8 +346,8 @@ async def test_langsmith_key_based_logging(mocker):
         print("done sleeping 3 seconds...")
 
         # Verify the post request was made with correct parameters
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
+        mock_async_httpx_handler.post.assert_called_once()
+        call_args = mock_async_httpx_handler.post.call_args
 
         print("call_args", call_args)
 
@@ -244,6 +356,8 @@ async def test_langsmith_key_based_logging(mocker):
 
         # Check headers contain the correct API key
         assert call_args[1]["headers"]["x-api-key"] == "fake_key_project2"
+        # tenant_id should not be in headers if not provided
+        assert "x-tenant-id" not in call_args[1]["headers"]
 
         # Verify the request body contains the expected data
         request_body = call_args[1]["json"]
@@ -278,7 +392,6 @@ async def test_langsmith_key_based_logging(mocker):
                                     "role": "assistant",
                                     "tool_calls": None,
                                     "function_call": None,
-                                    "provider_specific_fields": None,
                                 },
                             }
                         ],
@@ -335,6 +448,8 @@ async def test_langsmith_key_based_logging(mocker):
             actual_body["post"][0]["session_name"]
             == expected_body["post"][0]["session_name"]
         )
+        
+        mock_get_client.stop()
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

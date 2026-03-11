@@ -32,6 +32,7 @@ class TestCloudZeroDryRunEndpoint:
             'team_id': ['team1', 'team2'],
             'team_alias': ['Team One', 'Team Two'],
             'api_key_alias': ['key1', 'key2'],
+            'user_email': ['one@example.com', None],
             'prompt_tokens': [100, 200],
             'completion_tokens': [50, 100],
             'spend': [0.01, 0.02],
@@ -51,7 +52,8 @@ class TestCloudZeroDryRunEndpoint:
             'entity_id': ['team1', 'team2'],
             'resource/tag:team_id': ['team1', 'team2'],
             'resource/tag:team_alias': ['Team One', 'Team Two'],
-            'resource/tag:api_key_alias': ['key1', 'key2']
+            'resource/tag:api_key_alias': ['key1', 'key2'],
+            'resource/tag:user_email': ['one@example.com', 'N/A']
         })
         
         with patch('litellm.integrations.cloudzero.database.LiteLLMDatabase') as mock_db_class, \
@@ -86,6 +88,7 @@ class TestCloudZeroDryRunEndpoint:
             assert len(result['cbf_data']) == 2
             assert result['cbf_data'][0]['cost/cost'] == 0.01
             assert result['cbf_data'][1]['cost/cost'] == 0.02
+            assert result['cbf_data'][0]['resource/tag:user_email'] == 'one@example.com'
             
             # Verify summary
             summary = result['summary']
@@ -122,4 +125,3 @@ class TestCloudZeroDryRunEndpoint:
             assert result['summary']['total_records'] == 0
             assert result['summary']['total_cost'] == 0
             assert result['summary']['total_tokens'] == 0
-

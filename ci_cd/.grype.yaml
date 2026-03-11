@@ -1,0 +1,36 @@
+ignore:
+  - vulnerability: CVE-2026-22184
+    reason: no fixed zlib package is available yet in the Wolfi repositories, so this is ignored temporarily until an upstream release exists
+  # Wolfi base image: Python 3.13 and Node from apk have no fixed builds in Wolfi yet / not applicable
+  - vulnerability: CVE-2025-55130
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: CVE-2025-59465
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: CVE-2025-55131
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: CVE-2025-59466
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: CVE-2026-21637
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: CVE-2025-55132
+    reason: Node in Wolfi apk; only used for Admin UI build/prisma
+  - vulnerability: GHSA-hx9q-6w63-j58v
+    reason: orjson dumps recursion; allowlisted
+  - vulnerability: GHSA-73rr-hh4g-fpgx
+    reason: diff npm transitive dep; override in package.json, allowlisted
+  - vulnerability: CVE-2026-0865
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15282
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2026-0672
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15366
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-15367
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-11468
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2025-12781
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet
+  - vulnerability: CVE-2026-1299
+    reason: Python 3.13 in Wolfi base; no fixed apk build yet

@@ -1,0 +1,587 @@
+[
+  {
+    "id": "analritter",
+    "match": "analritter",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "arsch",
+    "match": "arsch",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "arschficker",
+    "match": "arschficker",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "arschlecker",
+    "match": "arschlecker",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "arschloch",
+    "match": "arschloch",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bimbo",
+    "match": "bimbo",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bratze",
+    "match": "bratze",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bumsen",
+    "match": "bumsen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bonze",
+    "match": "bonze",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "dodel",
+    "match": "dödel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fick",
+    "match": "fick",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "ficken",
+    "match": "ficken",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "flittchen",
+    "match": "flittchen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fotze",
+    "match": "fotze",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fratze",
+    "match": "fratze",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hackfresse",
+    "match": "hackfresse",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hure",
+    "match": "hure",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hurensohn",
+    "match": "hurensohn",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "ische",
+    "match": "ische",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kackbratze",
+    "match": "kackbratze",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kacke",
+    "match": "kacke",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kacken",
+    "match": "kacken",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kackwurst",
+    "match": "kackwurst",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kampflesbe",
+    "match": "kampflesbe",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kanake",
+    "match": "kanake",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kimme",
+    "match": "kimme",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "lummel",
+    "match": "lümmel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "milf",
+    "match": "milf",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mopse",
+    "match": "möpse",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "morgenlatte",
+    "match": "morgenlatte",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mose",
+    "match": "möse",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mufti",
+    "match": "mufti",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "muschi",
+    "match": "muschi",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nackt",
+    "match": "nackt",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "neger",
+    "match": "neger",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nigger",
+    "match": "nigger",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nippel",
+    "match": "nippel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nutte",
+    "match": "nutte",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "onanieren",
+    "match": "onanieren",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "orgasmus",
+    "match": "orgasmus",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pimmel",
+    "match": "pimmel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pimpern",
+    "match": "pimpern",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pinkeln",
+    "match": "pinkeln",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pissen",
+    "match": "pissen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pisser",
+    "match": "pisser",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "popel",
+    "match": "popel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "poppen",
+    "match": "poppen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "porno",
+    "match": "porno",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "reudig",
+    "match": "reudig",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "rosette",
+    "match": "rosette",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schabracke",
+    "match": "schabracke",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schlampe",
+    "match": "schlampe",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "scheisse",
+    "match": "scheiße",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "scheisser",
+    "match": "scheisser",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schiesser",
+    "match": "schiesser",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schnackeln",
+    "match": "schnackeln",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schwanzlutscher",
+    "match": "schwanzlutscher",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "schwuchtel",
+    "match": "schwuchtel",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tittchen",
+    "match": "tittchen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "titten",
+    "match": "titten",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "vogeln",
+    "match": "vögeln",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "vollpfosten",
+    "match": "vollpfosten",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "wichse",
+    "match": "wichse",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "wichsen",
+    "match": "wichsen",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "wichser",
+    "match": "wichser",
+    "tags": [
+      "profanity",
+      "german"
+    ],
+    "severity": 3
+  }
+]

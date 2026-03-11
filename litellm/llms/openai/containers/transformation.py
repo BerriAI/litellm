@@ -16,20 +16,17 @@ from litellm.types.containers.main import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
+from ...base_llm.containers.transformation import BaseContainerConfig
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.containers.transformation import (
-        BaseContainerConfig as _BaseContainerConfig,
-    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseContainerConfig = _BaseContainerConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseContainerConfig = Any
     BaseLLMException = Any
 
 
@@ -83,8 +80,13 @@ class OpenAIContainerConfig(BaseContainerConfig):
     ) -> str:
         """Get the complete URL for OpenAI container API.
         """
-        if api_base is None:
-            api_base = "https://api.openai.com/v1"
+        api_base = (
+            api_base
+            or litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
 
         return f"{api_base.rstrip('/')}/containers"
 

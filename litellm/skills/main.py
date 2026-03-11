@@ -23,11 +23,26 @@ from litellm.types.llms.anthropic_skills import (
     Skill,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
+
+# Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
+_litellm_skills_handler = None
+
+
+def _get_litellm_skills_handler():
+    """Lazy initialization of LiteLLM skills handler to avoid import overhead."""
+    global _litellm_skills_handler
+    if _litellm_skills_handler is None:
+        from litellm.llms.litellm_proxy.skills.transformation import (
+            LiteLLMSkillsTransformationHandler,
+        )
+        _litellm_skills_handler = LiteLLMSkillsTransformationHandler()
+    return _litellm_skills_handler
 
 
 @client
@@ -133,18 +148,6 @@ def create_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
-        )
-
-        if skills_api_provider_config is None:
-            raise ValueError(
-                f"CREATE skill is not supported for {custom_llm_provider}"
-            )
-
         # Build create request
         create_request: CreateSkillRequest = {}
         if display_title is not None:
@@ -155,6 +158,30 @@ def create_skill(
         # Merge extra_body if provided
         if extra_body:
             create_request.update(extra_body)  # type: ignore
+
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().create_skill_handler(
+                display_title=display_title,
+                files=files,
+                metadata=extra_body.get("metadata") if extra_body else None,
+                user_id=kwargs.get("user_id"),
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if skills_api_provider_config is None:
+            raise ValueError(
+                f"CREATE skill is not supported for {custom_llm_provider}"
+            )
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -316,7 +343,17 @@ def list_skills(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().list_skills_handler(
+                limit=limit or 20,
+                offset=0,
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
@@ -481,7 +518,16 @@ def get_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().get_skill_handler(
+                skill_id=skill_id,
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
@@ -638,7 +684,16 @@ def delete_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
-        # Get provider config
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+            return _get_litellm_skills_handler().delete_skill_handler(
+                skill_id=skill_id,
+                _is_async=_is_async,
+                logging_obj=litellm_logging_obj,
+                litellm_call_id=litellm_call_id,
+            )
+
+        # Get provider config for external providers (Anthropic, etc.)
         skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
             ProviderConfigManager.get_provider_skills_api_config(
                 provider=litellm.LlmProviders(custom_llm_provider),
