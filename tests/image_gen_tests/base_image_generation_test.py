@@ -90,6 +90,11 @@ class BaseImageGenTest(ABC):
             pass  # Azure randomly raises these errors - skip when they occur
         except litellm.InternalServerError:
             pass
+        except litellm.APIError as e:
+            if "ModelDeprecated" in str(e) or '"code":410' in str(e):
+                pass
+            else:
+                pytest.fail(f"An exception occurred - {str(e)}")
         except Exception as e:
             if "Your task failed as a result of our safety system." in str(e):
                 pass

@@ -72,3 +72,25 @@ def test_output_format_works_with_bedrock_and_azure():
         headers={}
     )
     assert "output_format" in azure_result
+
+
+def test_output_config_stripped_for_bedrock_provider():
+    """Test that Bedrock requests do not include unsupported output_config."""
+    config = AnthropicMessagesConfig()
+
+    optional_params = {
+        "max_tokens": 1024,
+        "output_config": {"effort": "medium"},
+        "output_format": {"type": "json_schema", "schema": {"type": "object"}},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="bedrock-nova-pro",
+        messages=[{"role": "user", "content": "Say hello"}],
+        anthropic_messages_optional_request_params=optional_params.copy(),
+        litellm_params={"custom_llm_provider": "bedrock"},
+        headers={},
+    )
+
+    assert "output_config" not in result
+    assert "output_format" in result

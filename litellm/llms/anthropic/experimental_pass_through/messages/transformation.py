@@ -154,6 +154,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
 
+        custom_llm_provider = litellm_params.get("custom_llm_provider")
+        # Bedrock Invoke rejects Anthropic `output_config` in the request payload.
+        if custom_llm_provider == "bedrock":
+            anthropic_messages_optional_request_params.pop("output_config", None)
+
         # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
         if system_param is not None:
