@@ -547,6 +547,13 @@ async def delete_vantage_settings(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
+        # Deregister in-memory VantageLogger so the scheduler stops firing
+        from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+        litellm.logging_callback_manager.remove_callbacks_by_type(
+            litellm.callbacks, VantageLogger
+        )
+
         verbose_proxy_logger.info("Vantage settings deleted successfully")
 
         return VantageInitResponse(
