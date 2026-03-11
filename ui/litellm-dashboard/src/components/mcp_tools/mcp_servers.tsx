@@ -29,7 +29,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth();
+  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -163,8 +163,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         handleDelete,
         isLoadingHealth,
         (server: MCPServer) => setByokModalServer(server),
+        recheckServerHealth,
+        recheckingServerIds,
       ),
-    [userRole, isLoadingHealth],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
   );
 
   function handleDelete(server_id: string) {
