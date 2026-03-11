@@ -310,9 +310,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           previousResponseId,
           (id: string) => setResponsesSessionId(id),
           (event: MCPEvent) => {
-            // Accumulate locally only — persisted once in finally to avoid
-            // one full localStorage write per MCP event during streaming.
+            // Update in real-time so users see tool activity as it happens.
+            // MCP events are infrequent (a handful per turn) so the extra
+            // localStorage writes are acceptable.
             accumulatedMCPEvents.push(event);
+            updateLastAssistantMessage(convId!, { mcpEvents: [...accumulatedMCPEvents] });
           },
         );
         streamCompletedCleanly = true;
@@ -327,10 +329,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           });
         }
       } finally {
-        // Only persist MCP events on clean completion — partial events from an
-        // aborted or errored turn would show incomplete tool calls to the user.
-        if (accumulatedMCPEvents.length > 0 && streamCompletedCleanly) {
-          updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
+        // Clear partial MCP events on non-clean completion so users don't see
+        // incomplete tool calls (e.g. a call_tool without its output).
+        if (!streamCompletedCleanly && accumulatedMCPEvents.length > 0) {
+          updateLastAssistantMessage(convId!, { mcpEvents: [] });
         }
         setIsStreaming(false);
         abortControllerRef.current = null;

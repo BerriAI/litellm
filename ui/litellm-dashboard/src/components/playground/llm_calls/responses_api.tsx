@@ -102,18 +102,15 @@ export async function makeOpenAIResponsesRequest(
           require_approval: "never",
         });
       } else {
-        // Individual servers selected - create one entry per server
-        selectedMCPServers.forEach((serverId) => {
-          const server = mcpServers?.find((s) => s.server_id === serverId);
-          // Use server_name for both routing and labelling. server_name is the
-          // unique registered identifier; aliases can collide across servers.
-          const routeName = server?.server_name || serverId;
-          const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+        // Individual servers selected — selectedMCPServers contains server names
+        // (as registered with the proxy), not server_id values.
+        selectedMCPServers.forEach((serverName) => {
+          const allowedTools = mcpServerToolRestrictions?.[serverName] || [];
 
           tools.push({
             type: "mcp",
-            server_label: routeName, // unique per request — collisions cause silent tool-routing failures
-            server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
+            server_label: serverName, // unique per request — server names are unique identifiers
+            server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(serverName)}`,
             require_approval: "never",
             ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
           });
