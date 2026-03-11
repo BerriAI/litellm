@@ -1707,6 +1707,20 @@ async def _process_team_members(
     litellm_proxy_admin_name: str,
 ) -> Tuple[List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
     """Process and add new team members."""
+    # Validate member models are a subset of team.models
+    if data.models is not None:
+        _team_allowed = set(complete_team_data.models or [])
+        if _team_allowed:  # only enforce when team has explicit restrictions
+            _disallowed = set(data.models) - _team_allowed
+            if _disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Member models {sorted(_disallowed)} are not in team.models. "
+                        f"Allowed team models: {sorted(_team_allowed)}"
+                    },
+                )
+
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
 
@@ -2386,6 +2400,18 @@ async def team_member_update(
 
         ### update team member models (inside transaction for atomicity)
         if data.models is not None:
+            # Validate member models are a subset of team.models
+            _team_allowed = set(existing_team_row.models or [])
+            if _team_allowed:  # only enforce when team has explicit restrictions
+                _disallowed = set(data.models) - _team_allowed
+                if _disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Member models {sorted(_disallowed)} are not in team.models. "
+                            f"Allowed team models: {sorted(_team_allowed)}"
+                        },
+                    )
             await tx.litellm_teammembership.upsert(
                 where={
                     "user_id_team_id": {

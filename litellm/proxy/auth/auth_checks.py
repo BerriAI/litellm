@@ -2696,12 +2696,12 @@ def get_effective_team_models(
 
     metadata = (
         team_metadata
-        or (
+        if team_metadata is not None
+        else (
             team_object.metadata
             if team_object and isinstance(team_object.metadata, dict)
-            else None
+            else {}
         )
-        or {}
     )
     team_default = metadata.get("team_default_models", None)
     if team_default is None:
@@ -2750,6 +2750,13 @@ async def can_team_access_model(
             models_from_groups = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
             )
+            # When per-user effective_models narrows the allowed set,
+            # only honour access-group models that are also in that set.
+            if effective_models is not None and models_from_groups:
+                _effective_set = set(effective_models)
+                models_from_groups = [
+                    m for m in models_from_groups if m in _effective_set
+                ]
             if models_from_groups:
                 return _can_object_call_model(
                     model=model,
