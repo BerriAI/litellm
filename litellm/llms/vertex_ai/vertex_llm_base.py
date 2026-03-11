@@ -60,7 +60,9 @@ class VertexBase:
             # If user didn't specify region, use the first supported region
             if vertex_region is None:
                 return supported_regions[0]
-            # If user specified a region, trust them
+            # If user specified a region not supported by this model, override it
+            if vertex_region not in supported_regions:
+                return supported_regions[0]
             return vertex_region
         return vertex_region or "us-central1"
 

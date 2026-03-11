@@ -98,8 +98,8 @@ class TestVertexBaseGetVertexRegion:
             )
             assert result == "global"
 
-    def test_global_model_with_user_region_trusts_user(self):
-        """Test that user-specified region is preserved even for global-only models."""
+    def test_global_model_with_unsupported_user_region_overrides(self):
+        """Test that unsupported user region is overridden for global-only models."""
         vertex_base = VertexBase()
 
         with patch.dict(
@@ -111,7 +111,7 @@ class TestVertexBaseGetVertexRegion:
                 vertex_region="us-central1",
                 model="qwen/qwen3-next-80b-a3b-instruct-maas",
             )
-            assert result == "us-central1"
+            assert result == "global"
 
     def test_non_global_model_uses_provided_region(self):
         """Test that non-global models use the provided region."""
