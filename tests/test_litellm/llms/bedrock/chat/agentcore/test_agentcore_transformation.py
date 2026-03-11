@@ -218,6 +218,7 @@ class TestAgentCoreStreamingJsonFallback:
                 model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
+                api_key="test-jwt-token",
                 client=client,
             )
 
@@ -256,6 +257,7 @@ class TestAgentCoreStreamingJsonFallback:
                 model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
+                api_key="test-jwt-token",
                 client=client,
             )
 
@@ -288,6 +290,7 @@ class TestAgentCoreStreamingJsonFallback:
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
+                    api_key="test-jwt-token",
                     client=client,
                 )
 
@@ -315,5 +318,6 @@ class TestAgentCoreStreamingJsonFallback:
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
+                    api_key="test-jwt-token",
                     client=client,
                 )
