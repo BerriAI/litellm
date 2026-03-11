@@ -303,7 +303,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         request_body = {
             "config": {
                 "modules": modules_payload,
-                "stream": stream_config,
+                **({"stream": stream_config} if stream_config else {})
             },
             **placeholder_values,
         }

@@ -118,7 +118,6 @@ class TestSAPTransformationIntegration:
                                         'model': {'name': 'gpt-4o', 'params': {}, 'version': 'latest'}
                                         }
                                    },
-                              'stream': {}
                               }
                          }
         config = mock_config.transform_request(

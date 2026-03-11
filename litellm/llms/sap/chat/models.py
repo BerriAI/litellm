@@ -1,5 +1,6 @@
 from typing import Union, Literal, Optional
 from enum import Enum
+import  warnings
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -369,6 +370,14 @@ class MaskingModuleConfig(BaseModel):
                 "DEPRECATED: parameter 'masking_providers' will be removed Sept 15, 2026. Use 'providers' instead."
             )
 
+        if has_masking_providers:
+            warnings.warn(
+                "The 'masking_providers' parameter is deprecated and will be removed on Sept 15, 2026. "
+                "Use 'providers' instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         return self
 
 
@@ -653,6 +662,14 @@ class TranslationModuleConfig(BaseModel):
     """
     input: Optional[SAPDocumentTranslationInput] = None
     output: Optional[SAPDocumentTranslationOutput] = None
+
+    @model_validator(mode="after")
+    def enforce_min_properties(self) -> "TranslationModuleConfig":
+        if self.input is None and self.output is None:
+            raise ValueError(
+                "TranslationModuleConfig requires at least one of 'input' or 'output'."
+            )
+        return self
 
 
 class ModuleConfig(BaseModel):
