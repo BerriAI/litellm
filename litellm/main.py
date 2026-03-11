@@ -131,6 +131,7 @@ from litellm.utils import (
     create_tokenizer,
     get_api_key,
     get_llm_provider,
+    get_model_info,
     get_non_default_completion_params,
     get_non_default_transcription_params,
     get_optional_params_embeddings,
@@ -2506,10 +2507,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             # Add GitHub Copilot headers (same as /responses endpoint does)
             if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
                     get_copilot_default_headers,
                 )
-                from litellm.llms.github_copilot.authenticator import Authenticator
 
                 copilot_auth = Authenticator()
                 copilot_api_key = copilot_auth.get_api_key()
@@ -5130,13 +5131,37 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("VERTEX_API_BASE")
             )
 
-            if (
+            try:
+                model_info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+                uses_embed_content = model_info.get("uses_embed_content", False)
+            except Exception:
+                uses_embed_content = False
+
+            if uses_embed_content:
+                response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                    model=model,
+                    input=input,
+                    encoding=_get_encoding(),
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                    custom_llm_provider="vertex_ai",
+                    api_key=None,
+                    api_base=api_base,
+                    client=client,
+                    extra_headers=headers,
+                )
+            elif (
                 "image" in optional_params
                 or "video" in optional_params
                 or model
                 in vertex_multimodal_embedding.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
             ):
-                # multimodal embedding is supported on vertex httpx
                 response = vertex_multimodal_embedding.multimodal_embedding(
                     model=model,
                     input=input,
