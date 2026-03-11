@@ -9,7 +9,7 @@ const mcpServersKeys = createQueryKeys("mcpServers");
 export const useMCPServers = (teamId?: string | null) => {
   const { accessToken } = useAuthorized();
   return useQuery<MCPServer[]>({
-    queryKey: mcpServersKeys.list(teamId ? { filters: { teamId } } : undefined),
+    queryKey: mcpServersKeys.list({ teamId: teamId ?? undefined }),
     queryFn: async () => await fetchMCPServers(accessToken!, teamId),
     enabled: !!accessToken,
   });

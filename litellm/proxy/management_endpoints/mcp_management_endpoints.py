@@ -778,6 +778,10 @@ if MCP_AVAILABLE:
                     aggregated_servers.values()
                 )
 
+                redacted_mcp_servers = _redact_mcp_credentials_list(
+                    aggregated_servers.values()
+                )
+
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
             for server in redacted_mcp_servers:
