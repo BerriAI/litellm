@@ -634,6 +634,9 @@ class MCPServerManager:
         resolved_scopes = scopes or (
             mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
         )
+        oauth2_flow = getattr(mcp_server, "oauth2_flow", None)
+        if oauth2_flow not in ("client_credentials", "authorization_code"):
+            oauth2_flow = None
 
         new_server = MCPServer(
             server_id=mcp_server.server_id,
@@ -651,7 +654,7 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            oauth2_flow=oauth2_flow,
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
