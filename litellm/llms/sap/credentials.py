@@ -339,7 +339,7 @@ def get_token_creator(
             expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
             return f"Bearer {access_token}", expiry_date
         except Exception as e:
-            msg = resp.text if resp is not None else str(e)
+            msg = resp.text if resp is not None else getattr(e, "text", str(e))
             raise RuntimeError(f"Token request failed: {msg}") from e
 
     def _fetch_token() -> tuple[str, datetime]:
