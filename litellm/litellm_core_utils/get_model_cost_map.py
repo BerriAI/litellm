@@ -193,6 +193,7 @@ def _expand_model_aliases(model_cost: dict) -> dict:
 
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
+    """
     aliases_to_add: Dict[str, dict] = {}
     keys_with_aliases: List[str] = []
 
