@@ -50,5 +50,53 @@ class TestBasetenModelAPI:
         assert api_key == "test-key"
 
 
+class TestBasetenTransformRequest:
+    """Test Baseten transform_request with served_model_name"""
+
+    def test_transform_request_with_served_model_name(self):
+        """Test that served_model_name overrides the model in request body"""
+        config = BasetenConfig()
+
+        result = config.transform_request(
+            model="wd1lndkw",
+            messages=[{"role": "user", "content": "Hello!"}],
+            optional_params={},
+            litellm_params={"served_model_name": "baseten-hosted/zai-org/GLM-5"},
+            headers={},
+        )
+
+        assert result["model"] == "baseten-hosted/zai-org/GLM-5"
+        assert result["messages"] == [{"role": "user", "content": "Hello!"}]
+
+    def test_transform_request_without_served_model_name(self):
+        """Test that model is used as-is when served_model_name is not set"""
+        config = BasetenConfig()
+
+        result = config.transform_request(
+            model="wd1lndkw",
+            messages=[{"role": "user", "content": "Hello!"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["model"] == "wd1lndkw"
+
+    def test_transform_request_model_api_with_served_model_name(self):
+        """Test served_model_name also works for Model API models"""
+        config = BasetenConfig()
+
+        result = config.transform_request(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Hello!"}],
+            optional_params={"max_tokens": 100},
+            litellm_params={"served_model_name": "my-custom-name"},
+            headers={},
+        )
+
+        assert result["model"] == "my-custom-name"
+        assert result["max_tokens"] == 100
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
