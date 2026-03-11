@@ -621,7 +621,7 @@ response = completion(model="sap/gpt-4o",
                       masking=masking_config)
 print(response.choices[0].message.content)
 
-###Data masking module also available for embedding 
+# Data masking module also available for embedding 
 response = embedding(model="sap/text-embedding-3-small",
                       input=mock_cv,
                       masking=masking_config)

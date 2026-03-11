@@ -284,7 +284,7 @@ class DPIMethodConstant(BaseModel):
     """
     Replaces the entity with the specified value followed by an incrementing number
     """
-    method: str = "constant"
+    method: Literal["constant"] = "constant"
     value: str
 
 
@@ -292,7 +292,7 @@ class DPIMethodFabricatedData(BaseModel):
     """
     Replaces the entity with a randomly generated value appropriate to its type.
     """
-    method: str = "fabricated_data"
+    method: Literal["fabricated_data"] = "fabricated_data"
 
 
 class DPICustomEntity(BaseModel):
