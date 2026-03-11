@@ -27,8 +27,7 @@ def test_basic_config_transform(fake_token_creator, fake_deployment_url):
             }
         },
         'input': {
-            'text': 'Hi',
-            'type': 'text'
+            'text': 'Hi'
         }
     }
     with patch(

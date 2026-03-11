@@ -24,7 +24,7 @@ from .models import ResponseFormatJSONSchema, ResponseFormat, OrchestrationReque
 from .handler import GenAIHubOrchestrationError, AsyncSAPStreamIterator, SAPStreamIterator
 
 def validate_dict(data: dict, model) -> dict:
-    return model(**data).model_dump(by_alias=True, exclude_none=True)
+    return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -233,7 +233,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             optional_modules = {}
             optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
             for module in optional_modules_lst:
-                if params.get(module, None) is None:
+                if params.get(module, None) is not None:
                     optional_modules[module] = params.pop(module)
 
             return {
