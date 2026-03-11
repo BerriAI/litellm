@@ -1,7 +1,7 @@
 import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { Accordion, AccordionBody, AccordionHeader, Button as Button2, SelectItem, TextInput } from "@tremor/react";
+import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
 import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
@@ -229,9 +229,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Original return for standalone mode
   return (
     <div className="flex gap-2">
-      <Button2 className="mb-0" onClick={() => setIsModalVisible(true)}>
+      <Button type="primary" className="mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
-      </Button2>
+      </Button>
       <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
         title="Invite User"

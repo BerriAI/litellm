@@ -351,15 +351,15 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.config_override_endpoints import (
-    router as config_override_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.compliance_endpoints import (
     router as compliance_router,
+)
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -373,7 +373,9 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -442,7 +444,9 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -541,7 +545,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -5788,6 +5794,8 @@ class ProxyStartupEvent:
                 _RUNTIME_GENERAL_SETTINGS_FLAGS,
             )
 
+            if prisma_client is None:
+                return
             db_record = await prisma_client.db.litellm_uisettings.find_unique(
                 where={"id": "ui_settings"}
             )
@@ -11983,6 +11991,7 @@ async def get_config_list(
         "mcp_trusted_proxy_ranges": {"type": "List"},
         "always_include_stream_usage": {"type": "Boolean"},
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
+        "mcp_required_fields": {"type": "List"},
     }
 
     return_val = []

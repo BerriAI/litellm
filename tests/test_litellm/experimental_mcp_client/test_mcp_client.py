@@ -11,7 +11,7 @@ sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
-from litellm.types.mcp import MCPStdioConfig, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
 
 class TestMCPClient:
@@ -244,6 +244,72 @@ class TestMCPClient:
             assert isinstance(test_client, httpx.AsyncClient)
             assert test_client.headers is not None
             await test_client.aclose()
+
+    def test_token_auth_header_generation(self):
+        """Test that token auth generates correct Authorization header"""
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.token,
+            auth_value="my-secret-token"
+        )
+        
+        headers = client._get_auth_headers()
+        
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "token my-secret-token"
+
+    def test_token_auth_compatibility_with_existing_auth_types(self):
+        """Verify existing auth types are not affected by token auth addition"""
+        # Test bearer token
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.bearer_token,
+            auth_value="bearer-token"
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer bearer-token"
+        
+        # Test API key
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.api_key,
+            auth_value="api-key"
+        )
+        headers = client._get_auth_headers()
+        assert headers["X-API-Key"] == "api-key"
+        
+        # Test basic auth (gets base64 encoded)
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.basic,
+            auth_value="user:pass"
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"].startswith("Basic ")
+
+    def test_token_auth_with_extra_headers(self):
+        """Test that token auth works alongside extra headers"""
+        client = MCPClient(
+            server_url="http://example.com/sse",
+            transport_type="sse",
+            auth_type=MCPAuth.token,
+            auth_value="my-token",
+            extra_headers={"X-Custom-Header": "custom-value"}
+        )
+        
+        headers = client._get_auth_headers()
+        
+        assert headers["Authorization"] == "token my-token"
+        assert headers["X-Custom-Header"] == "custom-value"
+
+    def test_token_auth_enum_value(self):
+        """Test that MCPAuth.token enum exists and has correct value"""
+        assert hasattr(MCPAuth, "token")
+        assert MCPAuth.token.value == "token"
 
 
 if __name__ == "__main__":

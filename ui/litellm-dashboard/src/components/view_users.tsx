@@ -1,7 +1,7 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button } from "@tremor/react";
+import { Button } from "antd";
 import BulkEditUserModal from "./BulkEditUsers";
 import { CreateUserButton } from "./CreateUserButton";
 import EditUserModal from "./edit_user";
@@ -309,7 +309,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
               {isProxyAdmin && (
                 <Button
                   onClick={handleToggleSelectionMode}
-                  variant={selectionMode ? "primary" : "secondary"}
+                  type={selectionMode ? "primary" : "default"}
                   className="flex items-center"
                 >
                   {selectionMode ? "Cancel Selection" : "Select Users"}
@@ -317,7 +317,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
               )}
 
               {isProxyAdmin && selectionMode && (
-                <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
               )}

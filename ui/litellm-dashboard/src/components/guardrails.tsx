@@ -140,7 +140,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
           <Tab>Guardrail Garden</Tab>
           <Tab>Guardrails</Tab>
           <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
-          <Tab>Team Guardrails</Tab>
+          <Tab>Submitted Guardrails</Tab>
         </TabList>
 
         <TabPanels>
