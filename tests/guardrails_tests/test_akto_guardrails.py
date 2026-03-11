@@ -12,9 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import asyncio
 
-from fastapi import HTTPException
+from starlette.exceptions import HTTPException
 from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_registry, guardrail_class_registry
+from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 
 
 # ---------------------------------------------------------------------------
@@ -23,17 +26,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 def test_akto_in_guardrail_initializer_registry():
-    from litellm.proxy.guardrails.guardrail_registry import (
-        guardrail_initializer_registry,
-    )
-
     assert "akto" in guardrail_initializer_registry
 
 
 def test_akto_in_guardrail_class_registry():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
-
     assert "akto" in guardrail_class_registry
     assert guardrail_class_registry["akto"] is AktoGuardrail
 
@@ -46,8 +42,6 @@ def test_akto_in_guardrail_class_registry():
 @pytest.fixture
 def akto_sync():
     """AktoGuardrail in sync (blocking) mode."""
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     return AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
@@ -61,8 +55,6 @@ def akto_sync():
 @pytest.fixture
 def akto_async():
     """AktoGuardrail in async (non-blocking) mode."""
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     return AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
@@ -124,8 +116,6 @@ def _mock_blocked_response(reason="Prompt injection detected"):
 
 
 def test_init_requires_akto_base_url():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError, match="akto_base_url is required"):
             AktoGuardrail(
@@ -137,8 +127,6 @@ def test_init_requires_akto_base_url():
 
 
 def test_init_requires_api_key():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError, match="akto_api_key is required"):
             AktoGuardrail(
@@ -150,8 +138,6 @@ def test_init_requires_api_key():
 
 
 def test_init_from_env():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     with patch.dict(
         os.environ,
         {
@@ -169,8 +155,6 @@ def test_init_from_env():
 
 
 def test_on_flagged_default_block():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
@@ -194,6 +178,9 @@ def testbuild_akto_payload_format(akto_sync, sample_inputs, sample_request_data)
 
     assert payload["path"] == "/v1/chat/completions"
     assert payload["method"] == "POST"
+    assert payload["type"] == "HTTP/1.1"
+    assert payload["akto_account_id"] == "1000000"
+    assert payload["akto_vxlan_id"] == "0"
     assert payload["is_pending"] == "false"
     assert payload["source"] == "MIRRORING"
     assert payload["contextSource"] == "AGENTIC"
@@ -225,8 +212,6 @@ def testbuild_akto_payload_with_response(
 
 
 def testbuild_query_params():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=False)
     assert params == {"akto_connector": "litellm", "guardrails": "true"}
 
@@ -247,8 +232,6 @@ def testbuild_query_params():
 
 
 def testparse_guardrails_result_allowed():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     allowed, reason = AktoGuardrail.parse_guardrails_result(
         {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
     )
@@ -257,8 +240,6 @@ def testparse_guardrails_result_allowed():
 
 
 def testparse_guardrails_result_blocked():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     allowed, reason = AktoGuardrail.parse_guardrails_result(
         {"data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}}
     )
@@ -267,8 +248,6 @@ def testparse_guardrails_result_blocked():
 
 
 def testparse_guardrails_result_missing():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     allowed, _ = AktoGuardrail.parse_guardrails_result({})
     assert allowed is True
 
@@ -321,6 +300,11 @@ async def test_sync_pre_call_blocked(akto_sync, sample_inputs, sample_request_da
             request_data=sample_request_data,
             input_type="request",
         )
+
+    # Await the fire-and-forget background tasks so the mock gets called
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    if pending:
+        await asyncio.gather(*pending)
 
     # Blocked requests should return 400 (not 500) so clients don't retry
     assert exc_info.value.status_code == 400
@@ -438,8 +422,6 @@ async def test_async_pre_call_noop(akto_async, sample_inputs, sample_request_dat
 
 @pytest.mark.asyncio
 async def test_fail_open_on_unreachable():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
@@ -462,8 +444,6 @@ async def test_fail_open_on_unreachable():
 
 @pytest.mark.asyncio
 async def test_fail_closed_on_unreachable():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
@@ -490,8 +470,6 @@ async def test_fail_closed_on_unreachable():
 
 
 def testextract_request_path_from_metadata():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     path = AktoGuardrail.extract_request_path(
         {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
     )
@@ -499,15 +477,11 @@ def testextract_request_path_from_metadata():
 
 
 def testextract_request_path_fallback():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     path = AktoGuardrail.extract_request_path({})
     assert path == "/v1/chat/completions"
 
 
 def testresolve_metadata_value():
-    from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
-
     assert (
         AktoGuardrail.resolve_metadata_value(
             {"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id"

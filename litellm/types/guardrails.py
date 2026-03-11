@@ -17,6 +17,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
@@ -490,31 +493,6 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
     send_user_api_key_team_id: Optional[bool] = Field(
         default=False, description="Whether to send user_API_key_team_id in headers"
-    )
-
-
-class AktoConfigModel(BaseModel):
-    """Config for the Akto guardrail."""
-
-    akto_base_url: Optional[str] = Field(
-        default=None,
-        description="Akto Guardrail API Base URL. Env: AKTO_GUARDRAIL_API_BASE.",
-    )
-    akto_api_key: Optional[str] = Field(
-        default=None,
-        description="API key. Env: AKTO_API_KEY.",
-    )
-    on_flagged: Optional[Literal["block", "monitor"]] = Field(
-        default="block",
-        description="'block' = pre-call validation, 'monitor' = post-call log only. Env: AKTO_ON_FLAGGED.",
-    )
-    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
-        default="fail_closed",
-        description="'fail_open' = allow, 'fail_closed' = block when Akto is down.",
-    )
-    guardrail_timeout: Optional[int] = Field(
-        default=None,
-        description="HTTP timeout in seconds. Default: 5.",
     )
 
 
