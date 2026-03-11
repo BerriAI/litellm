@@ -12,7 +12,8 @@ import os
 import sys
 import unittest.mock as mock
 
-sys.path.insert(0, os.path.abspath("../.."))
+# Use __file__ so the import path is correct regardless of the pytest working directory.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import httpx
 import pytest
