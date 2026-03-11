@@ -2388,6 +2388,9 @@ async def block_user(
             detail={"error": f"User {data.user_id} not found"},
         )
 
+    # Invalidate user cache entry
+    user_api_key_cache.delete_cache(key=data.user_id)
+
     # Invalidate cache for all keys associated with this user
     user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"user_id": data.user_id}
@@ -2442,6 +2445,9 @@ async def unblock_user(
             status_code=404,
             detail={"error": f"User {data.user_id} not found"},
         )
+
+    # Invalidate user cache entry
+    user_api_key_cache.delete_cache(key=data.user_id)
 
     # Invalidate cache for all keys associated with this user
     user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
