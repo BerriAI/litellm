@@ -4446,12 +4446,13 @@ def _get_model_info_from_litellm_params(
         return {}
 
     metadata = litellm_params.get("metadata", {}) or {}
-    return (
+    result = (
         metadata.get("model_info")
         or litellm_params.get("model_info")
         or (litellm_params.get("litellm_metadata", {}) or {}).get("model_info")
         or {}
     )
+    return result if isinstance(result, dict) else {}
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
