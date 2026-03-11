@@ -477,17 +477,12 @@ def test_cohere_embedding_optional_params():
 @pytest.mark.parametrize(
     "model,custom_llm_provider,drop_params,expect_dimensions",
     [
-        # hosted_vllm with a non-text-embedding-3 model and drop_params=True → drop
-        ("intfloat/e5-large-v2", "hosted_vllm", True, False),
-        # hosted_vllm with a non-text-embedding-3 model and drop_params=False → keep
-        ("intfloat/e5-large-v2", "hosted_vllm", False, True),
-        # text-embedding-3 model should always keep dimensions
-        ("text-embedding-3-small", "openai_compatible_providers", True, True),
-        ("text-embedding-3-small", "openai_compatible_providers", False, True),
-        # openrouter with a non-text-embedding-3 model and drop_params=True → drop
-        ("jina-embeddings-v3", "openai_compatible_providers", True, False),
-        # openrouter without drop_params → keep (don't block providers that support dimensions)
-        ("jina-embeddings-v3", "openai_compatible_providers", False, True),
+        ("intfloat/e5-large-v2", "groq", True, False),   # drop when drop_params=True
+        ("intfloat/e5-large-v2", "groq", False, True),   # keep when drop_params=False
+        ("text-embedding-3-small", "groq", True, True),  # text-embedding-3 always kept
+        ("text-embedding-3-small", "groq", False, True),
+        ("jina-embeddings-v3", "groq", True, False),
+        ("jina-embeddings-v3", "groq", False, True),
     ],
 )
 def test_openai_compatible_embedding_dimensions_drop_params(
