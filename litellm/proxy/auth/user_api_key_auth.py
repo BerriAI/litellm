@@ -766,6 +766,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             if team_membership is not None
                             else None
                         ),
+                        team_member_models=(
+                            team_membership.models
+                            if team_membership is not None
+                            else []
+                        ),
                         team_metadata=(
                             team_object.metadata if team_object is not None else None
                         ),

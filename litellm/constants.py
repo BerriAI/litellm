@@ -1318,6 +1318,11 @@ LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
 LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
     "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
 )  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
+# Team Model Overrides
+LITELLM_TEAM_MODEL_OVERRIDES_ENABLED = os.getenv(
+    "LITELLM_TEAM_MODEL_OVERRIDES", "false"
+)
+
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 

@@ -1449,6 +1449,36 @@ async def update_team(   # noqa: PLR0915
                 existing_team_row=existing_team_row,
             )
 
+        # Handle team_default_models → store in metadata
+        if data.team_default_models is not None:
+            # Validate: team_default_models must be a subset of team.models
+            _existing_models = (
+                data.models
+                if data.models is not None
+                else (existing_team_row.models or [])
+            )
+            if _existing_models:  # only validate if team has model restrictions
+                disallowed = set(data.team_default_models) - set(_existing_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"team_default_models contains models not in team.models: {sorted(disallowed)}"
+                        },
+                    )
+            # Merge into metadata
+            if "metadata" not in updated_kv or updated_kv["metadata"] is None:
+                existing_metadata = (
+                    existing_team_row.metadata
+                    if isinstance(existing_team_row.metadata, dict)
+                    else {}
+                )
+                updated_kv["metadata"] = existing_metadata
+            updated_kv["metadata"]["team_default_models"] = data.team_default_models
+
+        # Pop team_default_models from updated_kv so it doesn't go to prisma directly
+        updated_kv.pop("team_default_models", None)
+
         # update team metadata fields
         _update_metadata_fields(updated_kv=updated_kv)
 
@@ -1696,6 +1726,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                models=data.models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1720,6 +1751,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    models=data.models,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2352,6 +2384,25 @@ async def team_member_update(
             rpm_limit=data.rpm_limit,
         )
 
+    ### update team member models
+    if data.models is not None:
+        await prisma_client.db.litellm_teammembership.upsert(
+            where={
+                "user_id_team_id": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                }
+            },
+            data={
+                "create": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                    "models": data.models,
+                },
+                "update": {"models": data.models},
+            },
+        )
+
     ### update team member role
     if data.role is not None:
         team_members: List[Member] = []
@@ -2382,6 +2433,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        models=data.models,
     )
 
 

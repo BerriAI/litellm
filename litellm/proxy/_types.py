@@ -1694,6 +1694,10 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    team_default_models: Optional[List[str]] = Field(
+        default=None,
+        description="Default models all team members can access. Must be a subset of team.models. Stored in metadata.",
+    )
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -2360,6 +2364,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_member_spend: Optional[float] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_rpm_limit: Optional[int] = None
+    team_member_models: List[str] = []
 
     # End User Params
     end_user_id: Optional[str] = None
@@ -3534,6 +3539,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     team_id: str
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
+    models: List[str] = []
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
@@ -3647,6 +3653,10 @@ class TeamMemberAddRequest(MemberAddRequest):
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
     )
+    models: Optional[List[str]] = Field(
+        default=None,
+        description="Per-user model overrides beyond team_default_models",
+    )
 
 
 class TeamMemberDeleteRequest(MemberDeleteRequest):
@@ -3662,6 +3672,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
     )
+    models: Optional[List[str]] = Field(
+        default=None,
+        description="Per-user model overrides. Pass [] to clear overrides.",
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3669,6 +3683,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    models: Optional[List[str]] = None
 
 
 class TeamModelAddRequest(BaseModel):

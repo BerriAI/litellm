@@ -1229,6 +1229,53 @@ async def generate_key_fn(
                 prisma_client=prisma_client,
             )
 
+            # Validate key models against effective team models for this user
+            from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES_ENABLED
+            from litellm.secret_managers.main import str_to_bool
+
+            if (
+                str_to_bool(LITELLM_TEAM_MODEL_OVERRIDES_ENABLED)
+                and data.models
+                and data.team_id
+                and user_api_key_dict.user_id
+            ):
+                from litellm.proxy.auth.auth_checks import (
+                    get_effective_team_models,
+                )
+
+                # Look up membership for this user+team
+                _membership = await prisma_client.db.litellm_teammembership.find_unique(
+                    where={
+                        "user_id_team_id": {
+                            "user_id": user_api_key_dict.user_id,
+                            "team_id": data.team_id,
+                        }
+                    }
+                )
+                _member_models = (
+                    _membership.models if _membership and _membership.models else []
+                )
+                _team_metadata = (
+                    team_table.metadata
+                    if isinstance(team_table.metadata, dict)
+                    else {}
+                )
+                _effective = get_effective_team_models(
+                    team_object=team_table,
+                    team_member_models=_member_models,
+                    team_metadata=_team_metadata,
+                )
+                if _effective:  # only enforce when effective models is non-empty
+                    disallowed = set(data.models) - set(_effective)
+                    if disallowed:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": f"Key models {sorted(disallowed)} not in your effective team models. "
+                                f"Effective models: {_effective}"
+                            },
+                        )
+
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
             await _check_project_key_limits(
