@@ -86,6 +86,12 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "volcengine_plan":
+        return litellm.VolcEnginePlanChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "byteplus":
+        return litellm.BytePlusChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "byteplus_plan":
+        return litellm.BytePlusPlanChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":

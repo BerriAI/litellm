@@ -625,13 +625,45 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         dynamic_api_key = api_key or get_secret_str("AI21_API_KEY")
         custom_llm_provider = "ai21_chat"
     elif custom_llm_provider == "volcengine":
-        # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+        # volcengine is openai compatible
         api_base = (
             api_base
             or get_secret("VOLCENGINE_API_BASE")
             or "https://ark.cn-beijing.volces.com/api/v3"
         )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("VOLCENGINE_API_KEY")
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("VOLCENGINE_API_KEY")
+            or get_secret_str("ARK_API_KEY")
+        )
+    elif custom_llm_provider == "volcengine_plan":
+        # volcengine plan uses the /api/coding/v3 endpoint, shares API key with volcengine
+        api_base = (
+            api_base
+            or get_secret("VOLCENGINE_PLAN_API_BASE")
+            or "https://ark.cn-beijing.volces.com/api/coding/v3"
+        )  # type: ignore
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("VOLCENGINE_API_KEY")
+            or get_secret_str("ARK_API_KEY")
+        )
+    elif custom_llm_provider == "byteplus":
+        # byteplus is the international version of volcengine
+        api_base = (
+            api_base
+            or get_secret("BYTEPLUS_API_BASE")
+            or "https://ark.ap-southeast.bytepluses.com/api/v3"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("BYTEPLUS_API_KEY")
+    elif custom_llm_provider == "byteplus_plan":
+        # byteplus plan uses the /api/coding/v3 endpoint, shares API key with byteplus
+        api_base = (
+            api_base
+            or get_secret("BYTEPLUS_PLAN_API_BASE")
+            or "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("BYTEPLUS_API_KEY")
     elif custom_llm_provider == "codestral":
         # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
         api_base = (

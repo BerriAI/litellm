@@ -584,6 +584,9 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
+volcengine_plan_models: Set = set()
+byteplus_models: Set = set()
+byteplus_plan_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
@@ -836,6 +839,12 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             oci_models.add(key)
         elif value.get("litellm_provider") == "volcengine":
             volcengine_models.add(key)
+        elif value.get("litellm_provider") == "volcengine_plan":
+            volcengine_plan_models.add(key)
+        elif value.get("litellm_provider") == "byteplus":
+            byteplus_models.add(key)
+        elif value.get("litellm_provider") == "byteplus_plan":
+            byteplus_plan_models.add(key)
         elif value.get("litellm_provider") == "wandb":
             wandb_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud":
@@ -968,6 +977,9 @@ model_list = list(
     | heroku_models
     | vercel_ai_gateway_models
     | volcengine_models
+    | volcengine_plan_models
+    | byteplus_models
+    | byteplus_plan_models
     | wandb_models
     | ovhcloud_models
     | lemonade_models
@@ -1065,6 +1077,9 @@ models_by_provider: dict = {
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,
+    "volcengine_plan": volcengine_plan_models,
+    "byteplus": byteplus_models,
+    "byteplus_plan": byteplus_plan_models,
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
@@ -1529,6 +1544,9 @@ if TYPE_CHECKING:
     from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
     from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
     from .llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineChatConfig, VolcEngineChatConfig as VolcEngineConfig
+    from .llms.volcengine_plan.chat.transformation import VolcEnginePlanChatConfig as VolcEnginePlanChatConfig
+    from .llms.byteplus.chat.transformation import BytePlusChatConfig as BytePlusChatConfig
+    from .llms.byteplus_plan.chat.transformation import BytePlusPlanChatConfig as BytePlusPlanChatConfig
     from .llms.codestral.completion.transformation import CodestralTextCompletionConfig as CodestralTextCompletionConfig
     from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig as AzureOpenAIAssistantsAPIConfig
     from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
