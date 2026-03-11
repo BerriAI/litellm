@@ -15,11 +15,10 @@ from litellm.proxy.proxy_server import (
 from ..zx_security_validator import security_validator
 
 ttl = 24 * 60 * 60
-user_key_hashed_token_cache = DualCache(
-    default_in_memory_ttl = ttl
-)
+user_key_hashed_token_cache = DualCache(default_in_memory_ttl=ttl)
 
 tmp_prisma_client = None
+
 
 async def user_api_key_auth(
     request: Request, api_key: str
@@ -28,22 +27,24 @@ async def user_api_key_auth(
         if api_key.startswith("sk-zx-u-"):
             signature = api_key[8:]
 
-            key = f'user_key_hashed_token:{signature}'
-            hashed_token: Optional[str] = await user_key_hashed_token_cache.async_get_cache(key=key)
+            key = f"user_key_hashed_token:{signature}"
+            hashed_token: Optional[
+                str
+            ] = await user_key_hashed_token_cache.async_get_cache(key=key)
             if hashed_token is None:
-                client_id = request.headers.get('zx-client-id')
-                client_app_id = request.headers.get('zx-client-app-id')
-                email = request.headers.get('zx-user-email')
+                client_id = request.headers.get("zx-client-id")
+                client_app_id = request.headers.get("zx-client-app-id")
+                email = request.headers.get("zx-user-email")
                 data = email or client_app_id
-                timestamp  = request.headers.get('zx-timestamp')
-                if client_id is None :
+                timestamp = request.headers.get("zx-timestamp")
+                if client_id is None:
                     raise ProxyException(
                         message="Invalid API key: zx-client-id not found",
                         type="invalid_request_error",
                         param="api_key",
                         code=401,
                     )
-                if data is None :
+                if data is None:
                     raise ProxyException(
                         message="Invalid API key: zx-client-app-id or zx_user_email not found",
                         type="invalid_request_error",
@@ -75,28 +76,31 @@ async def user_api_key_auth(
                         code=401,
                     )
 
-                if not security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
+                if not security_validator.validate(
+                    client_id, signature, f"{data}:{timestamp}"
+                ):
                     raise ProxyException(
                         message="Invalid API key: signature error",
                         type="invalid_request_error",
                         param="api_key",
                         code=401,
                     )
-            
+
                 global tmp_prisma_client
                 if tmp_prisma_client is None:
                     from litellm.proxy.proxy_server import prisma_client
+
                     tmp_prisma_client = prisma_client
 
                 if tmp_prisma_client:
                     key_alias = email or f"{client_id}_{client_app_id}"
-                    response = await tmp_prisma_client.get_generic_data(key='key_alias', value=key_alias, table_name='keys')
-                    hashed_token = getattr(response, 'token', None)
+                    response = await tmp_prisma_client.get_generic_data(
+                        key="key_alias", value=key_alias, table_name="keys"
+                    )
+                    hashed_token = getattr(response, "token", None)
                     if hashed_token:
                         await user_key_hashed_token_cache.async_set_cache(
-                            key=key,
-                            value=hashed_token,
-                            local_only=True
+                            key=key, value=hashed_token, local_only=True
                         )
 
             if hashed_token is None:
