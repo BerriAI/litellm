@@ -10,7 +10,7 @@ from litellm._logging import verbose_logger
 
 from .database import FocusLiteLLMDatabase
 from .destinations import FocusDestinationFactory, FocusTimeWindow
-from .serializers import FocusParquetSerializer, FocusSerializer
+from .serializers import FocusCsvSerializer, FocusParquetSerializer, FocusSerializer
 from .transformer import FocusTransformer
 
 
@@ -38,9 +38,13 @@ class FocusExportEngine:
         self._database = FocusLiteLLMDatabase()
 
     def _init_serializer(self) -> FocusSerializer:
-        if self.export_format != "parquet":
-            raise NotImplementedError("Only parquet export supported currently")
-        return FocusParquetSerializer()
+        if self.export_format == "csv":
+            return FocusCsvSerializer()
+        if self.export_format == "parquet":
+            return FocusParquetSerializer()
+        raise NotImplementedError(
+            f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'."
+        )
 
     async def dry_run_export_usage_data(self, limit: Optional[int]) -> Dict[str, Any]:
         data = await self._database.get_usage_data(limit=limit)

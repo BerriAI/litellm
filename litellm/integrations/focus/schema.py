@@ -43,7 +43,7 @@ FOCUS_NORMALIZED_SCHEMA = pl.Schema(
         ("SubAccountId", pl.String),
         ("SubAccountName", pl.String),
         ("SubAccountType", pl.String),
-        ("Tags", pl.Object),
+        ("Tags", pl.String),
     ]
 )
 

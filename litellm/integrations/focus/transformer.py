@@ -2,11 +2,35 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import polars as pl
 
 from .schema import FOCUS_NORMALIZED_SCHEMA
+
+
+def _build_tags_json(row: dict) -> str:
+    """Build a JSON string of metadata tags from a DB row.
+
+    Vantage uses this for Token Allocation — enriching billing data with
+    team, user, and API key metadata.
+    """
+    tags: dict[str, str] = {}
+    for key in (
+        "team_id",
+        "team_alias",
+        "user_id",
+        "user_email",
+        "api_key_alias",
+        "model",
+        "model_group",
+        "custom_llm_provider",
+    ):
+        val = row.get(key)
+        if val is not None:
+            tags[key] = str(val)
+    return json.dumps(tags) if tags else "{}"
 
 
 class FocusTransformer:
@@ -18,6 +42,20 @@ class FocusTransformer:
         """Return a normalized frame expected by downstream serializers."""
         if frame.is_empty():
             return pl.DataFrame(schema=self.schema)
+
+        # Build Tags JSON from metadata columns
+        tag_col = "Tags"
+        tag_keys = [
+            "team_id", "team_alias", "user_id", "user_email",
+            "api_key_alias", "model", "model_group", "custom_llm_provider",
+        ]
+        available_keys = [k for k in tag_keys if k in frame.columns]
+        if available_keys:
+            tags_series = frame.select(available_keys).to_dicts()
+            tags_json = [_build_tags_json(row) for row in tags_series]
+            frame = frame.with_columns(pl.Series(tag_col, tags_json))
+        else:
+            frame = frame.with_columns(pl.lit("{}").alias(tag_col))
 
         # derive period start/end from usage date
         frame = frame.with_columns(
@@ -86,5 +124,5 @@ class FocusTransformer:
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),
-            none_str.alias("Tags"),
+            pl.col(tag_col).cast(pl.String).alias("Tags"),
         )
