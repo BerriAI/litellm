@@ -7654,7 +7654,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/11/anthropics-claude-sonnet-4-5-amazon-bedrock-aws-govcloud-us/"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -7826,7 +7826,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/11/anthropics-claude-sonnet-4-5-amazon-bedrock-aws-govcloud-us/"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -31057,7 +31057,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/11/anthropics-claude-sonnet-4-5-amazon-bedrock-aws-govcloud-us/"
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html"
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
