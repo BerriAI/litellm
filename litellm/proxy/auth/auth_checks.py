@@ -388,14 +388,20 @@ async def common_checks(  # noqa: PLR0915
 
     # 1. If user is blocked
     if user_object is not None and user_object.blocked is True:
-        raise Exception(
-            f"User={user_object.user_id} is blocked. Update via `/user/unblock` if you're an admin."
+        raise ProxyException(
+            message=f"User={user_object.user_id} is blocked. Update via `/user/unblock` if you're an admin.",
+            type=ProxyErrorTypes.auth_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     # 2. If team is blocked
     if team_object is not None and team_object.blocked is True:
-        raise Exception(
-            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
+        raise ProxyException(
+            message=f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin.",
+            type=ProxyErrorTypes.auth_error,
+            param="team_id",
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     # 3. If team can call model
