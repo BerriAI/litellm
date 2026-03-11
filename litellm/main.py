@@ -132,6 +132,7 @@ from litellm.utils import (
     create_tokenizer,
     get_api_key,
     get_llm_provider,
+    get_model_info,
     get_non_default_completion_params,
     get_non_default_transcription_params,
     get_optional_params_embeddings,
@@ -5190,13 +5191,37 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("VERTEX_API_BASE")
             )
 
-            if (
+            try:
+                model_info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+                uses_embed_content = model_info.get("uses_embed_content", False)
+            except Exception:
+                uses_embed_content = False
+
+            if uses_embed_content:
+                response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                    model=model,
+                    input=input,
+                    encoding=_get_encoding(),
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                    custom_llm_provider="vertex_ai",
+                    api_key=None,
+                    api_base=api_base,
+                    client=client,
+                    extra_headers=headers,
+                )
+            elif (
                 "image" in optional_params
                 or "video" in optional_params
                 or model
                 in vertex_multimodal_embedding.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
             ):
-                # multimodal embedding is supported on vertex httpx
                 response = vertex_multimodal_embedding.multimodal_embedding(
                     model=model,
                     input=input,
@@ -7565,6 +7590,111 @@ def stream_chunk_builder(  # noqa: PLR0915
             llm_provider="",
             model="",
         )
+
+
+########## Token Counting API ##########
+
+
+async def acount_tokens(
+    model: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    system: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+) -> "TokenCountResponse":
+    """
+    Count tokens for a given model and messages using provider-specific APIs.
+
+    Routes to the appropriate provider's token counting API (OpenAI, Anthropic, etc.)
+    for exact token counts. Falls back to local tiktoken-based counting for unsupported providers.
+
+    Args:
+        model: The model identifier (e.g., "openai/gpt-4o", "anthropic/claude-3-5-sonnet-20241022")
+        messages: The messages to count tokens for (standard chat format)
+        tools: Optional tools/functions to include in token count
+        system: Optional system message/instructions
+        api_key: Optional API key (falls back to environment variable)
+        api_base: Optional custom API base URL
+
+    Returns:
+        TokenCountResponse with total_tokens and metadata
+    """
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.types.utils import LlmProviders, TokenCountResponse
+    from litellm.utils import ProviderConfigManager
+
+    # Determine provider from model string
+    resolved_model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
+        get_llm_provider(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    )
+
+    # Use dynamic key/base if not explicitly provided
+    if api_key is None:
+        api_key = dynamic_api_key
+    if api_base is None:
+        api_base = dynamic_api_base
+
+    # Build deployment dict for the token counter
+    deployment: Dict[str, Any] = {
+        "litellm_params": {
+            "model": model,
+            "api_key": api_key,
+            "api_base": api_base,
+        }
+    }
+
+    # Try to get provider-specific token counter
+    try:
+        llm_provider_enum = LlmProviders(custom_llm_provider)
+        provider_model_info = ProviderConfigManager.get_provider_model_info(
+            model=model, provider=llm_provider_enum
+        )
+
+        if provider_model_info is not None:
+            token_counter_instance = provider_model_info.get_token_counter()
+            if (
+                token_counter_instance is not None
+                and token_counter_instance.should_use_token_counting_api(
+                    custom_llm_provider
+                )
+            ):
+                result = await token_counter_instance.count_tokens(
+                    model_to_use=resolved_model,
+                    messages=messages,
+                    contents=None,
+                    deployment=deployment,
+                    request_model=model,
+                    tools=tools,
+                    system=system,
+                )
+                if result is not None and not result.error:
+                    return result
+    except Exception as e:
+        verbose_logger.debug(
+            f"Provider token counting failed for model={model}, falling back to local: {e}"
+        )
+
+    # Fallback to local tiktoken-based token counting
+    fallback_messages = messages or []
+    if system and fallback_messages:
+        fallback_messages = [{"role": "system", "content": system}] + fallback_messages
+    local_count = litellm.token_counter(
+        model=model,
+        messages=fallback_messages,
+        tools=tools,
+    )
+
+    return TokenCountResponse(
+        total_tokens=local_count,
+        request_model=model,
+        model_used=resolved_model,
+        tokenizer_type="local_tokenizer",
+    )
 
 
 # Cache for encoding to avoid repeated __getattr__ calls

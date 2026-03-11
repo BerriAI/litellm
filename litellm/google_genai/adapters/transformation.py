@@ -770,8 +770,6 @@ class GoogleGenAIAdapter:
             "content_filter": "SAFETY",
             "tool_calls": "STOP",
             "function_call": "STOP",
-            "finish_reason_unspecified": "FINISH_REASON_UNSPECIFIED",
-            "malformed_function_call": "MALFORMED_FUNCTION_CALL",
         }
 
         return mapping.get(finish_reason, "STOP")
