@@ -78,6 +78,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     to: initialToDate,
   });
 
+  const [timezoneOffset, setTimezoneOffset] = useState<number>(() => new Date().getTimezoneOffset());
+
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
@@ -176,7 +178,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 
   // Calculate top models from the breakdown data
-  const getTopModels = (limit: number = 5) => {
+  const topModels = useMemo(() => {
     const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
@@ -219,10 +221,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topModelsLimit);
+  }, [userSpendData.results, topModelsLimit]);
 
-  const getTopModelGroups = (limit: number = 5) => {
+  const topModelGroups = useMemo(() => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
@@ -266,16 +268,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topModelsLimit);
+  }, [userSpendData.results, topModelsLimit]);
 
   // Calculate provider spend from the breakdown data
-  const getProviderSpend = () => {
-    const providerSpend: { [key: string]: MetricWithMetadata } = {};
+  const providerSpend = useMemo(() => {
+    const providerSpendMap: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpend[provider]) {
-          providerSpend[provider] = {
+        if (!providerSpendMap[provider]) {
+          providerSpendMap[provider] = {
             metrics: {
               spend: 0,
               prompt_tokens: 0,
@@ -291,19 +293,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        providerSpend[provider].metrics.spend += metrics.metrics.spend;
-        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
+        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpendMap[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
 
-    return Object.entries(providerSpend).map(([provider, metrics]) => ({
+    return Object.entries(providerSpendMap).map(([provider, metrics]) => ({
       provider,
       spend: metrics.metrics.spend,
       requests: metrics.metrics.api_requests,
@@ -311,10 +313,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       failed_requests: metrics.metrics.failed_requests,
       tokens: metrics.metrics.total_tokens,
     }));
-  };
+  }, [userSpendData.results]);
 
   // Calculate top API keys from the breakdown data
-  const getTopKeys = (limit: number = 5) => {
+  const topKeys = useMemo(() => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
@@ -334,7 +336,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             metadata: {
               key_alias: metrics.metadata.key_alias,
               team_id: null,
-              tags: metrics.metadata.tags || [], // This gets key-level tags
+              tags: metrics.metadata.tags || [],
             },
           };
         }
@@ -350,18 +352,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       });
     });
 
-    console.log("debugTags", { keySpend, userSpendData });
-
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
-        tags: metrics.metadata.tags || [], // This will show key-level tags
+        key_alias: metrics.metadata.key_alias || "-",
+        tags: metrics.metadata.tags || [],
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topKeysLimit);
+  }, [userSpendData.results, topKeysLimit]);
 
   const fetchUserSpendData = useCallback(async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -378,14 +378,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     try {
       // Prefer aggregated endpoint to avoid many page requests
       try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId, timezoneOffset);
         setUserSpendData(aggregated);
         return;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
 
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId, timezoneOffset);
 
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
@@ -396,7 +396,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       const aggregatedMetadata = { ...firstPageData.metadata };
 
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId, timezoneOffset);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
           aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
@@ -417,7 +417,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       setLoading(false);
       setIsDateChanging(false);
     }
-  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
+  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID, timezoneOffset]);
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
@@ -440,9 +440,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => clearTimeout(timeoutId);
   }, [fetchUserSpendData]);
 
-  const modelMetrics = processActivityData(userSpendData, "models", teams);
-  const keyMetrics = processActivityData(userSpendData, "api_keys", teams);
-  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers", teams);
+  const sortedDailyResults = useMemo(
+    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+    [userSpendData.results],
+  );
+  const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
+  const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
+  const mcpServerMetrics = useMemo(() => processActivityData(userSpendData, "mcp_servers", teams), [userSpendData, teams]);
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -493,7 +497,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               onChange={(value) => setUsageView(value)}
               isAdmin={isAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} timezoneOffset={timezoneOffset} onTimezoneChange={setTimezoneOffset} />
           </div>
           {/* Your Usage Panel */}
           {usageView === "global" && (
@@ -654,9 +658,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
-                            data={[...userSpendData.results].sort(
-                              (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                            )}
+                            data={sortedDailyResults}
                             index="date"
                             categories={["metrics.spend"]}
                             colors={["cyan"]}
@@ -688,7 +690,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Card className="h-full">
                         <Title>Top Virtual Keys</Title>
                         <TopKeyView
-                          topKeys={getTopKeys(topKeysLimit)}
+                          topKeys={topKeys}
                           teams={null}
                           topKeysLimit={topKeysLimit}
                           setTopKeysLimit={setTopKeysLimit}
@@ -739,8 +741,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             {(() => {
                               const modelData =
                                 modelViewType === "groups"
-                                  ? getTopModelGroups(topModelsLimit)
-                                  : getTopModels(topModelsLimit);
+                                  ? topModelGroups
+                                  : topModels;
                               return (
                                 <BarChart
                                   className="mt-4"
@@ -784,7 +786,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <SpendByProvider
                         loading={loading}
                         isDateChanging={isDateChanging}
-                        providerSpend={getProviderSpend()}
+                        providerSpend={providerSpend}
                       />
                     </Col>
 
@@ -825,6 +827,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 })) || null
               }
               premiumUser={premiumUser}
+              timezoneOffset={timezoneOffset}
             />
           )}
 
@@ -843,6 +846,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
 
@@ -861,6 +865,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* Tag Usage Panel */}
@@ -891,6 +896,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
+                timezoneOffset={timezoneOffset}
               />
             </>
           )}
@@ -905,6 +911,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* User Usage Panel */}
@@ -917,6 +924,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityList={userOptions.length > 0 ? userOptions : null}
               premiumUser={premiumUser}
               dateValue={dateValue}
+              timezoneOffset={timezoneOffset}
             />
           )}
           {/* User Agent Activity Panel */}

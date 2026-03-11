@@ -1228,13 +1228,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             # --- PRESERVE USAGE METADATA ---
             # stream_chunk_builder might miss usage if it's only in the last chunk
-            if (
-                not getattr(assembled_model_response, "usage", None)
-            ) and remaining_chunks:
-                last_chunk = remaining_chunks[-1]
-                last_chunk_usage = getattr(last_chunk, "usage", None)
-                if last_chunk_usage:
-                    setattr(assembled_model_response, "usage", last_chunk_usage)
+            self._preserve_usage_from_last_chunk(
+                assembled_model_response, remaining_chunks
+            )
 
             # Apply PII unmasking to assembled content (unmasking tokens back to original text)
             await self._process_response_for_pii(
@@ -1252,6 +1248,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             for chunk in remaining_chunks:
                 yield chunk
+
+    @staticmethod
+    def _preserve_usage_from_last_chunk(
+        assembled_model_response: Any,
+        chunks: List[Any],
+    ) -> None:
+        """Copy usage metadata from the last chunk when stream_chunk_builder misses it."""
+        if not getattr(assembled_model_response, "usage", None) and chunks:
+            last_chunk_usage = getattr(chunks[-1], "usage", None)
+            if last_chunk_usage:
+                setattr(assembled_model_response, "usage", last_chunk_usage)
 
     def get_presidio_settings_from_request_data(
         self, data: dict
