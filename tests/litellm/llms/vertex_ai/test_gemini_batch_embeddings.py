@@ -391,3 +391,68 @@ def test_dimensions_mapped_to_output_dimensionality():
     assert result["outputDimensionality"] == 768
     assert "dimensions" not in result
 
+
+def test_is_gcs_url():
+    """Test GCS URL detection."""
+    from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+        _is_gcs_url,
+    )
+    
+    assert _is_gcs_url("gs://my-bucket/path/to/file.png") is True
+    assert _is_gcs_url("gs://bucket/image.jpg") is True
+    assert _is_gcs_url("https://storage.googleapis.com/bucket/file.png") is False
+    assert _is_gcs_url("files/abc123") is False
+    assert _is_gcs_url("data:image/png;base64,abc") is False
+    assert _is_gcs_url("regular text") is False
+
+
+def test_infer_mime_type_from_gcs_url():
+    """Test MIME type inference from GCS URL."""
+    from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+        _infer_mime_type_from_gcs_url,
+    )
+    
+    assert _infer_mime_type_from_gcs_url("gs://bucket/image.png") == "image/png"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/photo.jpg") == "image/jpeg"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/photo.JPEG") == "image/jpeg"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/audio.mp3") == "audio/mpeg"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/audio.wav") == "audio/wav"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/video.mp4") == "video/mp4"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/video.mov") == "video/quicktime"
+    assert _infer_mime_type_from_gcs_url("gs://bucket/doc.pdf") == "application/pdf"
+    
+    with pytest.raises(ValueError, match="Unable to infer MIME type"):
+        _infer_mime_type_from_gcs_url("gs://bucket/file.txt")
+
+
+def test_transform_multimodal_with_gcs_url():
+    """Test transformation with GCS URL."""
+    input_data = [
+        "Describe this image",
+        "gs://my-bucket/images/photo.png"
+    ]
+    
+    result = transform_openai_input_gemini_embed_content(
+        input=input_data,
+        model="gemini-embedding-2-preview",
+        optional_params={},
+        resolved_files=None,
+    )
+    
+    parts = result["content"]["parts"]
+    assert len(parts) == 2
+    assert parts[0]["text"] == "Describe this image"
+    assert parts[1]["file_data"]["mime_type"] == "image/png"
+    assert parts[1]["file_data"]["file_uri"] == "gs://my-bucket/images/photo.png"
+
+
+def test_multimodal_input_detection_with_gcs():
+    """Test that GCS URLs are detected as multimodal."""
+    from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
+        _is_multimodal_input,
+    )
+    
+    assert _is_multimodal_input(["text", "gs://bucket/file.png"]) is True
+    assert _is_multimodal_input("gs://bucket/video.mp4") is True
+    assert _is_multimodal_input(["just text", "more text"]) is False
+
