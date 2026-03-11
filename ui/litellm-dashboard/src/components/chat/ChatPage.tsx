@@ -252,9 +252,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
       // When historyOverride is set (edit / retry), the existing server-side
       // session chain covers messages that were just truncated and is no longer
-      // valid for the rewritten history.  Always start a fresh session in that
-      // case so the model only sees the explicitly supplied history.
-      //
+      // valid for the rewritten history.  Eagerly clear the session so that a
+      // failed/aborted edit does not leave a stale session ID that contaminates
+      // the next regular send.
+      if (historyOverride) {
+        setResponsesSessionId(null);
+      }
+
       // On a normal continuation turn with an active session, the Responses API
       // already holds the prior context server-side, so we only pass the new
       // user message (sending the full history would double-count it).
@@ -283,6 +287,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       // MCP events accumulated locally so we can persist them to the message
       // without relying on component state (which would cause stale closures).
       const accumulatedMCPEvents: MCPEvent[] = [];
+      // Track clean completion so partial events are not shown on error/abort.
+      let streamCompletedCleanly = false;
 
       try {
         await makeOpenAIResponsesRequest(
@@ -309,6 +315,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             accumulatedMCPEvents.push(event);
           },
         );
+        streamCompletedCleanly = true;
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           updateLastAssistantMessage(convId!, {
@@ -320,9 +327,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           });
         }
       } finally {
-        // Persist MCP events only when the stream completed cleanly — partial
-        // events from an aborted/errored turn would show incomplete tool calls.
-        if (accumulatedMCPEvents.length > 0 && !abortControllerRef.current?.signal.aborted) {
+        // Only persist MCP events on clean completion — partial events from an
+        // aborted or errored turn would show incomplete tool calls to the user.
+        if (accumulatedMCPEvents.length > 0 && streamCompletedCleanly) {
           updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
         }
         setIsStreaming(false);

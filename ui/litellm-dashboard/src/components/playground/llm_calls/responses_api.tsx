@@ -105,15 +105,14 @@ export async function makeOpenAIResponsesRequest(
         // Individual servers selected - create one entry per server
         selectedMCPServers.forEach((serverId) => {
           const server = mcpServers?.find((s) => s.server_id === serverId);
-          // Use server_name for URL routing (proxy registers by name, not alias).
+          // Use server_name for both routing and labelling. server_name is the
+          // unique registered identifier; aliases can collide across servers.
           const routeName = server?.server_name || serverId;
-          // Use alias as the human-readable label when available.
-          const serverLabel = server?.alias || routeName;
           const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
 
           tools.push({
             type: "mcp",
-            server_label: serverLabel, // unique human-readable label per server
+            server_label: routeName, // unique per request — collisions cause silent tool-routing failures
             server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
             require_approval: "never",
             ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
