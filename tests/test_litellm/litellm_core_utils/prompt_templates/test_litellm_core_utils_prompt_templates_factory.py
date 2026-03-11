@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _convert_to_bedrock_tool_call_invoke,
     ollama_pt,
+    sanitize_messages_for_tool_calling,
 )
 
 
@@ -1179,7 +1180,7 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     System tools (nova_grounding) should be added via web_search_options,
     not via the tools parameter directly.
     """
-    
+
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
     # Regular function tools should still work
@@ -1741,3 +1742,288 @@ def test_bedrock_tool_call_invoke_multiple_normal_tools():
     assert len(result) == 2
     assert result[0]["toolUse"]["toolUseId"] == "call_1"
     assert result[1]["toolUse"]["toolUseId"] == "call_2"
+
+
+# ========================================================================
+# Tool result deduplication tests (Case D in sanitize_messages_for_tool_calling)
+# ========================================================================
+
+
+def test_sanitize_messages_deduplicates_tool_results():
+    """
+    Anthropic requires exactly one tool_result per tool_use. When conversation
+    history (e.g. from session resume) contains duplicate tool result messages
+    with the same tool_call_id, sanitize_messages_for_tool_calling should keep
+    only the last occurrence.
+
+    Without this fix, Anthropic rejects with:
+        each tool_use must have a single result. Found multiple tool_result
+        blocks with id: <id>
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                    }
+                ],
+            },
+            # First tool result (stale/duplicate)
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": "Partial result...",
+            },
+            # Second tool result (final/complete — should be kept)
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": '{"temperature": 72, "condition": "sunny"}',
+            },
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Count tool messages with this ID — should be exactly 1
+        tool_results = [
+            m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
+        ]
+        assert len(tool_results) == 1
+        # Should keep the LAST occurrence (most complete)
+        assert tool_results[0]["content"] == '{"temperature": 72, "condition": "sunny"}'
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_preserves_unique_tool_results():
+    """
+    When each tool_call_id has exactly one tool_result, no deduplication should
+    occur. Messages should pass through unchanged.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Get weather for two cities"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "LA"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "85F"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        tool_results = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_results) == 2
+        assert tool_results[0]["tool_call_id"] == "call_1"
+        assert tool_results[0]["content"] == "72F"
+        assert tool_results[1]["tool_call_id"] == "call_2"
+        assert tool_results[1]["content"] == "85F"
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_dedup_disabled_when_modify_params_false():
+    """
+    When litellm.modify_params is False, messages should be returned as-is
+    even if they contain duplicate tool results.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "user", "content": "Test"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_dup",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_dup", "content": "first"},
+            {"role": "tool", "tool_call_id": "call_dup", "content": "second"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Should be unchanged — no sanitization when modify_params=False
+        assert result == messages
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
+    """
+    When the same tool_call_id appears in two different assistant turns
+    (separated by a user message), both tool results must be preserved.
+    Deduplication should only apply within a single contiguous tool-result
+    block, not globally across the conversation.
+
+    Without per-turn scoping this would incorrectly drop the first tool result,
+    leaving the first assistant message without its required result (which
+    Anthropic would reject).
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "First question"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_X",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"q": "a"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_X", "content": "result_turn_1"},
+            {"role": "user", "content": "Second question"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_X",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"q": "b"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_X", "content": "result_turn_2"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Both tool results must survive — one per turn
+        tool_results = [
+            m for m in result
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
+        ]
+        assert len(tool_results) == 2, (
+            f"Expected 2 tool results (one per turn), got {len(tool_results)}. "
+            "Dedup may be global instead of per-turn scoped."
+        )
+        assert tool_results[0]["content"] == "result_turn_1"
+        assert tool_results[1]["content"] == "result_turn_2"
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_combined_case_a_and_case_d():
+    """
+    Combined Case A + Case D: an assistant message has two tool_calls —
+    one with a missing result (Case A should inject a dummy) and one with
+    duplicate results (Case D should deduplicate to keep only the last).
+
+    This validates that both sanitization passes compose correctly without
+    interfering with each other.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Do two things"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_missing",
+                        "type": "function",
+                        "function": {"name": "tool_a", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_duped",
+                        "type": "function",
+                        "function": {"name": "tool_b", "arguments": '{"q": "x"}'},
+                    },
+                ],
+            },
+            # No result for call_missing — Case A should inject a dummy
+            # Duplicate results for call_duped — Case D should keep last
+            {"role": "tool", "tool_call_id": "call_duped", "content": "stale_result"},
+            {"role": "tool", "tool_call_id": "call_duped", "content": "fresh_result"},
+            {"role": "user", "content": "Now summarize"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Collect tool results from the output
+        tool_results = [m for m in result if m.get("role") in ("tool", "function")]
+
+        # Case A: call_missing should have a dummy result injected
+        missing_results = [
+            m for m in tool_results if m.get("tool_call_id") == "call_missing"
+        ]
+        assert len(missing_results) == 1, (
+            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        )
+
+        # Case D: call_duped should have exactly 1 result (the fresh one)
+        duped_results = [
+            m for m in tool_results if m.get("tool_call_id") == "call_duped"
+        ]
+        assert len(duped_results) == 1, (
+            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        )
+        assert duped_results[0]["content"] == "fresh_result", (
+            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        )
+
+        # Verify tool results immediately follow the assistant message
+        asst_idx = next(
+            i for i, m in enumerate(result) if m.get("role") == "assistant"
+        )
+        tool_msgs_after_asst = [
+            m
+            for m in result[asst_idx + 1 :]
+            if m.get("role") in ("tool", "function")
+        ]
+        assert len(tool_msgs_after_asst) == 2, (
+            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        )
+        # Both tool_call_ids should be present (order may vary)
+        tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
+        assert tool_ids == {"call_missing", "call_duped"}, (
+            f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
+        )
+    finally:
+        litellm.modify_params = original

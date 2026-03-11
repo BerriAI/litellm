@@ -64,6 +64,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_key_mcp_servers_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -637,6 +638,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    # Validate MCP servers in object_permission are within team scope
+    await validate_key_mcp_servers_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1946,6 +1953,27 @@ async def update_key_fn(
             )
 
             # Set Management Endpoint Metadata Fields
+
+        # Validate MCP servers in object_permission against the effective team
+        if data.object_permission is not None:
+            effective_team_obj = team_obj
+            # If team_id isn't being changed, resolve the existing key's team
+            if effective_team_obj is None and existing_key_row.team_id:
+                effective_team_obj = await get_team_object(
+                    team_id=existing_key_row.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            object_permission_dict = (
+                data.object_permission.model_dump()
+                if hasattr(data.object_permission, "model_dump")
+                else data.object_permission
+            )
+            await validate_key_mcp_servers_against_team(
+                object_permission=object_permission_dict,
+                team_obj=effective_team_obj,
+            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row

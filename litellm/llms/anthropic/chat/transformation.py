@@ -395,6 +395,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
+            # Anthropic requires input_schema.type to be "object". Normalize
+            # schemas from external sources (MCP servers, OpenAI callers) that
+            # may omit the type field or use a non-object type.
+            if _input_schema.get("type") != "object":
+                litellm.verbose_logger.debug(
+                    "_map_tool_helper: coercing input_schema type from %r to "
+                    "'object' for Anthropic compatibility (tool: %s)",
+                    _input_schema.get("type"),
+                    tool["function"].get("name"),
+                )
+                _input_schema = dict(_input_schema)  # avoid mutating caller's dict
+                _input_schema["type"] = "object"
+                if "properties" not in _input_schema:
+                    _input_schema["properties"] = {}
+
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties

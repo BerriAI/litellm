@@ -20,6 +20,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
+  MessageOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -47,6 +48,7 @@ interface SidebarProps {
 
 interface MenuItemCfg {
   key: string;
+  newTab?: boolean;
   page: string; // legacy id; we map this to a path below
   label: string;
   roles?: string[];
@@ -105,6 +107,8 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "chat":
+      return "chat";
 
     // tools
     case "mcp-servers":
@@ -371,19 +375,29 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
   }, [pathname, filteredMenuItems, defaultSelectedKey]);
 
   // ----- Navigation -----
-  const goTo = (slug: string) => {
+  const goTo = (slug: string, newTab?: boolean) => {
     const href = toHref(slug);
-    router.push(href);
+    if (newTab) {
+      window.open(href, "_blank");
+    } else {
+      router.push(href);
+    }
   };
 
   // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
   // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (label: string, page: string): React.ReactNode => {
+  const renderNavLink = (label: string, page: string, newTab?: boolean): React.ReactNode => {
     const href = toHref(page);
     return (
       <a
         href={href}
+        target={newTab ? "_blank" : undefined}
+        rel={newTab ? "noopener noreferrer" : undefined}
         onClick={(e) => {
+          if (newTab) {
+            e.stopPropagation();
+            return;
+          }
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
             e.stopPropagation();
             return;
@@ -409,6 +423,8 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
         style={{
           transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
           position: "relative",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         <ConfigProvider
@@ -431,22 +447,60 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
               borderRight: 0,
               backgroundColor: "transparent",
               fontSize: "14px",
+              flex: 1,
+              overflowY: "auto",
             }}
             items={filteredMenuItems.map((item) => ({
               key: item.key,
               icon: item.icon,
-              label: renderNavLink(item.label, item.page),
+              label: renderNavLink(item.label, item.page, item.newTab),
               children: item.children?.map((child) => ({
                 key: child.key,
                 icon: child.icon,
-                label: renderNavLink(child.label, child.page),
-                onClick: () => goTo(child.page),
+                label: renderNavLink(child.label, child.page, child.newTab),
+                onClick: () => goTo(child.page, child.newTab),
               })),
-              onClick: !item.children ? () => goTo(item.page) : undefined,
+              onClick: !item.children ? () => goTo(item.page, item.newTab) : undefined,
             }))}
           />
         </ConfigProvider>
         {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+
+        {/* Pinned "Open Chat" button at bottom */}
+        <div style={{
+          padding: collapsed ? "10px 8px" : "10px 12px",
+          borderTop: "1px solid #f0f0f0",
+          flexShrink: 0,
+        }}>
+          <a
+            href={toHref("chat")}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: collapsed ? "center" : "flex-start",
+              gap: 8,
+              padding: collapsed ? "8px 0" : "8px 10px",
+              borderRadius: 8,
+              background: "#1677ff",
+              color: "#fff",
+              textDecoration: "none",
+              fontSize: 13,
+              fontWeight: 600,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.background = "#0958d9";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.background = "#1677ff";
+            }}
+          >
+            <MessageOutlined style={{ fontSize: 16, flexShrink: 0 }} />
+            {!collapsed && <span>Open Chat</span>}
+          </a>
+        </div>
       </Sider>
     </Layout>
   );

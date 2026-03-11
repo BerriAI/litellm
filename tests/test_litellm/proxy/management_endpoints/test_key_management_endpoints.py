@@ -605,6 +605,10 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
 
     mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+        AsyncMock(),
+    )
 
     from litellm.proxy._types import (
         GenerateKeyRequest,
@@ -2346,6 +2350,9 @@ async def test_generate_key_with_object_permission():
     ), patch(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name",
         "admin",
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+        new_callable=AsyncMock,
     ):
         # Execute
         result = await _common_key_generation_helper(
