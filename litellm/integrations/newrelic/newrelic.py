@@ -243,7 +243,6 @@ class NewRelicLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})
             headers = metadata.get("headers", {})
-            newrelic = headers.get("newrelic", None)
             traceparent = headers.get("traceparent", None)
 
             trace_id = None
@@ -255,10 +254,6 @@ class NewRelicLogger(CustomLogger):
                 parts = traceparent.split("-")
                 if len(parts) == 4:
                     trace_id = parts[1]
-
-            if not trace_id:
-                # attempt to pull from newrelic header
-                pass
 
             if not trace_id:
                 # Generate a random trace_id for grouping AI monitoring events
