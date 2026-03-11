@@ -30,14 +30,33 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient):
+    def __init__(self, prisma_client: PrismaClient, pod_lock_manager=None):
         self.prisma_client = prisma_client
+        self.pod_lock_manager = pod_lock_manager
 
     async def process_rotations(self):
         """
-        Main entry point - find and rotate keys that are due for rotation
+        Main entry point - find and rotate keys that are due for rotation.
+        Uses PodLockManager to ensure only one pod runs rotation in multi-pod deployments.
         """
+        from litellm.constants import KEY_ROTATION_JOB_NAME
+
+        lock_acquired = False
         try:
+            # If we have a pod lock manager with Redis, try to acquire the lock
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=KEY_ROTATION_JOB_NAME,
+                    )
+                    or False
+                )
+                if not lock_acquired:
+                    verbose_proxy_logger.debug(
+                        "Key rotation: another pod is already running rotation, skipping"
+                    )
+                    return
+
             verbose_proxy_logger.info("Starting scheduled key rotation check...")
 
             # Clean up expired deprecated keys first
@@ -74,6 +93,16 @@ class KeyRotationManager:
 
         except Exception as e:
             verbose_proxy_logger.error(f"Key rotation process failed: {e}")
+        finally:
+            # Only release the lock if it was actually acquired
+            if (
+                lock_acquired
+                and self.pod_lock_manager
+                and self.pod_lock_manager.redis_cache
+            ):
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=KEY_ROTATION_JOB_NAME,
+                )
 
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """
