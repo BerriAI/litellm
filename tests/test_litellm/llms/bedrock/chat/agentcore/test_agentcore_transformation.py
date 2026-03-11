@@ -219,6 +219,7 @@ class TestAgentCoreStreamingJsonFallback:
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
                 client=client,
+                api_key="test-jwt-token",
             )
 
             # Collect content across all chunks
@@ -257,6 +258,7 @@ class TestAgentCoreStreamingJsonFallback:
                 messages=[{"role": "user", "content": "test"}],
                 stream=True,
                 client=client,
+                api_key="test-jwt-token",
             )
 
             # Collect content across all chunks
@@ -289,6 +291,7 @@ class TestAgentCoreStreamingJsonFallback:
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
                     client=client,
+                    api_key="test-jwt-token",
                 )
 
     async def test_async_streaming_malformed_json_raises_error(self):
@@ -316,4 +319,5 @@ class TestAgentCoreStreamingJsonFallback:
                     messages=[{"role": "user", "content": "test"}],
                     stream=True,
                     client=client,
+                    api_key="test-jwt-token",
                 )
