@@ -31,9 +31,19 @@ serviceAccount:
 # annotations for litellm deployment
 deploymentAnnotations: {}
 deploymentLabels: {}
+deploymentMinReadySeconds: 0
+
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
+
+# -- Deployment strategy configuration
+# Example:
+#   type: RollingUpdate
+#   rollingUpdate:
+#     maxUnavailable: 0
+#     maxSurge: 1
+strategy: {}
 
 terminationGracePeriodSeconds: 90
 topologySpreadConstraints:

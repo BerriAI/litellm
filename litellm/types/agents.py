@@ -179,6 +179,12 @@ class AgentConfig(TypedDict, total=False):
     agent_card_params: Required[AgentCard]
     litellm_params: Dict[str, Any]  # allow for any future litellm params
     object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 class PatchAgentRequest(TypedDict, total=False):
@@ -186,6 +192,12 @@ class PatchAgentRequest(TypedDict, total=False):
     agent_card_params: AgentCard
     litellm_params: Dict[str, Any]
     object_permission: AgentObjectPermission
+    tpm_limit: Optional[int]
+    rpm_limit: Optional[int]
+    session_tpm_limit: Optional[int]
+    session_rpm_limit: Optional[int]
+    static_headers: Optional[Dict[str, str]]
+    extra_headers: Optional[List[str]]
 
 
 # Request/Response models for CRUD endpoints
@@ -197,6 +209,13 @@ class AgentResponse(BaseModel):
     litellm_params: Optional[Dict[str, Any]] = None
     agent_card_params: Dict[str, Any]
     object_permission: Optional[Dict[str, Any]] = None
+    spend: Optional[float] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    session_tpm_limit: Optional[int] = None
+    session_rpm_limit: Optional[int] = None
+    static_headers: Optional[Dict[str, str]] = None
+    extra_headers: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None

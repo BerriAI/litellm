@@ -867,6 +867,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {"disable_model_add_for_internal_users": True}
@@ -908,6 +909,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {

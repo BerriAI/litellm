@@ -88,6 +88,10 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "bedrock_mantle":
+        return litellm.BedrockMantleChatConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
@@ -118,9 +122,13 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "sap":
         if request_type == "chat_completion":
-            return litellm.GenAIHubOrchestrationConfig().get_supported_openai_params(model=model)
+            return litellm.GenAIHubOrchestrationConfig().get_supported_openai_params(
+                model=model
+            )
         elif request_type == "embeddings":
-            return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(model=model)
+            return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(

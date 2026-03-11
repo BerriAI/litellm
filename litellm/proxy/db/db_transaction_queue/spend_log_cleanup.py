@@ -131,8 +131,11 @@ class SpendLogCleanup:
 
             # If we have a pod lock manager, try to acquire the lock
             if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                lock_acquired = await self.pod_lock_manager.acquire_lock(
-                    cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                    )
+                    or False
                 )
                 verbose_proxy_logger.info(
                     f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}"
@@ -158,7 +161,11 @@ class SpendLogCleanup:
             return  # Return after error handling
         finally:
             # Only release the lock if it was actually acquired
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+            if (
+                lock_acquired
+                and self.pod_lock_manager
+                and self.pod_lock_manager.redis_cache
+            ):
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME
                 )

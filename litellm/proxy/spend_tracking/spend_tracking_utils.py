@@ -11,21 +11,30 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import \
-    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+)
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs, reconstruct_model_name)
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import (CostBreakdown,
-                                 StandardLoggingGuardrailInformation,
-                                 StandardLoggingMCPToolCall,
-                                 StandardLoggingModelInformation,
-                                 StandardLoggingPayload,
-                                 StandardLoggingVectorStoreRequest,
-                                 VectorStoreSearchResponse)
+from litellm.types.utils import (
+    CostBreakdown,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -117,9 +126,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -497,7 +506,6 @@ def _get_session_id_for_spend_log(
     """
     from litellm._uuid import uuid
 
-
     if (
         standard_logging_payload is not None
         and standard_logging_payload.get("trace_id") is not None
@@ -628,7 +636,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.constants import (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    )
 
     if visited is None:
         visited = set()
@@ -674,7 +685,8 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
                     f"{value[-end_chars:]}"
                 )
                 return truncated_value
@@ -774,7 +786,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
-                    perform_redaction, should_redact_message_logging)
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
 
                 # Build model_call_details dict to check redaction settings
                 model_call_details = {
@@ -791,6 +805,11 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
+            if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
+                verbose_proxy_logger.info(
+                    "Spend Log: request body was truncated before storing in DB. %s",
+                    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+                )
             return _request_body_json_str
     return "{}"
 
@@ -840,7 +859,9 @@ def _get_response_for_spend_logs_payload(
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction, should_redact_message_logging)
+                perform_redaction,
+                should_redact_message_logging,
+            )
 
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
@@ -866,8 +887,15 @@ def _get_response_for_spend_logs_payload(
         if sanitized_response is None:
             return "{}"
         if isinstance(sanitized_response, str):
-            return sanitized_response
-        return safe_dumps(sanitized_response)
+            result_str = sanitized_response
+        else:
+            result_str = safe_dumps(sanitized_response)
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
+            verbose_proxy_logger.info(
+                "Spend Log: response was truncated before storing in DB. %s",
+                LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+            )
+        return result_str
     return "{}"
 
 
