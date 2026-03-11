@@ -99,6 +99,7 @@ export interface KeyResponse {
   user?: {
     user_id: string;
     user_email: string;
+    user_alias: string | null;
   };
 }
 

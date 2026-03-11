@@ -57,6 +57,18 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));
 
+// Mock useOrganizations hook
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      {
+        organization_id: "org-1",
+        organization_alias: "Test Organization",
+      },
+    ],
+  }),
+}));
+
 // Mock fetchTeams to prevent network calls
 vi.mock("@/app/(dashboard)/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/(dashboard)/networking")>();
@@ -125,6 +137,7 @@ const mockKey: KeyResponse = {
   user: {
     user_email: "user@example.com",
     user_id: "user-1",
+    user_alias: null,
   },
 };
 
@@ -380,7 +393,7 @@ it("should render table headers correctly", () => {
   // Check that main headers are rendered (testing the header.isPlaceholder condition path)
   expect(screen.getByText("Key ID")).toBeInTheDocument();
   expect(screen.getByText("Key Alias")).toBeInTheDocument();
-  expect(screen.getByText("Team Alias")).toBeInTheDocument();
+  expect(screen.getByText("Team")).toBeInTheDocument();
   expect(screen.getByText("Models")).toBeInTheDocument();
   expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
 });
@@ -463,6 +476,8 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
   const keyWithDefaultUserId = {
     ...mockKey,
     user_id: "default_user_id",
+    user_email: "",
+    user: { user_id: "default_user_id", user_email: "", user_alias: null },
   };
 
   mockUseFilterLogic.mockReturnValue({
