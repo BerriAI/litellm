@@ -138,13 +138,13 @@ class DocumentMetadataKeyValueListPairs(KeyValueListPair):
 
 
 class GroundingSearchConfig(BaseModel):
-    max_chunk_count: int = Field(default=None, ge=0)
-    max_document_count: int = Field(default=None, ge=0)
+    max_chunk_count: Optional[int] = Field(default=None, ge=0)
+    max_document_count: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode='after')
     def validate_max_chunk_count_and_max_document_count(self):
         if self.max_chunk_count and self.max_document_count:
-            raise ValidationError("Cannot specify both maxChunkCount and maxDocumentCount.")
+            raise ValueError("Cannot specify both maxChunkCount and maxDocumentCount.")
         return self
 
 

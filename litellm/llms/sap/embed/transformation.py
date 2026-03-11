@@ -64,11 +64,11 @@ class EmbeddingInput(BaseModel):
     text: Union[str, List[str]]
     type: Literal["text", "document", "query"] = "text"
 
-class EmbeddingComfig(BaseModel):
+class EmbeddingConfig(BaseModel):
     modules: EmbeddingsModules
 
 class EmbeddingRequest(BaseModel):
-    config: EmbeddingComfig
+    config: EmbeddingConfig
     input: EmbeddingInput
 
 
