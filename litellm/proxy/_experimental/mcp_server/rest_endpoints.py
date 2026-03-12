@@ -100,12 +100,7 @@ if MCP_AVAILABLE:
             if cred and cred.get("access_token"):
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception:
-            verbose_logger.debug(
-                "Failed to fetch OAuth credential for user %r / server %r",
-                str(user_id).replace("\n", "\\n").replace("\r", "\\r"),
-                str(server_id).replace("\n", "\\n").replace("\r", "\\r"),
-                exc_info=True,
-            )
+            verbose_logger.debug("Failed to fetch OAuth credential", exc_info=True)
         return None
 
     async def _get_bulk_user_oauth_headers(
@@ -137,11 +132,7 @@ if MCP_AVAILABLE:
                 if c.get("access_token") and c.get("server_id")
             }
         except Exception:
-            verbose_logger.debug(
-                "Failed to bulk-fetch OAuth credentials for user %r",
-                str(user_id).replace("\n", "\\n").replace("\r", "\\r"),
-                exc_info=True,
-            )
+            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
             return {}
 
     def _create_tool_response_objects(tools, server_mcp_info):
