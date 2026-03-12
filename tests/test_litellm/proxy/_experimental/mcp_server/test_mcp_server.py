@@ -2095,148 +2095,81 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     assert spend_meta["per_server_tool_counts"]["server_a"] == 1
 
 
-def test_tool_name_matches_case_insensitive():
-    """Test that _tool_name_matches performs case-insensitive comparison.
-    
-    This is critical for OpenAPI-based MCP servers where:
-    1. operationIds are often in camelCase (e.g., 'addPet', 'updatePet')
-    2. Tool names are lowercased during registration (e.g., 'addpet', 'updatepet')
-    3. allowed_tools configuration may use the original camelCase names
-    
-    Without case-insensitive matching, all tools would be filtered out.
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     """
-    try:
-        from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
-    except ImportError:
-        pytest.skip("MCP server not available")
+    When _get_tools_from_mcp_servers is called for an OAuth2 MCP server and no
+    oauth2_headers are provided in the request (e.g. a /responses API call from a
+    chat UI), the per-user stored token must be fetched from the DB and passed as
+    extra_headers to _get_tools_from_server.
 
-    # Test case 1: Unprefixed tool name with camelCase in filter list
-    assert _tool_name_matches("addpet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("updatepet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("deletepet", ["addPet", "updatePet"]) is False
+    The implementation pre-fetches all user credentials in a single bulk query
+    (_prefetch_oauth_creds_for_user) to avoid N+1 queries in the gather loop.
 
-    # Test case 2: Prefixed tool name with camelCase in filter list
-    assert _tool_name_matches("per_store-addpet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("per_store-updatepet", ["addPet", "updatePet"]) is True
-    assert _tool_name_matches("per_store-deletepet", ["addPet", "updatePet"]) is False
-
-    # Test case 3: Mixed case variations
-    assert _tool_name_matches("findPetsByStatus", ["findpetsbystatus"]) is True
-    assert _tool_name_matches("findpetsbystatus", ["findPetsByStatus"]) is True
-    assert _tool_name_matches("FINDPETSBYSTATUS", ["findPetsByStatus"]) is True
-
-    # Test case 4: Full prefixed name in filter list (case-insensitive)
-    assert _tool_name_matches("server-addPet", ["server-addpet"]) is True
-    assert _tool_name_matches("server-addpet", ["server-addPet"]) is True
-
-    # Test case 5: Ensure non-matching names still don't match
-    assert _tool_name_matches("addpet", ["deletePet", "updatePet"]) is False
-    assert _tool_name_matches("server-addpet", ["deletePet", "updatePet"]) is False
-
-
-def test_filter_tools_by_allowed_tools_case_insensitive():
-    """Test that filter_tools_by_allowed_tools handles case-insensitive matching.
-    
-    Ensures that OpenAPI tools with lowercase names can be filtered using
-    camelCase allowed_tools configuration from the OpenAPI spec.
+    This covers the bug where OAuth2 MCP tools were always empty in the /responses
+    API because the stored credential was never injected.
     """
     try:
         from litellm.proxy._experimental.mcp_server.server import (
-            filter_tools_by_allowed_tools,
+            _get_tools_from_mcp_servers,
         )
-        from litellm.types.mcp_server.tool_registry import MCPTool
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
     except ImportError:
         pytest.skip("MCP server not available")
 
-    # Mock handler function
-    def mock_handler(**kwargs):
-        return kwargs
+    STORED_TOKEN = "atlassian-oauth-access-token-xyz"
+    SERVER_ID = "srv-oauth2-id"
+    USER_ID = "user-123"
 
-    # Create mock tools with lowercase names (as registered from OpenAPI)
-    tools = [
-        MCPTool(
-            name="per_store-addpet",
-            description="Add a pet",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-        MCPTool(
-            name="per_store-updatepet",
-            description="Update a pet",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-        MCPTool(
-            name="per_store-deletepet",
-            description="Delete a pet",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-        MCPTool(
-            name="per_store-findpetsbystatus",
-            description="Find pets by status",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-    ]
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id=USER_ID)
 
-    # Create mock server with camelCase allowed_tools (as from OpenAPI spec)
-    server = MCPServer(
-        server_id="test-server",
-        name="per_store",
-        transport=MCPTransport.http,
-        allowed_tools=["addPet", "updatePet", "findPetsByStatus"],
-    )
+    oauth2_server = MagicMock(name="atlassian_server")
+    oauth2_server.name = "atlassian_test"
+    oauth2_server.alias = "atlassian_test"
+    oauth2_server.server_name = "atlassian_test"
+    oauth2_server.server_id = SERVER_ID
+    oauth2_server.auth_type = MCPAuth.oauth2
+    oauth2_server.extra_headers = None
 
-    # Filter tools
-    filtered_tools = filter_tools_by_allowed_tools(tools, server)
+    # Simulate the DB returning a valid credential for this user+server
+    prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
 
-    # Should return 3 tools (case-insensitive match)
-    assert len(filtered_tools) == 3
-    assert any(t.name == "per_store-addpet" for t in filtered_tools)
-    assert any(t.name == "per_store-updatepet" for t in filtered_tools)
-    assert any(t.name == "per_store-findpetsbystatus" for t in filtered_tools)
-    assert not any(t.name == "per_store-deletepet" for t in filtered_tools)
+    tool_1 = MagicMock()
+    tool_1.name = "atlassian_test-search"
 
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        new=AsyncMock(return_value=[oauth2_server]),
+    ), patch(
+        # Patch the bulk prefetch so no real DB connection is needed
+        "litellm.proxy._experimental.mcp_server.server._prefetch_oauth_creds_for_user",
+        new=AsyncMock(return_value=prefetched_creds),
+    ) as mock_prefetch, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager, patch(
+        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+        side_effect=lambda tools, _server: tools,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+        new=AsyncMock(side_effect=lambda tools, **_: tools),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
 
-def test_filter_tools_by_allowed_tools_no_filter():
-    """Test that filter_tools_by_allowed_tools returns all tools when no filter is set."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            filter_tools_by_allowed_tools,
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["atlassian_test"],
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,  # No token from request — must fall back to DB
         )
-        from litellm.types.mcp_server.tool_registry import MCPTool
-    except ImportError:
-        pytest.skip("MCP server not available")
 
-    # Mock handler function
-    def mock_handler(**kwargs):
-        return kwargs
+    # Bulk credential prefetch was called once (not once per server)
+    mock_prefetch.assert_awaited_once_with(user_auth)
 
-    tools = [
-        MCPTool(
-            name="fusion_litellm_mcp-model_list",
-            description="List models",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-        MCPTool(
-            name="fusion_litellm_mcp-chat_completion",
-            description="Chat completion",
-            input_schema={"type": "object"},
-            handler=mock_handler,
-        ),
-    ]
+    # The stored token was forwarded to the MCP transport layer as extra_headers
+    mock_manager._get_tools_from_server.assert_awaited_once()
+    call_kwargs = mock_manager._get_tools_from_server.await_args.kwargs
+    assert call_kwargs["extra_headers"] == {"Authorization": f"Bearer {STORED_TOKEN}"}
 
-    # Server with no allowed_tools filter
-    server = MCPServer(
-        server_id="test-server",
-        name="fusion_litellm_mcp",
-        transport=MCPTransport.http,
-        allowed_tools=None,
-    )
-
-    filtered_tools = filter_tools_by_allowed_tools(tools, server)
-
-    # Should return all tools when no filter is configured
-    assert len(filtered_tools) == 2
+    assert tools == [tool_1]

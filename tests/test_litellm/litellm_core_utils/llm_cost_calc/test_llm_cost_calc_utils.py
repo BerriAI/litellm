@@ -42,7 +42,9 @@ from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
 def test_reasoning_tokens_no_price_set():
-    model = "o1-mini"
+    # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
+    # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)
+    model = "o1"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -266,7 +268,8 @@ def test_image_tokens_fallback_to_base_cost():
 
 
 def test_generic_cost_per_token_above_200k_tokens():
-    model = "gemini-2.5-pro-exp-03-25"
+    # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
+    model = "gemini-2.5-pro"
     custom_llm_provider = "vertex_ai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
