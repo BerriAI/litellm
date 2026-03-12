@@ -78,7 +78,7 @@ class PixverseVideoConfig(BaseVideoConfig):
         - input_reference -> image or video (based on file type detection)
         - size -> aspect_ratio + quality (e.g., "1280x720" -> "16:9" + "720p")
         - seconds -> duration (convert to int)
-        - model -> model (default "v5.6")
+        - model -> model (Pixverse model version like "v5.6")
         """
         mapped_params: Dict[str, Any] = {}
 
@@ -110,6 +110,17 @@ class PixverseVideoConfig(BaseVideoConfig):
                 except (ValueError, TypeError):
                     # If conversion fails, skip duration
                     pass
+
+        # Handle model parameter - forward Pixverse model version
+        if "model" in video_create_optional_params:
+            model_version = video_create_optional_params["model"]
+            # Only forward bare version strings like "v5.6", not LiteLLM routing keys
+            if (
+                model_version
+                and isinstance(model_version, str)
+                and "/" not in model_version
+            ):
+                mapped_params["model"] = model_version
 
         # Pass through extra_body parameters that might be Pixverse-specific
         if "extra_body" in video_create_optional_params:
@@ -231,28 +242,30 @@ class PixverseVideoConfig(BaseVideoConfig):
         Convert Pixverse aspect_ratio and quality back to size format.
 
         Args:
-            aspect_ratio: "16:9", "9:16", etc.
+            aspect_ratio: "16:9", "9:16", "1:1", etc.
             quality: "720p", "1080p", etc.
 
         Returns:
-            Size string like "1280x720", "720x1280", etc.
+            Size string like "1280x720", "720x1280", "720x720", etc.
         """
-        # Extract height from quality
-        height = 720
+        # Extract short edge from quality
+        short_edge = 720
         if "1080" in quality:
-            height = 1080
+            short_edge = 1080
 
-        # Determine width based on aspect ratio
+        # Determine dimensions based on aspect ratio
         if aspect_ratio == "16:9":
-            width = int(height * 16 / 9)
-            return f"{width}x{height}"
+            # Landscape: short edge is height
+            return f"{int(short_edge * 16 / 9)}x{short_edge}"
         elif aspect_ratio == "9:16":
-            width = int(height * 9 / 16)
-            return f"{width}x{height}"
+            # Portrait: short edge is width
+            return f"{short_edge}x{int(short_edge * 16 / 9)}"
+        elif aspect_ratio == "1:1":
+            # Square: both edges are equal
+            return f"{short_edge}x{short_edge}"
         else:
-            # Default to 16:9
-            width = int(height * 16 / 9)
-            return f"{width}x{height}"
+            # Default to 16:9 landscape
+            return f"{int(short_edge * 16 / 9)}x{short_edge}"
 
     def _determine_endpoint(self, input_reference: Optional[str]) -> str:
         """

@@ -408,6 +408,46 @@ class TestPixverseVideoTransformation:
         assert aspect_ratio == "9:16"
         assert quality == "1080p"
 
+    def test_pixverse_format_to_size_roundtrip(self):
+        """Test that _pixverse_format_to_size correctly converts aspect_ratio + quality back to size."""
+        # Landscape 16:9
+        assert self.config._pixverse_format_to_size("16:9", "720p") == "1280x720"
+        assert self.config._pixverse_format_to_size("16:9", "1080p") == "1920x1080"
+
+        # Portrait 9:16
+        assert self.config._pixverse_format_to_size("9:16", "720p") == "720x1280"
+        assert self.config._pixverse_format_to_size("9:16", "1080p") == "1080x1920"
+
+        # Square 1:1
+        assert self.config._pixverse_format_to_size("1:1", "720p") == "720x720"
+        assert self.config._pixverse_format_to_size("1:1", "1080p") == "1080x1080"
+
+    def test_model_parameter_mapping(self):
+        """Test that model parameter is correctly forwarded to Pixverse."""
+        # Test with Pixverse model version
+        video_params = {
+            "model": "v5.6",
+            "size": "1920x1080",
+        }
+        mapped = self.config.map_openai_params(
+            video_create_optional_params=video_params,
+            model="pixverse",
+            drop_params=False,
+        )
+        assert mapped["model"] == "v5.6"
+
+        # Test that LiteLLM routing keys are not forwarded
+        video_params_routing = {
+            "model": "pixverse/v5.6",
+            "size": "1920x1080",
+        }
+        mapped_routing = self.config.map_openai_params(
+            video_create_optional_params=video_params_routing,
+            model="pixverse",
+            drop_params=False,
+        )
+        assert "model" not in mapped_routing  # Should be filtered out
+
     def test_unsupported_operations(self):
         """Test that unsupported operations raise NotImplementedError."""
         # Test video remix (not supported)
