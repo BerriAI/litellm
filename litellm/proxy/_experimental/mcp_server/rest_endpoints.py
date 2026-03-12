@@ -557,6 +557,16 @@ if MCP_AVAILABLE:
                 request, user_api_key_dict, server_id
             )
 
+            # Look up per-user OAuth headers for this server (mirrors list_tool_rest_api).
+            user_oauth_extra_headers: Optional[Dict[str, str]] = None
+            target_server = next(
+                (s for s in allowed_mcp_servers if s.server_id == server_id), None
+            )
+            if target_server is not None:
+                user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                    target_server, user_api_key_dict
+                )
+
             # Call execute_mcp_tool directly (permission checks already done)
             result = await execute_mcp_tool(
                 name=tool_name,
@@ -566,7 +576,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                oauth2_headers=data.get("oauth2_headers"),
+                oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
                 raw_headers=data.get("raw_headers"),
                 litellm_logging_obj=data.get("litellm_logging_obj"),
             )

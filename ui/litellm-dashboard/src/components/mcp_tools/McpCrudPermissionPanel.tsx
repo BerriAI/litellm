@@ -33,6 +33,12 @@ interface McpCrudPermissionPanelProps {
   /** Called whenever the allowed set changes. Always emits a concrete string[]. */
   onChange: (allowed: string[]) => void;
   readOnly?: boolean;
+  /**
+   * Optional search filter string. When set, only tools whose name or description
+   * contain this string (case-insensitive) are shown. Group-level toggles still
+   * operate on the complete group — not just the visible (filtered) subset.
+   */
+  searchFilter?: string;
 }
 
 const CRUD_ORDER: CrudOp[] = ["read", "create", "update", "delete", "unknown"];
@@ -67,6 +73,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   value,
   onChange,
   readOnly = false,
+  searchFilter = "",
 }) => {
   const [collapsed, setCollapsed] = useState<Record<CrudOp, boolean>>({
     read: false,
@@ -197,10 +204,16 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
               </div>
             )}
 
-            {/* Tool list */}
+            {/* Tool list — searchFilter narrows display only; group toggles still cover all tools */}
             {!isCollapsed && (
               <div className="bg-white divide-y divide-gray-50">
-                {group.map((tool) => {
+                {group
+                  .filter((t) =>
+                    !searchFilter ||
+                    t.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
+                    (t.description ?? "").toLowerCase().includes(searchFilter.toLowerCase())
+                  )
+                  .map((tool) => {
                   const allowed = isToolAllowed(tool.name);
                   return (
                     <div

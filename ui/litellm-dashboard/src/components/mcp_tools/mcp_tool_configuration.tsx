@@ -464,12 +464,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                   size="large"
                 />
                 <McpCrudPermissionPanel
-                  tools={tools.filter(
-                    (t) =>
-                      !toolSearchTerm ||
-                      t.name.toLowerCase().includes(toolSearchTerm.toLowerCase()) ||
-                      (t.description ?? "").toLowerCase().includes(toolSearchTerm.toLowerCase())
-                  )}
+                  tools={tools}
+                  searchFilter={toolSearchTerm}
                   value={allowedTools}
                   onChange={(allowed) => onAllowedToolsChange(allowed)}
                 />

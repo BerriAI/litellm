@@ -43,12 +43,13 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   }, [allServers, selectedServers]);
 
   // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
-  const fetchToolsForServer = async (serverId: string) => {
+  // `token` is passed explicitly so the closure never captures a stale accessToken.
+  const fetchToolsForServer = async (serverId: string, token: string) => {
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
 
     try {
-      const response = await listMCPTools(accessToken, serverId);
+      const response = await listMCPTools(token, serverId);
 
       if (response.error) {
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
@@ -76,14 +77,17 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     }
   };
 
-  // Auto-fetch tools when servers change
+  // Auto-fetch tools when servers or accessToken change
   useEffect(() => {
     servers.forEach((server) => {
       if (!serverTools[server.server_id] && !loadingTools[server.server_id]) {
-        fetchToolsForServer(server.server_id);
+        fetchToolsForServer(server.server_id, accessToken);
       }
     });
-  }, [servers]);
+    // fetchToolsForServer is defined in this render scope but receives `accessToken`
+    // as an explicit argument, so it is safe to omit from deps here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servers, accessToken]);
 
   const handleCrudPanelChange = (serverId: string, allowed: string[]) => {
     onChange({ ...toolPermissions, [serverId]: allowed });
