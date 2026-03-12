@@ -454,5 +454,38 @@
       }
     },
     "description": "SQS Queue (AWS) Logging Integration"
+  },
+  {
+    "id": "microsoft_purview",
+    "displayName": "Microsoft Purview",
+    "logo": "microsoft.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "MICROSOFT_PURVIEW_TENANT_ID": {
+        "type": "text",
+        "ui_name": "Azure Tenant ID",
+        "description": "Azure Active Directory Tenant ID",
+        "required": true
+      },
+      "MICROSOFT_PURVIEW_CLIENT_ID": {
+        "type": "password",
+        "ui_name": "App Client ID",
+        "description": "App Registration Client ID with Content.Process.All permission",
+        "required": true
+      },
+      "MICROSOFT_PURVIEW_CLIENT_SECRET": {
+        "type": "password",
+        "ui_name": "App Client Secret",
+        "description": "App Registration Client Secret",
+        "required": true
+      },
+      "MICROSOFT_PURVIEW_APP_ID": {
+        "type": "text",
+        "ui_name": "App ID (GUID)",
+        "description": "Registered Application GUID in Purview policy location",
+        "required": false
+      }
+    },
+    "description": "Microsoft Purview AI Compliance & Audit Logging Integration"
   }
 ]
