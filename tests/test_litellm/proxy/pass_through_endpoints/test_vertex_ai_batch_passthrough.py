@@ -243,7 +243,7 @@ class TestVertexAIBatchPassthroughHandler:
         ]
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            vertex_ai_batch_responses, model_name="gemini-1.5-flash-001"
+            vertex_ai_batch_responses, model_name="gemini-2.0-flash-001"
         )
 
         assert usage.total_tokens == 15

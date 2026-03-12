@@ -907,6 +907,7 @@ export const keyCreateForAgentCall = async (
   keyAlias: string,
   models: string[],
   metadata?: Record<string, any>,
+  teamId?: string | null,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
   const body: Record<string, any> = {
@@ -914,6 +915,9 @@ export const keyCreateForAgentCall = async (
     key_alias: keyAlias,
     models: models.length > 0 ? models : [],
   };
+  if (teamId) {
+    body.team_id = teamId;
+  }
   if (metadata && Object.keys(metadata).length > 0) {
     body.metadata = metadata;
   }
@@ -9603,7 +9607,17 @@ export const storeMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to store OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to store OAuth credential");
   }
   return response.json();
 };
@@ -9621,7 +9635,17 @@ export const deleteMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to revoke OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to revoke OAuth credential");
   }
   return response.json();
 };

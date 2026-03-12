@@ -24,6 +24,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -655,34 +656,37 @@ def responses(
         # Native MCP Responses API
         #########################################################
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
-            return aresponses_api_with_mcp(
-                input=input,
-                model=model,
-                include=include,
-                instructions=instructions,
-                max_output_tokens=max_output_tokens,
-                prompt=prompt,
-                metadata=metadata,
-                parallel_tool_calls=parallel_tool_calls,
-                previous_response_id=previous_response_id,
-                reasoning=reasoning,
-                store=store,
-                background=background,
-                stream=stream,
-                temperature=temperature,
-                text=text,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_p=top_p,
-                truncation=truncation,
-                user=user,
-                extra_headers=extra_headers,
-                extra_query=extra_query,
-                extra_body=extra_body,
-                timeout=timeout,
-                custom_llm_provider=custom_llm_provider,
+            mcp_call_kwargs = {
+                "input": input,
+                "model": model,
+                "include": include,
+                "instructions": instructions,
+                "max_output_tokens": max_output_tokens,
+                "prompt": prompt,
+                "metadata": metadata,
+                "parallel_tool_calls": parallel_tool_calls,
+                "previous_response_id": previous_response_id,
+                "reasoning": reasoning,
+                "store": store,
+                "background": background,
+                "stream": stream,
+                "temperature": temperature,
+                "text": text,
+                "tool_choice": tool_choice,
+                "tools": tools,
+                "top_p": top_p,
+                "truncation": truncation,
+                "user": user,
+                "extra_headers": extra_headers,
+                "extra_query": extra_query,
+                "extra_body": extra_body,
+                "timeout": timeout,
+                "custom_llm_provider": custom_llm_provider,
                 **kwargs,
-            )
+            }
+            if _is_async:
+                return aresponses_api_with_mcp(**mcp_call_kwargs)
+            return run_async_function(aresponses_api_with_mcp, **mcp_call_kwargs)
 
         # get provider config
         responses_api_provider_config: Optional[
