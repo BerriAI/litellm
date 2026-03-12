@@ -20,11 +20,15 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
 
 // Mock react-query
 const mockInvalidateQueries = vi.fn();
-vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({
-    invalidateQueries: mockInvalidateQueries,
-  }),
-}));
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal() as any;
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: mockInvalidateQueries,
+    }),
+  };
+});
 
 // Mock the useModelsInfo hook
 const mockUseModelsInfo = vi.fn(() => ({
@@ -553,7 +557,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4-delete-test")).toBeInTheDocument();
@@ -597,7 +601,7 @@ describe("AllModelsTab", () => {
 
     mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
 
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4-clickable")).toBeInTheDocument();

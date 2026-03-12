@@ -11,7 +11,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.vertex_ai.common_utils import (
-    _build_vertex_schema_for_gemini_2,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
@@ -1383,93 +1382,3 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
-
-
-class TestBuildVertexSchemaForGemini2:
-    """Tests for _build_vertex_schema_for_gemini_2 — minimal transform for Gemini 2.0+ tools."""
-
-    def test_jsonvalue_standalone_preserved(self):
-        """JsonValue (bare {}) should NOT be coerced to {"type": "object"}."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "value": {},
-            },
-            "required": ["name", "value"],
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        assert result["properties"]["value"] == {}
-
-    def test_optional_jsonvalue_anyof_preserved(self):
-        """Optional[JsonValue] anyOf with null should be preserved, not converted to nullable."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "value": {
-                    "anyOf": [
-                        {"type": "array", "items": {}},
-                        {},
-                        {"type": "null"},
-                    ]
-                },
-            },
-            "required": ["name"],
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        value_schema = result["properties"]["value"]
-        assert "anyOf" in value_schema
-        assert len(value_schema["anyOf"]) == 3
-        assert {"type": "null"} in value_schema["anyOf"]
-        assert {} in value_schema["anyOf"]
-
-    def test_ref_defs_resolved(self):
-        """$ref/$defs should be resolved since Gemini doesn't support them in tool params."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "value": {"$ref": "#/$defs/JsonValue"},
-            },
-            "$defs": {"JsonValue": {}},
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        assert "$ref" not in result["properties"]["value"]
-        assert "$defs" not in result
-        assert result["properties"]["value"] == {}
-
-    def test_unsupported_fields_stripped(self):
-        """Fields not in Vertex Schema TypedDict should be removed."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "additionalProperties": False},
-            },
-            "additionalProperties": False,
-            "$schema": "http://json-schema.org/draft-07/schema#",
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        assert "additionalProperties" not in result
-        assert "$schema" not in result
-
-    def test_no_type_coercion(self):
-        """Schemas without type should NOT have type: object added."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "data": {"description": "Any data"},
-            },
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        assert "type" not in result["properties"]["data"]
-
-    def test_items_empty_preserved(self):
-        """items: {} should NOT be coerced to items: {"type": "object"}."""
-        schema = {
-            "type": "object",
-            "properties": {
-                "values": {"type": "array", "items": {}},
-            },
-        }
-        result = _build_vertex_schema_for_gemini_2(schema)
-        assert result["properties"]["values"]["items"] == {}

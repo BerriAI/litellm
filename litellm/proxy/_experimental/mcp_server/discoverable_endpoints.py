@@ -312,8 +312,8 @@ async def register_client_with_server(
 @router.get("/authorize")
 async def authorize(
     request: Request,
-    client_id: str,
     redirect_uri: str,
+    client_id: Optional[str] = None,
     state: str = "",
     mcp_server_name: Optional[str] = None,
     code_challenge: Optional[str] = None,
@@ -326,19 +326,34 @@ async def authorize(
         global_mcp_server_manager,
     )
 
-    lookup_name = mcp_server_name or client_id
+    lookup_name: Optional[str] = mcp_server_name or client_id
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-        lookup_name, client_ip=client_ip
+    mcp_server = (
+        global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
+        if lookup_name
+        else None
     )
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints()
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    # Use server's stored client_id when caller doesn't supply one.
+    # Raise a clear error instead of passing an empty string — an empty
+    # client_id would silently produce a broken authorization URL.
+    resolved_client_id: str = mcp_server.client_id or client_id or ""
+    if not resolved_client_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "client_id is required but was not supplied and is not "
+                "stored on the MCP server record. Provide client_id as a query "
+                "parameter or configure it on the server."
+            },
+        )
     return await authorize_with_server(
         request=request,
         mcp_server=mcp_server,
-        client_id=client_id,
+        client_id=resolved_client_id,
         redirect_uri=redirect_uri,
         state=state,
         code_challenge=code_challenge,

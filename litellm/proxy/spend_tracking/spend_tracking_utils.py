@@ -52,8 +52,8 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
-    if _master_key is None:
+def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    if _master_key is None or api_key is None:
         return False
 
     ## string comparison

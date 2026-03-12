@@ -1122,87 +1122,73 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         return response
 
-    async def async_post_call_streaming_iterator_hook(
+    async def _stream_apply_output_masking(
         self,
-        user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
     ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
-        """
-        Process streaming response chunks to unmask PII tokens when needed.
-        """
+        """Apply Presidio masking to streaming output (apply_to_output=True path)."""
         from litellm.llms.base_llm.base_model_iterator import (
             convert_model_response_to_streaming,
         )
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
-        # --- Output masking path (apply_to_output=True) ---
-        if self.apply_to_output:
-            all_chunks: List[ModelResponseStream] = []
-            try:
-                async for chunk in response:
-                    if isinstance(chunk, ModelResponseStream):
-                        all_chunks.append(chunk)
-                    elif isinstance(chunk, bytes):
-                        # Anthropic native SSE: pass through as-is
-                        yield chunk  # type: ignore[misc]
-                        continue
+        all_chunks: List[ModelResponseStream] = []
+        try:
+            async for chunk in response:
+                if isinstance(chunk, ModelResponseStream):
+                    all_chunks.append(chunk)
+                elif isinstance(chunk, bytes):
+                    yield chunk  # type: ignore[misc]
+                    continue
 
-                if not all_chunks:
-                    # All chunks were Anthropic native SSE bytes — output
-                    # masking cannot be applied to raw bytes.  Log a warning
-                    # so operators know PII masking was skipped for this stream.
-                    verbose_proxy_logger.warning(
-                        "Presidio apply_to_output: streaming response contained only "
-                        "bytes chunks (Anthropic native SSE). Output PII masking was "
-                        "skipped for this response."
-                    )
-                    return
-
-                assembled_model_response = stream_chunk_builder(
-                    chunks=all_chunks, messages=request_data.get("messages")
+            if not all_chunks:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: streaming response contained only "
+                    "bytes chunks (Anthropic native SSE). Output PII masking was "
+                    "skipped for this response."
                 )
-
-                if not isinstance(assembled_model_response, ModelResponse):
-                    for chunk in all_chunks:
-                        yield chunk
-                    return
-
-                # Apply Presidio masking on the assembled response
-                await self._process_response_for_pii(
-                    response=assembled_model_response,
-                    request_data=request_data,
-                    mode="mask",
-                )
-
-                mock_response_stream = convert_model_response_to_streaming(
-                    assembled_model_response
-                )
-                yield mock_response_stream
                 return
 
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error masking streaming PII output: {str(e)}"
-                )
-                # Cannot re-iterate `response` — it's already consumed.
-                # If we collected chunks before the error, replay those.
+            assembled_model_response = stream_chunk_builder(
+                chunks=all_chunks, messages=request_data.get("messages")
+            )
+
+            if not isinstance(assembled_model_response, ModelResponse):
                 for chunk in all_chunks:
                     yield chunk
                 return
 
-        # --- PII unmasking path (output_parse_pii=True) ---
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
-        if not pii_tokens and request_data:
-            verbose_proxy_logger.debug(
-                "No pii_tokens in request_data['metadata'] for streaming unmask path"
+            await self._process_response_for_pii(
+                response=assembled_model_response,
+                request_data=request_data,
+                mode="mask",
             )
-        if not (self.output_parse_pii and pii_tokens):
-            async for chunk in response:
+
+            mock_response_stream = convert_model_response_to_streaming(
+                assembled_model_response
+            )
+            yield mock_response_stream
+
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error masking streaming PII output: {str(e)}"
+            )
+            for chunk in all_chunks:
                 yield chunk
-            return
+
+    async def _stream_pii_unmasking(
+        self,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+        """Apply PII unmasking to streaming output (output_parse_pii=True path)."""
+        from litellm.llms.base_llm.base_model_iterator import (
+            convert_model_response_to_streaming,
+        )
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import ModelResponse
 
         remaining_chunks: List[ModelResponseStream] = []
         try:
@@ -1210,7 +1196,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 if isinstance(chunk, ModelResponseStream):
                     remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    # Anthropic native SSE: pass through as-is
                     yield chunk  # type: ignore[misc]
                     continue
 
@@ -1226,17 +1211,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
                 return
 
-            # --- PRESERVE USAGE METADATA ---
-            # stream_chunk_builder might miss usage if it's only in the last chunk
-            if (
-                not getattr(assembled_model_response, "usage", None)
-            ) and remaining_chunks:
-                last_chunk = remaining_chunks[-1]
-                last_chunk_usage = getattr(last_chunk, "usage", None)
-                if last_chunk_usage:
-                    setattr(assembled_model_response, "usage", last_chunk_usage)
+            self._preserve_usage_from_last_chunk(
+                assembled_model_response, remaining_chunks
+            )
 
-            # Apply PII unmasking to assembled content (unmasking tokens back to original text)
             await self._process_response_for_pii(
                 response=assembled_model_response,
                 request_data=request_data,
@@ -1252,6 +1230,47 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             for chunk in remaining_chunks:
                 yield chunk
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+        """
+        Process streaming response chunks to unmask PII tokens when needed.
+        """
+        if self.apply_to_output:
+            async for chunk in self._stream_apply_output_masking(
+                response, request_data
+            ):
+                yield chunk
+            return
+
+        metadata = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens = metadata.get("pii_tokens", {})
+        if not pii_tokens and request_data:
+            verbose_proxy_logger.debug(
+                "No pii_tokens in request_data['metadata'] for streaming unmask path"
+            )
+        if not (self.output_parse_pii and pii_tokens):
+            async for chunk in response:
+                yield chunk
+            return
+
+        async for chunk in self._stream_pii_unmasking(response, request_data):
+            yield chunk
+
+    @staticmethod
+    def _preserve_usage_from_last_chunk(
+        assembled_model_response: Any,
+        chunks: List[Any],
+    ) -> None:
+        """Copy usage metadata from the last chunk when stream_chunk_builder misses it."""
+        if not getattr(assembled_model_response, "usage", None) and chunks:
+            last_chunk_usage = getattr(chunks[-1], "usage", None)
+            if last_chunk_usage:
+                setattr(assembled_model_response, "usage", last_chunk_usage)
 
     def get_presidio_settings_from_request_data(
         self, data: dict

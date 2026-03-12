@@ -172,6 +172,8 @@ class AgentObjectPermission(TypedDict, total=False):
     mcp_servers: Optional[List[str]]
     mcp_access_groups: Optional[List[str]]
     mcp_tool_permissions: Optional[Dict[str, List[str]]]
+    models: Optional[List[str]]
+    agents: Optional[List[str]]
 
 
 class AgentConfig(TypedDict, total=False):
