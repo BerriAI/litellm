@@ -4121,6 +4121,98 @@ async def test_list_keys_with_expand_user():
 
 
 @pytest.mark.asyncio
+async def test_list_keys_with_expand_user_includes_created_by_user():
+    """
+    Test that expand=user also resolves created_by to a user object.
+    """
+    mock_prisma_client = AsyncMock()
+
+    # Key created by user789 but owned by user123
+    key1_dict = {
+        "token": "token1",
+        "user_id": "user123",
+        "created_by": "user789",
+        "key_alias": "key1",
+        "models": ["gpt-4"],
+    }
+    mock_key1 = MagicMock()
+    mock_key1.token = "token1"
+    mock_key1.user_id = "user123"
+    mock_key1.created_by = "user789"
+    mock_key1.model_dump = MagicMock(return_value=key1_dict)
+
+    mock_find_many_keys = AsyncMock(return_value=[mock_key1])
+    mock_count_keys = AsyncMock(return_value=1)
+
+    # Create mock users for both user_id and created_by
+    mock_user_owner = MagicMock()
+    mock_user_owner.user_id = "user123"
+    mock_user_owner.user_email = "owner@example.com"
+    mock_user_owner.user_alias = "Owner"
+    mock_user_owner.model_dump = MagicMock(return_value={
+        "user_id": "user123",
+        "user_email": "owner@example.com",
+        "user_alias": "Owner",
+    })
+
+    mock_user_creator = MagicMock()
+    mock_user_creator.user_id = "user789"
+    mock_user_creator.user_email = "creator@example.com"
+    mock_user_creator.user_alias = "Creator"
+
+    mock_find_many_users = AsyncMock(return_value=[mock_user_owner, mock_user_creator])
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count_keys
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
+
+    async def mock_attach_object_permission(d, _):
+        return d
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
+        side_effect=mock_attach_object_permission,
+    ):
+        args = {
+            "prisma_client": mock_prisma_client,
+            "page": 1,
+            "size": 50,
+            "user_id": None,
+            "team_id": None,
+            "organization_id": None,
+            "key_alias": None,
+            "key_hash": None,
+            "exclude_team_id": None,
+            "return_full_object": False,
+            "admin_team_ids": None,
+            "include_created_by_keys": False,
+            "expand": ["user"],
+        }
+
+        result = await _list_key_helper(**args)
+
+        # Verify that the user lookup included both user_id and created_by
+        call_args = mock_find_many_users.call_args
+        user_ids_in_query = set(call_args.kwargs["where"]["user_id"]["in"])
+        assert user_ids_in_query == {"user123", "user789"}
+
+        # Verify created_by_user is attached
+        key_result = result["keys"][0]
+        assert key_result.created_by_user == {
+            "user_id": "user789",
+            "user_email": "creator@example.com",
+            "user_alias": "Creator",
+        }
+
+        # Verify user (owner) is also still attached
+        assert key_result.user == {
+            "user_id": "user123",
+            "user_email": "owner@example.com",
+            "user_alias": "Owner",
+        }
+
+
+@pytest.mark.asyncio
 async def test_list_keys_with_status_deleted():
     """
     Test that status="deleted" parameter correctly queries the deleted keys table.
