@@ -1320,7 +1320,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
-            pip install "websockets"
+            pip install "websockets==13.1.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run realtime tests
