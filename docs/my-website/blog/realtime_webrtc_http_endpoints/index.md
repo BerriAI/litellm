@@ -22,31 +22,16 @@ hide_table_of_contents: false
 
 import WebRTCTester from '@site/src/components/WebRTCTester';
 
-Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management; audio streams directly to OpenAI/Azure.
-
-**Providers:** OpenAI · Azure OpenAI
-
-:::info **WebRTC vs WebSocket**
-- **WebSocket** (`/v1/realtime`) — server-to-server
-- **WebRTC** (`/v1/realtime/client_secrets` + `/v1/realtime/calls`) — browser/mobile, lower latency
-:::
+Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management.
 
 ## How it works
 
-LiteLLM issues tokens and relays SDP; audio never passes through the proxy.
+![WebRTC flow: Browser, LiteLLM Proxy, and OpenAI/Azure](../../img/webrtc_flow.png)
 
-```
-Browser                  LiteLLM Proxy              OpenAI/Azure
-  |                           |                          |
-  |-- POST /v1/realtime/      |                          |
-  |   client_secrets -------->|-- POST sessions -------->|
-  |                           |<-- { ek_... } -----------|
-  |<-- { encrypted_token } ---|                          |
-  |-- POST /v1/realtime/calls |-- POST calls ----------->|
-  |   [SDP + token] --------->|                          |
-  |<-- SDP answer ------------|<-- SDP answer -----------|
-  |===== audio P2P direct to OpenAI/Azure =============>|
-```
+**Flow of generating ephemeral token**
+
+![Ephemeral token flow: Browser requests token, LiteLLM gets real token from OpenAI, returns encrypted token](../../img/ephemeral_token.png)
+
 
 ## Proxy Setup
 
