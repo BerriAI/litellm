@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -185,13 +186,22 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         endpoint = self._get_model_endpoint(model)
         return f"{base_url}{endpoint}"
 
-    def _read_image_bytes(self, image: Any) -> bytes:
+    def _read_image_bytes(
+        self,
+        image: Any,
+        depth: int = 0,
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
+    ) -> bytes:
         """Read image bytes from various input types."""
+        if depth > max_depth:
+            raise ValueError(
+                f"Max recursion depth {max_depth} reached while reading image bytes for Black Forest Labs image edit."
+            )
         if isinstance(image, bytes):
             return image
         elif isinstance(image, list):
             # If it's a list, take the first image
-            return self._read_image_bytes(image[0])
+            return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
                 # Download image from URL
