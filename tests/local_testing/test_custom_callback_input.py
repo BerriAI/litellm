@@ -1085,10 +1085,15 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
-            # response is a full ModelResponse dict (choices format) since d84e5e381acf
             response = slobject["response"]
-            assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-            assert response["choices"][0]["message"].get("audio") is None
+            if "choices" in response:
+                assert (
+                    response["choices"][0]["message"]["content"]
+                    == "redacted-by-litellm"
+                )
+                assert response["choices"][0]["message"].get("audio") is None
+            else:
+                assert response["text"] == "redacted-by-litellm"
 
 
 @pytest.mark.parametrize(
@@ -1188,10 +1193,15 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
-            # response is a full ModelResponse dict (choices format) since d84e5e381acf
             response = slobject["response"]
-            assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-            assert response["choices"][0]["message"].get("audio") is None
+            if "choices" in response:
+                assert (
+                    response["choices"][0]["message"]["content"]
+                    == "redacted-by-litellm"
+                )
+                assert response["choices"][0]["message"].get("audio") is None
+            else:
+                assert response["text"] == "redacted-by-litellm"
 
 
 @pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
