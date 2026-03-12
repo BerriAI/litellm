@@ -3,10 +3,15 @@ Polls LiteLLM_ManagedObjectTable to check if the response is complete.
 Cost tracking is handled automatically by litellm.aget_responses().
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
+    MAX_OBJECTS_PER_POLL_CYCLE,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -27,6 +32,26 @@ class CheckResponsesCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
 
+    async def _cleanup_stale_managed_objects(self) -> None:
+        """
+        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
+        in non-terminal states as 'stale_expired'. These will never complete and
+        should not be polled.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "created_at": {"lt": cutoff},
+            },
+            data={"status": "stale_expired"},
+        )
+        if result > 0:
+            verbose_proxy_logger.warning(
+                f"CheckResponsesCost: marked {result} stale managed objects "
+                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+            )
+
     async def check_responses_cost(self):
         """
         Check if background responses are complete and track their cost.
@@ -35,11 +60,15 @@ class CheckResponsesCost:
         - Cost is automatically tracked by litellm.aget_responses()
         - Mark completed/failed/cancelled responses as complete in the database
         """
+        await self._cleanup_stale_managed_objects()
+
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "status": {"in": ["queued", "in_progress"]},
                 "file_purpose": "response",
-            }
+            },
+            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            order={"created_at": "asc"},
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")

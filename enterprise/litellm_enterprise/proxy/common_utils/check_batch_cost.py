@@ -2,11 +2,15 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-from litellm._uuid import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
+from litellm.constants import (
+    MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
+    MAX_OBJECTS_PER_POLL_CYCLE,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -49,6 +53,26 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
+    async def _cleanup_stale_managed_objects(self) -> None:
+        """
+        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
+        in non-terminal states as 'stale_expired'. These will never complete and
+        should not be polled.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "created_at": {"lt": cutoff},
+            },
+            data={"status": "stale_expired"},
+        )
+        if result > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: marked {result} stale managed objects "
+                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+            )
+
     async def check_batch_cost(self):
         """
         Check if the batch JOB has been tracked.
@@ -70,14 +94,32 @@ class CheckBatchCost:
             get_model_id_from_unified_batch_id,
         )
 
+        await self._cleanup_stale_managed_objects()
+
         # Look for all batches that have not yet been processed by CheckBatchCost
-        jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
-            where={
-                "file_purpose": "batch",
-                "batch_processed" : False,
-                "status": {"not_in": ["failed", "expired", "cancelled"]}
-            }
-        )
+        try:
+            jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                where={
+                    "file_purpose": "batch",
+                    "batch_processed": False,
+                    "status": {"not_in": ["failed", "expired", "cancelled"]},
+                },
+                take=MAX_OBJECTS_PER_POLL_CYCLE,
+                order={"created_at": "asc"},
+            )
+        except Exception:
+            # Fallback: batch_processed column may not exist on older schemas
+            verbose_proxy_logger.warning(
+                "CheckBatchCost: batch_processed column not found, querying without it"
+            )
+            jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                where={
+                    "file_purpose": "batch",
+                    "status": {"not_in": ["failed", "expired", "cancelled", "complete", "completed"]},
+                },
+                take=MAX_OBJECTS_PER_POLL_CYCLE,
+                order={"created_at": "asc"},
+            )
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
@@ -163,14 +205,14 @@ class CheckBatchCost:
 
                 # Access content - handle both direct attribute and method call
                 if hasattr(_file_content, 'content'):
-                    content_bytes = _file_content.content
+                    content_bytes = _file_content.content  # type: ignore[union-attr]
                 elif hasattr(_file_content, 'read'):
-                    content_bytes = await _file_content.read()
+                    content_bytes = await _file_content.read()  # type: ignore[misc]
                 else:
-                    content_bytes = _file_content
+                    content_bytes = _file_content  # type: ignore[assignment]
 
                 file_content_as_dict = _get_file_content_as_dictionary(
-                    content_bytes
+                    content_bytes  # type: ignore[arg-type]
                 )
 
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
@@ -195,7 +237,7 @@ class CheckBatchCost:
                         file_content_dictionary=file_content_as_dict,
                         custom_llm_provider=llm_provider,  # type: ignore
                         model_name=model_name,
-                        model_info=deployment_model_info,
+                        model_info=deployment_model_info,  # type: ignore[arg-type]
                     )
                 )
                 logging_obj = LiteLLMLogging(

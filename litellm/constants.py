@@ -1351,6 +1351,16 @@ PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
 PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
+MAX_OBJECTS_PER_POLL_CYCLE = int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50))
+MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = int(
+    os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)
+)
+# Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
+# CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
+# installations with large numbers of stale managed objects).
+PROXY_BATCH_POLLING_ENABLED = (
+    os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower() != "false"
+)
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
