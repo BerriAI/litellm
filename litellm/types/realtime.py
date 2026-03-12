@@ -112,6 +112,6 @@ class RealtimeClientSecretResponse(BaseModel):
     The `session` field is kept as a raw dict so unknown fields pass through.
     """
 
-    expires_at: int
+    expires_at: Optional[int] = None
     value: str
     session: Optional[Dict[str, Any]] = None

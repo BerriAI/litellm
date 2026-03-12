@@ -4746,6 +4746,7 @@ class BaseLLMHTTPHandler:
         model: Optional[str] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/client_secrets to upstream provider.
@@ -4761,7 +4762,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         if provider_config is not None:
-            url = provider_config.get_complete_url(api_base=api_base, model=model or "")
+            url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: Dict[str, Any] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
@@ -4811,6 +4812,7 @@ class BaseLLMHTTPHandler:
         session_config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
     ) -> httpx.Response:
         """
         Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
@@ -4830,7 +4832,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         if provider_config is not None:
-            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "")
+            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
             headers: Dict[str, Any] = provider_config.get_realtime_calls_headers(
                 ephemeral_key=openai_ephemeral_key
             )

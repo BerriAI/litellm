@@ -7,6 +7,7 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 import json
 import os
 import sys
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -59,19 +60,20 @@ def test_encode_realtime_token_payload_none_optional_fields():
 
 
 def test_decode_realtime_token_payload_valid():
+    future_expires_at = int(time.time()) + 3600
     payload = _encode_realtime_token_payload(
         ephemeral_key="epk_abc",
         model_id="gpt-4o",
         user_id=None,
         team_id=None,
-        expires_at=999,
+        expires_at=future_expires_at,
     )
     decrypted = json.loads(payload)  # simulate decrypted value
     result = _decode_realtime_token_payload(json.dumps(decrypted))
     assert result is not None
     assert result["ephemeral_key"] == "epk_abc"
     assert result["model_id"] == "gpt-4o"
-    assert result["expires_at"] == 999
+    assert result["expires_at"] == future_expires_at
 
 
 def test_decode_realtime_token_payload_invalid_version():
@@ -115,14 +117,15 @@ def proxy_app():
 @pytest.fixture
 def mock_route_request_client_secrets():
     """Mock route_request to return a fake upstream client_secrets response."""
+    future_expires_at = int(time.time()) + 3600
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
-    mock_resp.text = '{"value":"upstream_ephemeral_key","expires_at":999}'
-    mock_resp.content = b'{"value":"upstream_ephemeral_key","expires_at":999}'
+    mock_resp.text = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+    mock_resp.content = f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'.encode()
     mock_resp.headers = {}
     mock_resp.json.return_value = {
         "value": "upstream_ephemeral_key",
-        "expires_at": 999,
+        "expires_at": future_expires_at,
     }
 
     async def _mock_route(*args, **kwargs):
@@ -215,7 +218,8 @@ async def test_client_secrets_success_with_mock(
     assert response.status_code == 200
     data = response.json()
     assert "value" in data
-    assert data["expires_at"] == 999
+    assert data["expires_at"] is not None
+    assert data["expires_at"] > int(time.time())  # Should be in the future
     # Proxy encrypts the upstream value, so returned value should differ
     assert data["value"] != "upstream_ephemeral_key"
 
@@ -259,12 +263,13 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
     proxy_server.master_key = "sk-test-master-key"
 
     # Build a valid encrypted token (same format as client_secrets returns)
+    future_expires_at = int(time.time()) + 3600
     token_payload = _encode_realtime_token_payload(
         ephemeral_key="fake_upstream_epk",
         model_id="gpt-4o-realtime-preview",
         user_id=None,
         team_id=None,
-        expires_at=999,
+        expires_at=future_expires_at,
     )
     encrypted_token = encrypt_value_helper(token_payload)
 

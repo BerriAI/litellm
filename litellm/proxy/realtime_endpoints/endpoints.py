@@ -282,14 +282,21 @@ async def proxy_realtime_calls(
             or request.query_params.get("model")
             or "gpt-4o-realtime-preview"
         )
+        user_id = decoded_payload.get("user_id") or None
+        team_id = decoded_payload.get("team_id") or None
     else:
         # Backward compatibility: older tokens contained only encrypted upstream key.
         openai_ephemeral_key = decrypted_token_value
         model = request.query_params.get("model", "gpt-4o-realtime-preview")
+        user_id = None
+        team_id = None
 
-    # Build a minimal UserAPIKeyAuth so we can pass through the logging pipeline
-    # even though this endpoint uses the provider ephemeral key for auth.
-    minimal_auth = UserAPIKeyAuth()
+    # Build a minimal UserAPIKeyAuth with user/team IDs from the token
+    # so spend tracking and budget enforcement work correctly.
+    minimal_auth = UserAPIKeyAuth(
+        user_id=user_id,
+        team_id=team_id,
+    )
 
     data: dict = {}
     try:
