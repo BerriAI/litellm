@@ -1013,7 +1013,7 @@ def test_completion_cost_azure_common_deployment_name():
     "model, custom_llm_provider",
     [
         ("claude-sonnet-4-6", "anthropic"),
-        ("gemini/gemini-2.5-flash", "gemini"),
+        ("claude-haiku-4-5", "anthropic"),
     ],
 )
 def test_completion_cost_prompt_caching(model, custom_llm_provider):
