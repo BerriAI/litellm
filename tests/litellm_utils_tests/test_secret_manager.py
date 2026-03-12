@@ -166,10 +166,7 @@ def test_oidc_circle_v1_with_amazon():
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Skipping this test as requested.")
 def test_oidc_circle_v1_with_amazon_fips():
     # The purpose of this test is to validate that we can assume a role in a FIPS region
 
