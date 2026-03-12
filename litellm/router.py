@@ -3147,7 +3147,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def aspeech(self, model: str, input: str, voice: str, stream: Optional[bool] = None, **kwargs):
         """
         Example Usage:
 
@@ -3182,6 +3182,7 @@ class Router:
         try:
             kwargs["input"] = input
             kwargs["voice"] = voice
+            kwargs["stream"] = stream
 
             deployment = await self.async_get_available_deployment(
                 model=model,

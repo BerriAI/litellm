@@ -146,6 +146,7 @@ if TYPE_CHECKING:
         Run,
         RunDeleteResponse,
     )
+    from litellm.llms.custom_httpx.httpx_stream_handler import HttpxStreamHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -9315,9 +9316,11 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        stream: Optional[bool] = None,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        "HttpxStreamHandler",
+        Coroutine[Any, Any, Union["HttpxBinaryResponseContent", "HttpxStreamHandler"]],
     ]:
         """
         Handles text-to-speech requests.
@@ -9336,6 +9339,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
+                stream=stream,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -9393,6 +9397,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=True if stream and text_to_speech_provider_config.supports_streaming else False,
                 )
             elif "ssml_body" in request_data:
                 response = sync_httpx_client.post(
@@ -9400,6 +9405,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=True if stream and text_to_speech_provider_config.supports_streaming else False,
                 )
             else:
                 raise ValueError(
@@ -9411,6 +9417,13 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=text_to_speech_provider_config,
             )
+
+        if stream is True and text_to_speech_provider_config.supports_streaming:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            return HttpxStreamHandler(response=response)
 
         return text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
@@ -9431,7 +9444,8 @@ class BaseLLMHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         extra_headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-    ) -> "HttpxBinaryResponseContent":
+        stream: Optional[bool] = None,
+    ) -> Union["HttpxBinaryResponseContent", "HttpxStreamHandler"]:
         """
         Async version of the text-to-speech handler.
         Uses async HTTP client to make requests.
@@ -9492,6 +9506,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=True if stream and text_to_speech_provider_config.supports_streaming else False,
                 )
             elif "ssml_body" in request_data:
                 response = await async_httpx_client.post(
@@ -9499,6 +9514,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=True if stream and text_to_speech_provider_config.supports_streaming else False,
                 )
             else:
                 raise ValueError(
@@ -9510,6 +9526,13 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=text_to_speech_provider_config,
             )
+
+        if stream is True and text_to_speech_provider_config.supports_streaming:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            return HttpxStreamHandler(response=response)
 
         return text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
