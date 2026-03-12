@@ -511,22 +511,24 @@ async def get_response(
             user_api_base=user_api_base,
             version=version,
         )
-    except ValueError:
-        # Provider doesn't support GET /responses — fall back to SpendLogs
-        from litellm.responses.litellm_completion_transformation.session_handler import (
-            ResponsesSessionHandler,
-        )
-
-        stored = await ResponsesSessionHandler.get_response_from_spend_logs(
-            response_id=response_id,
-        )
-        if stored is not None:
-            return stored
-        raise HTTPException(
-            status_code=404,
-            detail=f"Response {response_id} not found",
-        )
     except Exception as e:
+        # Provider doesn't support GET /responses — fall back to SpendLogs/S3
+        # The original ValueError from main.py gets wrapped into APIConnectionError
+        # by litellm.exception_type() before reaching this handler.
+        if "not supported" in str(e).lower():
+            from litellm.responses.litellm_completion_transformation.session_handler import (
+                ResponsesSessionHandler,
+            )
+
+            stored = await ResponsesSessionHandler.get_response_from_spend_logs(
+                response_id=response_id,
+            )
+            if stored is not None:
+                return stored
+            raise HTTPException(
+                status_code=404,
+                detail=f"Response {response_id} not found",
+            )
         raise await processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
@@ -645,26 +647,28 @@ async def delete_response(
             user_api_base=user_api_base,
             version=version,
         )
-    except ValueError:
-        # Provider doesn't support DELETE /responses — fall back to SpendLogs
-        from litellm.responses.litellm_completion_transformation.session_handler import (
-            ResponsesSessionHandler,
-        )
-
-        deleted = await ResponsesSessionHandler.delete_response_from_spend_logs(
-            response_id=response_id,
-        )
-        if deleted:
-            return DeleteResponseResult(
-                id=response_id,
-                object="response",
-                deleted=True,
-            )
-        raise HTTPException(
-            status_code=404,
-            detail=f"Response {response_id} not found",
-        )
     except Exception as e:
+        # Provider doesn't support DELETE /responses — fall back to SpendLogs/S3
+        # The original ValueError from main.py gets wrapped into APIConnectionError
+        # by litellm.exception_type() before reaching this handler.
+        if "not supported" in str(e).lower():
+            from litellm.responses.litellm_completion_transformation.session_handler import (
+                ResponsesSessionHandler,
+            )
+
+            deleted = await ResponsesSessionHandler.delete_response_from_spend_logs(
+                response_id=response_id,
+            )
+            if deleted:
+                return DeleteResponseResult(
+                    id=response_id,
+                    object="response",
+                    deleted=True,
+                )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Response {response_id} not found",
+            )
         raise await processor._handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
