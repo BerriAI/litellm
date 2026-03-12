@@ -1,8 +1,10 @@
 #### Realtime WebRTC Endpoints #####
 
 import json
+import time
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
 
@@ -148,7 +150,7 @@ async def create_realtime_client_secret(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp = await llm_call
+        upstream_resp: httpx.Response = await llm_call  # type: ignore
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -264,6 +266,16 @@ async def proxy_realtime_calls(
     sdp_body: bytes = await request.body()
     decoded_payload = _decode_realtime_token_payload(decrypted_token_value)
     if decoded_payload is not None:
+        # Check token expiry
+        expires_at = decoded_payload.get("expires_at")
+        if expires_at is not None and isinstance(expires_at, int):
+            if time.time() > expires_at:
+                return Response(
+                    content=json.dumps({"error": "Token has expired"}),
+                    status_code=http_status.HTTP_401_UNAUTHORIZED,
+                    media_type="application/json",
+                )
+        
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
         model = (
             decoded_payload.get("model_id")
@@ -319,7 +331,7 @@ async def proxy_realtime_calls(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp = await llm_call
+        upstream_resp: httpx.Response = await llm_call  # type: ignore
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(

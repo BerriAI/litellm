@@ -24,9 +24,10 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
             or ""
         )
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
         base = self.get_api_base(api_base).rstrip("/")
-        return f"{base}/v1/realtime/client_secrets"
+        version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
+        return f"{base}/openai/realtime/client_secrets?api-version={version}"
 
     def validate_environment(
         self,
@@ -40,8 +41,12 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
             "Content-Type": "application/json",
         }
 
+    def get_realtime_calls_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        version = api_version or get_secret_str("AZURE_API_VERSION") or "2024-12-17"
+        return f"{base}/openai/realtime/calls?api-version={version}"
+
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         return {
             "api-key": ephemeral_key,
-            "Content-Type": "application/sdp",
         }
