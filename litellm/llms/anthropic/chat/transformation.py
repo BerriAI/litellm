@@ -194,6 +194,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "web_search_options",
             "speed",
             "context_management",
+            "cache_control",
         ]
 
         if (
@@ -316,6 +317,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result[key] = value
 
+        # Anthropic requires additionalProperties=false for object schemas
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
         return result
 
     def get_json_schema_from_pydantic_object(
@@ -388,6 +394,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "properties": {},
                 },
             )
+
+            # Anthropic requires input_schema.type to be "object". Normalize
+            # schemas from external sources (MCP servers, OpenAI callers) that
+            # may omit the type field or use a non-object type.
+            if _input_schema.get("type") != "object":
+                litellm.verbose_logger.debug(
+                    "_map_tool_helper: coercing input_schema type from %r to "
+                    "'object' for Anthropic compatibility (tool: %s)",
+                    _input_schema.get("type"),
+                    tool["function"].get("name"),
+                )
+                _input_schema = dict(_input_schema)  # avoid mutating caller's dict
+                _input_schema["type"] = "object"
+                if "properties" not in _input_schema:
+                    _input_schema["properties"] = {}
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
@@ -769,6 +790,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_schema is None:
             return None
 
+        # Resolve $ref/$defs before filtering — Anthropic doesn't support
+        # external schema references (e.g., /$defs/CalendarEvent).
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        json_schema = copy.deepcopy(json_schema)
+        defs = json_schema.pop("$defs", json_schema.pop("definitions", {}))
+        if defs:
+            unpack_defs(json_schema, defs)
+
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)
 
@@ -1031,6 +1065,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+            elif param == "cache_control" and isinstance(value, dict):
+                # Pass through top-level cache_control for automatic prompt caching
+                optional_params["cache_control"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(

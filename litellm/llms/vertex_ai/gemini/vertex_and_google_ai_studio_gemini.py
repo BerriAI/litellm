@@ -800,9 +800,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
         is_gemini3flash = model and (
-            "gemini-3-flash-preview" in model.lower()
-            or "gemini-3-flash" in model.lower()
+            "gemini-3-flash" in model.lower()
+            or "gemini-3.1-flash" in model.lower()
         )
         is_gemini31pro = model and (
             "gemini-3.1-pro-preview" in model.lower()
@@ -1229,27 +1230,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
+    _GEMINI_FINISH_REASON_KEYS = frozenset({
+        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "FINISH_REASON_UNSPECIFIED",
+        "MALFORMED_FUNCTION_CALL", "LANGUAGE", "OTHER", "BLOCKLIST",
+        "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+        "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE",
+    })
+
     @staticmethod
     def get_finish_reason_mapping() -> Dict[str, OpenAIChatCompletionFinishReason]:
         """
-        Return Dictionary of finish reasons which indicate response was flagged
-
-        and what it means
+        Return Dictionary of Gemini/Vertex AI finish reasons and their
+        OpenAI-compatible mappings.
         """
+        from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
+
         return {
-            "FINISH_REASON_UNSPECIFIED": "finish_reason_unspecified",
-            "STOP": "stop",
-            "MAX_TOKENS": "length",
-            "SAFETY": "content_filter",
-            "RECITATION": "content_filter",
-            "LANGUAGE": "content_filter",
-            "OTHER": "content_filter",
-            "BLOCKLIST": "content_filter",
-            "PROHIBITED_CONTENT": "content_filter",
-            "SPII": "content_filter",
-            "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
-            "IMAGE_SAFETY": "content_filter",
-            "IMAGE_PROHIBITED_CONTENT": "content_filter",
+            k: v
+            for k, v in _FINISH_REASON_MAP.items()
+            if k in VertexGeminiConfig._GEMINI_FINISH_REASON_KEYS
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -1768,15 +1767,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
     ) -> OpenAIChatCompletionFinishReason:
-        mapped_finish_reason = VertexGeminiConfig.get_finish_reason_mapping()
+        from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
         if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
         elif chat_completion_message and chat_completion_message.get("tool_calls"):
             return "tool_calls"
-        elif (
-            finish_reason and finish_reason in mapped_finish_reason.keys()
-        ):  # vertex ai
-            return mapped_finish_reason[finish_reason]
+        elif finish_reason:
+            return map_finish_reason(finish_reason)
         else:
             return "stop"
 
@@ -2362,7 +2360,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: Optional[AsyncHTTPHandler],  # module-level client
+    gemini_client: Optional[AsyncHTTPHandler],  # if passed by user
     api_base: str,
     headers: dict,
     data: str,
@@ -2370,6 +2369,8 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
+    if gemini_client is not None:
+        client = gemini_client
     if client is None:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -2541,7 +2542,11 @@ class VertexLLM(VertexBase):
             completion_stream=None,
             make_call=partial(
                 make_call,
-                client=client,
+                gemini_client=(
+                    client
+                    if client is not None and isinstance(client, AsyncHTTPHandler)
+                    else None
+                ),
                 api_base=api_base,
                 headers=headers,
                 data=request_body_str,
@@ -2905,6 +2910,7 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
+        self.has_seen_tool_calls: bool = False
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2942,6 +2948,40 @@ class ModelResponseIterator:
                     self.logging_obj.optional_params,
                     cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
+
+                # Track whether tool_calls have been seen across streaming chunks.
+                # Gemini sends tool_calls and finishReason in separate chunks,
+                # so we need to remember if earlier chunks contained tool_calls
+                # to correctly set finish_reason="tool_calls" per the OpenAI spec.
+                if not self.has_seen_tool_calls:
+                    for choice in model_response.choices:
+                        if hasattr(choice, "delta") and choice.delta and choice.delta.tool_calls:
+                            self.has_seen_tool_calls = True
+                            break
+
+                # Handle final chunk with finishReason but no content.
+                # _process_candidates skips candidates without "content",
+                # so the finish_reason from the final chunk is lost.
+                if not model_response.choices and _candidates:
+                    from litellm.types.utils import Delta, StreamingChoices
+
+                    for candidate in _candidates:
+                        finish_reason_str = candidate.get("finishReason")
+                        if finish_reason_str is not None:
+                            if self.has_seen_tool_calls:
+                                mapped_finish_reason = "tool_calls"
+                            else:
+                                mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                                    None, finish_reason_str
+                                )
+                            choice = StreamingChoices(
+                                finish_reason=mapped_finish_reason,
+                                index=candidate.get("index", 0),
+                                delta=Delta(content=None, role=None),
+                                logprobs=None,
+                                enhancements=None,
+                            )
+                            model_response.choices.append(choice)
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore

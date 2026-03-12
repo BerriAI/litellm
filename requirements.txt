@@ -41,7 +41,7 @@ polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
-python-multipart==0.0.22 # admin UI
+python-multipart>=0.0.20 # admin UI
 jaraco.context>=6.1.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 ; python_version >= "3.9" # for azure content safety
@@ -57,7 +57,7 @@ grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.50 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.54 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
@@ -75,9 +75,9 @@ jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core +
 websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
-pypdf>=6.6.2 # for PDF text extraction in RAG ingestion
+pypdf>=6.7.3 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.33
+litellm-enterprise==0.1.34

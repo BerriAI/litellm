@@ -476,13 +476,15 @@ class ChunkProcessor:
             "prompt_tokens_details": prompt_tokens_details,
         }
 
-    def count_reasoning_tokens(self, response: ModelResponse) -> int:
-        reasoning_tokens = 0
+    def count_reasoning_tokens(self, response: ModelResponse) -> Optional[int]:
+        reasoning_tokens: Optional[int] = None
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
                 and cast(Choices, choice).message.reasoning_content is not None
             ):
+                if reasoning_tokens is None:
+                    reasoning_tokens = 0
                 reasoning_tokens += token_counter(
                     text=cast(Choices, choice).message.reasoning_content,
                     count_response_tokens=True,

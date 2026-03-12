@@ -247,23 +247,27 @@ def _get_embedding_url(
     - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
     - numeric model -> routes to endpoints/
     - regular model -> routes to publishers/google/models/
-    """
-    endpoint = "predict"
-    
-    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+    - models with uses_embed_content flag -> use embedContent endpoint instead of predict
+    """    
+    original_model = model
     model = get_vertex_base_model_name(model=model)
     
-    # Get base URL (handles global vs regional)
+    try:
+        model_info = litellm.get_model_info(
+            model=original_model,
+            custom_llm_provider="vertex_ai",
+        )
+        uses_embed_content = model_info.get("uses_embed_content", False)
+    except Exception:
+        uses_embed_content = False
+    
+    endpoint = "embedContent" if uses_embed_content else "predict"
+    
     base_url = get_vertex_base_url(vertex_location)
     
     if model.isdigit():
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
-        # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/endpoints/$ENDPOINT_ID:predict
         url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     else:
-        # Regular model -> publisher model
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/publishers/google/models/{model}:predict
-        # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/publishers/google/models/{model}:predict
         url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
     
     return url, endpoint
@@ -1030,7 +1034,8 @@ class VertexAITokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
-        **kwargs,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Optional[TokenCountResponse]:
         import copy
 

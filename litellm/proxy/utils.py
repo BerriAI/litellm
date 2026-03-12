@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import hashlib
+import inspect
 import json
 import os
 import smtplib
@@ -285,6 +286,19 @@ class InternalUsageCache:
 
 
 ### LOGGING ###
+
+# Cache for inspect.signature checks — avoids repeated introspection per request
+_CALLBACK_ACCEPTS_CALL_INFO: Dict[int, bool] = {}
+
+
+def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
+    key = id(type(cb))
+    if key not in _CALLBACK_ACCEPTS_CALL_INFO:
+        sig = inspect.signature(cb.async_post_call_response_headers_hook)
+        _CALLBACK_ACCEPTS_CALL_INFO[key] = "litellm_call_info" in sig.parameters
+    return _CALLBACK_ACCEPTS_CALL_INFO[key]
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -325,7 +339,7 @@ class ProxyLogging:
             if email_logger_class is not None:
                 # All email logger classes now accept internal_usage_cache
                 self.email_logging_instance = email_logger_class(
-                    internal_usage_cache=self.internal_usage_cache.dual_cache,
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,  # type: ignore[call-arg]
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
@@ -1773,7 +1787,7 @@ class ProxyLogging:
         """
 
         #########################################################
-        # Only log LLM API errors for proxy level hooks
+        # Only log LLM API and info route errors for proxy level hooks
         # eg. Authentication errors, rate limit errors, etc.
         # Note: This fixes a security issue where we
         #       would log temporary keys/auth info
@@ -1781,7 +1795,10 @@ class ProxyLogging:
         #########################################################
         if route is None:
             return False
-        if RouteChecks.is_llm_api_route(route) is not True:
+        if not (
+            RouteChecks.is_llm_api_route(route) or
+            RouteChecks.is_info_route(route)
+        ):
             return False
 
         return isinstance(original_exception, HTTPException) or (
@@ -1975,6 +1992,9 @@ class ProxyLogging:
         """
         merged_headers: Dict[str, str] = {}
         try:
+            # Build litellm_call_info — normalized routing metadata for callbacks
+            litellm_call_info = self._build_litellm_call_info(data=data, response=response)
+
             for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
@@ -1985,12 +2005,22 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
 
                 if _callback is not None and isinstance(_callback, CustomLogger):
-                    result = await _callback.async_post_call_response_headers_hook(
-                        data=data,
-                        user_api_key_dict=user_api_key_dict,
-                        response=response,
-                        request_headers=request_headers,
-                    )
+                    if _accepts_litellm_call_info(_callback):
+                        result = await _callback.async_post_call_response_headers_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_headers=request_headers,
+                            litellm_call_info=litellm_call_info,
+                        )
+                    else:
+                        # Backwards compat: callback doesn't accept litellm_call_info
+                        result = await _callback.async_post_call_response_headers_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_headers=request_headers,
+                        )
                     if result is not None:
                         merged_headers.update(result)
         except Exception as e:
@@ -1998,6 +2028,30 @@ class ProxyLogging:
                 "Error in post_call_response_headers_hook: %s", str(e)
             )
         return merged_headers
+
+    @staticmethod
+    def _build_litellm_call_info(
+        data: dict, response: Any
+    ) -> Dict[str, Any]:
+        """
+        Build a normalized dict of routing metadata from response._hidden_params
+        and data, abstracting away the metadata vs litellm_metadata split.
+        """
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+
+        # model_info: check both metadata keys (chat uses "metadata", responses uses "litellm_metadata")
+        model_info = (
+            (data.get("metadata") or {}).get("model_info")
+            or (data.get("litellm_metadata") or {}).get("model_info")
+            or {}
+        )
+
+        return {
+            "custom_llm_provider": hidden_params.get("custom_llm_provider"),
+            "model_info": model_info,
+            "api_base": hidden_params.get("api_base"),
+            "model_id": hidden_params.get("model_id"),
+        }
 
     def is_a2a_streaming_response(self, response: dict) -> bool:
         expected_keys = ["jsonrpc", "id", "result"]
@@ -3583,8 +3637,9 @@ class PrismaClient:
     def _get_engine_pid(self) -> int:
         try:
             engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
-            if engine is not None and engine.process is not None:
-                return engine.process.pid
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -4688,6 +4743,19 @@ async def update_spend_logs_job(
             guardrail_tracking_err,
         )
 
+    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    try:
+        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        await process_spend_logs_tool_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as tool_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+            tool_tracking_err,
+        )
+
 
 async def _monitor_spend_logs_queue(
     prisma_client: PrismaClient,
@@ -5262,7 +5330,7 @@ async def get_available_models_for_user(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
         team_models = team_object.models
 
     team_models = get_team_models(

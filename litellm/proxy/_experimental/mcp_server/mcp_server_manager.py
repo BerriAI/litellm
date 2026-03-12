@@ -38,7 +38,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -318,6 +318,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
+                oauth2_flow=server_config.get("oauth2_flow", None),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -339,6 +340,12 @@ class MCPServerManager:
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
                 ),
+                # AWS SigV4 fields
+                aws_access_key_id=server_config.get("aws_access_key_id", None),
+                aws_secret_access_key=server_config.get("aws_secret_access_key", None),
+                aws_session_token=server_config.get("aws_session_token", None),
+                aws_region_name=server_config.get("aws_region_name", None),
+                aws_service_name=server_config.get("aws_service_name", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -385,6 +392,7 @@ class MCPServerManager:
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             load_openapi_spec_async,
+            resolve_operation_params,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -417,6 +425,8 @@ class MCPServerManager:
                     headers["Authorization"] = f"ApiKey {server.authentication_token}"
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
+                elif server.auth_type == MCPAuth.token:
+                    headers["Authorization"] = f"token {server.authentication_token}"
 
             # Add any static headers from server config.
             #
@@ -438,6 +448,7 @@ class MCPServerManager:
 
             # Extract and register tools from OpenAPI paths
             paths = spec.get("paths", {})
+            components = spec.get("components", {})
             registered_count = 0
 
             verbose_logger.debug(f"Processing {len(paths)} paths from OpenAPI spec")
@@ -448,6 +459,11 @@ class MCPServerManager:
                         continue
 
                     operation = path_item[method]
+
+                    # Resolve $ref params and merge path-level params into the operation.
+                    resolved_operation = resolve_operation_params(
+                        operation, path_item, components
+                    )
 
                     # Generate tool name (without prefix initially)
                     operation_id = operation.get(
@@ -467,11 +483,11 @@ class MCPServerManager:
                     )
 
                     # Build input schema using imported function
-                    input_schema = build_input_schema(operation)
+                    input_schema = build_input_schema(resolved_operation)
 
                     # Create tool function with headers using imported function
                     tool_func = create_tool_function(
-                        path, method, operation, base_url, headers=headers
+                        path, method, resolved_operation, base_url, headers=headers
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
@@ -581,6 +597,11 @@ class MCPServerManager:
             else:
                 client_secret_value = encrypted_client_secret
 
+        # AWS SigV4 credential fields
+        aws_creds = self._extract_aws_credentials(
+            credentials_dict, credentials_are_encrypted
+        )
+
         scopes: Optional[List[str]] = None
         if credentials_dict:
             scopes_value = credentials_dict.get("scopes")
@@ -598,12 +619,17 @@ class MCPServerManager:
             mcp_info["description"] = mcp_server.description
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
-        if mcp_server.url and auth_type == MCPAuth.oauth2:
-            mcp_oauth_metadata = await self._descovery_metadata(
-                server_url=mcp_server.url,
-            )
-        else:
-            mcp_oauth_metadata = None
+        server_url = mcp_server.url
+        needs_discovery = (
+            bool(server_url)
+            and auth_type == MCPAuth.oauth2
+            and not mcp_server.authorization_url
+        )
+        mcp_oauth_metadata = (
+            await self._descovery_metadata(server_url=server_url)  # type: ignore[arg-type]
+            if needs_discovery
+            else None
+        )
 
         resolved_scopes = scopes or (
             mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
@@ -625,6 +651,7 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
+            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -644,6 +671,21 @@ class MCPServerManager:
             ),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
+            tool_name_to_display_name=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_display_name", None)
+            ),
+            tool_name_to_description=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_description", None)
+            ),
+            is_byok=bool(getattr(mcp_server, "is_byok", False)),
+            byok_description=getattr(mcp_server, "byok_description", None) or [],
+            byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            # AWS SigV4 fields
+            aws_access_key_id=aws_creds.get("aws_access_key_id"),
+            aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
+            aws_session_token=aws_creds.get("aws_session_token"),
+            aws_region_name=aws_creds.get("aws_region_name"),
+            aws_service_name=aws_creds.get("aws_service_name"),
         )
         return new_server
 
@@ -957,6 +999,18 @@ class MCPServerManager:
         else:
             # For HTTP/SSE transports
             server_url = server.url or ""
+
+            # Create SigV4 auth if configured
+            aws_auth = None
+            if server.auth_type == MCPAuth.aws_sigv4:
+                aws_auth = MCPSigV4Auth(
+                    aws_access_key_id=server.aws_access_key_id,
+                    aws_secret_access_key=server.aws_secret_access_key,
+                    aws_session_token=server.aws_session_token,
+                    aws_region_name=server.aws_region_name,
+                    aws_service_name=server.aws_service_name,
+                )
+
             return MCPClient(
                 server_url=server_url,
                 transport_type=transport,
@@ -964,6 +1018,7 @@ class MCPServerManager:
                 auth_value=auth_value,
                 timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
+                aws_auth=aws_auth,
             )
 
     async def _get_tools_from_server(
@@ -1469,6 +1524,52 @@ class MCPServerManager:
                 return metadata
 
         return None
+
+    @staticmethod
+    def _decrypt_credential_field(
+        encrypted_value: Optional[str],
+        key: str,
+        credentials_are_encrypted: bool,
+    ) -> Optional[str]:
+        """Decrypt a single credential field, or return as-is if not encrypted."""
+        if not encrypted_value:
+            return None
+        if credentials_are_encrypted:
+            return decrypt_value_helper(
+                value=encrypted_value,
+                key=key,
+                exception_type="debug",
+                return_original_value=True,
+            )
+        return encrypted_value
+
+    def _extract_aws_credentials(
+        self,
+        credentials_dict: Optional[Dict[str, str]],
+        credentials_are_encrypted: bool,
+    ) -> Dict[str, Optional[str]]:
+        """Extract and decrypt AWS SigV4 credential fields from credentials dict."""
+        if not credentials_dict:
+            return {}
+        return {
+            "aws_access_key_id": self._decrypt_credential_field(
+                credentials_dict.get("aws_access_key_id"),
+                "aws_access_key_id",
+                credentials_are_encrypted,
+            ),
+            "aws_secret_access_key": self._decrypt_credential_field(
+                credentials_dict.get("aws_secret_access_key"),
+                "aws_secret_access_key",
+                credentials_are_encrypted,
+            ),
+            "aws_session_token": self._decrypt_credential_field(
+                credentials_dict.get("aws_session_token"),
+                "aws_session_token",
+                credentials_are_encrypted,
+            ),
+            "aws_region_name": credentials_dict.get("aws_region_name"),
+            "aws_service_name": credentials_dict.get("aws_service_name"),
+        }
 
     def _extract_scopes(self, scopes_value: Any) -> Optional[List[str]]:
         if isinstance(scopes_value, str):
@@ -2254,7 +2355,7 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        db_mcp_servers = await get_all_mcp_servers(prisma_client, approval_status="active")
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
@@ -2490,9 +2591,11 @@ class MCPServerManager:
         if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
+        # (except aws_sigv4 which uses its own credential fields)
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
+            and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
         ):
             should_skip_health_check = True
@@ -2651,6 +2754,9 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            is_byok=server.is_byok,
+            byok_description=server.byok_description,
+            byok_api_key_help_url=server.byok_api_key_help_url,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

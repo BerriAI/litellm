@@ -1,59 +1,40 @@
 import enum
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Literal,
+                    Optional, Union)
 
 import httpx
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    Json,
-    field_validator,
-    model_validator,
-)
+from pydantic import (BaseModel, ConfigDict, Field, Json, field_validator,
+                      model_validator)
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIFileObject,
-    ResponsesAPIResponse,
-)
-from litellm.types.mcp import (
-    MCPAuthType,
-    MCPCredentials,
-    MCPTransport,
-    MCPTransportType,
-)
+from litellm.types.llms.openai import (AllMessageValues, OpenAIFileObject,
+                                       ResponsesAPIResponse)
+from litellm.types.mcp import (MCPAuthType, MCPCredentials, MCPTransport,
+                               MCPTransportType)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
-from litellm.types.utils import (
-    CallTypes,
-    CostBreakdown,
-    EmbeddingResponse,
-    GenericBudgetConfigType,
-    ImageResponse,
-    LiteLLMBatch,
-    LiteLLMFineTuningJob,
-    LiteLLMPydanticObjectBase,
-    ModelResponse,
-    ProviderField,
-    StandardCallbackDynamicParams,
-    StandardLoggingGuardrailInformation,
-    StandardLoggingMCPToolCall,
-    StandardLoggingModelInformation,
-    StandardLoggingPayloadErrorInformation,
-    StandardLoggingPayloadStatus,
-    StandardLoggingVectorStoreRequest,
-    StandardPassThroughResponseObject,
-    TextCompletionResponse,
-)
+from litellm.types.utils import (CallTypes, CostBreakdown, EmbeddingResponse,
+                                 GenericBudgetConfigType, ImageResponse,
+                                 LiteLLMBatch, LiteLLMFineTuningJob,
+                                 LiteLLMPydanticObjectBase, ModelResponse,
+                                 ProviderField, StandardCallbackDynamicParams,
+                                 StandardLoggingGuardrailInformation,
+                                 StandardLoggingMCPToolCall,
+                                 StandardLoggingModelInformation,
+                                 StandardLoggingPayloadErrorInformation,
+                                 StandardLoggingPayloadStatus,
+                                 StandardLoggingVectorStoreRequest,
+                                 StandardPassThroughResponseObject,
+                                 TextCompletionResponse)
 from litellm.types.videos.main import VideoObject
 
-from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
+from .types_utils.utils import (get_instance_fn,
+                                validate_custom_validate_return_type)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -77,6 +58,8 @@ class SupportedDBObjectType(str, enum.Enum):
     PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
     PROMPTS = "prompts"
     MODEL_COST_MAP = "model_cost_map"
+    TOOLS = "tools"
+    CONFIG_OVERRIDES = "config_overrides"
 
     def __str__(self):
         return str(self.value)
@@ -200,6 +183,7 @@ class Litellm_EntityType(enum.Enum):
     ORGANIZATION = "organization"
     PROJECT = "project"
     TAG = "tag"
+    AGENT = "agent"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -237,6 +221,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # list routes
     KEY_LIST = "/key/list"
+    KEY_ALIASES = "/key/aliases"
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
@@ -512,6 +497,8 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.KEY_RESET_SPEND.value,
+        KeyManagementRoutes.KEY_ALIASES.value,
     ]
 
     management_routes = [
@@ -541,6 +528,11 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/model/info",
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        "/jwt/key/mapping/list",
+        "/jwt/key/mapping/info",
     ] + key_management_routes
 
     spend_tracking_routes = [
@@ -620,6 +612,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity/model",
             "/v1/models/{model_id}",
             "/models/{model_id}",
+            "/guardrails/list",
+            "/v2/guardrails/list",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -640,6 +634,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
+        "/user/available_roles",  # read-only role metadata; any authenticated user may read
+        "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -669,6 +665,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity",
         "/tag/daily/activity",
         "/tag/list",
+        "/audit",
+        "/audit/{id}",
     ] + info_routes
 
     # All routes accesible by an Org Admin
@@ -840,6 +838,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
+    models: Optional[List[str]] = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1072,6 +1071,12 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
+class MCPApprovalStatus(str, enum.Enum):
+    pending_review = "pending_review"
+    active = "active"
+    rejected = "rejected"
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1086,6 +1091,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
@@ -1097,6 +1104,21 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields — set by the endpoint, not by the caller.
+    # Any caller-provided values are silently overridden before persistence.
+    approval_status: Optional[str] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
+    submitted_by: Optional[str] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
+    submitted_at: Optional[datetime] = Field(
+        None, description="Server-managed: set by the endpoint; caller values are overridden."
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1140,6 +1162,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
@@ -1151,6 +1175,10 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1189,6 +1217,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list)
+    tool_name_to_display_name: Optional[Dict[str, str]] = None
+    tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
@@ -1208,10 +1238,77 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    is_byok: bool = False
+    byok_description: List[str] = Field(default_factory=list)
+    byok_api_key_help_url: Optional[str] = None
+    has_user_credential: Optional[bool] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields
+    approval_status: Optional[str] = Field(
+        default="active",
+        description="Approval status: 'pending_review', 'active', 'rejected'",
+    )
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: List[str]
+
+
+class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
+    credential: str
+    save: bool = True
+
+
+class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
+    server_id: str
+    has_credential: bool
+
+
+class MCPOAuthUserCredentialRequest(LiteLLMPydanticObjectBase):
+    """Stores a user's OAuth2 token for an OpenAPI MCP server."""
+
+    access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None  # seconds until expiry
+    scopes: Optional[List[str]] = None
+
+
+class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
+    """Describes whether the calling user has a stored OAuth credential."""
+
+    server_id: str
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601
+    is_expired: bool = False
+    connected_at: Optional[str] = None  # ISO-8601
+
+
+class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
+    """One entry in the /user-credentials list."""
+
+    server_id: str
+    server_name: Optional[str] = None
+    alias: Optional[str] = None
+    credential_type: str  # "oauth2" or "byok"
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601; None means non-expiring
+    connected_at: Optional[str] = None  # ISO-8601
+
+
+class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
+    review_notes: Optional[str] = None
+
+
+class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+    items: List["LiteLLM_MCPServerTable"]
 
 
 ######## Skills API Types ########
@@ -1551,6 +1648,8 @@ class NewTeamRequest(TeamBase):
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    enforced_batch_output_expires_after: Optional[dict] = None
+    enforced_file_expires_after: Optional[dict] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1606,6 +1705,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    enforced_batch_output_expires_after: Optional[dict] = None
+    enforced_file_expires_after: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
 
@@ -2128,7 +2229,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
-        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
     )
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
@@ -2157,6 +2258,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     forward_client_headers_to_llm_api: Optional[bool] = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
+    mcp_required_fields: Optional[List[str]] = Field(
+        None,
+        description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
 
 
@@ -2337,6 +2442,7 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
+    created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -2380,7 +2486,8 @@ class UserAPIKeyAuth(
 
         This is used to track number of requests/spend for health check calls.
         """
-        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        from litellm.constants import \
+            LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
@@ -2412,7 +2519,8 @@ class UserAPIKeyAuth(
 
         This is used to track actions performed by automated system jobs.
         """
-        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+        from litellm.constants import \
+            LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -2818,7 +2926,8 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+        from litellm.litellm_core_utils.sensitive_data_masker import \
+            SensitiveDataMasker
 
         masker = SensitiveDataMasker(sensitive_patterns={"key"})
 
@@ -3372,6 +3481,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Team member is already in team
     """
 
+    tool_access_denied = "tool_access_denied"
+    """
+    Tool is not in the allowed tools list for this key/team
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org", "project"]
@@ -3672,6 +3786,36 @@ class KeyHealthResponse(TypedDict, total=False):
     logging_callbacks: Optional[LoggingCallbackStatus]
 
 
+class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    jwt_claim_name: str
+    jwt_claim_value: str
+    key: str
+    description: Optional[str] = None
+
+
+class UpdateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+    key: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class DeleteJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+
+
+class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    description: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
 class SpecialHeaders(enum.Enum):
     """Used by user_api_key_auth.py to get litellm key"""
 
@@ -3783,6 +3927,8 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "temp_budget_increase",
     "temp_budget_expiry",
     "allowed_vector_store_indexes",
+    "enforced_batch_output_expires_after",
+    "enforced_file_expires_after",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -3842,6 +3988,7 @@ class JWTAuthBuilderResult(TypedDict):
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
+    jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -3984,6 +4131,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     oidc_userinfo_cache_ttl: float = Field(
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
+    )
+    # JWT-to-Virtual-Key Mapping
+    virtual_key_claim_field: Optional[str] = Field(
+        default=None,
+        description="JWT claim field for virtual key mapping lookup (e.g. 'sub', 'email'). Supports dot notation.",
+    )
+    virtual_key_mapping_cache_ttl: float = Field(
+        default=300,
+        description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
     #########################################################
 
@@ -4139,6 +4295,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
+    agent_list_transactions: Optional[Dict[str, float]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):
@@ -4154,6 +4311,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     key_hash: Optional[str]  # hash of virtual key that triggered discovery
     team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
+    user_agent: Optional[str]  # HTTP User-Agent of the caller
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

@@ -69,6 +69,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
+    ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -4453,8 +4454,11 @@ class BaseLLMHTTPHandler:
                         return agentic_response
 
             except Exception as e:
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
-                    f"LiteLLM.AgenticHookError: Exception in agentic completion hooks: {str(e)}"
+                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks "
+                    "[call_id=%s model=%s]: %s",
+                    _call_id, model, str(e),
                 )
 
         # Check if we need to convert response to fake stream
@@ -4727,6 +4731,270 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )
+
+    async def async_realtime_client_secret_handler(
+        self,
+        api_base: str,
+        api_key: str,
+        request_data: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """
+        Forward POST /v1/realtime/client_secrets to upstream provider.
+
+        Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
+        header auth when available; falls back to the legacy OpenAI-style defaults.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+            )
+        else:
+            async_httpx_client = client
+
+        if provider_config is not None:
+            url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
+            headers: Dict[str, Any] = provider_config.validate_environment(
+                headers={}, model=model or "", api_key=api_key
+            )
+        else:
+            url = f"{api_base.rstrip('/')}/v1/realtime/client_secrets"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "OpenAI-Beta": "realtime=v1",
+            }
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        logging_obj.pre_call(
+            input=request_data,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            return await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    async def async_realtime_calls_handler(
+        self,
+        api_base: str,
+        openai_ephemeral_key: str,
+        sdp_body: bytes,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        session_config: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """
+        Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
+
+        Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
+        header auth when available; falls back to the legacy OpenAI-style defaults.
+
+        OpenAI's GA realtime API expects multipart/form-data with:
+          - sdp: the SDP offer (text)
+          - session: JSON string with {"type": "realtime", "model": "...", ...}
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+            )
+        else:
+            async_httpx_client = client
+
+        if provider_config is not None:
+            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            headers: Dict[str, Any] = provider_config.get_realtime_calls_headers(
+                ephemeral_key=openai_ephemeral_key
+            )
+        else:
+            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            headers = {
+                "Authorization": f"Bearer {openai_ephemeral_key}",
+            }
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Build multipart form data: sdp + session JSON
+        session_data = session_config or {}
+        if "type" not in session_data:
+            session_data["type"] = "realtime"
+        if "model" not in session_data and model:
+            session_data["model"] = model
+
+        sdp_text = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+
+        files = {
+            "sdp": (None, sdp_text, "text/plain"),
+            "session": (None, json.dumps(session_data), "application/json"),
+        }
+
+        logging_obj.pre_call(
+            input="realtime_sdp_offer",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "session": session_data,
+            },
+        )
+
+        try:
+            return await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                files=files,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    async def async_responses_websocket(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLoggingObj,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """
+        Handles Responses API WebSocket mode.
+
+        For providers with native websocket support (OpenAI, Azure):
+        - Opens a persistent WebSocket to the provider's /v1/responses endpoint
+        - Proxies response.create events bidirectionally for lower-latency agentic workflows
+
+        For providers without native websocket support (all others):
+        - Uses ManagedResponsesWebSocketHandler which makes HTTP streaming calls
+        - Forwards events over the websocket connection
+        """
+        if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
+            from litellm.responses.streaming_iterator import (
+                ManagedResponsesWebSocketHandler,
+            )
+
+            handler = ManagedResponsesWebSocketHandler(
+                websocket=websocket,
+                model=model,
+                logging_obj=logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                litellm_metadata=litellm_metadata,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+            await handler.run()
+            return
+
+        import websockets
+        from websockets.asyncio.client import ClientConnection
+
+        litellm_params = GenericLiteLLMParams()
+        headers = responses_api_provider_config.validate_environment(
+            headers={},
+            model=model,
+            litellm_params=litellm_params,
+        )
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        http_url = responses_api_provider_config.get_complete_url(
+            api_base=api_base,
+            litellm_params={},
+        )
+        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+        try:
+            ssl_context = get_shared_realtime_ssl_context()
+            if ws_url.startswith("wss://") and ssl_context is False:
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+            logging_obj.pre_call(
+                input=None,
+                api_key=api_key or "",
+                additional_args={
+                    "api_base": ws_url,
+                    "headers": headers,
+                    "complete_input_dict": {"mode": "responses_websocket"},
+                },
+            )
+
+            async with websockets.connect(  # type: ignore
+                ws_url,
+                additional_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_context,
+            ) as backend_ws:
+                _request_data: Dict[str, Any] = {}
+                if litellm_metadata:
+                    _request_data["litellm_metadata"] = litellm_metadata
+                streaming = ResponsesWebSocketStreaming(
+                    websocket=websocket,
+                    backend_ws=cast(ClientConnection, backend_ws),
+                    logging_obj=logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_request_data,
+                )
+                await streaming.bidirectional_forward()
+
+        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+            verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
+            await websocket.close(code=e.status_code, reason=str(e))
+        except Exception as e:
+            verbose_logger.exception(f"Error in responses WS: {e}")
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(
+                    close_error
+                ):
+                    pass
+                else:
                     raise Exception(
                         f"Unexpected error while closing WebSocket: {close_error}"
                     )
@@ -7503,6 +7771,536 @@ class BaseLLMHTTPHandler:
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
+
+    async def async_vector_store_retrieve_handler(
+        self,
+        vector_store_id: str,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> VectorStoreCreateResponse:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return vector_store_provider_config.transform_create_vector_store_response(
+            response=response,
+        )
+
+    def vector_store_retrieve_handler(
+        self,
+        vector_store_id: str,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> Union[
+        VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]
+    ]:
+        if _is_async:
+            return self.async_vector_store_retrieve_handler(
+                vector_store_id=vector_store_id,
+                vector_store_provider_config=vector_store_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return vector_store_provider_config.transform_create_vector_store_response(
+            response=response,
+        )
+
+    async def async_vector_store_list_handler(
+        self,
+        after: Optional[str],
+        before: Optional[str],
+        limit: Optional[int],
+        order: Optional[str],
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ):
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = api_base
+        
+        params = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+                "params": params,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return response.json()
+
+    def vector_store_list_handler(
+        self,
+        after: Optional[str],
+        before: Optional[str],
+        limit: Optional[int],
+        order: Optional[str],
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ):
+        if _is_async:
+            return self.async_vector_store_list_handler(
+                after=after,
+                before=before,
+                limit=limit,
+                order=order,
+                vector_store_provider_config=vector_store_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = api_base
+        
+        params = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+                "params": params,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return response.json()
+
+    async def async_vector_store_update_handler(
+        self,
+        vector_store_id: str,
+        vector_store_update_optional_params: VectorStoreCreateOptionalRequestParams,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> VectorStoreCreateResponse:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+        
+        request_body = dict(vector_store_update_optional_params)
+        
+        # Clean metadata to only include string values (OpenAI requirement)
+        if "metadata" in request_body and request_body["metadata"] is not None:
+            from litellm.utils import add_openai_metadata
+            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+        
+        if extra_body:
+            request_body.update(extra_body)
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return vector_store_provider_config.transform_create_vector_store_response(
+            response=response,
+        )
+
+    def vector_store_update_handler(
+        self,
+        vector_store_id: str,
+        vector_store_update_optional_params: VectorStoreCreateOptionalRequestParams,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> Union[
+        VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]
+    ]:
+        if _is_async:
+            return self.async_vector_store_update_handler(
+                vector_store_id=vector_store_id,
+                vector_store_update_optional_params=vector_store_update_optional_params,
+                vector_store_provider_config=vector_store_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+        
+        request_body = dict(vector_store_update_optional_params)
+        
+        # Clean metadata to only include string values (OpenAI requirement)
+        if "metadata" in request_body and request_body["metadata"] is not None:
+            from litellm.utils import add_openai_metadata
+            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+        
+        if extra_body:
+            request_body.update(extra_body)
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return vector_store_provider_config.transform_create_vector_store_response(
+            response=response,
+        )
+
+    async def async_vector_store_delete_handler(
+        self,
+        vector_store_id: str,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ):
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return response.json()
+
+    def vector_store_delete_handler(
+        self,
+        vector_store_id: str,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ):
+        if _is_async:
+            return self.async_vector_store_delete_handler(
+                vector_store_id=vector_store_id,
+                vector_store_provider_config=vector_store_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = vector_store_provider_config.validate_environment(
+            headers=extra_headers or {}, litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = vector_store_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url = f"{api_base}/{vector_store_id}"
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+
+        return response.json()
 
     #####################################################################
     ################ Vector Store Files HANDLERS ########################

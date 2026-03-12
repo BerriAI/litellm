@@ -424,6 +424,7 @@ class CreateBatchRequest(TypedDict, total=False):
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
+    output_expires_after: FileExpiresAfter
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
@@ -1197,6 +1198,14 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     cost: Optional[float] = None
     """The cost of the request."""
+
+    @field_validator("cost", mode="before")
+    @classmethod
+    def parse_cost(cls, v: Any) -> Optional[float]:
+        """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
+        if isinstance(v, dict):
+            return v.get("total_cost")
+        return v
 
     model_config = {"extra": "allow"}
 
@@ -2109,7 +2118,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
+    "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
 
 

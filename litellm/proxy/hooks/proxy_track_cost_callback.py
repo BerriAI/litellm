@@ -38,8 +38,9 @@ class _ProxyDBLogger(CustomLogger):
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
-        elif request_route is not None and not RouteChecks.is_llm_api_route(
-            route=request_route
+        elif request_route is not None and not (
+            RouteChecks.is_llm_api_route(route=request_route) or
+            RouteChecks.is_info_route(route=request_route)
         ):
             return
 

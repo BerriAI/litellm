@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 
@@ -13,7 +12,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import ServerToolUse
 
 
 def test_response_format_transformation_unit_test():
@@ -1964,7 +1963,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
 
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
-    assert usage.completion_tokens_details.reasoning_tokens is 0
+    assert usage.completion_tokens_details.reasoning_tokens == 0
     assert usage.completion_tokens_details.text_tokens == 248
     assert usage.completion_tokens == 248
     assert usage.prompt_tokens == 37
@@ -2861,6 +2860,83 @@ def test_map_openai_params_with_context_management():
     assert result["context_management"] == non_default_params_anthropic["context_management"]
 
 
+def test_cache_control_in_supported_params():
+    """
+    Test that cache_control is listed as a supported OpenAI param for Anthropic.
+    """
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "cache_control" in params
+
+
+def test_map_openai_params_with_cache_control():
+    """
+    Test that map_openai_params correctly passes through top-level cache_control
+    for Anthropic's automatic prompt caching.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": {"type": "ephemeral"}
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
+def test_map_openai_params_cache_control_ignored_when_not_dict():
+    """
+    Test that cache_control is ignored when it is not a dict.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": "ephemeral"
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" not in result
+
+
+def test_transform_request_includes_cache_control():
+    """
+    Test that transform_request includes top-level cache_control in the request body.
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "max_tokens": 100,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
@@ -2975,7 +3051,6 @@ def test_fast_mode_cost_calculation():
     Test that fast mode applies the 'fast' multiplier from provider_specific_entry
     on top of the base model cost (1.1x for claude-opus-4-6).
     """
-    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
@@ -3015,7 +3090,6 @@ def test_fast_mode_with_inference_geo():
     Test that fast mode + inference_geo both apply their multipliers from
     provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
-    from unittest.mock import patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
@@ -3101,3 +3175,128 @@ def test_map_openai_params_max_tokens_normalized_to_int():
 
     assert "max_tokens" in result
     assert result["max_tokens"] == 1
+
+
+# ========================================================================
+# Tool schema normalization tests
+# ========================================================================
+
+
+def test_map_tool_helper_enforces_object_type_when_missing():
+    """
+    Anthropic requires input_schema.type to be "object". When an OpenAI tool
+    has parameters without a 'type' field (common with MCP servers), LiteLLM
+    should inject type:"object" before forwarding to Anthropic.
+
+    Without this fix, Anthropic rejects with:
+        tools.N.custom.input_schema.type: Input should be 'object'
+    """
+    config = AnthropicConfig()
+
+    # Tool with parameters that has properties but no 'type' field
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Search for code patterns",
+            "parameters": {
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "properties" in result["input_schema"]
+    assert "query" in result["input_schema"]["properties"]
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_enforces_object_type_when_wrong_type():
+    """
+    If a tool schema has type:"string" or type:"array" at the root level,
+    LiteLLM should normalize it to type:"object" for Anthropic compatibility.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "Echo input",
+            "parameters": {
+                "type": "string",
+                "description": "The input to echo",
+            },
+        },
+    }
+
+    original_params = tool["function"]["parameters"].copy()
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}, (
+        "properties should be injected as {} when schema has non-object type and no properties key"
+    )
+    # Original parameters dict must not be modified in place
+    assert tool["function"]["parameters"] == original_params, (
+        "parameters dict was mutated; _map_tool_helper should not modify caller data"
+    )
+
+
+def test_map_tool_helper_preserves_valid_object_schema():
+    """
+    When a tool schema already has type:"object", it should be preserved
+    without modification.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                },
+                "required": ["city"],
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert "city" in result["input_schema"]["properties"]
+    assert result["input_schema"]["required"] == ["city"]
+
+
+def test_map_tool_helper_empty_parameters_get_default():
+    """
+    When parameters is entirely missing, the existing default should still
+    produce a valid {type:"object", properties:{}} schema.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "no_params_tool",
+            "description": "Tool with no parameters",
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}
