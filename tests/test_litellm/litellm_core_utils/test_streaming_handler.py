@@ -1491,3 +1491,54 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
     )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
+
+
+def test_reasoning_content_from_provider_specific_fields_in_generic_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    When a custom provider returns reasoning_content in
+    GenericStreamingChunk.provider_specific_fields, it must appear as
+    delta.reasoning_content on the final ModelResponseStream — not just
+    inside delta.provider_specific_fields.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/9197
+    """
+    completion_obj = {"content": ""}
+    response_obj = {
+        "text": "",
+        "is_finished": False,
+        "finish_reason": None,
+        "usage": None,
+        "tool_use": None,
+        "provider_specific_fields": {
+            "reasoning_content": "thinking hard",
+        },
+    }
+    model_response = ModelResponseStream(
+        id="test-chunk",
+        created=1000,
+        model="custom-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    initialized_custom_stream_wrapper.sent_first_chunk = True
+    result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj=completion_obj,
+        model_response=model_response,
+        response_obj=response_obj,
+    )
+
+    assert result is not None
+    delta = result.choices[0].delta
+    assert hasattr(delta, "reasoning_content"), (
+        "reasoning_content should be a top-level Delta attribute"
+    )
+    assert delta.reasoning_content == "thinking hard"
