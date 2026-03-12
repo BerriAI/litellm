@@ -819,6 +819,7 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
     router.completion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello",
     )
 
 
