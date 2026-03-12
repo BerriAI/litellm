@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined, LoadingOutlined } from "@ant-design/icons";
+import { DownOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -148,6 +148,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -397,11 +398,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
-          aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
-          aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
-          aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
-          aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
-          aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+          aggregatedMetadata.total_spend = (aggregatedMetadata.total_spend || 0) + (pageData.metadata.total_spend || 0);
+          aggregatedMetadata.total_api_requests = (aggregatedMetadata.total_api_requests || 0) + (pageData.metadata.total_api_requests || 0);
+          aggregatedMetadata.total_successful_requests = (aggregatedMetadata.total_successful_requests || 0) + (pageData.metadata.total_successful_requests || 0);
+          aggregatedMetadata.total_failed_requests = (aggregatedMetadata.total_failed_requests || 0) + (pageData.metadata.total_failed_requests || 0);
+          aggregatedMetadata.total_tokens = (aggregatedMetadata.total_tokens || 0) + (pageData.metadata.total_tokens || 0);
+          aggregatedMetadata.total_prompt_tokens = (aggregatedMetadata.total_prompt_tokens || 0) + (pageData.metadata.total_prompt_tokens || 0);
+          aggregatedMetadata.total_completion_tokens = (aggregatedMetadata.total_completion_tokens || 0) + (pageData.metadata.total_completion_tokens || 0);
+          aggregatedMetadata.total_cache_read_input_tokens = (aggregatedMetadata.total_cache_read_input_tokens || 0) + (pageData.metadata.total_cache_read_input_tokens || 0);
+          aggregatedMetadata.total_cache_creation_input_tokens = (aggregatedMetadata.total_cache_creation_input_tokens || 0) + (pageData.metadata.total_cache_creation_input_tokens || 0);
         }
       }
 
@@ -629,12 +634,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </Text>
                           </Card>
                           <Card>
-                            <Title>Total Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
                             <Title>Average Cost per Request</Title>
                             <Text className="text-2xl font-bold mt-2">
                               $
@@ -644,7 +643,51 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               )}
                             </Text>
                           </Card>
+                          <Card
+                            className="cursor-pointer hover:bg-gray-50 transition-colors"
+                            onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Title>Total Tokens</Title>
+                              {showTokenBreakdown ? (
+                                <DownOutlined className="text-gray-400 text-xs" />
+                              ) : (
+                                <RightOutlined className="text-gray-400 text-xs" />
+                              )}
+                            </div>
+                            <Text className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
                         </Grid>
+                        {showTokenBreakdown && (
+                          <Grid numItems={4} className="gap-4 mt-4">
+                            <Card>
+                              <Title>Input Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-blue-600">
+                                {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Output Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-cyan-600">
+                                {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Cache Read Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-green-600">
+                                {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Cache Write Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-purple-600">
+                                {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </Grid>
+                        )}
                       </Card>
                     </Col>
 
