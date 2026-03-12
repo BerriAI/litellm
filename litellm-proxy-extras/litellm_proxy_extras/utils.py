@@ -230,7 +230,6 @@ class ProxyExtrasDBManager:
         idempotent_patterns = [
             r"already exists",
             r"column .* already exists",
-            r"duplicate key value violates",
             r"relation .* already exists",
             r"constraint .* already exists",
             r"does not exist",

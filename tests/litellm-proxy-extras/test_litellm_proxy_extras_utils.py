@@ -86,10 +86,10 @@ class TestIdempotentErrorDetection:
         error_message = "column 'email' already exists"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-    def test_is_idempotent_error_duplicate_key(self):
-        """Test detection of duplicate key violation error"""
+    def test_duplicate_key_violation_not_idempotent(self):
+        """Duplicate key violations (e.g., CREATE INDEX with duplicate data) are NOT idempotent"""
         error_message = "duplicate key value violates unique constraint"
-        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
 
     def test_is_idempotent_error_relation_already_exists(self):
         """Test detection of 'relation already exists' error"""
