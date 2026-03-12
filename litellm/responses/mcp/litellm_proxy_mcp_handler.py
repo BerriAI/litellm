@@ -44,11 +44,12 @@ ToolParam = Any
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
-# Matches full proxy URLs of the form http(s)://<host>/mcp/<server_name> where /mcp/ is
-# directly under the root path (no sub-path prefix). This ensures external MCP servers
-# whose paths happen to contain "/mcp/" (e.g. https://mcp.atlassian.com/v1/mcp/...) are
-# NOT rewritten as internal proxy routes.
-_PROXY_MCP_PATH_RE = re.compile(r"^https?://[^/]+/mcp/([^/]+)$")
+# Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
+# (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
+# A false-positive match (e.g. an external URL that happens to end with /mcp/<name>) results
+# in a "server not found" error from the internal gateway, not a silent failure or data leak,
+# so this broad pattern is intentional and preferred over anchoring to localhost only.
+_PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
 
 
 class LiteLLM_Proxy_MCP_Handler:
