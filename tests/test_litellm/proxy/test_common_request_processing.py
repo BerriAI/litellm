@@ -15,6 +15,7 @@ from litellm.proxy.common_request_processing import (
     ProxyConfig,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
+    _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
     create_response,
@@ -1367,6 +1368,99 @@ class TestOverrideOpenAIResponseModel:
 
         # Verify the model was not changed
         assert response_obj.model == fallback_model
+
+    def test_override_model_preserves_azure_model_router_actual_model(self):
+        """
+        Test that when the requested model is an Azure Model Router,
+        the actual model used (returned in the response) is preserved
+        instead of being overridden with the router model.
+        
+        This ensures users can see which model actually handled their request
+        when using Azure Model Router.
+        """
+        requested_model = "azure_ai/model_router"
+        actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
+        
+        # Create a mock object response with the actual model used
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+        
+        # Call the function - should preserve the actual model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model was NOT overridden - should still be the actual model
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_azure_model_router_with_deployment_name(self):
+        """
+        Test that Azure Model Router with deployment name pattern also preserves
+        the actual model used.
+        """
+        requested_model = "azure_ai/model_router/my-deployment"
+        actual_model_used = "azure_ai/gpt-4.1-nano-2025-04-14"
+        
+        # Create a mock object response
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+        
+        # Call the function - should preserve the actual model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model was NOT overridden
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_azure_model_router_with_hyphen(self):
+        """
+        Test that Azure Model Router with hyphen pattern (model-router) also preserves
+        the actual model used.
+        """
+        requested_model = "azure_ai/model-router"
+        actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
+        
+        # Create a mock object response
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+        
+        # Call the function - should preserve the actual model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model was NOT overridden
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+
+class TestIsAzureModelRouterRequest:
+    """Tests for _is_azure_model_router_request helper"""
+
+    def test_detects_model_router_with_underscore(self):
+        assert _is_azure_model_router_request("azure_ai/model_router") is True
+        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+
+    def test_detects_model_router_with_hyphen(self):
+        assert _is_azure_model_router_request("azure_ai/model-router") is True
+        assert _is_azure_model_router_request("model-router") is True
+
+    def test_rejects_regular_models(self):
+        assert _is_azure_model_router_request("azure_ai/gpt-4") is False
+        assert _is_azure_model_router_request("gpt-4") is False
+        assert _is_azure_model_router_request("openai/gpt-3.5-turbo") is False
 
 
 class TestStreamingOverheadHeader:
