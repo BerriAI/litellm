@@ -86,7 +86,10 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   }, [servers]);
 
   const handleCrudPanelChange = (serverId: string, allowed: string[] | undefined) => {
-    onChange({ ...toolPermissions, [serverId]: allowed ?? [] });
+    // `undefined` from the panel means "allow all" — expand to the full tool list
+    // rather than collapsing to [] ("allow none").
+    const resolved = allowed ?? (serverTools[serverId] || []).map((t) => t.name);
+    onChange({ ...toolPermissions, [serverId]: resolved });
   };
 
   const handleSelectAll = (serverId: string) => {

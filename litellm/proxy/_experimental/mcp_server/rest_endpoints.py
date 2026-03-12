@@ -100,7 +100,12 @@ if MCP_AVAILABLE:
             if cred and cred.get("access_token"):
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception:
-            pass
+            verbose_logger.debug(
+                "Failed to fetch OAuth credential for user %s / server %s",
+                user_id,
+                server_id,
+                exc_info=True,
+            )
         return None
 
     def _create_tool_response_objects(tools, server_mcp_info):

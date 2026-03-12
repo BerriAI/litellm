@@ -15,21 +15,25 @@ export interface MCPToolEntry {
  * the name alone yields no match. This prevents incidental phrasing in
  * free-form descriptions (e.g. "removes noise from…") from promoting a safe
  * tool into a high-risk bucket.
+ *
+ * READ is checked before DELETE/UPDATE so that tools like `get_removed_entries`
+ * or `list_deleted_items` — where the primary verb is a read operation — are
+ * not silently blocked by the delete-by-default policy for new servers.
  */
 export function classifyToolOp(name: string, description = ""): CrudOp {
   const nameLower = name.toLowerCase();
+  if (READ_RE.test(nameLower)) return "read";
   if (DELETE_RE.test(nameLower)) return "delete";
   if (UPDATE_RE.test(nameLower)) return "update";
   if (CREATE_RE.test(nameLower)) return "create";
-  if (READ_RE.test(nameLower)) return "read";
 
   // Only consult description when the name is unrecognised.
   if (description) {
     const descLower = description.toLowerCase();
+    if (READ_RE.test(descLower)) return "read";
     if (DELETE_RE.test(descLower)) return "delete";
     if (UPDATE_RE.test(descLower)) return "update";
     if (CREATE_RE.test(descLower)) return "create";
-    if (READ_RE.test(descLower)) return "read";
   }
 
   return "unknown";

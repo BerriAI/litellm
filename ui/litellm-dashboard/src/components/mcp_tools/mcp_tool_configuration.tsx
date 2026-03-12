@@ -456,7 +456,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               <McpCrudPermissionPanel
                 tools={tools}
                 value={allowedTools}
-                onChange={(allowed) => onAllowedToolsChange(allowed ?? [])}
+                onChange={(allowed) => onAllowedToolsChange(allowed ?? tools.map((t) => t.name))}
               />
             )}
 
