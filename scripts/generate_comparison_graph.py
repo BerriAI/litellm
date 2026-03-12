@@ -40,28 +40,29 @@ BEFORE_CSV = """elapsed_s,rss_mb,fd_count,requests_sent,rps
 302.4,640.16,68,28100,80.0"""
 
 AFTER_CSV = """elapsed_s,rss_mb,fd_count,requests_sent,rps
-0.0,568.89,70,0,0.0
-0.0,568.89,70,0,0.0
-15.5,610.83,120,1406,91.0
-30.5,613.89,120,2800,92.9
-45.5,615.44,120,4200,93.3
-60.5,616.84,118,5650,96.6
-75.9,628.53,118,7100,94.2
-90.9,629.23,118,8450,90.0
-105.9,630.47,118,9800,90.0
-120.9,631.61,118,11200,93.2
-136.2,631.72,121,12604,91.5
-151.2,631.80,118,14018,94.2
-166.2,632.07,118,15400,92.1
-181.2,632.08,118,16821,94.7
-196.8,633.13,118,18307,95.3
-211.8,633.13,118,19713,93.7
-226.8,633.16,118,21200,99.1
-241.8,633.30,118,22600,93.3
-257.2,634.55,118,24050,94.5
-272.2,634.57,118,25481,95.4
-287.2,634.77,118,26900,94.6
-302.2,634.91,68,28150,83.3"""
+0.0,570.18,70,0,0.0
+0.0,570.18,70,0,0.0
+15.4,612.54,120,1501,97.6
+30.4,608.96,120,3000,99.9
+45.4,615.77,120,4550,103.3
+60.4,609.82,118,6001,96.7
+75.7,616.18,118,7550,101.3
+90.7,610.00,118,9050,100.0
+105.7,613.53,118,10600,103.3
+120.7,608.31,118,12056,97.0
+136.0,612.61,118,13602,101.3
+151.0,607.01,118,15101,99.9
+166.0,612.73,118,16650,103.2
+181.0,618.67,118,18199,103.2
+196.3,612.33,118,19699,97.7
+211.3,616.50,118,21050,90.1
+226.3,611.43,118,22550,100.0
+241.3,617.59,118,24050,100.0
+256.7,610.75,118,25591,100.4
+271.7,617.40,118,27100,100.6
+286.7,612.33,118,28599,99.9
+301.7,614.95,68,29950,90.0
+317.0,606.12,68,29950,0.0"""
 
 
 def parse_csv(csv_text):
@@ -119,22 +120,27 @@ def main():
     ax2.grid(True, alpha=0.3)
     ax2.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f"{x/1000:.0f}K"))
 
-    # Steady-state comparison box
-    # Before: 636.50 → 640.16 over 120s-302s
-    # After:  631.61 → 634.91 over 120s-302s
-    before_steady = before["rss_mb"][-1] - before["rss_mb"][9]  # ~120s mark
-    after_steady = after["rss_mb"][-1] - after["rss_mb"][9]   # ~120s mark
-    improvement = (1 - after_steady / before_steady) * 100 if before_steady > 0 else 0
+    # Comparison stats
+    before_final = before["rss_mb"][-1]
+    after_final = after["rss_mb"][-1]
+    before_peak = max(before["rss_mb"][2:])  # skip initial 0s
+    after_peak = max(after["rss_mb"][2:])
+    before_start = before["rss_mb"][0]
+    after_start = after["rss_mb"][0]
+    before_growth = before_final - before_start
+    after_growth = after_final - after_start
 
     textstr = (
-        f"Steady-state growth (120s→300s):\n"
-        f"  Before: +{before_steady:.1f} MB\n"
-        f"  After:  +{after_steady:.1f} MB\n"
-        f"  Improvement: {improvement:.0f}%\n\n"
+        f"Total RSS growth:\n"
+        f"  Before: +{before_growth:.1f} MB (monotonic)\n"
+        f"  After:  +{after_growth:.1f} MB (oscillating)\n"
+        f"  Reduction: {(1 - after_growth/before_growth)*100:.0f}%\n\n"
         f"Peak RSS:\n"
-        f"  Before: {max(before['rss_mb']):.1f} MB\n"
-        f"  After:  {max(after['rss_mb']):.1f} MB\n"
-        f"  Saved: {max(before['rss_mb']) - max(after['rss_mb']):.1f} MB"
+        f"  Before: {before_peak:.1f} MB\n"
+        f"  After:  {after_peak:.1f} MB\n"
+        f"  Saved: {before_peak - after_peak:.1f} MB\n\n"
+        f"Key: malloc_trim releases\n"
+        f"memory back to OS every 10s"
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
     ax2.text(0.02, 0.98, textstr, transform=ax2.transAxes, fontsize=8,
