@@ -1012,8 +1012,8 @@ def test_completion_cost_azure_common_deployment_name():
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
-        ("claude-3-5-sonnet-20240620", "anthropic"),
-        ("gemini/gemini-1.5-flash-001", "gemini"),
+        ("claude-sonnet-4-6", "anthropic"),
+        ("gemini/gemini-2.5-flash", "gemini"),
     ],
 )
 def test_completion_cost_prompt_caching(model, custom_llm_provider):
