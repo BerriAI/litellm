@@ -54,7 +54,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
-from litellm.proxy.utils import get_server_root_path
+from litellm.proxy.utils import get_server_root_path, normalize_route_for_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2058,21 +2058,10 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        # When SERVER_ROOT_PATH is set, all valid routes carry that prefix.
-        # Strip it before comparing against mapped routes; if the route does not
-        # carry the prefix, it cannot be a mapped pass-through route.
-        root_path = get_server_root_path()
-        if root_path and root_path != "/":
-            if route.startswith(root_path):
-                normalized_route = route[len(root_path):]
-                if normalized_route:  # guard against route == root_path exactly
-                    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                        if normalized_route.startswith(mapped_route):
-                            return True
-            # Route lacks expected prefix (or is exactly root_path) — not a mapped pass-through route
-        else:
+        normalized_route = normalize_route_for_root_path(route)
+        if normalized_route is not None:
             for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                if route.startswith(mapped_route):
+                if normalized_route.startswith(mapped_route):
                     return True
 
         # Fast path: check if any registered route key contains this path

@@ -50,7 +50,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body, _safe_get_request_headers,
     populate_request_with_path_params)
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
+from litellm.proxy.utils import PrismaClient, ProxyLogging, normalize_route_for_root_path
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -386,18 +386,10 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     api_key: str,
 ) -> Union[UserAPIKeyAuth, str]:
     is_mapped_pass_through_route: bool = False
-    root_path = get_server_root_path()
-    if root_path and root_path != "/":
-        if route.startswith(root_path):
-            normalized_route = route[len(root_path):]
-            if normalized_route:  # guard against route == root_path exactly
-                for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-                    if normalized_route.startswith(mapped_route):
-                        is_mapped_pass_through_route = True
-                        break
-    else:
+    normalized_route = normalize_route_for_root_path(route)
+    if normalized_route is not None:
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-            if route.startswith(mapped_route):
+            if normalized_route.startswith(mapped_route):
                 is_mapped_pass_through_route = True
                 break
     if is_mapped_pass_through_route:
