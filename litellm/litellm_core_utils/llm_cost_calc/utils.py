@@ -735,16 +735,6 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
     )
- 
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=model_info,
-        prompt_base_cost=prompt_base_cost,
-        cache_read_cost=cache_read_cost,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-        service_tier=service_tier,
-    )
 
     ## CALCULATE OUTPUT COST
     text_tokens = 0
