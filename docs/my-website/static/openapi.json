@@ -15,10 +15,6 @@
   },
   "servers": [
     {
-      "url": "https://litellm-api.up.railway.app",
-      "description": "Demo LiteLLM Proxy"
-    },
-    {
       "url": "http://localhost:4000",
       "description": "Local LiteLLM Proxy"
     }
@@ -1164,6 +1160,14 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "example": {
+                    "object": "list",
+                    "data": [
+                      { "id": "gpt-4o", "object": "model", "created": 1700000000, "owned_by": "openai" },
+                      { "id": "claude-opus-4-6", "object": "model", "created": 1700000000, "owned_by": "anthropic" },
+                      { "id": "gemini/gemini-2.0-flash", "object": "model", "created": 1700000000, "owned_by": "google" }
+                    ]
+                  },
                   "properties": {
                     "object": { "type": "string", "example": "list" },
                     "data": {
@@ -1357,6 +1361,22 @@
       },
       "ChatCompletionResponse": {
         "type": "object",
+        "example": {
+          "id": "chatcmpl-abc123",
+          "object": "chat.completion",
+          "created": 1700000000,
+          "model": "gpt-4o-2024-11-20",
+          "choices": [
+            {
+              "index": 0,
+              "message": { "role": "assistant", "content": "Hello! How can I help you today?" },
+              "finish_reason": "stop",
+              "logprobs": null
+            }
+          ],
+          "usage": { "prompt_tokens": 13, "completion_tokens": 9, "total_tokens": 22 },
+          "system_fingerprint": "fp_abc123"
+        },
         "properties": {
           "id": { "type": "string", "example": "chatcmpl-abc123" },
           "object": { "type": "string", "example": "chat.completion" },
@@ -1406,6 +1426,14 @@
       },
       "TextCompletionResponse": {
         "type": "object",
+        "example": {
+          "id": "cmpl-abc123",
+          "object": "text_completion",
+          "created": 1700000000,
+          "model": "gpt-3.5-turbo-instruct",
+          "choices": [{ "text": "\n\nThis is a sample completion.", "index": 0, "logprobs": null, "finish_reason": "stop" }],
+          "usage": { "prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13 }
+        },
         "properties": {
           "id": { "type": "string" },
           "object": { "type": "string", "example": "text_completion" },
@@ -1574,6 +1602,14 @@
       },
       "EmbeddingResponse": {
         "type": "object",
+        "example": {
+          "object": "list",
+          "data": [
+            { "object": "embedding", "index": 0, "embedding": [0.0023064255, -0.009327292, 0.015797347, -0.0077780334, 0.0023064255] }
+          ],
+          "model": "text-embedding-ada-002",
+          "usage": { "prompt_tokens": 8, "total_tokens": 8 }
+        },
         "properties": {
           "object": { "type": "string", "example": "list" },
           "data": {

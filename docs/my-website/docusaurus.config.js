@@ -87,20 +87,31 @@ const config = {
       },
     ],
     [
-      '@docusaurus/plugin-content-blog',
+      '@docusaurus/plugin-content-docs',
       {
-        id: 'release_notes',
+        id: 'release-notes',
         path: './release_notes',
         routeBasePath: 'release_notes',
-        blogTitle: 'Release Notes',
-        blogSidebarTitle: 'Releases',
-        blogSidebarCount: 'ALL',
-        postsPerPage: 'ALL',
-        showReadingTime: false,
-        sortPosts: 'descending',
-        include: ['**/*.{md,mdx}'],
-        onInlineAuthors: 'ignore',
-        onUntruncatedBlogPosts: 'ignore',
+        sidebarPath: require.resolve('./sidebars-release-notes.js'),
+        async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
+          const items = await defaultSidebarItemsGenerator(args);
+          function transformItems(list) {
+            return list
+              .filter(item => !(item.type === 'doc' && item.id === 'index'))
+              .map(item => {
+                if (item.type === 'doc') {
+                  // Shorten label to just the version string
+                  const label = item.id.replace(/\/index$/, '');
+                  return {...item, label};
+                }
+                if (item.type === 'category') {
+                  return {...item, items: transformItems(item.items)};
+                }
+                return item;
+              });
+          }
+          return transformItems(items);
+        },
       },
     ],
     [
@@ -129,6 +140,7 @@ const config = {
           url: '/openapi.json',
           title: 'LiteLLM API Reference',
           theme: 'default',
+          proxy: 'https://proxy.scalar.com',
         },
       },
     ],
@@ -210,10 +222,20 @@ const config = {
             label: 'Docs',
           },
           {
-            type: 'docSidebar',
-            sidebarId: 'learnSidebar',
-            position: 'left',
+            type: 'dropdown',
             label: 'Learn',
+            position: 'left',
+            items: [
+              {
+                type: 'docSidebar',
+                sidebarId: 'learnSidebar',
+                label: 'Guides & Tutorials',
+              },
+              {
+                to: '/docs/integrations/websearch_interception',
+                label: 'Web Search Integration',
+              },
+            ],
           },
           {
             type: 'docSidebar',
@@ -222,12 +244,33 @@ const config = {
             label: 'Integrations',
           },
           {
+            type: 'docSidebar',
+            sidebarId: 'releaseNotesSidebar',
+            docsPluginId: 'release-notes',
+            position: 'left',
+            label: 'Release Notes',
+          },
+          {
             position: 'left',
             label: 'Enterprise',
             to: "docs/enterprise"
           },
           { to: '/blog', label: 'Blog', position: 'left' },
-          { to: '/api-reference', label: 'API Reference', position: 'left' },
+          {
+            type: 'dropdown',
+            label: 'API Reference',
+            position: 'left',
+            items: [
+              {
+                to: '/api-reference',
+                label: 'API Reference',
+              },
+              {
+                to: '/docs/integrations/websearch_interception',
+                label: 'Web Search Integration',
+              },
+            ],
+          },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 Cost Map',

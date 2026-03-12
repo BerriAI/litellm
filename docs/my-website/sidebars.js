@@ -203,11 +203,11 @@ const sidebars = {
     { type: "link", label: "Release Notes", href: "/release_notes" },
 
     // ════════════════════════════════════════════════════════════
-    // PYTHON SDK
+    // LITELLM PYTHON SDK
     // ════════════════════════════════════════════════════════════
     {
       type: "category",
-      label: "Python SDK",
+      label: "LiteLLM Python SDK",
       collapsed: true,
       items: [
         {
@@ -258,6 +258,16 @@ const sidebars = {
             "tutorials/instructor",
           ],
         },
+        {
+          type: "category",
+          label: "Router",
+          collapsed: true,
+          items: [
+            { type: "doc", id: "routing", label: "Load Balancing & Fallbacks" },
+          ],
+        },
+        { type: "doc", id: "budget_manager", label: "Budgets & Rate Limits" },
+        { type: "doc", id: "sdk_production", label: "Production Best Practices" },
       ],
     },
 
@@ -266,7 +276,7 @@ const sidebars = {
     // ════════════════════════════════════════════════════════════
     {
       type: "category",
-      label: "AI Gateway (Proxy)",
+      label: "LiteLLM AI Gateway (Proxy)",
       collapsed: true,
       link: {
         type: "generated-index",

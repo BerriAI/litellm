@@ -341,6 +341,7 @@ li.tabs__item--active {
    ========================================= */
 .menu {
   font-weight: 400;
+  padding: 0.5rem 0.25rem !important;
   background-image: radial-gradient(rgba(0, 0, 0, 0.07) 1px, transparent 1px);
   background-size: 24px 24px;
 }
@@ -352,8 +353,7 @@ li.tabs__item--active {
 
 .menu__link {
   font-size: 14px;
-  padding-top: 0.22rem !important;
-  padding-bottom: 0.22rem !important;
+  padding: 0.22rem 0.75rem !important;
   border-radius: 4px;
 }
 
@@ -676,6 +676,48 @@ video {
   .references-mobile-header {
     display: none !important;
   }
+}
+
+/* =========================================
+   BASH / SHELL CODE BLOCKS
+   ========================================= */
+
+/* Subtle grey bash/shell blocks — light mode */
+[data-theme='light'] [class*='language-bash'] .prism-code,
+[data-theme='light'] [class*='language-sh'] .prism-code,
+[data-theme='light'] [class*='language-shell'] .prism-code,
+[data-theme='light'] [class*='language-zsh'] .prism-code {
+  background-color: #f3f4f6 !important;
+  border: 1px solid #d1d5db !important;
+  border-left: 3px solid #6b7280 !important;
+  color: #1f2937 !important;
+}
+
+[data-theme='light'] [class*='language-bash'] .prism-code span,
+[data-theme='light'] [class*='language-sh'] .prism-code span,
+[data-theme='light'] [class*='language-shell'] .prism-code span,
+[data-theme='light'] [class*='language-zsh'] .prism-code span {
+  color: #1f2937 !important;
+}
+
+/* Dark mode — slightly lighter than the default near-black */
+[data-theme='dark'] [class*='language-bash'] .prism-code,
+[data-theme='dark'] [class*='language-sh'] .prism-code,
+[data-theme='dark'] [class*='language-shell'] .prism-code,
+[data-theme='dark'] [class*='language-zsh'] .prism-code {
+  background-color: #1c2130 !important;
+  border: 1px solid #2d3748 !important;
+  border-left: 3px solid #4b5563 !important;
+}
+
+/* "$ " terminal prompt prefix on bash title bar */
+[class*='language-bash'] [class*='codeBlockTitle']::before,
+[class*='language-sh'] [class*='codeBlockTitle']::before,
+[class*='language-shell'] [class*='codeBlockTitle']::before,
+[class*='language-zsh'] [class*='codeBlockTitle']::before {
+  content: '$ ';
+  color: #6b7280;
+  font-weight: 700;
 }
 
 /* =========================================
