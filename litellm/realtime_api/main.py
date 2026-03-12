@@ -4,8 +4,7 @@ import os
 from typing import Any, Dict, Optional, cast
 
 import litellm
-from litellm.constants import request_timeout
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -56,7 +55,9 @@ def _get_realtime_http_provider_config(
     Uses ProviderConfigManager so each provider keeps its credential-resolution
     and URL-construction logic in its own transformation class.
     """
-    from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
+    from litellm.llms.base_llm.realtime.http_transformation import (
+        BaseRealtimeHTTPConfig,
+    )
 
     provider_config: Optional[BaseRealtimeHTTPConfig] = None
     if custom_llm_provider in LlmProviders._member_map_.values():
@@ -138,6 +139,7 @@ async def acreate_realtime_client_secret(
         model=model_name,
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
+        api_version=litellm_params.api_version,
     )
 
 
@@ -182,6 +184,7 @@ async def arealtime_calls(
         session_config=session,
         extra_headers=kwargs.get("extra_headers"),
         client=kwargs.get("client"),
+        api_version=litellm_params.api_version,
     )
 
 

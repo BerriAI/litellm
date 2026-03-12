@@ -54,7 +54,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
         """Return the full URL for POST /realtime/client_secrets."""
 
     @abstractmethod
@@ -76,7 +76,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # ------------------------------------------------------------------ #
 
     def get_realtime_calls_url(
-        self, api_base: Optional[str], model: str
+        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
     ) -> str:
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
         base = (api_base or "").rstrip("/")
