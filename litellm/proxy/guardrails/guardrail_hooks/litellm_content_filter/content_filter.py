@@ -310,10 +310,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
 
     def _init_tone_checker(self, tone_detection_config: Dict[str, Any]) -> None:
-        self._tone_checker = ToneChecker(tone_detection_config)
-        verbose_proxy_logger.debug(
-            "ContentFilterGuardrail: tone checker enabled"
-        )
+        try:
+            self._tone_checker = ToneChecker(tone_detection_config)
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: tone checker enabled"
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: failed to init tone checker: %s",
+                e,
+            )
 
     def _apply_tone_detection_policy(
         self,

@@ -57,7 +57,7 @@ _TONE_PATTERNS: List[Tuple[str, str]] = [
     (r"\bjust do what i said\b", "impatience"),
 
     # Unprofessional casual language
-    (r"\b(?:bruh|lol|idk|smh|lmao|wtf)\b", "unprofessional"),
+    (r"\b(?:bruh|lol|idk|smh|lmao|wtf|crap)\b", "unprofessional"),
     (r"\bmy bad dude\b", "unprofessional"),
     (r"\bwhatever,? just deal with it\b", "unprofessional"),
     (r"\bsounds like a you problem\b", "unprofessional"),

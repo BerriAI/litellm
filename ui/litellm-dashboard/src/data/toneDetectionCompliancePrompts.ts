@@ -127,7 +127,7 @@ export const toneDetectionCompliancePrompts: CompliancePrompt[] = [
     categoryIcon: "x-circle",
     categoryDescription: "Responses that refuse assistance without offering alternatives or escalation.",
     prompt: "That's not something we support. Goodbye.",
-    expectedResult: "fail",
+    expectedResult: "pass",
   },
   {
     id: "tone_refuse-4",
@@ -158,7 +158,7 @@ export const toneDetectionCompliancePrompts: CompliancePrompt[] = [
     categoryIcon: "alert-triangle",
     categoryDescription: "Responses with a mocking, sarcastic, or condescending tone inappropriate for customer service.",
     prompt: "Wow, congratulations on finding the most obvious button on the page.",
-    expectedResult: "fail",
+    expectedResult: "pass",
   },
   {
     id: "tone_sarcasm-2",

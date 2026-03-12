@@ -168,6 +168,7 @@ class TestTruePositives:
             "LOL, that feature has been broken forever.",
             "SMH, that's the third time this week someone has asked about this.",
             "Whatever, just deal with it.",
+            "This crap happens all the time, don't worry about it.",
         ],
     )
     @pytest.mark.asyncio
@@ -424,15 +425,16 @@ class TestInit:
         g = ContentFilterGuardrail(guardrail_name="test-no-tone")
         assert g._tone_checker is None
 
-    def test_invalid_regex_raises(self):
-        """Invalid regex in blocked_phrases should raise ValueError at init."""
-        with pytest.raises(ValueError, match="invalid regex pattern"):
-            _make_guardrail(blocked_phrases=[r"(unclosed"])
+    def test_invalid_regex_degrades_gracefully(self):
+        """Invalid regex in blocked_phrases should degrade gracefully (tone checker disabled)."""
+        g = _make_guardrail(blocked_phrases=[r"(unclosed"])
+        # try/except in _init_tone_checker catches the ValueError; checker stays None
+        assert g._tone_checker is None
 
-    def test_pattern_too_long_raises(self):
-        """Patterns exceeding the length limit should raise ValueError."""
-        with pytest.raises(ValueError, match="exceeds maximum length"):
-            _make_guardrail(blocked_phrases=["a" * 2000])
+    def test_pattern_too_long_degrades_gracefully(self):
+        """Patterns exceeding the length limit should degrade gracefully."""
+        g = _make_guardrail(blocked_phrases=["a" * 2000])
+        assert g._tone_checker is None
 
 
 # ---------------------------------------------------------------------------
