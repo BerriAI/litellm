@@ -102,7 +102,7 @@ class CheckBatchCost:
                 where={
                     "file_purpose": "batch",
                     "batch_processed": False,
-                    "status": {"not_in": ["failed", "expired", "cancelled"]},
+                    "status": {"not_in": ["failed", "expired", "cancelled", "stale_expired"]},
                 },
                 take=MAX_OBJECTS_PER_POLL_CYCLE,
                 order={"created_at": "asc"},
@@ -115,7 +115,16 @@ class CheckBatchCost:
             jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
                 where={
                     "file_purpose": "batch",
-                    "status": {"not_in": ["failed", "expired", "cancelled", "complete", "completed"]},
+                    "status": {
+                        "not_in": [
+                            "failed",
+                            "expired",
+                            "cancelled",
+                            "complete",
+                            "completed",
+                            "stale_expired",
+                        ]
+                    },
                 },
                 take=MAX_OBJECTS_PER_POLL_CYCLE,
                 order={"created_at": "asc"},

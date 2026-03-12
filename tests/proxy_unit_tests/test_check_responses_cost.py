@@ -133,8 +133,9 @@ class TestCheckResponsesCost:
             ),
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check with mocked litellm.aget_responses
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -142,11 +143,12 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify the job was marked as completed
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_called_once()
-        call_args = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
-        assert call_args[1]["data"]["status"] == "completed"
-        assert call_args[1]["where"]["id"]["in"] == ["job-123"]
+        # calls[0] = stale cleanup, calls[1] = job completion
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 2
+        completion_call = calls[1]
+        assert completion_call[1]["data"]["status"] == "completed"
+        assert completion_call[1]["where"]["id"]["in"] == ["job-123"]
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_failed_response(
@@ -173,8 +175,9 @@ class TestCheckResponsesCost:
             usage=None,
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -182,10 +185,10 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify the job was marked as completed (even though response failed)
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_called_once()
-        call_args = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
-        assert call_args[1]["data"]["status"] == "completed"
+        # calls[0] = stale cleanup, calls[1] = job completion
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 2
+        assert calls[1][1]["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_cancelled_response(
@@ -212,8 +215,9 @@ class TestCheckResponsesCost:
             usage=None,
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -221,8 +225,10 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify the job was marked as completed
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_called_once()
+        # calls[0] = stale cleanup, calls[1] = job completion
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 2
+        assert calls[1][1]["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_in_progress_response(
@@ -249,8 +255,9 @@ class TestCheckResponsesCost:
             usage=None,
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -258,8 +265,10 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify no updates were made (response still in progress)
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_not_called()
+        # Only the stale-cleanup call should have fired — no completion update
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 1
+        assert calls[0][1]["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_queued_response(
@@ -286,8 +295,9 @@ class TestCheckResponsesCost:
             usage=None,
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -295,8 +305,10 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify no updates were made (response still queued)
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_not_called()
+        # Only the stale-cleanup call should have fired — no completion update
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 1
+        assert calls[0][1]["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_exception(
@@ -313,8 +325,9 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check with mocked exception
         with patch(
@@ -325,8 +338,10 @@ class TestCheckResponsesCost:
             # Should not raise, just skip the job
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify no updates were made (job was skipped due to error)
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_not_called()
+        # Only the stale-cleanup call should have fired — no completion update
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 1
+        assert calls[0][1]["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_multiple_jobs(
@@ -389,8 +404,9 @@ class TestCheckResponsesCost:
             ),
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
 
         # Run the check
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -398,10 +414,11 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # Verify only the 2 completed jobs were marked as complete
-        mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_called_once()
-        call_args = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
-        assert len(call_args[1]["where"]["id"]["in"]) == 2
-        assert "job-1" in call_args[1]["where"]["id"]["in"]
-        assert "job-3" in call_args[1]["where"]["id"]["in"]
-        assert "job-2" not in call_args[1]["where"]["id"]["in"]
+        # calls[0] = stale cleanup, calls[1] = completion of 2 finished jobs
+        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        assert len(calls) == 2
+        completion_call = calls[1]
+        assert len(completion_call[1]["where"]["id"]["in"]) == 2
+        assert "job-1" in completion_call[1]["where"]["id"]["in"]
+        assert "job-3" in completion_call[1]["where"]["id"]["in"]
+        assert "job-2" not in completion_call[1]["where"]["id"]["in"]
