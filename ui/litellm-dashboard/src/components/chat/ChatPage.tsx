@@ -144,7 +144,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">("chats");
+  const _oauthReturn = searchParams?.get("mcpOauthReturn");
+  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">(
+    _oauthReturn === "apps" ? "apps" : "chats"
+  );
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
   // Comparison mode state (active when selectedModels.length > 1)
@@ -171,6 +174,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     deleteConversation,
     renameConversation,
   } = useChatHistory(activeConversationId);
+
+  // Clean up the OAuth return param after it's been consumed
+  useEffect(() => {
+    if (_oauthReturn && typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("mcpOauthReturn");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load models
   useEffect(() => {

@@ -179,7 +179,9 @@ export const useUserMcpOAuthFlow = ({
       };
 
       setStorage(FLOW_STATE_KEY, JSON.stringify(flowState));
-      setStorage(RETURN_URL_KEY, window.location.href);
+      const returnUrl = new URL(window.location.href);
+      returnUrl.searchParams.set("mcpOauthReturn", "apps");
+      setStorage(RETURN_URL_KEY, returnUrl.toString());
 
       window.location.href = authorizeUrl;
     } catch (err) {
