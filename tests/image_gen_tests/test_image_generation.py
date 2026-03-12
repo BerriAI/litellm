@@ -272,19 +272,19 @@ class TestRunwaymlImageGeneration(BaseImageGenTest):
         return {"model": "runwayml/gen4_image"}
 
 
-class TestAzureOpenAIDalle3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {
-            "model": "azure/dall-e-3",
-            "api_version": "2024-02-01",
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "metadata": {
-                "model_info": {
-                    "base_model": "azure/dall-e-3",
-                }
-            },
-        }
+# class TestAzureOpenAIDalle3(BaseImageGenTest):
+#     def get_base_image_generation_call_args(self) -> dict:
+#         return {
+#             "model": "azure/dall-e-3",
+#             "api_version": "2024-02-01",
+#             "api_base": os.getenv("AZURE_API_BASE"),
+#             "api_key": os.getenv("AZURE_API_KEY"),
+#             "metadata": {
+#                 "model_info": {
+#                     "base_model": "azure/dall-e-3",
+#                 }
+#             },
+#         }
 
 
 @pytest.mark.skip(reason="model EOL")

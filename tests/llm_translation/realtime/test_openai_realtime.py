@@ -3,6 +3,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from websockets import ConnectionClosed
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -86,7 +87,7 @@ async def test_openai_realtime_direct_call_no_intent():
                 if not self.connection_successful:
                     await asyncio.sleep(3.0)
             
-            raise websockets.exceptions.ConnectionClosed(None, None)
+            raise ConnectionClosed(None, None)
             
         async def close(self, code=1000, reason=""):
             self.close_code = code
@@ -106,7 +107,7 @@ async def test_openai_realtime_direct_call_no_intent():
             api_key=os.environ.get("OPENAI_API_KEY"),
             timeout=60
         )
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
         pass
     except Exception as e:
         caught_exception = e
@@ -220,7 +221,7 @@ async def test_openai_realtime_direct_call_with_intent():
                 if not self.connection_successful:
                     await asyncio.sleep(3.0)
 
-            raise websockets.exceptions.ConnectionClosed(None, None)
+            raise ConnectionClosed(None, None)
 
         async def close(self, code=1000, reason=""):
             self.close_code = code
@@ -246,7 +247,7 @@ async def test_openai_realtime_direct_call_with_intent():
             query_params=query_params,
             timeout=60
         )
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
         pass
     except Exception as e:
         caught_exception = e

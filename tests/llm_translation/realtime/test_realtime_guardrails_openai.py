@@ -220,7 +220,7 @@ async def test_voice_transcript_blocked_by_guardrail():
     Simulate a backend-side voice transcription event containing the blocked phrase.
     Guardrail must block it - no response.create sent to OpenAI.
     """
-    from websockets.exceptions import ConnectionClosed
+    from websockets import ConnectionClosed
 
     guardrail = _make_guardrail(GuardrailEventHooks.realtime_input_transcription)
     litellm.callbacks = [guardrail]

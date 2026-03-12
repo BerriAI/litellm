@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import pytest
-import websockets
+from websockets import ConnectionClosed
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -33,9 +33,8 @@ class RealTimeWebSocketClient:
         self.connection_successful = False
         self.close_code = None
         self.close_reason = None
-        # Required by realtime_streaming.py - import exceptions module
-        from websockets import exceptions as websockets_exceptions
-        self.exceptions = websockets_exceptions
+        # Required by realtime_streaming.py - use ConnectionClosed for websockets 15+ compatibility
+        self.exceptions = type("exceptions", (), {"ConnectionClosed": ConnectionClosed})()
         
     async def accept(self):
         """Accept the WebSocket connection"""
@@ -112,7 +111,7 @@ class RealTimeWebSocketClient:
         print(f"TEST COMPLETE - Closing connection")
         print(f"Total messages received from API: {len(self.messages_received)}")
         print(f"{'='*80}\n")
-        raise websockets.exceptions.ConnectionClosed(None, None)
+        raise ConnectionClosed(None, None)
     
     def queue_client_message(self, message: str):
         """Queue a message to be sent from 'client' to backend"""
@@ -190,7 +189,7 @@ class BaseRealtimeTest(ABC):
                 api_key=os.environ.get(self.get_api_key_env_var()),
                 timeout=60
             )
-        except websockets.exceptions.ConnectionClosed:
+        except ConnectionClosed:
             pass
         except Exception as e:
             print(f"\nException: {type(e).__name__}: {e}\n")
@@ -249,7 +248,7 @@ class BaseRealtimeTest(ABC):
                 query_params=query_params,
                 timeout=60
             )
-        except websockets.exceptions.ConnectionClosed:
+        except ConnectionClosed:
             pass
         except Exception as e:
             caught_exception = e
@@ -364,7 +363,7 @@ class BaseRealtimeTest(ABC):
                 print(f"CLOSING CONNECTION")
                 print(f"Total messages received: {len(self.messages_received)}")
                 print(f"{'='*80}\n")
-                raise websockets.exceptions.ConnectionClosed(None, None)
+                raise ConnectionClosed(None, None)
         
         websocket_client = InteractiveWebSocketClient()
         caught_exception = None
@@ -382,7 +381,7 @@ class BaseRealtimeTest(ABC):
                 api_key=os.environ.get(self.get_api_key_env_var()),
                 timeout=60
             )
-        except websockets.exceptions.ConnectionClosed:
+        except ConnectionClosed:
             pass
         except Exception as e:
             print(f"\nException: {type(e).__name__}: {e}\n")

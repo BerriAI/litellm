@@ -4781,12 +4781,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - publish_proxy_extras:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_release_day_.*/
+      # - publish_proxy_extras:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting
@@ -4840,5 +4840,5 @@ workflows:
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
-            - publish_proxy_extras
+            # - publish_proxy_extras
             - guardrails_testing
