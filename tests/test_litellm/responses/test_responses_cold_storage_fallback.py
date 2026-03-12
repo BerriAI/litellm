@@ -317,7 +317,7 @@ class TestS3DeleteObject:
         ), patch(
             "botocore.auth.SigV4Auth"
         ), patch(
-            "litellm.integrations.s3_v2.asyncify",
+            "litellm.litellm_core_utils.asyncify.asyncify",
             return_value=AsyncMock(return_value=mock_creds),
         ):
             result = await logger._delete_object_from_s3("logs/test.json")
@@ -359,7 +359,7 @@ class TestS3DeleteObject:
         ), patch(
             "botocore.auth.SigV4Auth"
         ), patch(
-            "litellm.integrations.s3_v2.asyncify",
+            "litellm.litellm_core_utils.asyncify.asyncify",
             return_value=AsyncMock(return_value=mock_creds),
         ):
             result = await logger._delete_object_from_s3("logs/missing.json")
