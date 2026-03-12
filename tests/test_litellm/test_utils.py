@@ -90,7 +90,7 @@ def test_supports_function_calling_github_openai_alias():
 def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
-            model="github/claude-3-5-sonnet-latest"
+            model="github/claude-3-7-sonnet-20250219"
         )
         is True
     )

@@ -1882,13 +1882,20 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
+    from unittest.mock import patch
+
     # Claude 3 model should get 4096
     config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
     assert config_claude3["max_tokens"] == 4096
 
-    # Claude 3.5 model should get 8192
-    config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
-    assert config_claude35["max_tokens"] == 8192
+    # Claude 3.5 model should get 8192 (mock get_max_tokens since the model
+    # may not be in the local cost map when LITELLM_LOCAL_MODEL_COST_MAP is set)
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        return_value=8192,
+    ):
+        config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
+        assert config_claude35["max_tokens"] == 8192
 
     # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
     config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
