@@ -119,69 +119,76 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
 
+  const fetchAllPages = async (
+    fetcher: (page: number) => Promise<any>,
+  ) => {
+    const firstPageData = await fetcher(1);
+
+    if (!firstPageData.metadata || firstPageData.metadata.total_pages <= 1) {
+      return firstPageData;
+    }
+
+    const allResults = [...firstPageData.results];
+    const aggregatedMetadata = { ...firstPageData.metadata };
+
+    for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
+      const pageData = await fetcher(page);
+      allResults.push(...pageData.results);
+      if (pageData.metadata) {
+        aggregatedMetadata.total_spend = (aggregatedMetadata.total_spend || 0) + (pageData.metadata.total_spend || 0);
+        aggregatedMetadata.total_api_requests = (aggregatedMetadata.total_api_requests || 0) + (pageData.metadata.total_api_requests || 0);
+        aggregatedMetadata.total_successful_requests = (aggregatedMetadata.total_successful_requests || 0) + (pageData.metadata.total_successful_requests || 0);
+        aggregatedMetadata.total_failed_requests = (aggregatedMetadata.total_failed_requests || 0) + (pageData.metadata.total_failed_requests || 0);
+        aggregatedMetadata.total_tokens = (aggregatedMetadata.total_tokens || 0) + (pageData.metadata.total_tokens || 0);
+        aggregatedMetadata.total_prompt_tokens = (aggregatedMetadata.total_prompt_tokens || 0) + (pageData.metadata.total_prompt_tokens || 0);
+        aggregatedMetadata.total_completion_tokens = (aggregatedMetadata.total_completion_tokens || 0) + (pageData.metadata.total_completion_tokens || 0);
+        aggregatedMetadata.total_cache_read_input_tokens = (aggregatedMetadata.total_cache_read_input_tokens || 0) + (pageData.metadata.total_cache_read_input_tokens || 0);
+        aggregatedMetadata.total_cache_creation_input_tokens = (aggregatedMetadata.total_cache_creation_input_tokens || 0) + (pageData.metadata.total_cache_creation_input_tokens || 0);
+      }
+    }
+
+    return {
+      results: allResults,
+      metadata: aggregatedMetadata,
+    };
+  };
+
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
     // Create new Date objects to avoid mutating the original dates
     const startTime = new Date(dateValue.from);
     const endTime = new Date(dateValue.to);
+    const tagsParam = selectedTags.length > 0 ? selectedTags : null;
 
+    let data;
     if (entityType === "tag") {
-      const data = await tagDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
+      data = await fetchAllPages((page) =>
+        tagDailyActivityCall(accessToken, startTime, endTime, page, tagsParam),
       );
-      setSpendData(data);
     } else if (entityType === "team") {
-      const data = await teamDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
+      data = await fetchAllPages((page) =>
+        teamDailyActivityCall(accessToken, startTime, endTime, page, tagsParam),
       );
-      setSpendData(data);
     } else if (entityType === "organization") {
-      const data = await organizationDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
+      data = await fetchAllPages((page) =>
+        organizationDailyActivityCall(accessToken, startTime, endTime, page, tagsParam),
       );
-      setSpendData(data);
     } else if (entityType === "customer") {
-      const data = await customerDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
+      data = await fetchAllPages((page) =>
+        customerDailyActivityCall(accessToken, startTime, endTime, page, tagsParam),
       );
-      setSpendData(data);
     } else if (entityType === "agent") {
-      const data = await agentDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
+      data = await fetchAllPages((page) =>
+        agentDailyActivityCall(accessToken, startTime, endTime, page, tagsParam),
       );
-      setSpendData(data);
     } else if (entityType === "user") {
-      const data = await userDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags[0] : null,
+      data = await fetchAllPages((page) =>
+        userDailyActivityCall(accessToken, startTime, endTime, page, selectedTags.length > 0 ? selectedTags[0] : null),
       );
-      setSpendData(data);
     } else {
       throw new Error("Invalid entity type");
     }
+    setSpendData(data);
   };
 
   const fetchAgentSpendData = async () => {
