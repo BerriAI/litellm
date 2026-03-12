@@ -1826,6 +1826,7 @@ async def test_get_tools_for_single_server():
         mock_manager._get_tools_from_server.assert_called_once_with(
             server=mock_server,
             mcp_auth_header="Bearer test_token",
+            extra_headers=None,
             add_prefix=False,
             raw_headers=None,
         )
