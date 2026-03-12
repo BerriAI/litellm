@@ -159,7 +159,10 @@ class TestPixverseVideoTransformation:
             headers={},
         )
 
-        assert url == "https://app-api.pixverse.ai/openapi/v2/video/result/task_abc123def456"
+        assert (
+            url
+            == "https://app-api.pixverse.ai/openapi/v2/video/result/task_abc123def456"
+        )
         assert params == {}
 
         # Test status response with ISO 8601 timestamp parsing
@@ -175,7 +178,7 @@ class TestPixverseVideoTransformation:
                 "url": "https://media.pixverse.ai/videos/task_abc123def456.mp4",
                 "outputWidth": 1280,
                 "outputHeight": 720,
-            }
+            },
         }
 
         result = self.config.transform_video_status_retrieve_response(
@@ -198,9 +201,7 @@ class TestPixverseVideoTransformation:
         from litellm.types.videos.utils import encode_video_id_with_provider
 
         # Test content request URL
-        video_id = encode_video_id_with_provider(
-            "task_xyz789", "pixverse", "pixverse"
-        )
+        video_id = encode_video_id_with_provider("task_xyz789", "pixverse", "pixverse")
         api_base = "https://app-api.pixverse.ai/openapi/v2"
 
         url, params = self.config.transform_video_content_request(
@@ -220,7 +221,7 @@ class TestPixverseVideoTransformation:
                 "id": 391504857968062,
                 "status": 1,  # completed
                 "url": "https://media.pixverse.ai/videos/task_xyz789.mp4",
-            }
+            },
         }
         video_url = self.config._extract_video_url_from_response(response_data)
         assert video_url == "https://media.pixverse.ai/videos/task_xyz789.mp4"
@@ -232,7 +233,7 @@ class TestPixverseVideoTransformation:
             "Resp": {
                 "id": 391504857968062,
                 "status": 3,  # processing
-            }
+            },
         }
         with pytest.raises(ValueError, match="still processing"):
             self.config._extract_video_url_from_response(processing_response)
@@ -244,7 +245,7 @@ class TestPixverseVideoTransformation:
             "Resp": {
                 "id": 391504857968062,
                 "status": 2,  # failed
-            }
+            },
         }
         with pytest.raises(ValueError, match="Video generation failed"):
             self.config._extract_video_url_from_response(failed_response)
@@ -304,10 +305,7 @@ class TestPixverseVideoTransformation:
         mock_create_response.json.return_value = {
             "ErrCode": 0,
             "ErrMsg": "success",
-            "Resp": {
-                "video_id": 391504480090022,
-                "credits": 45
-            }
+            "Resp": {"video_id": 391504480090022, "credits": 45},
         }
 
         video_obj = config.transform_video_create_response(
@@ -334,7 +332,7 @@ class TestPixverseVideoTransformation:
                 "url": "https://media.pixverse.ai/videos/task_123abc.mp4",
                 "outputWidth": 1280,
                 "outputHeight": 720,
-            }
+            },
         }
 
         status_obj = config.transform_video_status_retrieve_response(
@@ -357,14 +355,58 @@ class TestPixverseVideoTransformation:
         }
 
         mapped = self.config.map_openai_params(
-            video_create_optional_params=video_params, model="pixverse", drop_params=False
+            video_create_optional_params=video_params,
+            model="pixverse",
+            drop_params=False,
         )
 
         assert mapped["input_reference"] == "https://example.com/image.jpg"
         assert mapped["aspect_ratio"] == "16:9"
         assert mapped["quality"] == "1080p"
         assert mapped["duration"] == 10
-        assert mapped["model"] == "v5.6"
+        # Model should not be hardcoded - removed default model assertion
+
+    def test_determine_endpoint_with_query_params(self):
+        """Test endpoint determination with URLs containing query parameters."""
+        # Video URL with query parameters
+        endpoint = self.config._determine_endpoint(
+            "https://cdn.example.com/video.mp4?token=abc123&expires=456789"
+        )
+        assert endpoint == "/video/video/generate"
+
+        # Image URL with query parameters
+        endpoint = self.config._determine_endpoint(
+            "https://cdn.example.com/image.jpg?size=large&quality=high"
+        )
+        assert endpoint == "/video/image/generate"
+
+        # URL with fragment
+        endpoint = self.config._determine_endpoint(
+            "https://cdn.example.com/video.mov#timestamp=30"
+        )
+        assert endpoint == "/video/video/generate"
+
+    def test_square_aspect_ratio(self):
+        """Test that square dimensions map to 1:1 aspect ratio."""
+        # Test 720x720 (square)
+        aspect_ratio, quality = self.config._parse_size_to_pixverse_format("720x720")
+        assert aspect_ratio == "1:1"
+        assert quality == "720p"
+
+        # Test 1080x1080 (square)
+        aspect_ratio, quality = self.config._parse_size_to_pixverse_format("1080x1080")
+        assert aspect_ratio == "1:1"
+        assert quality == "1080p"
+
+        # Verify landscape still works
+        aspect_ratio, quality = self.config._parse_size_to_pixverse_format("1920x1080")
+        assert aspect_ratio == "16:9"
+        assert quality == "1080p"
+
+        # Verify portrait still works
+        aspect_ratio, quality = self.config._parse_size_to_pixverse_format("1080x1920")
+        assert aspect_ratio == "9:16"
+        assert quality == "1080p"
 
     def test_unsupported_operations(self):
         """Test that unsupported operations raise NotImplementedError."""

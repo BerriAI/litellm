@@ -111,10 +111,6 @@ class PixverseVideoConfig(BaseVideoConfig):
                     # If conversion fails, skip duration
                     pass
 
-        # Set default model if not specified
-        if "model" not in mapped_params:
-            mapped_params["model"] = "v5.6"
-
         # Pass through extra_body parameters that might be Pixverse-specific
         if "extra_body" in video_create_optional_params:
             extra_body = video_create_optional_params["extra_body"]
@@ -177,7 +173,9 @@ class PixverseVideoConfig(BaseVideoConfig):
         The specific endpoint path will be added in the transform methods.
         """
         if api_base is None:
-            api_base = f"https://app-api.pixverse.ai/openapi/{PIXVERSE_DEFAULT_API_VERSION}"
+            api_base = (
+                f"https://app-api.pixverse.ai/openapi/{PIXVERSE_DEFAULT_API_VERSION}"
+            )
 
         return api_base.rstrip("/")
 
@@ -205,7 +203,10 @@ class PixverseVideoConfig(BaseVideoConfig):
                 height = int(parts[1])
 
                 # Determine aspect ratio
-                if width > height:
+                if width == height:
+                    # Square
+                    aspect_ratio = "1:1"
+                elif width > height:
                     # Landscape
                     aspect_ratio = "16:9"
                 else:
@@ -270,15 +271,25 @@ class PixverseVideoConfig(BaseVideoConfig):
         video_extensions = (".mp4", ".mov", ".avi", ".webm", ".mkv", ".flv")
         video_mimetypes = ("video/", "application/x-mpegurl")
 
-        if any(input_lower.endswith(ext) for ext in video_extensions):
-            return "/video/video/generate"
-
         # Check data URI scheme
         if input_lower.startswith("data:"):
             if any(mime in input_lower for mime in video_mimetypes):
                 return "/video/video/generate"
             else:
                 return "/video/image/generate"
+
+        # For URLs, parse and check the path extension only (ignore query params)
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(input_reference)
+            path = parsed.path.lower()
+            if any(path.endswith(ext) for ext in video_extensions):
+                return "/video/video/generate"
+        except Exception:
+            # If parsing fails, fall back to simple check
+            if any(ext in input_lower for ext in video_extensions):
+                return "/video/video/generate"
 
         # Default to image-to-video for URLs without clear video indicators
         return "/video/image/generate"
@@ -676,11 +687,20 @@ class PixverseVideoConfig(BaseVideoConfig):
         """Transform the Pixverse video delete/cancel response."""
         response_data = raw_response.json()
 
+        # Check for error
+        if response_data.get("ErrCode", 0) != 0:
+            raise ValueError(
+                f"Pixverse API error: {response_data.get('ErrMsg', 'Unknown error')}"
+            )
+
+        # Extract data from Resp
+        resp_data = response_data.get("Resp", {})
+
         video_obj = VideoObject(
-            id=response_data.get("task_id", response_data.get("id", "")),
+            id=str(resp_data.get("id", resp_data.get("task_id", ""))),
             object="video",
             status="cancelled",
-            created_at=self._parse_pixverse_timestamp(response_data.get("created_at")),
+            created_at=self._parse_pixverse_timestamp(resp_data.get("created_at")),
         )  # type: ignore[arg-type]
 
         return video_obj
@@ -762,7 +782,9 @@ class PixverseVideoConfig(BaseVideoConfig):
 
         # Add size information
         if "outputWidth" in resp_data and "outputHeight" in resp_data:
-            video_data["size"] = f"{resp_data['outputWidth']}x{resp_data['outputHeight']}"
+            video_data[
+                "size"
+            ] = f"{resp_data['outputWidth']}x{resp_data['outputHeight']}"
 
         # Store video URL in hidden params for content download
         if "url" in resp_data:
