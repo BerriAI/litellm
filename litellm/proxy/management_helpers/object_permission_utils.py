@@ -202,10 +202,10 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
-    access_group_servers: List[
-        str
-    ] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-        team_object_permission.mcp_access_groups or []
+    access_group_servers: List[str] = (
+        await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            team_object_permission.mcp_access_groups or []
+        )
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
     if isinstance(raw_tool_perms, str):

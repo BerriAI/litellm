@@ -1,4 +1,5 @@
-export type { MCPEvent } from "../mcp_tools/types";
+import type { MCPEvent } from "../mcp_tools/types";
+export type { MCPEvent };
 
 export interface ChatMessage {
   id: string;

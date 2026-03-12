@@ -689,7 +689,7 @@ def responses(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         local_vars.update(kwargs)
@@ -905,7 +905,7 @@ def delete_responses(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1085,7 +1085,7 @@ def get_responses(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1242,7 +1242,7 @@ def list_input_items(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1400,7 +1400,7 @@ def cancel_responses(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
@@ -1587,7 +1587,7 @@ def compact_responses(
             BaseResponsesAPIConfig
         ] = ProviderConfigManager.get_provider_responses_api_config(
             model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=custom_llm_provider,
         )
 
         if responses_api_provider_config is None:
