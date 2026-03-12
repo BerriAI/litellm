@@ -2240,7 +2240,7 @@ if MCP_AVAILABLE:
             # Child app receives path like /undefined when mounted at /mcp
             # Extract first path segment as server name
             segments = path.strip("/").split("/")
-            if segments and segments[0] and "?" not in segments[0]:
+            if segments and segments[0] and "?" not in segments[0] and "#" not in segments[0]:
                 mcp_servers_from_path = [segments[0]]
         return mcp_servers_from_path
 
@@ -2464,9 +2464,11 @@ if MCP_AVAILABLE:
                     content = {"error": detail}
                 else:
                     content = {"error": {"message": str(detail)}}
+                headers = dict(e.headers) if e.headers else {}
                 error_response = JSONResponse(
                     status_code=e.status_code,
                     content=content,
+                    headers=headers,
                 )
                 await error_response(scope, receive, send)
             except Exception:
@@ -2554,9 +2556,11 @@ if MCP_AVAILABLE:
                     content = {"error": detail}
                 else:
                     content = {"error": {"message": str(detail)}}
+                headers = dict(e.headers) if e.headers else {}
                 error_response = JSONResponse(
                     status_code=e.status_code,
                     content=content,
+                    headers=headers,
                 )
                 await error_response(scope, receive, send)
             except Exception:
