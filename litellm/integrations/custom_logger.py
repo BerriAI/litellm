@@ -883,6 +883,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
+    async def delete_object_from_cold_storage(
+        self,
+        object_key: str,
+    ) -> bool:
+        """
+        Delete an object from cold storage.
+
+        Args:
+            object_key: The S3/GCS object key to delete
+
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        return False
+
     def handle_callback_failure(self, callback_name: str):
         """
         Handle callback logging failures by incrementing Prometheus metrics.

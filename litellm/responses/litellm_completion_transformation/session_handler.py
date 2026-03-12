@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
+    from litellm.types.llms.openai import ResponsesAPIResponse
 else:
     ChatCompletionSession = Any
 
@@ -251,6 +252,135 @@ class ResponsesSessionHandler:
         return False
 
 
+
+    @staticmethod
+    async def get_response_from_spend_logs(
+        response_id: str,
+    ) -> Optional["ResponsesAPIResponse"]:
+        """
+        Retrieve a stored response from SpendLogs by response_id.
+
+        Used as a fallback when the provider doesn't support native GET /responses/{id}.
+
+        Args:
+            response_id: The encoded response ID (resp_... format)
+
+        Returns:
+            Optional[ResponsesAPIResponse]: The stored response, or None if not found
+        """
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return None
+
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            response_id
+        )
+        decoded_request_id = decoded.get("response_id", response_id)
+
+        try:
+            query = """
+                SELECT response
+                FROM "LiteLLM_SpendLogs"
+                WHERE request_id = $1
+                LIMIT 1
+            """
+            rows = await prisma_client.db.query_raw(query, decoded_request_id)
+
+            if not rows:
+                return None
+
+            response_data = rows[0].get("response")
+            if not response_data:
+                return None
+
+            # Parse the response field
+            if isinstance(response_data, str):
+                response_dict = json.loads(response_data)
+            elif isinstance(response_data, dict):
+                response_dict = response_data
+            else:
+                return None
+
+            return ResponsesAPIResponse(**response_dict)
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            verbose_proxy_logger.debug(
+                "Failed to parse stored response for %s: %s", decoded_request_id, e
+            )
+            return None
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error retrieving response from SpendLogs for %s: %s",
+                decoded_request_id,
+                e,
+            )
+            return None
+
+    @staticmethod
+    async def delete_response_from_spend_logs(
+        response_id: str,
+    ) -> bool:
+        """
+        Delete a response from SpendLogs (and its cold storage object if present).
+
+        Used as a fallback when the provider doesn't support native DELETE /responses/{id}.
+
+        Args:
+            response_id: The encoded response ID (resp_... format)
+
+        Returns:
+            bool: True if the SpendLog was deleted, False if not found
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return False
+
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            response_id
+        )
+        decoded_request_id = decoded.get("response_id", response_id)
+
+        try:
+            # First fetch to get cold storage key
+            fetch_query = """
+                SELECT metadata
+                FROM "LiteLLM_SpendLogs"
+                WHERE request_id = $1
+                LIMIT 1
+            """
+            rows = await prisma_client.db.query_raw(fetch_query, decoded_request_id)
+
+            if not rows:
+                return False
+
+            # Try to delete cold storage object if key exists
+            spend_log_row: SpendLogsPayload = rows[0]  # type: ignore
+            cold_storage_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(
+                spend_log_row
+            )
+            if cold_storage_key:
+                await COLD_STORAGE_HANDLER.delete_object_from_cold_storage(
+                    object_key=cold_storage_key
+                )
+
+            # Delete the SpendLog row
+            delete_query = """
+                DELETE FROM "LiteLLM_SpendLogs"
+                WHERE request_id = $1
+            """
+            await prisma_client.db.execute_raw(delete_query, decoded_request_id)
+
+            return True
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error deleting response from SpendLogs for %s: %s",
+                decoded_request_id,
+                e,
+            )
+            return False
 
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(

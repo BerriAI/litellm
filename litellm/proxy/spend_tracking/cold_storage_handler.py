@@ -53,6 +53,37 @@ class ColdStorageHandler:
         
 
 
+    async def delete_object_from_cold_storage(
+        self,
+        object_key: str,
+    ) -> bool:
+        """
+        Delete an object from cold storage.
+
+        Args:
+            object_key: The S3/GCS object key to delete
+
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        # select the custom logger to use for cold storage
+        custom_logger_name: Optional[_custom_logger_compatible_callbacks_literal] = self._select_custom_logger_for_cold_storage()
+
+        # if no custom logger name is configured, return False
+        if custom_logger_name is None:
+            return False
+
+        # get the active/initialized custom logger
+        custom_logger: Optional[CustomLogger] = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(custom_logger_name)
+
+        # if no custom logger is found, return False
+        if custom_logger is None:
+            return False
+
+        return await custom_logger.delete_object_from_cold_storage(
+            object_key=object_key,
+        )
+
     def _select_custom_logger_for_cold_storage(
         self,
     ) -> Optional[_custom_logger_compatible_callbacks_literal]:
