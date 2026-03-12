@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -53,6 +53,32 @@ def get_new_internal_user_defaults(
         if v is not None:
             non_null_dict[k] = v
     return non_null_dict
+
+
+async def refresh_team_cache(
+    team_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> None:
+    """
+    Refresh team cache using _cache_team_object to update last_refreshed_at.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if team_row is None:
+        return
+
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def handle_budget_for_entity(
