@@ -369,11 +369,6 @@ if MCP_AVAILABLE:
             list_tools_result = []
             error_message = None
 
-            # Bulk-fetch all OAuth credentials for this user in a single DB query
-            # so per-server calls below can use a dict lookup (O(1)) instead of
-            # issuing one DB query per server (N+1 pattern).
-            bulk_oauth_headers = await _get_bulk_user_oauth_headers(user_api_key_dict)
-
             # If server_id is specified, only query that specific server
             if server_id:
                 # Resolve a server name to its UUID if needed (MCPConnectPicker passes
@@ -422,7 +417,8 @@ if MCP_AVAILABLE:
                 server_auth_header = _get_server_auth_header(
                     server, mcp_server_auth_headers, mcp_auth_header
                 )
-                user_oauth_extra_headers = bulk_oauth_headers.get(server.server_id)
+                # Single-server request: targeted lookup is more efficient than a bulk fetch.
+                user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
@@ -464,7 +460,10 @@ if MCP_AVAILABLE:
                         },
                     )
 
-                # Query all servers the user has access to
+                # Query all servers the user has access to.
+                # Bulk-fetch OAuth creds once so each per-server call below can
+                # do an O(1) dict lookup instead of N individual DB queries.
+                bulk_oauth_headers = await _get_bulk_user_oauth_headers(user_api_key_dict)
                 errors = []
                 for allowed_server_id in allowed_server_ids:
                     server = global_mcp_server_manager.get_mcp_server_by_id(

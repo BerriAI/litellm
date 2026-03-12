@@ -1,6 +1,6 @@
 export type CrudOp = "read" | "create" | "update" | "delete" | "unknown";
 
-const DELETE_RE = /\b(delete|remove|destroy|purge|drop|clear|erase|unlink|disconnect)\b/i;
+const DELETE_RE = /\b(delete|remove|destroy|purge|drop|erase|unlink)\b/i;
 const CREATE_RE = /\b(create|add|insert|new|post|submit|register|make|generate|write|upload)\b/i;
 const UPDATE_RE = /\b(update|edit|modify|change|patch|put|set|rename|move|transform)\b/i;
 const READ_RE = /\b(get|read|list|fetch|search|find|query|retrieve|show|view|check|describe|info)\b/i;

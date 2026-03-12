@@ -451,39 +451,30 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               </Text>
             </div>
 
+            {/* Search box shared by both views */}
+            <Input
+              placeholder="Search tools by name or description..."
+              prefix={<SearchOutlined className="text-gray-400" />}
+              value={toolSearchTerm}
+              onChange={(e) => setToolSearchTerm(e.target.value)}
+              allowClear
+              className="rounded-lg"
+              size="large"
+            />
+
             {/* CRUD grouped view */}
             {viewMode === "crud" && (
-              <>
-                <Input
-                  placeholder="Search tools by name or description..."
-                  prefix={<SearchOutlined className="text-gray-400" />}
-                  value={toolSearchTerm}
-                  onChange={(e) => setToolSearchTerm(e.target.value)}
-                  allowClear
-                  className="rounded-lg"
-                  size="large"
-                />
-                <McpCrudPermissionPanel
-                  tools={tools}
-                  searchFilter={toolSearchTerm}
-                  value={allowedTools}
-                  onChange={(allowed) => onAllowedToolsChange(allowed)}
-                />
-              </>
+              <McpCrudPermissionPanel
+                tools={tools}
+                searchFilter={toolSearchTerm}
+                value={allowedTools}
+                onChange={(allowed) => onAllowedToolsChange(allowed)}
+              />
             )}
 
             {/* Flat list view */}
             {viewMode === "flat" && (
               <>
-                <Input
-                  placeholder="Search tools by name or description..."
-                  prefix={<SearchOutlined className="text-gray-400" />}
-                  value={toolSearchTerm}
-                  onChange={(e) => setToolSearchTerm(e.target.value)}
-                  allowClear
-                  className="rounded-lg"
-                  size="large"
-                />
                 {filteredTools.length === 0 ? (
                   <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
                     <SearchOutlined className="text-2xl mb-2" />

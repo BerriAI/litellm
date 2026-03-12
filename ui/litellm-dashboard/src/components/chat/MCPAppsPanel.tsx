@@ -193,7 +193,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         message.warning(`Could not load tools for ${serverName}`);
         return;
       }
-      onChange([...selectedServers, serverName]);
+      // Use the ref so we read the most up-to-date list; guard against duplicates
+      // that the oauthConnected effect may have already added while we awaited.
+      if (!selectedServersRef.current.includes(serverName)) {
+        onChange([...selectedServersRef.current, serverName]);
+      }
     } catch {
       message.warning(`Could not load tools for ${serverName}`);
     } finally {
