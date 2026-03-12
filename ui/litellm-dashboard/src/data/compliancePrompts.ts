@@ -1,5 +1,6 @@
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
+import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
 
 export interface CompliancePrompt {
   id: string;
@@ -255,6 +256,7 @@ const compliancePrompts: CompliancePrompt[] = [
   // See: insultsCompliancePrompts.ts, financialCompliancePrompts.ts
   ...insultsCompliancePrompts,
   ...financialCompliancePrompts,
+  ...codeExecutionCompliancePrompts,
 ];
 
 export const airlineCompliancePrompts: CompliancePrompt[] = [
@@ -535,6 +537,11 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
   "Airline Brand Protection": {
     icon: "plane",
     description: "Destination vs competitor intent — avoid answering competitor comparison questions.",
+  },
+  "Code Execution Safety": {
+    icon: "terminal",
+    description:
+      "Requests that ask the assistant to execute code, run commands, access the filesystem/network, or otherwise perform runtime actions should be blocked; static explanation/analysis is allowed.",
   },
 };
 

@@ -163,7 +163,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1555,6 +1559,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                # Preserve hidden params (including litellm_overhead_time_ms) from original response
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
 
             def __aiter__(self):
                 return self
@@ -6416,6 +6423,7 @@ class Router:
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
@@ -6726,6 +6734,7 @@ class Router:
         """
         idx = len(self.model_list)
         self.model_list.append(model)
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 
         # Update model_id index for O(1) lookup
@@ -6774,6 +6783,7 @@ class Router:
 
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
+                        self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
@@ -6808,6 +6818,7 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
+                self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
@@ -6978,9 +6989,9 @@ class Router:
             raise ValueError("Deployment not found")
 
         ## GET BASE MODEL
-        base_model = deployment.get("model_info", {}).get("base_model", None)
+        base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = deployment.get("litellm_params", {}).get("base_model", None)
+            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
 
         model = base_model
 
@@ -6995,7 +7006,7 @@ class Router:
             raise ValueError(
                 f"Deployment missing valid litellm_params. "
                 f"Got: {type(litellm_params_data).__name__}, "
-                f"deployment_id: {deployment.get('model_info', {}).get('id', 'unknown')}"
+                f"deployment_id: {(deployment.get('model_info') or {}).get('id', 'unknown')}"
             )
         _model, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=litellm_params.model,
@@ -7015,10 +7026,10 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if potential_model.get("model_info", {}).get(
+                            if (potential_model.get("model_info") or {}).get(
                                 "id"
-                            ) == deployment.get("model_info", {}).get("id"):
-                                model = potential_model.get("litellm_params", {}).get(
+                            ) == (deployment.get("model_info") or {}).get("id"):
+                                model = (potential_model.get("litellm_params") or {}).get(
                                     "model"
                                 )
                                 break
@@ -7039,9 +7050,10 @@ class Router:
         model_info = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
-        user_model_info = deployment.get("model_info", {})
+        user_model_info = deployment.get("model_info") or {}
 
-        model_info.update(user_model_info)
+        if model_info is not None:
+            model_info.update(user_model_info)
 
         return model_info
 
@@ -7568,6 +7580,7 @@ class Router:
         """
         # First populate the model_list
         self.model_list = []
+        self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         for _, model in enumerate(model_list):
             # Extract model_info from the model dict
@@ -7911,6 +7924,13 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def _invalidate_model_group_info_cache(self) -> None:
+        """Invalidate the cached model group info.
+
+        Call this whenever self.model_list is modified to ensure the cache is rebuilt.
+        """
+        self._cached_get_model_group_info.cache_clear()
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.

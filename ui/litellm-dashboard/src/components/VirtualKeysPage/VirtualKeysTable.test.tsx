@@ -453,8 +453,8 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
   // Wait for KeyInfoView to appear - check for unique elements that only exist in KeyInfoView
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
-    // KeyInfoView shows "Created:" or "Updated:" which is unique to it
-    expect(screen.getByText(/Created:|Updated:/)).toBeInTheDocument();
+    // KeyInfoHeader shows "Created At" metadata label
+    expect(screen.getByText("Created At")).toBeInTheDocument();
   });
 
   // Verify that table-specific elements are no longer visible

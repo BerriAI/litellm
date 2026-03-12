@@ -183,6 +183,7 @@ class LitellmTableNames(str, enum.Enum):
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
+    TOOL_TABLE_NAME = "LiteLLM_ToolTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -850,6 +851,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    agent_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
@@ -2078,6 +2080,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     health_check_interval: int = Field(
         300, description="background health check interval in seconds"
+    )
+    health_check_concurrency: Optional[int] = Field(
+        None,
+        description=(
+            "limit concurrent health checks per cycle; when unset, "
+            "health checks run without a concurrency cap"
+        ),
     )
     alerting: Optional[List] = Field(
         None,
@@ -4114,6 +4123,15 @@ class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: Optional[float]
+
+
+class ToolDiscoveryQueueItem(TypedDict, total=False):
+    tool_name: str
+    origin: Optional[str]   # MCP server name or "user_defined"
+    created_by: Optional[str]
+    key_hash: Optional[str]   # hash of virtual key that triggered discovery
+    team_id: Optional[str]    # team that triggered discovery
+    key_alias: Optional[str]  # human-readable key alias
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

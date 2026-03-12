@@ -973,6 +973,54 @@ def test_convert_to_anthropic_tool_invoke_regular_tool():
     assert result[0]["input"] == {"location": "San Francisco"}
 
 
+def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
+    """Test that tool_use IDs with invalid characters are sanitized.
+
+    Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$.
+    IDs from external frameworks (e.g. MiniMax) may contain characters
+    like colons that violate this pattern.
+    """
+    tool_calls = [
+        {
+            "id": "sessions_history:183",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+        },
+        {
+            "id": "composio.NOTION_SEARCH",
+            "type": "function",
+            "function": {
+                "name": "search_notes",
+                "arguments": '{"query": "test"}',
+            },
+        },
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 2
+    # Colons replaced with underscores
+    assert result[0]["id"] == "sessions_history_183"
+    # Dots replaced with underscores
+    assert result[1]["id"] == "composio_NOTION_SEARCH"
+    # Valid IDs should pass through unchanged
+    valid_tool_calls = [
+        {
+            "id": "toolu_01ABC-xyz_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "NYC"}',
+            },
+        }
+    ]
+    valid_result = convert_to_anthropic_tool_invoke(valid_tool_calls)
+    assert valid_result[0]["id"] == "toolu_01ABC-xyz_123"
+
+
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
     Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.

@@ -3,6 +3,8 @@
 urllib3>=2.6.0  # CVE-2025-66471, CVE-2025-66418, CVE-2026-21441
 tornado>=6.5.3  # CVE-2025-67725, CVE-2025-67726, CVE-2025-67724
 filelock>=3.20.1  # CVE-2025-68146
+h11>=0.16.0    # CVE-2025-43859, GHSA-vqfr-h8mv-ghfj — HTTP request smuggling
+wheel>=0.46.2  # CVE-2026-24049 — path traversal
 Pillow==12.1.1  #GHSA-cfh3-3jmp-rvhc
 cryptography==46.0.5 #GHSA-r6ph-v2qm-q3c2
 
@@ -21,7 +23,7 @@ boto3==1.40.53 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, com
 redis==5.2.1 # redis caching
 redisvl==0.4.1 ## redis semantic caching
 prisma==0.11.0 # for db
-nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
+nodejs-wheel-binaries==24.13.1 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
 google-cloud-aiplatform==1.133.0 # for vertex ai calls

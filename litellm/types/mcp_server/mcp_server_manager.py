@@ -65,3 +65,25 @@ class MCPServer(BaseModel):
     def needs_user_oauth_token(self) -> bool:
         """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def requires_per_user_auth(self) -> bool:
+        """
+        True if this server requires per-user/per-request authentication.
+        This includes:
+        - OAuth2 servers without client credentials
+        - Servers with auth_type=none but extra_headers configured for auth passthrough
+        
+        Health checks should be skipped for these servers since they cannot
+        authenticate without user-provided credentials.
+        """
+        # OAuth2 without client credentials
+        if self.needs_user_oauth_token:
+            return True
+        
+        # PAT passthrough: auth_type is none but extra_headers includes auth headers
+        if self.auth_type == MCPAuth.none and self.extra_headers:
+            auth_header_names = {"authorization", "x-api-key", "api-key", "apikey"}
+            return any(h.lower() in auth_header_names for h in self.extra_headers)
+        
+        return False
