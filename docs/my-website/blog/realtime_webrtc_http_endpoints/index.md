@@ -57,11 +57,11 @@ litellm --config /path/to/config.yaml
 
 ## Client Usage
 
-**1. Get token** — `POST /v1/realtime/client_secrets` with LiteLLM API key and `{ model }`.
+**1. Get token** - `POST /v1/realtime/client_secrets` with LiteLLM API key and `{ model }`.
 
-**2. WebRTC handshake** — Create `RTCPeerConnection`, add mic track, create data channel `oai-events`, send SDP offer to `POST /v1/realtime/calls` with `Authorization: Bearer <encrypted_token>` and `Content-Type: application/sdp`.
+**2. WebRTC handshake** - Create `RTCPeerConnection`, add mic track, create data channel `oai-events`, send SDP offer to `POST /v1/realtime/calls` with `Authorization: Bearer <encrypted_token>` and `Content-Type: application/sdp`.
 
-**3. Events** — Use the data channel for `session.update` and other events.
+**3. Events** - Use the data channel for `session.update` and other events.
 
 <details>
 <summary>Full code example</summary>
