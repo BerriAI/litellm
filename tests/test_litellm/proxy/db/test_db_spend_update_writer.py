@@ -1428,3 +1428,52 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+class TestGetCacheTokenHelpers:
+    """Tests for _get_cache_read_input_tokens and _get_cache_creation_input_tokens.
+
+    These helpers extract cache token counts from usage objects. Anthropic/DeepSeek
+    store them as top-level fields, while OpenAI nests them under prompt_tokens_details.
+    """
+
+    def test_cache_read_from_top_level_field(self):
+        """Anthropic-style: cache_read_input_tokens at top level."""
+        usage = {"cache_read_input_tokens": 500}
+        assert DBSpendUpdateWriter._get_cache_read_input_tokens(usage) == 500
+
+    def test_cache_read_from_prompt_tokens_details(self):
+        """OpenAI-style: cached_tokens nested in prompt_tokens_details."""
+        usage = {"prompt_tokens_details": {"cached_tokens": 300}}
+        assert DBSpendUpdateWriter._get_cache_read_input_tokens(usage) == 300
+
+    def test_cache_read_top_level_takes_precedence(self):
+        """When both are present, top-level field wins."""
+        usage = {
+            "cache_read_input_tokens": 500,
+            "prompt_tokens_details": {"cached_tokens": 300},
+        }
+        assert DBSpendUpdateWriter._get_cache_read_input_tokens(usage) == 500
+
+    def test_cache_read_empty_usage(self):
+        assert DBSpendUpdateWriter._get_cache_read_input_tokens({}) == 0
+
+    def test_cache_read_none_values(self):
+        usage = {
+            "cache_read_input_tokens": None,
+            "prompt_tokens_details": None,
+        }
+        assert DBSpendUpdateWriter._get_cache_read_input_tokens(usage) == 0
+
+    def test_cache_creation_from_top_level_field(self):
+        """Anthropic-style: cache_creation_input_tokens at top level."""
+        usage = {"cache_creation_input_tokens": 200}
+        assert DBSpendUpdateWriter._get_cache_creation_input_tokens(usage) == 200
+
+    def test_cache_creation_from_prompt_tokens_details(self):
+        """cache_creation_tokens nested in prompt_tokens_details."""
+        usage = {"prompt_tokens_details": {"cache_creation_tokens": 150}}
+        assert DBSpendUpdateWriter._get_cache_creation_input_tokens(usage) == 150
+
+    def test_cache_creation_empty_usage(self):
+        assert DBSpendUpdateWriter._get_cache_creation_input_tokens({}) == 0

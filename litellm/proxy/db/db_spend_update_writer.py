@@ -1852,6 +1852,38 @@ class DBSpendUpdateWriter:
             unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
+    @staticmethod
+    def _get_cache_read_input_tokens(usage_obj: dict) -> int:
+        """
+        Extract cache read input tokens from a usage object dict.
+
+        Anthropic/DeepSeek store this as a top-level `cache_read_input_tokens` field.
+        OpenAI stores it nested under `prompt_tokens_details.cached_tokens`.
+        """
+        value = usage_obj.get("cache_read_input_tokens", 0) or 0
+        if value:
+            return value
+        prompt_details = usage_obj.get("prompt_tokens_details") or {}
+        if isinstance(prompt_details, dict):
+            return prompt_details.get("cached_tokens", 0) or 0
+        return 0
+
+    @staticmethod
+    def _get_cache_creation_input_tokens(usage_obj: dict) -> int:
+        """
+        Extract cache creation input tokens from a usage object dict.
+
+        Anthropic stores this as a top-level `cache_creation_input_tokens` field.
+        It may also appear under `prompt_tokens_details.cache_creation_tokens`.
+        """
+        value = usage_obj.get("cache_creation_input_tokens", 0) or 0
+        if value:
+            return value
+        prompt_details = usage_obj.get("prompt_tokens_details") or {}
+        if isinstance(prompt_details, dict):
+            return prompt_details.get("cache_creation_tokens", 0) or 0
+        return 0
+
     async def _common_add_spend_log_transaction_to_daily_transaction(
         self,
         payload: Union[dict, SpendLogsPayload],
@@ -1932,12 +1964,12 @@ class DBSpendUpdateWriter:
                 api_requests=1,
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
-                cache_read_input_tokens=usage_obj.get("cache_read_input_tokens", 0)
-                or 0,
-                cache_creation_input_tokens=usage_obj.get(
-                    "cache_creation_input_tokens", 0
-                )
-                or 0,
+                cache_read_input_tokens=self._get_cache_read_input_tokens(
+                    usage_obj
+                ),
+                cache_creation_input_tokens=self._get_cache_creation_input_tokens(
+                    usage_obj
+                ),
             )
             return daily_transaction
         except Exception as e:
