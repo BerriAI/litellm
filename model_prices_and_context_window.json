@@ -14538,6 +14538,31 @@
         "supports_multimodal": true,
         "uses_embed_content": true
     },
+    "gemini-flash-experimental": {
+        "input_cost_per_character": 0,
+        "input_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "uses_embed_content": true
+    },
+    "vertex_ai/gemini-embedding-2-preview": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
+        "supports_multimodal": true,
+        "uses_embed_content": true
+    },
     "gemini/gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "gemini",
@@ -14552,6 +14577,21 @@
     },
     "gemini/gemini-embedding-2-preview": {
         "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "rpm": 10000,
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
+        "supports_multimodal": true,
+        "tpm": 10000000
+    },
+    "gemini/gemini-1.5-flash": {
+        "deprecation_date": "2025-09-29",
+        "input_cost_per_token": 7.5e-08,
+        "input_cost_per_token_above_128k_tokens": 1.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 8192,
         "max_tokens": 8192,

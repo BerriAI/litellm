@@ -21,15 +21,11 @@ router = APIRouter()
 
 class CredentialHelperUtils:
     @staticmethod
-    def encrypt_credential_values(
-        credential: CredentialItem, new_encryption_key: Optional[str] = None
-    ) -> CredentialItem:
+    def encrypt_credential_values(credential: CredentialItem, new_encryption_key: Optional[str] = None) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
         for key, value in (credential.credential_values or {}).items():
-            encrypted_credential_values[key] = encrypt_value_helper(
-                value, new_encryption_key
-            )
+            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
 
         # Return a new object to avoid mutating the caller's credential, which
         # is kept in memory and should remain unencrypted.
@@ -146,8 +142,6 @@ async def get_credentials(
     tags=["credential management"],
     response_model=CredentialItem,
 )
-
-
 @router.get(
     "/credentials/by_model/{model_id}",
     dependencies=[Depends(user_api_key_auth)],
@@ -222,9 +216,7 @@ async def get_credential(
 async def delete_credential(
     request: Request,
     fastapi_response: Response,
-    credential_name: str = Path(
-        ..., description="The credential name, percent-decoded; may contain slashes"
-    ),
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -254,9 +246,7 @@ async def delete_credential(
 
 
 def update_db_credential(
-    db_credential: CredentialItem,
-    updated_patch: CredentialItem,
-    new_encryption_key: Optional[str] = None,
+    db_credential: CredentialItem, updated_patch: CredentialItem, new_encryption_key: Optional[str] = None
 ) -> CredentialItem:
     """
     Update a credential in the DB.
@@ -303,9 +293,7 @@ async def update_credential(
     request: Request,
     fastapi_response: Response,
     credential: CredentialItem,
-    credential_name: str = Path(
-        ..., description="The credential name, percent-decoded; may contain slashes"
-    ),
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
