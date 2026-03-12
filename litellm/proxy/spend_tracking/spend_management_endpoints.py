@@ -3239,6 +3239,30 @@ async def ui_view_session_spend_logs(
             )
 
 
+def _get_session_id_from_row(row: Any) -> Optional[str]:
+    """Extract session_id from a row (dict, Prisma model, or dict-like)."""
+    if isinstance(row, dict):
+        return row.get("session_id")
+    if hasattr(row, "get") and callable(getattr(row, "get")):
+        return row.get("session_id")
+    sid = getattr(row, "session_id", None)
+    if sid is not None:
+        return sid
+    try:
+        return row["session_id"]
+    except (KeyError, TypeError):
+        return None
+
+
+def _row_to_dict(row: Any) -> dict:
+    """Convert row to dict for enrichment. Handles dict (from query_raw) and Prisma models."""
+    if isinstance(row, dict):
+        return dict(row)
+    if hasattr(row, "model_dump") and callable(getattr(row, "model_dump")):
+        return row.model_dump()
+    return dict(row)
+
+
 async def _build_ui_spend_logs_response(
     prisma_client: "PrismaClient",
     data: list,
@@ -3263,8 +3287,7 @@ async def _build_ui_spend_logs_response(
 
     Args:
         prisma_client: The connected Prisma client instance.
-        data: A list of Prisma model instances (must support ``.model_dump()``
-              and have a ``session_id`` attribute).
+        data: A list of rows (dicts from query_raw or Prisma model instances).
         total_records: Total number of matching records (for pagination).
         page: Current page number.
         page_size: Number of items per page.
@@ -3279,11 +3302,7 @@ async def _build_ui_spend_logs_response(
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
-            {
-                (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
-                for row in data
-                if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
-            }
+            {sid for row in data if (sid := _get_session_id_from_row(row))}
         )
         if session_ids:
             # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
@@ -3304,11 +3323,7 @@ async def _build_ui_spend_logs_response(
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
-            row_dict = (
-                dict(row)
-                if isinstance(row, dict)
-                else row.model_dump()
-            )
+            row_dict = _row_to_dict(row)
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
             enriched.append(row_dict)
