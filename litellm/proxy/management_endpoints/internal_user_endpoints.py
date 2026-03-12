@@ -2374,6 +2374,7 @@ async def block_user(
 
     """
     from litellm.proxy.proxy_server import (
+        prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
@@ -2381,6 +2382,23 @@ async def block_user(
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    # Check if target user is a proxy admin - cannot block proxy admins
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+    
+    if target_user.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot block users with proxy admin role"},
+        )
 
     record = await prisma_client.db.litellm_usertable.update(
         where={"user_id": data.user_id}, data={"blocked": True}  # type: ignore
@@ -2440,6 +2458,7 @@ async def unblock_user(
 
     """
     from litellm.proxy.proxy_server import (
+        prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
@@ -2447,6 +2466,23 @@ async def unblock_user(
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    # Check if target user is a proxy admin - cannot unblock proxy admins
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+    
+    if target_user.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot unblock users with proxy admin role"},
+        )
 
     record = await prisma_client.db.litellm_usertable.update(
         where={"user_id": data.user_id}, data={"blocked": False}  # type: ignore

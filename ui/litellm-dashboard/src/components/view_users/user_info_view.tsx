@@ -167,7 +167,7 @@ export default function UserInfoView({
     }
   };
 
-  const handleBlockToggle = async (newBlockedStatus: boolean) => {
+  const handleBlockToggle = async () => {
     // Refresh user data after block/unblock to get updated state
     try {
       if (!accessToken) return;

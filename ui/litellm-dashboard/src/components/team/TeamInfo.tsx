@@ -568,7 +568,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const handleBlockToggle = async (newBlockedStatus: boolean) => {
+  const handleBlockToggle = async () => {
     // Refresh team data after block/unblock to get updated state
     try {
       if (!accessToken) return;

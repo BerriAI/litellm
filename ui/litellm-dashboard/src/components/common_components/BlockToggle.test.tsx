@@ -26,6 +26,7 @@ describe("BlockToggle", () => {
     currentBlockedStatus: false,
     accessToken: "test-token",
     baseUrl: "http://localhost:4000",
+    userRole: "proxy_admin" as const,
   };
 
   beforeEach(() => {
