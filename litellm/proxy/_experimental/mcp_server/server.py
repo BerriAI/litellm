@@ -871,6 +871,35 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    async def _get_user_oauth_extra_headers_from_db(
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Look up stored OAuth2 token for (user, server) from DB and return as extra_headers dict."""
+        if server.auth_type != MCPAuth.oauth2:
+            return None
+        if user_api_key_auth is None:
+            return None
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return None
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_user_oauth_credential,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+            if cred and cred.get("access_token"):
+                return {"Authorization": f"Bearer {cred['access_token']}"}
+        except Exception:
+            pass
+        return None
+
     def _prepare_mcp_server_headers(
         server: MCPServer,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
@@ -1029,6 +1058,12 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                 )
+
+                # If no OAuth2 token came from request headers, fall back to DB lookup
+                if extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                    extra_headers = await _get_user_oauth_extra_headers_from_db(
+                        server, user_api_key_auth
+                    )
 
                 try:
                     tools = await global_mcp_server_manager._get_tools_from_server(
