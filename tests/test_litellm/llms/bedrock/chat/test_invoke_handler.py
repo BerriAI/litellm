@@ -211,7 +211,7 @@ def test_bedrock_invoke_async_streaming_passes_timeout_to_make_call():
     Fixes https://github.com/BerriAI/litellm/issues/23375
     """
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     import httpx
 
@@ -229,6 +229,7 @@ def test_bedrock_invoke_async_streaming_passes_timeout_to_make_call():
         "litellm.llms.bedrock.chat.invoke_handler.CustomStreamWrapper",
         FakeCustomStreamWrapper,
     ):
+
         async def run():
             await handler.async_streaming(
                 model="anthropic.claude-3-sonnet",
@@ -248,9 +249,9 @@ def test_bedrock_invoke_async_streaming_passes_timeout_to_make_call():
 
     make_call_partial = captured_partial.get("make_call")
     assert make_call_partial is not None
-    assert make_call_partial.keywords.get("timeout") == timeout, (
-        "timeout must be forwarded via partial() to make_call()"
-    )
+    assert (
+        make_call_partial.keywords.get("timeout") == timeout
+    ), "timeout must be forwarded via partial() to make_call()"
 
 
 def test_bedrock_converse_async_streaming_passes_timeout_to_make_call():
@@ -284,7 +285,9 @@ def test_bedrock_converse_async_streaming_passes_timeout_to_make_call():
     ) as mock_make_call, patch(
         "litellm.AmazonConverseConfig",
     ) as mock_converse_config, patch.object(
-        handler, "get_request_headers", return_value=fake_prepped,
+        handler,
+        "get_request_headers",
+        return_value=fake_prepped,
     ):
         mock_converse_config.return_value._async_transform_request = AsyncMock(
             return_value={"messages": []}
@@ -308,9 +311,9 @@ def test_bedrock_converse_async_streaming_passes_timeout_to_make_call():
         asyncio.run(run())
 
     _, kwargs = mock_make_call.call_args
-    assert kwargs.get("timeout") == timeout, (
-        "timeout must be forwarded to make_call() in BedrockConverseLLM.async_streaming()"
-    )
+    assert (
+        kwargs.get("timeout") == timeout
+    ), "timeout must be forwarded to make_call() in BedrockConverseLLM.async_streaming()"
 
 
 def test_bedrock_converse_sync_make_sync_call_passes_timeout_to_client_post():
@@ -335,9 +338,7 @@ def test_bedrock_converse_sync_make_sync_call_passes_timeout_to_client_post():
 
     timeout = httpx.Timeout(4.0)
 
-    with patch(
-        "litellm.llms.bedrock.chat.converse_handler.AWSEventStreamDecoder"
-    ):
+    with patch("litellm.llms.bedrock.chat.converse_handler.AWSEventStreamDecoder"):
         make_sync_call(
             client=mock_client,
             api_base="https://example.com",
@@ -350,6 +351,6 @@ def test_bedrock_converse_sync_make_sync_call_passes_timeout_to_client_post():
         )
 
     _, kwargs = mock_client.post.call_args
-    assert kwargs.get("timeout") == timeout, (
-        "timeout must be forwarded to client.post() in converse make_sync_call()"
-    )
+    assert (
+        kwargs.get("timeout") == timeout
+    ), "timeout must be forwarded to client.post() in converse make_sync_call()"

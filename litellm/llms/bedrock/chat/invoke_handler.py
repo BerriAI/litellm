@@ -202,7 +202,11 @@ async def make_call(
 
         if client is None:
             _params: dict = {}
-            if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify"):
+            if (
+                logging_obj
+                and logging_obj.litellm_params
+                and logging_obj.litellm_params.get("ssl_verify")
+            ):
                 _params["ssl_verify"] = logging_obj.litellm_params.get("ssl_verify")
             if timeout is not None:
                 _params["timeout"] = timeout
@@ -413,9 +417,9 @@ class BedrockLLM(BaseAWSLLM):
 
         # Claude 3+ indicators (all use Messages API)
         messages_api_indicators = [
-            "claude-3",      # Claude 3.x models
-            "claude-opus-4", # Claude Opus 4
-            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-3",  # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4
+            "claude-sonnet-4",  # Claude Sonnet 4
             "claude-haiku-4",  # Claude Haiku 4
         ]
 
