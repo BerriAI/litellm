@@ -215,3 +215,39 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+@pytest.mark.asyncio
+async def test_async_vector_store_retrieve_handler():
+    """Verify vector_store_retrieve_handler calls GET with correct URL."""
+    handler = BaseLLMHTTPHandler()
+    mock_config = Mock()
+    mock_config.validate_environment = Mock(return_value={"Authorization": "Bearer x"})
+    mock_config.get_complete_url = Mock(return_value="https://api.openai.com/v1/vector_stores")
+    mock_config.transform_create_vector_store_response = Mock(
+        return_value={"id": "vs_123", "object": "vector_store", "status": "completed"}
+    )
+    mock_resp = Mock()
+    mock_resp.json.return_value = {"id": "vs_123", "object": "vector_store", "status": "completed"}
+    mock_async_handler = AsyncMock()
+    mock_async_handler.get = AsyncMock(return_value=mock_resp)
+    mock_logging = Mock()
+    mock_logging.pre_call = Mock()
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_async_handler,
+    ):
+        result = await handler.async_vector_store_retrieve_handler(
+            vector_store_id="vs_123",
+            vector_store_provider_config=mock_config,
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=mock_logging,
+        )
+
+    assert result["id"] == "vs_123"
+    mock_async_handler.get.assert_called_once_with(
+        url="https://api.openai.com/v1/vector_stores/vs_123",
+        headers={"Authorization": "Bearer x"},
+    )
