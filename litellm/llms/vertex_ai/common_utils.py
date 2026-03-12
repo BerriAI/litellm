@@ -522,29 +522,6 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
-def _build_vertex_schema_for_gemini_2(parameters: dict) -> dict:
-    """
-    Minimal schema builder for Gemini 2.0+ tool parameters.
-
-    Gemini 2.0+ accepts standard JSON Schema natively in tool parameters,
-    including lowercase types, anyOf with null, and bare {} (TYPE_UNSPECIFIED).
-    The only transformation needed is resolving $ref/$defs, which Gemini does
-    NOT support in tool parameters (returns 400).
-
-    This avoids the harmful transforms in _build_vertex_schema that break
-    JsonValue/Any semantics by coercing {} to {"type": "object"}.
-    """
-    valid_schema_fields = set(get_type_hints(Schema).keys())
-
-    parameters = dict(parameters)  # shallow copy to avoid mutating caller's dict
-    defs = parameters.pop("$defs", {})
-    unpack_defs(parameters, defs)
-
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
-
-    return parameters
-
-
 def _build_json_schema(parameters: dict) -> dict:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.

@@ -19,19 +19,21 @@ import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agents/agent_info";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Agent, AgentKeyInfo } from "./agents/types";
+import { Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface AgentsPanelProps {
   accessToken: string | null;
   userRole?: string;
+  teams?: Team[] | null;
 }
 
 interface AgentsResponse {
   agents: Agent[];
 }
 
-const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
+const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -282,6 +284,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
         onClose={handleCloseModal}
         accessToken={accessToken}
         onSuccess={handleSuccess}
+        teams={teams}
       />
 
       {agentToDelete && (

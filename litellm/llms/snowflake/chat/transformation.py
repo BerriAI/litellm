@@ -219,17 +219,32 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             tool_choice: Tool choice in OpenAI format (str or dict)
 
         Returns:
-            Tool choice in Snowflake format (always an object)
+            Tool choice in Snowflake format (always an object, never a string)
 
-        OpenAI format (string): "auto", "required", "none"
-        OpenAI format (object): {"type": "function", "function": {"name": "get_weather"}}
+        OpenAI format (string):
+        "auto", "required", "none"
 
-        Snowflake format (string values become objects): {"type": "auto"}
-        Snowflake format (specific tool): {"type": "tool", "name": ["get_weather"]}
+        OpenAI format (dict):
+        {"type": "function", "function": {"name": "get_weather"}}
+
+        Snowflake format:
+        {"type": "auto"} / {"type": "any"} / {"type": "none"}
+        {"type": "tool", "name": ["get_weather"]}
+
+        Snowflake's API (like Anthropic) requires tool_choice as an object
+        with a "type" field, not as a bare string.
         """
         if isinstance(tool_choice, str):
-            # Snowflake requires object format: {"type": "auto"} not string "auto"
-            return {"type": tool_choice}
+            # Snowflake requires object format, not string.
+            # Map OpenAI string values to Snowflake object format.
+            # "required" maps to "any" (Snowflake/Anthropic convention).
+            _type_map = {
+                "auto": "auto",
+                "required": "any",
+                "none": "none",
+            }
+            mapped_type = _type_map.get(tool_choice, tool_choice)
+            return {"type": mapped_type}
 
         if isinstance(tool_choice, dict):
             if tool_choice.get("type") == "function":
