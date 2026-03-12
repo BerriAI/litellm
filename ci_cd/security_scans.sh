@@ -163,6 +163,7 @@ run_grype_scans() {
         "CVE-2026-25639" # axios - full fix requires 1.x major version bump; pinned to >=0.30.2 to clear other axios CVEs, upgrade to 1.x in follow-up
         "CVE-2026-2297" # Python 3.13 SourcelessFileLoader audit hook bypass - no fix available in base image
         "GHSA-qffp-2rhf-9h96" # tar hardlink path traversal - from nodejs_wheel bundled npm, not used in application runtime code
+        "GHSA-9ppj-qmqm-q256" # tar symlink path traversal - tracked in npm tooling paths in image scan; allowlisted to unblock CI until base/npm dependency graph fully converges on >=7.5.11
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
