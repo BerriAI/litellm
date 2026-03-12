@@ -1,5 +1,5 @@
 import importlib
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request

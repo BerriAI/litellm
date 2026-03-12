@@ -15,6 +15,7 @@ exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_conf
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
 "litellm/proxy/utils.py" = ["F401", "PLR0915"]
 "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/content_filter.py" = ["PLR0915"]
+"litellm/proxy/_experimental/mcp_server/rest_endpoints.py" = ["PLR0915"]
 "litellm/proxy/guardrails/guardrail_hooks/guardrail_benchmarks/test_eval.py" = ["PLR0915"]
 "litellm/responses/streaming_iterator.py" = ["PLR0915"]
 "litellm/files/main.py" = ["PLR0915"]
