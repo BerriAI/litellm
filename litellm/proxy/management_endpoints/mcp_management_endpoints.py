@@ -1658,12 +1658,6 @@ if MCP_AVAILABLE:
             sid = cred["server_id"]
             srv = servers.get(sid)
             expires_at: Optional[str] = cred.get("expires_at")
-            is_expired = False
-            if expires_at:
-                try:
-                    is_expired = datetime.fromisoformat(expires_at) < datetime.now(timezone.utc)
-                except Exception:
-                    pass
             items.append(
                 MCPUserCredentialListItem(
                     server_id=sid,
