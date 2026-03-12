@@ -1,7 +1,6 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 from unittest.mock import patch
 
 CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1/"
