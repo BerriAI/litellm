@@ -3,6 +3,7 @@ import { financialCompliancePrompts } from "./financialCompliancePrompts";
 import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
 import { canadianPiiCompliancePrompts } from "./canadianPiiCompliancePrompts";
 import { claimsCompliancePrompts } from "./claimsCompliancePrompts";
+import { toneDetectionCompliancePrompts } from "./toneDetectionCompliancePrompts";
 
 export interface CompliancePrompt {
   id: string;
@@ -261,6 +262,7 @@ const compliancePrompts: CompliancePrompt[] = [
   ...codeExecutionCompliancePrompts,
   ...canadianPiiCompliancePrompts,
   ...claimsCompliancePrompts,
+  ...toneDetectionCompliancePrompts,
 ];
 
 export const airlineCompliancePrompts: CompliancePrompt[] = [
@@ -561,6 +563,11 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
     icon: "shield",
     description:
       "Security + UX validation prompts for an AI claims assistant supporting out-of-network claim submissions.",
+  },
+  "Tone Detection": {
+    icon: "message-circle",
+    description:
+      "Detects dismissive, condescending, unprofessional, or unhelpful tone in customer-facing chatbot responses while allowing domain-specific terms in context.",
   },
 };
 
