@@ -1,6 +1,6 @@
 import importlib
-from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -69,18 +69,36 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
+    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
+        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no
+        OAuth2 servers are involved in the current request.
+        """
+        return {
+            sid
+            for sid in allowed_server_ids
+            if getattr(
+                global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None
+            )
+            == MCPAuth.oauth2
+        }
+
     async def _get_user_oauth_extra_headers(
         server,
         user_api_key_dict: UserAPIKeyAuth,
+        prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, str]]:
         """
         For OAuth2 servers, look up the user's stored access token and return it
         as extra_headers {"Authorization": "Bearer <token>"} so that it reaches
         the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
         Returns None for non-OAuth2 servers or when no credential is stored.
-        """
-        from litellm.types.mcp import MCPAuth
 
+        Args:
+            prefetched_creds: Optional dict keyed by server_id with credential payloads.
+                              When provided, avoids a per-server DB round-trip.
+        """
         if getattr(server, "auth_type", None) != MCPAuth.oauth2:
             return None
         user_id = getattr(user_api_key_dict, "user_id", None)
@@ -90,18 +108,60 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy._experimental.mcp_server.db import (
                 get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+
+            if prefetched_creds is not None:
+                cred = prefetched_creds.get(server_id)
+            else:
+                from litellm.proxy.utils import get_prisma_client_or_throw
+
+                prisma_client = get_prisma_client_or_throw(
+                    "Database not connected. Connect a database to use OAuth2 MCP tools."
+                )
+                cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+            if cred and cred.get("access_token"):
+                if is_oauth_credential_expired(cred):
+                    verbose_logger.debug(
+                        f"_get_user_oauth_extra_headers: token expired for "
+                        f"user={user_id} server={server_id}"
+                    )
+                    return None
+                return {"Authorization": f"Bearer {cred['access_token']}"}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_get_user_oauth_extra_headers: failed to retrieve credential for "
+                f"user={user_id} server={server_id}: {e}"
+            )
+        return None
+
+    async def _prefetch_user_oauth_creds(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch all OAuth2 credentials for the user in a single DB query.
+
+        Returns a dict keyed by server_id. Used to avoid N+1 DB queries when
+        iterating over multiple OAuth2 MCP servers.
+        """
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        if not user_id:
+            return {}
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                list_user_oauth_credentials,
             )
             from litellm.proxy.utils import get_prisma_client_or_throw
 
             prisma_client = get_prisma_client_or_throw(
                 "Database not connected. Connect a database to use OAuth2 MCP tools."
             )
-            cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
-            if cred and cred.get("access_token"):
-                return {"Authorization": f"Bearer {cred['access_token']}"}
-        except Exception:
-            verbose_logger.debug("Failed to fetch OAuth credential", exc_info=True)
-        return None
+            creds = await list_user_oauth_credentials(prisma_client, user_id)
+            return {c["server_id"]: c for c in creds if "server_id" in c}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}"
+            )
+            return {}
 
     async def _get_bulk_user_oauth_headers(
         user_api_key_dict: UserAPIKeyAuth,
@@ -364,13 +424,21 @@ if MCP_AVAILABLE:
             if server_id:
                 # Resolve a server name to its UUID if needed (MCPConnectPicker passes
                 # server_name strings, but allowed_server_ids_set contains UUIDs).
+                # _name_resolved is kept so the second check can reuse it for accurate
+                # IP-filter error reporting if the resolved UUID is not in allowed_server_ids.
+                _name_resolved = None
                 if server_id not in allowed_server_ids:
-                    _resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-                    if _resolved is not None and _resolved.server_id in set(allowed_server_ids):
-                        server_id = _resolved.server_id
+                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                    if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
+                        server_id = _name_resolved.server_id
 
                 if server_id not in allowed_server_ids:
-                    _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    # Try UUID lookup first; fall back to the name-resolved server so that
+                    # IP-filter reporting works correctly even when server_id is a name string.
+                    _server = (
+                        global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                        or _name_resolved
+                    )
                     if (
                         _server is not None
                         and _rest_client_ip is not None
@@ -451,10 +519,15 @@ if MCP_AVAILABLE:
                         },
                     )
 
-                # Query all servers the user has access to.
-                # Bulk-fetch OAuth creds once so each per-server call below can
-                # do an O(1) dict lookup instead of N individual DB queries.
-                bulk_oauth_headers = await _get_bulk_user_oauth_headers(user_api_key_dict)
+                # Pre-fetch OAuth credentials only when at least one allowed server uses OAuth2,
+                # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
+                prefetched_oauth_creds = (
+                    await _prefetch_user_oauth_creds(user_api_key_dict)
+                    if _get_oauth2_server_ids(allowed_server_ids)
+                    else {}
+                )
+
+                # Query all servers the user has access to
                 errors = []
                 for allowed_server_id in allowed_server_ids:
                     server = global_mcp_server_manager.get_mcp_server_by_id(
@@ -466,7 +539,9 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
-                    user_oauth_extra_headers = bulk_oauth_headers.get(server.server_id)
+                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                        server, user_api_key_dict, prefetched_creds=prefetched_oauth_creds
+                    )
 
                     try:
                         tools_result = await _get_tools_for_single_server(

@@ -319,7 +319,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     // Ignore — credential may already be gone; update UI regardless.
                   }
                   setOauthConnected((prev) => { const n = new Set(prev); n.delete(detailServer.server_id); return n; });
-                  onChange(selectedServers.filter((s) => s !== name));
+                  onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
                 }}
                 style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
               >
@@ -331,7 +331,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 accessToken={accessToken}
                 onConnect={(id) => {
                   setOauthConnected((prev) => new Set(prev).add(id));
-                  handleToggle(name, true, detailServer.server_id);
                 }}
                 variant="button"
               />
@@ -559,7 +558,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                       accessToken={accessToken}
                       onConnect={(id) => {
                         setOauthConnected((prev) => new Set(prev).add(id));
-                        handleToggle(nameOf(server), true, server.server_id);
                       }}
                       variant="badge"
                     />
