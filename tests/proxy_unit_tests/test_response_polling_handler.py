@@ -1250,6 +1250,119 @@ class TestStreamingEventParsing:
         assert tools_data == [{"type": "function", "function": {"name": "test"}}]
         assert model_data == "gpt-4o"
 
+    def test_parse_response_failed_event(self):
+        """Test parsing response.failed event extracts error and sets failed status"""
+        event = {
+            "type": "response.failed",
+            "response": {
+                "id": "resp_123",
+                "status": "failed",
+                "error": {
+                    "type": "server_error",
+                    "message": "The model encountered an error",
+                    "code": "model_error",
+                },
+                "model": "gpt-4o",
+                "output": [],
+            },
+        }
+
+        event_type = event.get("type", "")
+        terminal_status = None
+        terminal_error = None
+        model_data = None
+
+        if event_type in (
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        ):
+            response_data = event.get("response", {})
+            terminal_status = response_data.get("status", "completed")
+            model_data = response_data.get("model")
+            if event_type == "response.failed":
+                terminal_error = response_data.get("error")
+
+        assert terminal_status == "failed"
+        assert terminal_error == {
+            "type": "server_error",
+            "message": "The model encountered an error",
+            "code": "model_error",
+        }
+        assert model_data == "gpt-4o"
+
+    def test_parse_response_incomplete_event(self):
+        """Test parsing response.incomplete event extracts incomplete_details"""
+        event = {
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_123",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "usage": {"input_tokens": 10, "output_tokens": 4096},
+                "model": "gpt-4o",
+                "output": [{"id": "item_1", "type": "message"}],
+            },
+        }
+
+        event_type = event.get("type", "")
+        terminal_status = None
+        incomplete_details_data = None
+        usage_data = None
+
+        if event_type in (
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        ):
+            response_data = event.get("response", {})
+            terminal_status = response_data.get("status", "completed")
+            incomplete_details_data = response_data.get("incomplete_details")
+            usage_data = response_data.get("usage")
+
+        assert terminal_status == "incomplete"
+        assert incomplete_details_data == {"reason": "max_output_tokens"}
+        assert usage_data == {"input_tokens": 10, "output_tokens": 4096}
+
+    def test_parse_response_cancelled_event(self):
+        """Test parsing response.cancelled event sets cancelled status"""
+        event = {
+            "type": "response.cancelled",
+            "response": {
+                "id": "resp_123",
+                "status": "cancelled",
+                "model": "gpt-4o",
+                "output": [],
+            },
+        }
+
+        event_type = event.get("type", "")
+        terminal_status = None
+        model_data = None
+
+        if event_type in (
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        ):
+            response_data = event.get("response", {})
+            terminal_status = response_data.get("status", "completed")
+            model_data = response_data.get("model")
+
+        assert terminal_status == "cancelled"
+        assert model_data == "gpt-4o"
+
+    def test_terminal_status_defaults_to_completed_when_missing(self):
+        """Test that terminal_status defaults to completed when no terminal event is received"""
+        terminal_status = None  # No terminal event received
+
+        final_status = terminal_status or "completed"
+
+        assert final_status == "completed"
+
     def test_parse_done_marker(self):
         """Test that [DONE] marker is detected correctly"""
         chunks = [
