@@ -1,5 +1,9 @@
 import os
+import subprocess
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(
     0,
@@ -138,3 +142,102 @@ class TestErrorClassificationPriority:
         error_message = "connection timeout"
         assert ProxyExtrasDBManager._is_permission_error(error_message) is False
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
+
+
+class TestMarkAllMigrationsApplied:
+    """Test that _mark_all_migrations_applied only marks migrations without applying diffs"""
+
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch.object(
+        ProxyExtrasDBManager,
+        "_get_migration_names",
+        return_value=["20250326162113_baseline", "20250329084805_new_cron_job_table"],
+    )
+    def test_marks_each_migration_as_applied(self, mock_get_names, mock_run):
+        """Verify each migration is marked as applied via prisma migrate resolve"""
+        ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
+
+        assert mock_run.call_count == 2
+        for call_args in mock_run.call_args_list:
+            cmd = call_args[0][0]
+            assert "migrate" in cmd
+            assert "resolve" in cmd
+            assert "--applied" in cmd
+
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch.object(
+        ProxyExtrasDBManager,
+        "_get_migration_names",
+        return_value=["20250326162113_baseline"],
+    )
+    def test_does_not_generate_or_apply_diffs(self, mock_get_names, mock_run):
+        """Verify no diff generation or db execute commands are run"""
+        ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
+
+        for call_args in mock_run.call_args_list:
+            cmd = call_args[0][0]
+            # Should never run diff or db execute
+            assert "diff" not in cmd
+            assert "execute" not in cmd
+            assert "push" not in cmd
+
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch.object(
+        ProxyExtrasDBManager,
+        "_get_migration_names",
+        return_value=["20250326162113_baseline"],
+    )
+    def test_skips_already_applied_migration(self, mock_get_names, mock_run):
+        """Verify already-applied migrations are silently skipped"""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="Migration `20250326162113_baseline` is already recorded as applied in the database.",
+        )
+        # Should not raise
+        ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
+
+
+class TestSetupDatabaseFailFast:
+    """Test that setup_database fails fast on non-recoverable migration errors"""
+
+    @patch("litellm_proxy_extras.utils.os.chdir")
+    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
+    @patch.object(
+        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
+    )
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_p3009_non_idempotent_raises_runtime_error(
+        self, mock_run, mock_dir, mock_getcwd, mock_chdir
+    ):
+        """P3009 with non-idempotent error should raise RuntimeError, not silently retry"""
+        error = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3009: migrate found failed migrations in the target database, `20250329084805_new_cron_job_table` migration. Error: syntax error at or near 'ALTR'",
+            output="",
+        )
+        mock_run.side_effect = error
+
+        with pytest.raises(RuntimeError, match="requires manual intervention"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True)
+
+    @patch("litellm_proxy_extras.utils.os.chdir")
+    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
+    @patch.object(
+        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
+    )
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_successful_deploy_does_not_call_resolve_all(
+        self, mock_run, mock_dir, mock_getcwd, mock_chdir
+    ):
+        """After successful prisma migrate deploy, no diff/resolve should be called"""
+        mock_run.return_value = MagicMock(stdout="All migrations applied", returncode=0)
+
+        result = ProxyExtrasDBManager.setup_database(use_migrate=True)
+
+        assert result is True
+        # Only one subprocess call: prisma migrate deploy
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["prisma", "migrate", "deploy"]

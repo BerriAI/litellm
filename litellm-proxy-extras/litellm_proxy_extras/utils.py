@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -244,97 +243,18 @@ class ProxyExtrasDBManager:
         return False
 
     @staticmethod
-    def _resolve_all_migrations(
-        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
-    ):
+    def _mark_all_migrations_applied(migrations_dir: str):
         """
-        1. Compare the current database state to schema.prisma and generate a migration for the diff.
-        2. Run prisma migrate deploy to apply any pending migrations.
-        3. Mark all existing migrations as applied.
+        Mark all existing migrations as applied in the _prisma_migrations table.
+
+        Used after creating a baseline migration for an existing database (P3005),
+        so that Prisma knows these migrations have already been reflected in the schema.
+
+        This does NOT generate or apply any schema diffs — it only updates migration
+        tracking state.
         """
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            logger.error("DATABASE_URL not set")
-            return
-
-        diff_dir = (
-            Path(migrations_dir)
-            / "migrations"
-            / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_baseline_diff"
-        )
-        try:
-            diff_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            if "Permission denied" in str(e):
-                logger.warning(
-                    f"Permission denied - {e}\nunable to baseline db. Set LITELLM_MIGRATION_DIR environment variable to a writable directory to enable migrations."
-                )
-                return
-            raise e
-        diff_sql_path = diff_dir / "migration.sql"
-
-        # 1. Generate migration SQL for the diff between DB and schema
-        try:
-            logger.info("Generating migration diff between DB and schema.prisma...")
-            with open(diff_sql_path, "w") as f:
-                subprocess.run(
-                    [
-                        _get_prisma_command(),
-                        "migrate",
-                        "diff",
-                        "--from-url",
-                        database_url,
-                        "--to-schema-datamodel",
-                        schema_path,
-                        "--script",
-                    ],
-                    check=True,
-                    timeout=60,
-                    stdout=f,
-                    env=_get_prisma_env(),
-                )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to generate migration diff: {e.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("Migration diff generation timed out.")
-
-        # check if the migration was created
-        if not diff_sql_path.exists():
-            logger.warning("Migration diff was not created")
-            return
-        logger.info(f"Migration diff created at {diff_sql_path}")
-
-        # 2. Run prisma db execute to apply the migration
-        try:
-            logger.info("Running prisma db execute to apply the migration diff...")
-            result = subprocess.run(
-                [
-                    _get_prisma_command(),
-                    "db",
-                    "execute",
-                    "--file",
-                    str(diff_sql_path),
-                    "--schema",
-                    schema_path,
-                ],
-                timeout=60,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=_get_prisma_env(),
-            )
-            logger.info(f"prisma db execute stdout: {result.stdout}")
-            logger.info("✅ Migration diff applied successfully")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to apply migration diff: {e.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("Migration diff application timed out.")
-
-        # 3. Mark all migrations as applied
-        if not mark_all_applied:
-            return
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
-        logger.info(f"Resolving {len(migration_names)} migrations")
+        logger.info(f"Marking {len(migration_names)} migrations as applied")
         for migration_name in migration_names:
             try:
                 logger.info(f"Resolving migration: {migration_name}")
@@ -392,15 +312,7 @@ class ProxyExtrasDBManager:
                             env=_get_prisma_env(),
                         )
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
-
-                        logger.info("prisma migrate deploy completed")
-
-                        # Run sanity check to ensure DB matches schema
-                        logger.info("Running post-migration sanity check...")
-                        ProxyExtrasDBManager._resolve_all_migrations(
-                            migrations_dir, schema_path, mark_all_applied=False
-                        )
-                        logger.info("✅ Post-migration sanity check completed")
+                        logger.info("✅ prisma migrate deploy completed")
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
@@ -426,27 +338,29 @@ class ProxyExtrasDBManager:
                                     )
                                     return True
                                 else:
-                                    logger.info(
-                                        f"Found failed migration: {failed_migration}, marking as rolled back"
+                                    logger.error(
+                                        f"❌ Migration {failed_migration} failed with a non-idempotent error. "
+                                        f"This requires manual intervention. Error: {e.stderr}"
                                     )
-                                    # Mark the failed migration as rolled back
-                                    subprocess.run(
-                                        [
-                                            _get_prisma_command(),
-                                            "migrate",
-                                            "resolve",
-                                            "--rolled-back",
-                                            failed_migration,
-                                        ],
-                                        timeout=60,
-                                        check=True,
-                                        capture_output=True,
-                                        text=True,
-                                        env=_get_prisma_env(),
-                                    )
-                                    logger.info(
-                                        f"✅ Migration {failed_migration} marked as rolled back... retrying"
-                                    )
+                                    # Mark as rolled back so the migration can be retried after manual fix
+                                    try:
+                                        ProxyExtrasDBManager._roll_back_migration(
+                                            failed_migration
+                                        )
+                                        logger.info(
+                                            f"Migration {failed_migration} marked as rolled back"
+                                        )
+                                    except Exception as rollback_error:
+                                        logger.warning(
+                                            f"Failed to mark migration as rolled back: {rollback_error}"
+                                        )
+                                    raise RuntimeError(
+                                        f"Migration {failed_migration} failed and requires manual intervention. "
+                                        f"Please inspect the migration and database state, then either:\n"
+                                        f"  - Fix the issue and restart, or\n"
+                                        f"  - Run: prisma migrate resolve --applied {failed_migration}\n"
+                                        f"Original error: {e.stderr}"
+                                    ) from e
                         elif (
                             "P3005" in e.stderr
                             and "database schema is not empty" in e.stderr
@@ -456,12 +370,27 @@ class ProxyExtrasDBManager:
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(
-                                "Baseline migration created, resolving all migrations"
+                                "Baseline migration created, marking all existing migrations as applied"
                             )
-                            ProxyExtrasDBManager._resolve_all_migrations(
-                                migrations_dir, schema_path
+                            ProxyExtrasDBManager._mark_all_migrations_applied(
+                                migrations_dir
                             )
-                            logger.info("✅ All migrations resolved.")
+                            # Now run prisma migrate deploy to apply any truly pending migrations
+                            logger.info(
+                                "Running prisma migrate deploy for any pending migrations..."
+                            )
+                            result = subprocess.run(
+                                [_get_prisma_command(), "migrate", "deploy"],
+                                timeout=60,
+                                check=True,
+                                capture_output=True,
+                                text=True,
+                                env=_get_prisma_env(),
+                            )
+                            logger.info(
+                                f"prisma migrate deploy stdout: {result.stdout}"
+                            )
+                            logger.info("✅ All migrations applied.")
                             return True
                         elif "P3018" in e.stderr:
                             # Check if this is a permission error or idempotent error
