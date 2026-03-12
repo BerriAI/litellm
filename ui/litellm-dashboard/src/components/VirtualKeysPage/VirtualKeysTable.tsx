@@ -311,25 +311,40 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       cell: (info) => {
         const userId = info.getValue() as string | null;
         if (!userId) return "-";
+        const key = info.row.original;
+        const createdByUser = key.created_by_user;
+        const userAlias = createdByUser?.user_alias ?? null;
+        const userEmail = createdByUser?.user_email ?? null;
         const isDefaultAdmin = userId === "default_user_id";
+        const displayValue = userAlias || userEmail || userId;
         const width = 160;
 
         const popoverContent = (
           <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-            <div className="flex flex-col min-w-0">
-              <span className="text-gray-400">User ID</span>
-              <Typography.Text
-                className="font-mono text-xs"
-                ellipsis={{ tooltip: userId }}
-                copyable
-              >
-                {userId}
-              </Typography.Text>
-            </div>
+            {[
+              { label: "User Alias", value: userAlias },
+              { label: "User Email", value: userEmail },
+              { label: "User ID", value: userId },
+            ].map(({ label, value }) => (
+              <div key={label} className="flex flex-col min-w-0">
+                <span className="text-gray-400">{label}</span>
+                {value ? (
+                  <Typography.Text
+                    className="font-mono text-xs"
+                    ellipsis={{ tooltip: value }}
+                    copyable
+                  >
+                    {value}
+                  </Typography.Text>
+                ) : (
+                  <span className="font-mono">-</span>
+                )}
+              </div>
+            ))}
           </div>
         );
 
-        if (isDefaultAdmin) {
+        if (isDefaultAdmin && !userAlias && !userEmail) {
           return (
             <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
               <span className="cursor-default">
@@ -345,7 +360,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
               className="font-mono text-xs truncate block cursor-default"
               style={{ maxWidth: width, overflow: "hidden" }}
             >
-              {userId}
+              {displayValue}
             </span>
           </Popover>
         );

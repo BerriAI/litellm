@@ -10,19 +10,9 @@ import {
   registerMcpOAuthClient,
   serverRootPath,
 } from "@/components/networking";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
-
-function extractErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    const e = err as Record<string, unknown>;
-    if (typeof e.detail === "string") return e.detail;
-    if (typeof e.message === "string") return e.message;
-    return JSON.stringify(err);
-  }
-  return String(err);
-}
 
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
@@ -90,9 +80,10 @@ export const useMcpOAuthFlow = ({
   const setStorageItem = (key: string, value: string) => {
     if (typeof window === "undefined") return;
     try {
-      // Store in both sessionStorage and localStorage for redundancy
+      // Use sessionStorage only — the flow state may contain client credentials;
+      // writing them to localStorage would persist across browser sessions and
+      // make them readable by any injected script (XSS).
       window.sessionStorage.setItem(key, value);
-      window.localStorage.setItem(key, value);
     } catch (err) {
       console.warn(`Failed to set storage item ${key}`, err);
     }

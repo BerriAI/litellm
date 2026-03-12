@@ -1133,6 +1133,7 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
+            custom_body: Optional[dict] = None,  # caller-supplied body takes precedence over request-parsed body
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -1208,9 +1209,11 @@ def create_pass_through_route(
             )
             if query_params:
                 final_query_params.update(query_params)
-            # Use the body parsed from the raw request
+            # Caller-supplied custom_body takes precedence over the request-parsed body
             final_custom_body: Optional[dict] = None
-            if isinstance(custom_body_data, dict):
+            if custom_body is not None:
+                final_custom_body = custom_body
+            elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
             return await pass_through_request(  # type: ignore

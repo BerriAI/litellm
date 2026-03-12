@@ -555,6 +555,94 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
 });
 
 
+it("should display created_by_user email in 'Created By' column when available", async () => {
+  const keyWithCreatedByUser = {
+    ...mockKey,
+    created_by: "some-uuid-1234",
+    created_by_user: {
+      user_id: "some-uuid-1234",
+      user_email: "creator@example.com",
+      user_alias: null,
+    },
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("creator@example.com")).toBeInTheDocument();
+  });
+});
+
+it("should display created_by_user alias over email when both available", async () => {
+  const keyWithCreatedByUser = {
+    ...mockKey,
+    created_by: "some-uuid-1234",
+    created_by_user: {
+      user_id: "some-uuid-1234",
+      user_email: "creator@example.com",
+      user_alias: "The Creator",
+    },
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("The Creator")).toBeInTheDocument();
+  });
+});
+
 it("should render table without crashing when models is null", async () => {
   const keyWithNullModels = {
     ...mockKey,
