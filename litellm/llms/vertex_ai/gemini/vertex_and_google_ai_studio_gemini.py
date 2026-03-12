@@ -2385,14 +2385,14 @@ async def make_call(
     if gemini_client is not None:
         client = gemini_client
     if client is None:
-        _async_client_params: dict = {}
+        _params: dict = {}
         if timeout is not None:
             if isinstance(timeout, (float, int)):
                 timeout = httpx.Timeout(timeout)
-            _async_client_params["timeout"] = timeout
+            _params["timeout"] = timeout
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
-            params=_async_client_params if _async_client_params else None,
+            params=_params if _params else None,
         )
 
     try:
