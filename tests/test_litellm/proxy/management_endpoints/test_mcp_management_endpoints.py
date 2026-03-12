@@ -1365,6 +1365,11 @@ class TestTemporaryMCPSessionEndpoints:
             client_id="client-id",
             client_secret="client-secret",
             scopes=["scope1"],
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_session_token=None,
+            aws_region_name=None,
+            aws_service_name=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()
