@@ -4,8 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import Field
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-from litellm.types.proxy.guardrails.guardrail_hooks.base import \
-    GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 # --- Competitor intent blocker (generic, industry-agnostic) ---
 
@@ -81,11 +80,20 @@ class CompetitorIntentDetection(TypedDict):
     evidence: List[Dict[str, Any]]
 
 
+class ToneDetection(TypedDict):
+    """Detection from tone checker (category + matched text)."""
+
+    type: Literal["tone"]
+    category: str
+    matched_text: str
+
+
 ContentFilterDetection = Union[
     PatternDetection,
     BlockedWordDetection,
     CategoryKeywordDetection,
     CompetitorIntentDetection,
+    ToneDetection,
 ]
 
 
@@ -171,6 +179,14 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
         "descriptor_lexicon (list, optional), indirect_competitor_patterns (dict, optional), "
         "policy (dict), threshold_high, threshold_medium, threshold_low, "
         "reframe_message_template, refuse_message_template.",
+    )
+
+    # Tone detection (customer-facing chatbot tone checks)
+    tone_detection_config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional config for CPU-only tone detection. "
+        "Keys: blocked_phrases (list of regex strings, optional), "
+        "safe_phrases (list of regex strings that exempt text from blocking, optional).",
     )
 
     @staticmethod

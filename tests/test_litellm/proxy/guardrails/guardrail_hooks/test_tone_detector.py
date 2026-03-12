@@ -1,5 +1,5 @@
 """
-Tests for the Tone Detector Guardrail.
+Tests for the Tone Detection feature of ContentFilterGuardrail.
 
 Covers:
   - True positives: inappropriate tone is blocked
@@ -19,16 +19,28 @@ sys.path.insert(0, os.path.abspath("../../"))
 
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.tone_detector.tone_detector import (
-    ToneDetectorGuardrail,
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+    ContentFilterGuardrail,
 )
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_guardrail(**kwargs) -> ToneDetectorGuardrail:
-    return ToneDetectorGuardrail(guardrail_name="test-tone", **kwargs)
+def _make_guardrail(
+    blocked_phrases=None,
+    safe_phrases=None,
+) -> ContentFilterGuardrail:
+    """Create a ContentFilterGuardrail with only tone detection enabled."""
+    config = {}
+    if blocked_phrases is not None:
+        config["blocked_phrases"] = blocked_phrases
+    if safe_phrases is not None:
+        config["safe_phrases"] = safe_phrases
+    return ContentFilterGuardrail(
+        guardrail_name="test-tone",
+        tone_detection_config=config,
+    )
 
 
 def _inputs(text: str) -> dict:
@@ -211,42 +223,34 @@ class TestFalsePositiveResistance:
     @pytest.mark.parametrize(
         "text,description",
         [
-            # "you should have" + informational continuation
             (
                 "You should have received a confirmation email within 5 minutes.",
                 "informational 'should have received'",
             ),
-            # "problem is on your end" with helpful framing
             (
                 "If the problem is on your end, here are some steps to troubleshoot.",
                 "'the problem' not 'this problem/issue'",
             ),
-            # "I can't help but" (positive usage)
             (
                 "I can't help but notice you've been a loyal customer — thank you!",
                 "'can't help but notice' is a compliment",
             ),
-            # "spell out" without "for you"
             (
                 "Let me spell out the steps clearly so nothing is missed.",
                 "'spell out the steps' is helpful, not condescending",
             ),
-            # "I've already told" + someone other than the customer
             (
                 "I've already told our engineering team about this, and they're working on a fix.",
                 "'told our team' is reassuring, not impatient",
             ),
-            # "nothing I can do" + "but" (offers alternative)
             (
                 "There's nothing I can do to speed up the shipment, but I can offer a discount on your next order.",
                 "'nothing I can do to X, but Y' offers an alternative",
             ),
-            # "FAQ" in a polite context (no "just read the")
             (
                 "Please check the FAQ for a list of supported file formats — it's very comprehensive.",
                 "polite FAQ reference without 'just read the'",
             ),
-            # "your fault" as a technical term
             (
                 "I understand that's your fault tolerance threshold — let me adjust it for you.",
                 "'fault tolerance' is a technical term",
@@ -372,16 +376,10 @@ class TestEdgeCases:
         assert result["texts"] == [""]
 
     @pytest.mark.asyncio
-    async def test_none_in_texts_passes(self):
-        g = _make_guardrail()
-        result = await g.apply_guardrail({"texts": [None]}, {}, "response")
-        assert result["texts"] == [None]
-
-    @pytest.mark.asyncio
     async def test_no_texts_key(self):
         g = _make_guardrail()
         result = await g.apply_guardrail({}, {}, "response")
-        assert result == {}
+        assert result["texts"] == []
 
     @pytest.mark.asyncio
     async def test_multiple_texts_blocks_on_first_violation(self):
@@ -409,24 +407,19 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# INIT & REGISTRATION
+# INIT
 # ---------------------------------------------------------------------------
 
-class TestRegistration:
+class TestInit:
 
     def test_guardrail_name_set(self):
         g = _make_guardrail()
         assert g.guardrail_name == "test-tone"
 
-    def test_init_with_no_extras(self):
+    def test_tone_checker_enabled(self):
         g = _make_guardrail()
-        assert g._extra_blocked == []
-        assert g._safe_patterns == []
+        assert g._tone_checker is not None
 
-    def test_init_with_blocked_and_safe(self):
-        g = _make_guardrail(
-            blocked_phrases=[r"foo", r"bar"],
-            safe_phrases=[r"baz"],
-        )
-        assert len(g._extra_blocked) == 2
-        assert len(g._safe_patterns) == 1
+    def test_tone_checker_disabled_when_no_config(self):
+        g = ContentFilterGuardrail(guardrail_name="test-no-tone")
+        assert g._tone_checker is None

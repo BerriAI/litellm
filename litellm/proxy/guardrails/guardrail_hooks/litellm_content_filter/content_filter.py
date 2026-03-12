@@ -56,6 +56,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterCategoryConfig,
     ContentFilterDetection,
     PatternDetection,
+    ToneDetection,
 )
 
 from .competitor_intent import (
@@ -63,6 +64,7 @@ from .competitor_intent import (
     BaseCompetitorIntentChecker,
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
+from .tone_detection import ToneChecker
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
 GAP_WORD_TOKENIZER = re.compile(r"\b\w+\b")
@@ -169,6 +171,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
         competitor_intent_config: Optional[Dict[str, Any]] = None,
+        tone_detection_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -228,6 +231,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
             self._init_competitor_intent_checker(competitor_intent_config)
+
+        # Tone checker (optional; CPU-only regex detection of inappropriate chatbot tone)
+        self._tone_checker: Optional[ToneChecker] = None
+        if tone_detection_config is not None and isinstance(tone_detection_config, dict):
+            self._init_tone_checker(tone_detection_config)
 
         # Load categories if provided
         if categories:
@@ -300,6 +308,46 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "ContentFilterGuardrail: failed to init competitor intent checker: %s",
                 e,
             )
+
+    def _init_tone_checker(self, tone_detection_config: Dict[str, Any]) -> None:
+        try:
+            self._tone_checker = ToneChecker(tone_detection_config)
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: tone checker enabled"
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: failed to init tone checker: %s",
+                e,
+            )
+
+    def _apply_tone_detection_policy(
+        self,
+        tone_result: Dict[str, str],
+        detections: List[ContentFilterDetection],
+    ) -> None:
+        """Raise HTTPException(400) when a tone violation is detected."""
+        category = tone_result["category"]
+        matched = tone_result["matched_text"]
+        detection: ToneDetection = {
+            "type": "tone",
+            "category": category,
+            "matched_text": matched,
+        }
+        detections.append(detection)
+        verbose_proxy_logger.warning(
+            "ContentFilterGuardrail: tone violation (%s): '%s'",
+            category,
+            matched,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Tone violation detected: {category}",
+                "category": category,
+                "matched_text": matched,
+            },
+        )
 
     @staticmethod
     def _normalize_patterns(
@@ -1820,6 +1868,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                     if intent_result.get("intent", "other") != "other":
                         self._apply_competitor_intent_policy(
                             intent_result, request_data, detections
+                        )
+                # Tone detection (optional; raises on violation)
+                if self._tone_checker and text:
+                    tone_result = self._tone_checker.run(text)
+                    if tone_result is not None:
+                        self._apply_tone_detection_policy(
+                            tone_result, detections
                         )
                 filtered_text = self._filter_single_text(text, detections=detections)
                 processed_texts.append(filtered_text)
