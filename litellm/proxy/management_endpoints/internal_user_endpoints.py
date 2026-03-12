@@ -2411,7 +2411,7 @@ async def block_user(
     )
 
     # Invalidate user cache entry (local and Redis)
-    user_api_key_cache.delete_cache(key=data.user_id)
+    await user_api_key_cache.async_delete_cache(key=data.user_id)
 
     # Invalidate cache for all keys associated with this user
     # Use pagination to avoid unbounded query for users with many keys
@@ -2507,7 +2507,7 @@ async def unblock_user(
     )
 
     # Invalidate user cache entry (local and Redis)
-    user_api_key_cache.delete_cache(key=data.user_id)
+    await user_api_key_cache.async_delete_cache(key=data.user_id)
 
     # Invalidate cache for all keys associated with this user
     # Use pagination to avoid unbounded query for users with many keys

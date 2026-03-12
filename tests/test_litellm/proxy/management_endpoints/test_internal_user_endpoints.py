@@ -1793,6 +1793,7 @@ async def test_block_user_basic_functionality(mocker):
 
     # Mock cache and logging objects
     mock_user_api_key_cache = mocker.MagicMock()
+    mock_user_api_key_cache.async_delete_cache = mocker.AsyncMock()
     mock_proxy_logging_obj = mocker.MagicMock()
 
     # Mock _delete_cache_key_object (correct import path from auth_checks)
@@ -1826,7 +1827,7 @@ async def test_block_user_basic_functionality(mocker):
     assert result.user_id == "test-user-123"
 
     # Verify user cache was invalidated
-    mock_user_api_key_cache.delete_cache.assert_called_once_with(key="test-user-123")
+    mock_user_api_key_cache.async_delete_cache.assert_called_once_with(key="test-user-123")
 
     # Verify all keys were invalidated
     assert mock_delete_cache_key.call_count == 2
@@ -2054,6 +2055,7 @@ async def test_unblock_user_basic_functionality(mocker):
 
     # Mock cache and logging objects
     mock_user_api_key_cache = mocker.MagicMock()
+    mock_user_api_key_cache.async_delete_cache = mocker.AsyncMock()
     mock_proxy_logging_obj = mocker.MagicMock()
 
     # Mock _delete_cache_key_object (correct import path from auth_checks)
@@ -2087,7 +2089,7 @@ async def test_unblock_user_basic_functionality(mocker):
     assert result.user_id == "test-user-456"
 
     # Verify user cache was invalidated
-    mock_user_api_key_cache.delete_cache.assert_called_once_with(key="test-user-456")
+    mock_user_api_key_cache.async_delete_cache.assert_called_once_with(key="test-user-456")
 
     # Verify all keys were invalidated
     assert mock_delete_cache_key.call_count == 2
@@ -2150,6 +2152,7 @@ async def test_block_user_with_null_role(mocker):
 
     # Mock cache
     mock_user_api_key_cache = mocker.MagicMock()
+    mock_user_api_key_cache.async_delete_cache = mocker.AsyncMock()
     mock_proxy_logging_obj = mocker.MagicMock()
 
     # Patch the imports
