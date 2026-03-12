@@ -1143,7 +1143,9 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
-        if "litellm_metadata" in kwargs and isinstance(kwargs["litellm_metadata"], dict):
+        if "litellm_metadata" in kwargs and isinstance(
+            kwargs["litellm_metadata"], dict
+        ):
             litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
             # For endpoints like /v1/messages that use "litellm_metadata" instead
             # of "metadata" (to avoid conflicting with provider API metadata fields),
@@ -8348,7 +8350,9 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         # Resolve provider string for JSON lookup
-        provider_str = provider.value if isinstance(provider, LlmProviders) else str(provider)
+        provider_str = (
+            provider.value if isinstance(provider, LlmProviders) else str(provider)
+        )
 
         # Try to convert to enum for Python class lookup first.
         # Python classes take priority over JSON (they have custom overrides).
@@ -8369,7 +8373,9 @@ class ProviderConfigManager:
             return result
 
         # Fall back to JSON providers (generic OpenAI-compatible)
-        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+        if JSONProviderRegistry.exists(
+            provider_str
+        ) and JSONProviderRegistry.supports_responses_api(provider_str):
             provider_config = JSONProviderRegistry.get(provider_str)
             if provider_config is not None:
                 return create_responses_config_class(provider_config)()
@@ -8585,6 +8591,12 @@ class ProviderConfigManager:
             from litellm.llms.manus.files.transformation import ManusFilesConfig
 
             return ManusFilesConfig()
+        elif LlmProviders.ANTHROPIC == provider:
+            from litellm.llms.anthropic.files.transformation import (
+                AnthropicFilesConfig,
+            )
+
+            return AnthropicFilesConfig()
         return None
 
     @staticmethod

@@ -25,38 +25,53 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
-    ExperimentalUIJWTToken, _cache_key_object, _delete_cache_key_object,
-    _get_user_role, _is_user_proxy_admin, _virtual_key_max_budget_alert_check,
-    _virtual_key_max_budget_check, _virtual_key_soft_budget_check,
-    can_key_call_model, common_checks, get_end_user_object,
-    get_jwt_key_mapping_object, get_key_object, get_project_object,
-    get_team_object, get_user_object, is_valid_fallback_model)
-from litellm.proxy.auth.auth_exception_handler import \
-    UserAPIKeyAuthExceptionHandler
-from litellm.proxy.auth.auth_utils import (abbreviate_api_key,
-                                           get_end_user_id_from_request_body,
-                                           get_model_from_request,
-                                           get_request_route,
-                                           normalize_request_route,
-                                           pre_db_read_auth_checks,
-                                           route_in_additonal_public_routes)
+    ExperimentalUIJWTToken,
+    _cache_key_object,
+    _delete_cache_key_object,
+    _get_user_role,
+    _is_user_proxy_admin,
+    _virtual_key_max_budget_alert_check,
+    _virtual_key_max_budget_check,
+    _virtual_key_soft_budget_check,
+    can_key_call_model,
+    common_checks,
+    get_end_user_object,
+    get_jwt_key_mapping_object,
+    get_key_object,
+    get_project_object,
+    get_team_object,
+    get_user_object,
+    is_valid_fallback_model,
+)
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_utils import (
+    abbreviate_api_key,
+    get_end_user_id_from_request_body,
+    get_model_from_request,
+    get_request_route,
+    normalize_request_route,
+    pre_db_read_auth_checks,
+    route_in_additonal_public_routes,
+)
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.cache_coordinator import \
-    EventDrivenCacheCoordinator
+from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body, _safe_get_request_headers,
-    populate_request_with_path_params)
+    _read_request_body,
+    _safe_get_request_headers,
+    populate_request_with_path_params,
+)
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging, normalize_route_for_root_path
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
 try:
-    from litellm_enterprise.proxy.auth.user_api_key_auth import \
-        enterprise_custom_auth as _enterprise_custom_auth
+    from litellm_enterprise.proxy.auth.user_api_key_auth import (
+        enterprise_custom_auth as _enterprise_custom_auth,
+    )
 
     enterprise_custom_auth: Optional[Callable] = _enterprise_custom_auth
 except ImportError as e:
@@ -336,8 +351,9 @@ def get_api_key(
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
     from litellm.proxy.auth.route_checks import RouteChecks
-    from litellm.proxy.common_utils.http_parsing_utils import \
-        _safe_get_request_query_params
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _safe_get_request_query_params,
+    )
 
     api_key = api_key
     passed_in_key: Optional[str] = None
@@ -506,15 +522,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     request_data: dict,
     custom_litellm_key_header: Optional[str] = None,
 ) -> UserAPIKeyAuth:
-    from litellm.proxy.proxy_server import (general_settings, jwt_handler,
-                                            litellm_proxy_admin_name,
-                                            llm_model_list, llm_router,
-                                            master_key,
-                                            model_max_budget_limiter,
-                                            open_telemetry_logger,
-                                            prisma_client, proxy_logging_obj,
-                                            user_api_key_cache,
-                                            user_custom_auth)
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        jwt_handler,
+        litellm_proxy_admin_name,
+        llm_model_list,
+        llm_router,
+        master_key,
+        model_max_budget_limiter,
+        open_telemetry_logger,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_custom_auth,
+    )
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
@@ -617,12 +638,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Only apply OAuth2 M2M authentication to LLM API routes and info routes, not UI/management routes
             # This allows UI SSO to work separately from API M2M authentication
             # Note: Info routes are already scoped to the user
-            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route):
+            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(
+                route=route
+            ):
                 # When both OAuth2 and JWT auth are enabled, use token format to decide:
                 # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
                 # - Opaque tokens -> use OAuth2 handler
                 # This allows JWT for users and OAuth2 for M2M on the same instance
-                is_jwt_token = jwt_handler.is_jwt(token=api_key) if general_settings.get("enable_jwt_auth", False) is True else False
+                is_jwt_token = (
+                    jwt_handler.is_jwt(token=api_key)
+                    if general_settings.get("enable_jwt_auth", False) is True
+                    else False
+                )
                 if not is_jwt_token:
                     # return UserAPIKeyAuth object
                     # helper to check if the api_key is a valid oauth2 token
@@ -778,8 +805,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     model = get_model_from_request(request_data, route)
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import \
-                            _is_model_cost_zero
+                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                         skip_budget_checks = _is_model_cost_zero(
                             model=model, llm_router=llm_router
@@ -884,9 +910,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     route=route,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -895,8 +921,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         )
                 elif litellm.max_end_user_budget_id is not None:
                     # End user doesn't exist yet, but apply default budget limits if configured
-                    from litellm.proxy.auth.auth_checks import \
-                        get_default_end_user_budget
+                    from litellm.proxy.auth.auth_checks import (
+                        get_default_end_user_budget,
+                    )
 
                     default_budget = await get_default_end_user_budget(
                         prisma_client=prisma_client,
@@ -1453,9 +1480,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict["end_user_object_permission"] = (
-                    _end_user_object.object_permission
-                )
+                valid_token_dict[
+                    "end_user_object_permission"
+                ] = _end_user_object.object_permission
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1677,8 +1704,7 @@ async def _lookup_end_user_and_apply_budget(
                 valid_token=valid_token, end_user_params=end_user_params
             )
         elif litellm.max_end_user_budget_id is not None:
-            from litellm.proxy.auth.auth_checks import \
-                get_default_end_user_budget
+            from litellm.proxy.auth.auth_checks import get_default_end_user_budget
 
             default_budget = await get_default_end_user_budget(
                 prisma_client=prisma_client,
@@ -1709,10 +1735,14 @@ async def _run_post_custom_auth_checks(
     route: str,
     parent_otel_span: Optional[Span],
 ) -> UserAPIKeyAuth:
-    from litellm.proxy.proxy_server import (general_settings, llm_router,
-                                            model_max_budget_limiter,
-                                            prisma_client, proxy_logging_obj,
-                                            user_api_key_cache)
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        model_max_budget_limiter,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     # 1. Look up end_user object from DB if end_user_id is set
     end_user_object = None

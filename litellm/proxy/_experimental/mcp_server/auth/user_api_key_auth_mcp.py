@@ -388,7 +388,6 @@ class MCPRequestHandler:
                     )
                 )
 
-
                 # If end_user has explicit MCP server permissions, apply intersection
                 if len(allowed_mcp_servers_for_end_user) > 0:
                     verbose_logger.debug(
@@ -547,16 +546,16 @@ class MCPRequestHandler:
                 agent_obj_perm = await MCPRequestHandler._get_agent_object_permission(
                     user_api_key_auth
                 )
-                agent_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
-                    server_id=server_id,
-                    user_api_key_auth=user_api_key_auth,
-                    agent_object_permission=agent_obj_perm,
+                agent_tools = (
+                    await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                        server_id=server_id,
+                        user_api_key_auth=user_api_key_auth,
+                        agent_object_permission=agent_obj_perm,
+                    )
                 )
                 if agent_tools is not None:
                     if allowed_tools is not None:
-                        allowed_tools = list(
-                            set(allowed_tools) & set(agent_tools)
-                        )
+                        allowed_tools = list(set(allowed_tools) & set(agent_tools))
                     else:
                         allowed_tools = agent_tools
             return allowed_tools
@@ -621,13 +620,18 @@ class MCPRequestHandler:
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
-            if key_object_permission is None and user_api_key_auth and user_api_key_auth.object_permission_id:
+            if (
+                key_object_permission is None
+                and user_api_key_auth
+                and user_api_key_auth.object_permission_id
+            ):
                 from litellm.proxy.auth.auth_checks import get_object_permission
                 from litellm.proxy.proxy_server import (
                     prisma_client,
                     proxy_logging_obj,
                     user_api_key_cache,
                 )
+
                 if prisma_client is not None:
                     key_object_permission = await get_object_permission(
                         object_permission_id=user_api_key_auth.object_permission_id,
@@ -725,7 +729,6 @@ class MCPRequestHandler:
             return []
 
         if prisma_client is None:
-
             verbose_logger.debug("prisma_client is None")
             return []
 
@@ -739,7 +742,6 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
                 route="/mcp",
             )
-
 
             if end_user_obj is None or end_user_obj.object_permission is None:
                 return []
@@ -796,9 +798,7 @@ class MCPRequestHandler:
 
             return agent_row.object_permission
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get agent object permission: {str(e)}"
-            )
+            verbose_logger.warning(f"Failed to get agent object permission: {str(e)}")
             return None
 
     @staticmethod
@@ -877,9 +877,7 @@ class MCPRequestHandler:
             if obj_perm is None:
                 return None
 
-            mcp_tool_permissions = getattr(
-                obj_perm, "mcp_tool_permissions", None
-            )
+            mcp_tool_permissions = getattr(obj_perm, "mcp_tool_permissions", None)
             if not mcp_tool_permissions:
                 return None
             if isinstance(mcp_tool_permissions, dict):

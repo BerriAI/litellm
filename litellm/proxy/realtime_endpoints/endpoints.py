@@ -114,14 +114,14 @@ async def create_realtime_client_secret(
         )
 
         data = {"model": model}
-        
+
         # If session is provided, use it; otherwise create one from model
         if req.session:
             data["session"] = req.session.model_dump(exclude_none=True)
         elif req.model:
             # User provided model at root level, convert to session format
             data["session"] = {"type": "realtime", "model": model}
-        
+
         if req.expires_after:
             data["expires_after"] = req.expires_after.model_dump(exclude_none=True)
 
@@ -275,7 +275,7 @@ async def proxy_realtime_calls(
                     status_code=http_status.HTTP_401_UNAUTHORIZED,
                     media_type="application/json",
                 )
-        
+
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
         model = (
             decoded_payload.get("model_id")
@@ -328,9 +328,7 @@ async def proxy_realtime_calls(
             call_type="arealtime_calls",
         )
 
-        verbose_proxy_logger.debug(
-            "WebRTC: /v1/realtime/calls (model=%s)", model
-        )
+        verbose_proxy_logger.debug("WebRTC: /v1/realtime/calls (model=%s)", model)
 
         llm_call = await route_request(
             data=data,

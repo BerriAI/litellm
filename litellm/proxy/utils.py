@@ -1796,8 +1796,7 @@ class ProxyLogging:
         if route is None:
             return False
         if not (
-            RouteChecks.is_llm_api_route(route) or
-            RouteChecks.is_info_route(route)
+            RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)
         ):
             return False
 
@@ -1993,7 +1992,9 @@ class ProxyLogging:
         merged_headers: Dict[str, str] = {}
         try:
             # Build litellm_call_info — normalized routing metadata for callbacks
-            litellm_call_info = self._build_litellm_call_info(data=data, response=response)
+            litellm_call_info = self._build_litellm_call_info(
+                data=data, response=response
+            )
 
             for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
@@ -2030,9 +2031,7 @@ class ProxyLogging:
         return merged_headers
 
     @staticmethod
-    def _build_litellm_call_info(
-        data: dict, response: Any
-    ) -> Dict[str, Any]:
+    def _build_litellm_call_info(data: dict, response: Any) -> Dict[str, Any]:
         """
         Build a normalized dict of routing metadata from response._hidden_params
         and data, abstracting away the metadata vs litellm_metadata split.
@@ -2096,8 +2095,10 @@ class ProxyLogging:
 
                         ## CHECK FOR MODEL-LEVEL GUARDRAILS (cached per-request)
                         if not _guardrail_data_computed:
-                            _cached_guardrail_data = _check_and_merge_model_level_guardrails(
-                                data=data, llm_router=llm_router
+                            _cached_guardrail_data = (
+                                _check_and_merge_model_level_guardrails(
+                                    data=data, llm_router=llm_router
+                                )
                             )
                             _guardrail_data_computed = True
 
@@ -3688,13 +3689,15 @@ class PrismaClient:
             probe_pid, _ = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
             verbose_proxy_logger.debug(
-                "PID %s is not a child process; skipping waitpid watch.", pid,
+                "PID %s is not a child process; skipping waitpid watch.",
+                pid,
             )
             return False
 
         if probe_pid == pid:
             verbose_proxy_logger.warning(
-                "prisma-query-engine PID %s already dead at watch start.", pid,
+                "prisma-query-engine PID %s already dead at watch start.",
+                pid,
             )
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
@@ -3871,11 +3874,17 @@ class PrismaClient:
            waitpid thread nor pidfd are available.
 
         """
-        if self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
+        if (
+            self._watching_engine
+            or self._engine_pidfd >= 0
+            or self._engine_wait_thread is not None
+        ):
             return
         pid = self._get_engine_pid()
         if pid == 0:
-            verbose_proxy_logger.debug("Could not find prisma-query-engine PID; engine death detection unavailable.")
+            verbose_proxy_logger.debug(
+                "Could not find prisma-query-engine PID; engine death detection unavailable."
+            )
             return
         self._engine_pid = pid
         self._engine_confirmed_dead = False
@@ -3884,15 +3893,18 @@ class PrismaClient:
         pidfd_ok = False if waitpid_ok else self._try_pidfd_watch(pid)
         if waitpid_ok:
             verbose_proxy_logger.info(
-                "Watching engine PID %s via waitpid thread.", pid,
+                "Watching engine PID %s via waitpid thread.",
+                pid,
             )
         elif pidfd_ok:
             verbose_proxy_logger.info(
-                "Watching engine PID %s via pidfd.", pid,
+                "Watching engine PID %s via pidfd.",
+                pid,
             )
         else:
             verbose_proxy_logger.info(
-                "Watching engine PID %s via os.kill polling.", pid,
+                "Watching engine PID %s via os.kill polling.",
+                pid,
             )
             self._watching_engine = True
             asyncio.create_task(self._poll_engine_proc())
@@ -3915,7 +3927,9 @@ class PrismaClient:
         blip -- disconnect, connect, SELECT 1).
         """
         effective_timeout = (
-            timeout_seconds if timeout_seconds is not None else self._db_watchdog_reconnect_timeout_seconds
+            timeout_seconds
+            if timeout_seconds is not None
+            else self._db_watchdog_reconnect_timeout_seconds
         )
 
         engine_is_dead = self._engine_confirmed_dead or (
@@ -3935,14 +3949,18 @@ class PrismaClient:
             async def _do_heavy_reconnect() -> None:
                 db_url = os.getenv("DATABASE_URL", "")
                 if not db_url:
-                    verbose_proxy_logger.error("DATABASE_URL not set; cannot recreate Prisma client.")
+                    verbose_proxy_logger.error(
+                        "DATABASE_URL not set; cannot recreate Prisma client."
+                    )
                     raise RuntimeError("DATABASE_URL not set")
                 await self.db.recreate_prisma_client(db_url)
                 await self._start_engine_watcher()
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
         else:
-            verbose_proxy_logger.debug("Performing Prisma DB reconnect (engine alive or unknown).")
+            verbose_proxy_logger.debug(
+                "Performing Prisma DB reconnect (engine alive or unknown)."
+            )
 
             async def _do_direct_reconnect() -> None:
                 try:
@@ -4041,7 +4059,9 @@ class PrismaClient:
 
         if lock_timeout_seconds is None:
             async with self._db_reconnect_lock:
-                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+                return await self._attempt_reconnect_inside_lock(
+                    force, reason, timeout_seconds
+                )
 
         lock_acquired_by_timeout_task = False
 
@@ -4090,14 +4110,17 @@ class PrismaClient:
             return False
 
         try:
-            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+            return await self._attempt_reconnect_inside_lock(
+                force, reason, timeout_seconds
+            )
         finally:
             self._db_reconnect_lock.release()
 
     async def start_db_health_watchdog_task(self) -> None:
         """Start background tasks that monitor DB health:
         - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
-        - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling."""
+        - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling.
+        """
         if self._db_health_watchdog_enabled is not True:
             verbose_proxy_logger.debug(
                 "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
@@ -4557,9 +4580,9 @@ class ProxyUpdateSpend:
                     :MAX_LOGS_PER_INTERVAL
                 ]
                 # Remove the logs we're about to process
-                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                    len(logs_to_process) :
-                ]
+                prisma_client.spend_log_transactions = (
+                    prisma_client.spend_log_transactions[len(logs_to_process) :]
+                )
             popped_batch = True
         if len(logs_to_process) > 0:
             verbose_proxy_logger.info(
@@ -4713,9 +4736,7 @@ async def update_spend_logs_job(
         return
 
     async with prisma_client._spend_log_transactions_lock:
-        logs_to_process = prisma_client.spend_log_transactions[
-            :MAX_LOGS_PER_INTERVAL
-        ]
+        logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
             len(logs_to_process) :
         ]
@@ -4733,6 +4754,7 @@ async def update_spend_logs_job(
         from litellm.proxy.guardrails.usage_tracking import (
             process_spend_logs_guardrail_usage,
         )
+
         await process_spend_logs_guardrail_usage(
             prisma_client=prisma_client,
             logs_to_process=logs_to_process,
@@ -4746,6 +4768,7 @@ async def update_spend_logs_job(
     # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
     try:
         from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+
         await process_spend_logs_tool_usage(
             prisma_client=prisma_client,
             logs_to_process=logs_to_process,
@@ -5340,7 +5363,9 @@ async def get_available_models_for_user(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        await validate_membership(
+            user_api_key_dict=user_api_key_dict, team_table=team_object
+        )
         team_models = team_object.models
 
     team_models = get_team_models(
