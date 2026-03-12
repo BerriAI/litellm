@@ -422,7 +422,38 @@ class TestAzureExceptionMapping:
     def test_azure_context_length_exceeded_via_error_code(self):
         """Azure Responses API returns context_length_exceeded in the error code
         with a different message format than the chat completions API. This
-        should still be mapped to ContextWindowExceededError."""
+        should still be mapped to ContextWindowExceededError.
+
+        The exception message intentionally avoids the string-match trigger
+        substrings so that only the azure_error_code == "context_length_exceeded"
+        branch can cause the mapping."""
+
+        mock_exception = Exception(
+            "An unexpected error occurred (code: context_length_exceeded)."
+        )
+        mock_exception.body = {
+            "error": {
+                "message": "An unexpected error occurred (code: context_length_exceeded).",
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "context_length_exceeded",
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContextWindowExceededError):
+            exception_type(
+                model="azure/gpt-4o",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+    def test_azure_context_length_exceeded_via_message_string(self):
+        """When Azure returns a message containing 'input exceeds the context
+        window' but without a structured error code, the string-match branch
+        should still map to ContextWindowExceededError."""
 
         mock_exception = Exception(
             "Your input exceeds the context window of this model. "
@@ -436,7 +467,7 @@ class TestAzureExceptionMapping:
                 ),
                 "type": "invalid_request_error",
                 "param": "input",
-                "code": "context_length_exceeded",
+                "code": None,
             }
         }
         mock_response = MagicMock()
