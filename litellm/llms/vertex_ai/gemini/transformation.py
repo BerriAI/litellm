@@ -482,8 +482,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     provider_specific_fields = assistant_msg.get("provider_specific_fields")
                     thought_signatures = None
                     if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
+                        thought_signatures = provider_specific_fields.get("thought_signatures") or provider_specific_fields.get("thought_signature")
                     
+                    if isinstance(thought_signatures, str):
+                        thought_signatures = [thought_signatures]
+
                     # If we have thought signatures, add them to the part
                     if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
                         # Use the first signature for the text part (Gemini expects one signature per part)
