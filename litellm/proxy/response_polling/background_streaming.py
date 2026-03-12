@@ -116,7 +116,6 @@ async def background_streaming_task(  # noqa: PLR0915
         # Track the terminal event from the stream (may not be "completed")
         terminal_status = None  # Will be set by response.completed/failed/incomplete/cancelled
         terminal_error = None
-        terminal_response_data = None
 
         async def flush_state_if_needed(force: bool = False) -> None:
             """Flush accumulated state to Redis if interval elapsed or forced"""
@@ -238,7 +237,6 @@ async def background_streaming_task(  # noqa: PLR0915
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
-                            terminal_response_data = response_data
                             terminal_status = response_data.get(
                                 "status", "completed"
                             )
