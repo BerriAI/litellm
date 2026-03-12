@@ -1069,7 +1069,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
-            elif param == "service_tier" and isinstance(value, str):
+            elif param == "service_tier" and value in ("auto", "standard_only"):
                 optional_params["service_tier"] = value
 
         ## handle thinking tokens

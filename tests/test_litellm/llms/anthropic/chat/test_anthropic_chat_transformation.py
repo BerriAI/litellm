@@ -3332,3 +3332,24 @@ def test_service_tier_in_supported_params():
     assert "service_tier" in config.get_supported_openai_params(
         model="claude-sonnet-4-6"
     )
+
+
+@pytest.mark.parametrize("service_tier", ["default", "flex", "scale"])
+def test_service_tier_openai_values_not_forwarded_to_anthropic(service_tier: str):
+    """
+    OpenAI-specific service_tier values must not be forwarded to Anthropic
+    to avoid hard API errors. Only "auto" and "standard_only" are valid on
+    the Anthropic API.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23398
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="claude-sonnet-4-6",
+        drop_params=False,
+    )
+
+    assert "service_tier" not in result
