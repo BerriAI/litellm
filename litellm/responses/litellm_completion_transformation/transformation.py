@@ -215,6 +215,7 @@ class LiteLLMCompletionResponsesConfig:
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
+            "extra_body": kwargs.get("extra_body"),
         }
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage

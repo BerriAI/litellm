@@ -1774,3 +1774,53 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+
+class TestExtraBodyPassthrough:
+    """Test cases for extra_body parameter passthrough to completion request"""
+
+    def test_extra_body_passed_through_to_completion_request(self):
+        """Test that extra_body is passed through to the completion request"""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="openrouter/moonshotai/kimi-k2.5",
+            input="Tell me a story.",
+            responses_api_request={},
+            extra_body={
+                "provider": {
+                    "order": ["Together"],
+                    "allow_fallbacks": False,
+                }
+            },
+        )
+
+        assert "extra_body" in result
+        assert result["extra_body"] == {
+            "provider": {
+                "order": ["Together"],
+                "allow_fallbacks": False,
+            }
+        }
+
+    def test_extra_body_none_is_filtered_out(self):
+        """Test that extra_body is None when not provided"""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-4",
+            input="Hello",
+            responses_api_request={},
+        )
+
+        # extra_body should be None when not provided
+        assert result.get("extra_body") is None
+
+    def test_extra_body_and_extra_headers_passed_together(self):
+        """Test that both extra_body and extra_headers can be passed together"""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="openrouter/anthropic/claude-3.5-sonnet",
+            input="Test input",
+            responses_api_request={},
+            extra_headers={"X-Custom-Header": "custom-value"},
+            extra_body={"custom_param": "custom_value"},
+        )
+
+        assert result["extra_headers"] == {"X-Custom-Header": "custom-value"}
+        assert result["extra_body"] == {"custom_param": "custom_value"}
