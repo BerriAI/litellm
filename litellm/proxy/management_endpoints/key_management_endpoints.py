@@ -18,7 +18,7 @@ import re
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 import yaml
@@ -1699,6 +1699,7 @@ async def _process_single_key_update(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
+    user_custom_key_update: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """
     Process a single key update with all validations and checks.
@@ -1739,6 +1740,19 @@ async def _process_single_key_update(
             existing_key_row=existing_key_row,
             user_api_key_cache=user_api_key_cache,
         )
+
+    # Custom key update hook
+    if user_custom_key_update is not None:
+        if inspect.iscoroutinefunction(user_custom_key_update):
+            result = await user_custom_key_update(key_update_item)
+        else:
+            raise ValueError("user_custom_key_update must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=message
+            )
 
     # Create UpdateKeyRequest from BulkUpdateKeyRequestItem
     update_key_request = UpdateKeyRequest(
@@ -2292,6 +2306,7 @@ async def bulk_update_keys(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_update,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2335,6 +2350,7 @@ async def bulk_update_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
+                user_custom_key_update=user_custom_key_update,
             )
 
             successful_updates.append(
