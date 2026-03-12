@@ -1,49 +1,38 @@
+import importlib
 import os
-from unittest.mock import patch
+
+import litellm.litellm_core_utils.default_encoding as default_encoding
 
 
-def test_tiktoken_cache_fallback(monkeypatch):
+def _reload_default_encoding(monkeypatch, **env_overrides):
     """
-    Test that TIKTOKEN_CACHE_DIR falls back to /tmp/tiktoken_cache
-    if the default directory is not writable and LITELLM_NON_ROOT is true.
+    Helper to reload default_encoding with a clean TIKTOKEN_CACHE_DIR and
+    specific environment overrides.
     """
-    # Simulate non-root environment
-    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    monkeypatch.delenv("CUSTOM_TIKTOKEN_CACHE_DIR", raising=False)
-
-    # Mock os.access to return False (not writable)
-    # and mock os.makedirs to avoid actually creating /tmp/tiktoken_cache on local machine
-    with patch("os.access", return_value=False), patch("os.makedirs"):
-        # We need to reload or re-run the logic in default_encoding.py
-        # But since it's already executed, we'll just test the logic directly
-        # mirroring what we wrote in the file.
-
-        filename = (
-            "/usr/lib/python3.13/site-packages/litellm/litellm_core_utils/tokenizers"
-        )
-        is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-
-        if not os.access(filename, os.W_OK) and is_non_root:
-            filename = "/tmp/tiktoken_cache"
-            # mock_makedirs(filename, exist_ok=True)
-
-        assert filename == "/tmp/tiktoken_cache"
+    monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
+    for key, value in env_overrides.items():
+        monkeypatch.setenv(key, value)
+    importlib.reload(default_encoding)
 
 
-def test_tiktoken_cache_no_fallback_if_writable(monkeypatch):
+def test_default_encoding_uses_bundled_tokenizers_by_default(monkeypatch):
     """
-    Test that TIKTOKEN_CACHE_DIR does NOT fall back if writable
+    TIKTOKEN_CACHE_DIR should point at the bundled tokenizers directory
+    when no CUSTOM_TIKTOKEN_CACHE_DIR is set, even in non-root environments.
     """
-    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    _reload_default_encoding(monkeypatch, LITELLM_NON_ROOT="true")
 
-    filename = "/usr/lib/python3.13/site-packages/litellm/litellm_core_utils/tokenizers"
+    assert "TIKTOKEN_CACHE_DIR" in os.environ
+    cache_dir = os.environ["TIKTOKEN_CACHE_DIR"]
+    assert "tokenizers" in cache_dir
 
-    with patch("os.access", return_value=True):
-        is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-        if not os.access(filename, os.W_OK) and is_non_root:
-            filename = "/tmp/tiktoken_cache"
 
-        assert (
-            filename
-            == "/usr/lib/python3.13/site-packages/litellm/litellm_core_utils/tokenizers"
-        )
+def test_custom_tiktoken_cache_dir_override(monkeypatch, tmp_path):
+    """
+    CUSTOM_TIKTOKEN_CACHE_DIR must override the default bundled directory.
+    """
+    custom_dir = tmp_path / "tiktoken_cache"
+    monkeypatch.setenv("CUSTOM_TIKTOKEN_CACHE_DIR", str(custom_dir))
+    _reload_default_encoding(monkeypatch)
+
+    assert os.environ.get("TIKTOKEN_CACHE_DIR") == str(custom_dir)
