@@ -8855,6 +8855,30 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_realtime_http_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseRealtimeHTTPConfig"]:
+        """
+        Return the HTTP transformation config for realtime HTTP endpoints
+        (POST /realtime/client_secrets and POST /realtime/calls).
+        """
+
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.realtime.http_transformation import (
+                OpenAIRealtimeHTTPConfig,
+            )
+
+            return OpenAIRealtimeHTTPConfig()
+        if LlmProviders.AZURE == provider:
+            from litellm.llms.azure.realtime.http_transformation import (
+                AzureRealtimeHTTPConfig,
+            )
+
+            return AzureRealtimeHTTPConfig()
+        return None
+
+    @staticmethod
     def get_provider_image_edit_config(
         model: str,
         provider: LlmProviders,

@@ -492,6 +492,8 @@ CallTypesLiteral = Literal[
     "aresponses",
     "responses",
     "acreate_skill",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
 ]
 
 # Mapping of API routes to their corresponding call types
