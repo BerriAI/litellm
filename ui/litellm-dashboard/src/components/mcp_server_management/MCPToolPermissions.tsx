@@ -2,9 +2,11 @@ import React, { useEffect, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
-import { Spin, Checkbox } from "antd";
+import { Spin, Radio } from "antd";
 import { XIcon } from "lucide-react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
+import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
 
 interface MCPToolPermissionsProps {
   accessToken: string;
@@ -25,6 +27,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
+  const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
 
   // Filter servers based on selectedServers
   const servers = useMemo(() => {
@@ -32,7 +35,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     return allServers.filter((server: MCPServer) => selectedServers.includes(server.server_id));
   }, [allServers, selectedServers]);
 
-  // Fetch tools for a specific server
+  // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
   const fetchToolsForServer = async (serverId: string) => {
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
@@ -44,7 +47,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
         setServerTools((prev) => ({ ...prev, [serverId]: [] }));
       } else {
-        setServerTools((prev) => ({ ...prev, [serverId]: response.tools || [] }));
+        const fetchedTools: MCPTool[] = response.tools || [];
+        setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
+
+        // For servers that have no permissions stored yet, block delete tools by default.
+        if (!toolPermissions[serverId] && fetchedTools.length > 0) {
+          const nonDeleteTools = fetchedTools
+            .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
+            .map((t) => t.name);
+          onChange({ ...toolPermissions, [serverId]: nonDeleteTools });
+        }
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
@@ -64,35 +76,17 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     });
   }, [servers]);
 
-  // Handle tool selection
-  const handleToolToggle = (serverId: string, toolName: string) => {
-    const currentTools = toolPermissions[serverId] || [];
-    const newTools = currentTools.includes(toolName)
-      ? currentTools.filter((name) => name !== toolName)
-      : [...currentTools, toolName];
-
-    const updatedPermissions = {
-      ...toolPermissions,
-      [serverId]: newTools,
-    };
-    onChange(updatedPermissions);
+  const handleCrudPanelChange = (serverId: string, allowed: string[] | undefined) => {
+    onChange({ ...toolPermissions, [serverId]: allowed ?? [] });
   };
 
   const handleSelectAll = (serverId: string) => {
     const tools = serverTools[serverId] || [];
-    const newPermissions = {
-      ...toolPermissions,
-      [serverId]: tools.map((t) => t.name),
-    };
-    onChange(newPermissions);
+    onChange({ ...toolPermissions, [serverId]: tools.map((t) => t.name) });
   };
 
   const handleDeselectAll = (serverId: string) => {
-    const newPermissions = {
-      ...toolPermissions,
-      [serverId]: [],
-    };
-    onChange(newPermissions);
+    onChange({ ...toolPermissions, [serverId]: [] });
   };
 
   if (selectedServers.length === 0) {
@@ -117,22 +111,41 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  onClick={() => handleSelectAll(server.server_id)}
-                  disabled={disabled || isLoading}
-                >
-                  Select All
-                </button>
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  onClick={() => handleDeselectAll(server.server_id)}
-                  disabled={disabled || isLoading}
-                >
-                  Deselect All
-                </button>
+                {!disabled && tools.length > 0 && (
+                  <Radio.Group
+                    value={viewModes[server.server_id] ?? "crud"}
+                    onChange={(e) =>
+                      setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))
+                    }
+                    size="small"
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: "Risk Groups", value: "crud" },
+                      { label: "Flat List", value: "flat" },
+                    ]}
+                  />
+                )}
+                {!disabled && (
+                  <>
+                    <button
+                      type="button"
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      onClick={() => handleSelectAll(server.server_id)}
+                      disabled={isLoading}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      onClick={() => handleDeselectAll(server.server_id)}
+                      disabled={isLoading}
+                    >
+                      Deselect All
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   className="text-gray-400 hover:text-gray-600"
@@ -147,8 +160,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
             {/* Tools */}
             <div className="p-4">
-              <Text className="text-sm font-medium text-gray-700 mb-3">Available Tools</Text>
-
               {/* Loading */}
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
@@ -165,18 +176,36 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 </div>
               )}
 
-              {/* Tool List - Compact */}
-              {!isLoading && !error && tools.length > 0 && (
+              {/* CRUD grouped view */}
+              {!isLoading && !error && tools.length > 0 && (viewModes[server.server_id] ?? "crud") === "crud" && (
+                <McpCrudPermissionPanel
+                  tools={tools}
+                  value={selectedTools.length === 0 && !toolPermissions[server.server_id] ? undefined : selectedTools}
+                  onChange={(allowed) => handleCrudPanelChange(server.server_id, allowed)}
+                  readOnly={disabled}
+                  blockDeleteByDefault
+                />
+              )}
+
+              {/* Flat list view */}
+              {!isLoading && !error && tools.length > 0 && (viewModes[server.server_id] ?? "crud") === "flat" && (
                 <div className="space-y-2">
                   {tools.map((tool) => {
                     const isSelected = selectedTools.includes(tool.name);
-
                     return (
                       <div key={tool.name} className="flex items-start gap-2">
-                        <Checkbox
+                        <input
+                          type="checkbox"
                           checked={isSelected}
-                          onChange={() => handleToolToggle(server.server_id, tool.name)}
+                          onChange={() => {
+                            if (disabled) return;
+                            const next = isSelected
+                              ? selectedTools.filter((n) => n !== tool.name)
+                              : [...selectedTools, tool.name];
+                            handleCrudPanelChange(server.server_id, next);
+                          }}
                           disabled={disabled}
+                          className="mt-0.5"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">

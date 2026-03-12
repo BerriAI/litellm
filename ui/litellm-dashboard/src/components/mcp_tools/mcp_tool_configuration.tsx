@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox, Input } from "antd";
+import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
+import McpCrudPermissionPanel from "./McpCrudPermissionPanel";
 
 interface KeyTool {
   name: string;
@@ -163,6 +164,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   const hasInitializedRef = useRef(false);
   const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<"crud" | "flat">("crud");
 
   // Use external tool state when provided (avoids duplicate fetch with MCPConnectionStatus).
   // Fall back to internal hook when used standalone (e.g., edit flow).
@@ -367,6 +369,19 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               />
             )}
           </div>
+          {tools.length > 0 && (
+            <Radio.Group
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              size="small"
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: "Risk Groups", value: "crud" },
+                { label: "Flat List", value: "flat" },
+              ]}
+            />
+          )}
         </div>
 
         {/* Description */}
@@ -436,104 +451,118 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               </Text>
             </div>
 
-            {/* Search bar */}
-            <Input
-              placeholder="Search tools by name or description..."
-              prefix={<SearchOutlined className="text-gray-400" />}
-              value={toolSearchTerm}
-              onChange={(e) => setToolSearchTerm(e.target.value)}
-              allowClear
-              className="rounded-lg"
-              size="large"
-            />
+            {/* CRUD grouped view */}
+            {viewMode === "crud" && (
+              <McpCrudPermissionPanel
+                tools={tools}
+                value={allowedTools}
+                onChange={(allowed) => onAllowedToolsChange(allowed ?? [])}
+              />
+            )}
 
-            {/* Tool list with checkboxes */}
-            {filteredTools.length === 0 ? (
-              <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
-                <SearchOutlined className="text-2xl mb-2" />
-                <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {pinnedFiltered.length > 0 && (
-                  <>
-                    <div className="flex items-center justify-between px-1">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        Suggested tools
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleEnableSuggested}
-                          className="text-xs text-blue-600 hover:text-blue-700"
-                        >
-                          Enable all
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleDisableSuggested}
-                          className="text-xs text-gray-500 hover:text-gray-700"
-                        >
-                          Disable all
-                        </button>
-                      </div>
-                    </div>
-                    {pinnedFiltered.map((tool) => (
-                      <ToolRow
-                        key={tool.name}
-                        tool={tool}
-                        isEnabled={allowedTools.includes(tool.name)}
-                        isEditExpanded={expandedTools.has(tool.name)}
-                        toolNameToDisplayName={toolNameToDisplayName}
-                        toolNameToDescription={toolNameToDescription}
-                        onToggle={handleToolToggle}
-                        onToggleExpand={handleToggleEditExpanded}
-                        onDisplayNameChange={handleDisplayNameChange}
-                        onDescriptionChange={handleDescriptionChange}
-                      />
-                    ))}
-                  </>
+            {/* Flat list view */}
+            {viewMode === "flat" && (
+              <>
+                {/* Search bar */}
+                <Input
+                  placeholder="Search tools by name or description..."
+                  prefix={<SearchOutlined className="text-gray-400" />}
+                  value={toolSearchTerm}
+                  onChange={(e) => setToolSearchTerm(e.target.value)}
+                  allowClear
+                  className="rounded-lg"
+                  size="large"
+                />
+
+                {/* Tool list with checkboxes */}
+                {filteredTools.length === 0 ? (
+                  <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                    <SearchOutlined className="text-2xl mb-2" />
+                    <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {pinnedFiltered.length > 0 && (
+                      <>
+                        <div className="flex items-center justify-between px-1">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Suggested tools
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={handleEnableSuggested}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
+                              Enable all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDisableSuggested}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Disable all
+                            </button>
+                          </div>
+                        </div>
+                        {pinnedFiltered.map((tool) => (
+                          <ToolRow
+                            key={tool.name}
+                            tool={tool}
+                            isEnabled={allowedTools.includes(tool.name)}
+                            isEditExpanded={expandedTools.has(tool.name)}
+                            toolNameToDisplayName={toolNameToDisplayName}
+                            toolNameToDescription={toolNameToDescription}
+                            onToggle={handleToolToggle}
+                            onToggleExpand={handleToggleEditExpanded}
+                            onDisplayNameChange={handleDisplayNameChange}
+                            onDescriptionChange={handleDescriptionChange}
+                          />
+                        ))}
+                      </>
+                    )}
+                    {restFiltered.length > 0 && (
+                      <>
+                        <div className="flex items-center justify-between px-1 pt-2">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={handleEnableRest}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
+                              Enable all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDisableRest}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Disable all
+                            </button>
+                          </div>
+                        </div>
+                        {restFiltered.map((tool) => (
+                          <ToolRow
+                            key={tool.name}
+                            tool={tool}
+                            isEnabled={allowedTools.includes(tool.name)}
+                            isEditExpanded={expandedTools.has(tool.name)}
+                            toolNameToDisplayName={toolNameToDisplayName}
+                            toolNameToDescription={toolNameToDescription}
+                            onToggle={handleToolToggle}
+                            onToggleExpand={handleToggleEditExpanded}
+                            onDisplayNameChange={handleDisplayNameChange}
+                            onDescriptionChange={handleDescriptionChange}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </div>
                 )}
-                {restFiltered.length > 0 && (
-                  <>
-                    <div className="flex items-center justify-between px-1 pt-2">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        {pinnedFiltered.length > 0 ? "All tools" : "Tools"}
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleEnableRest}
-                          className="text-xs text-blue-600 hover:text-blue-700"
-                        >
-                          Enable all
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleDisableRest}
-                          className="text-xs text-gray-500 hover:text-gray-700"
-                        >
-                          Disable all
-                        </button>
-                      </div>
-                    </div>
-                    {restFiltered.map((tool) => (
-                      <ToolRow
-                        key={tool.name}
-                        tool={tool}
-                        isEnabled={allowedTools.includes(tool.name)}
-                        isEditExpanded={expandedTools.has(tool.name)}
-                        toolNameToDisplayName={toolNameToDisplayName}
-                        toolNameToDescription={toolNameToDescription}
-                        onToggle={handleToolToggle}
-                        onToggleExpand={handleToggleEditExpanded}
-                        onDisplayNameChange={handleDisplayNameChange}
-                        onDescriptionChange={handleDescriptionChange}
-                      />
-                    ))}
-                  </>
-                )}
-              </div>
+              </>
             )}
           </div>
         )}
