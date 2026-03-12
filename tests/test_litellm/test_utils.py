@@ -3468,6 +3468,30 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("prompt_cache_key") == "test_key"
         assert result.get("custom_param") == "value"
 
+    def test_anthropic_does_not_forward_vector_store_ids(self):
+        """Test that vector_store_ids and vector_store_id are never forwarded to non-OpenAI providers."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "temperature": 0.7,
+            "vector_store_ids": ["vs_abc"],
+            "vector_store_id": "vs_legacy",
+            "custom_provider_param": "keep_me",
+        }
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=["temperature", "model"],
+            additional_drop_params=None,
+        )
+
+        assert "vector_store_ids" not in result
+        assert "vector_store_id" not in result
+        assert result.get("custom_provider_param") == "keep_me"
+
 
 class TestDropParamsWithPromptCacheKey:
     """

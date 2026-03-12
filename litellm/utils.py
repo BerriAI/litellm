@@ -65,6 +65,7 @@ from litellm.constants import (
     FUNCTION_DEFINITION_TOKEN_COUNT,
     INITIAL_RETRY_DELAY,
     JITTER,
+    LITELLM_INTERNAL_PASSTHROUGH_BLOCKLIST,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
@@ -4720,7 +4721,11 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params.keys():
-            if k not in openai_params and passed_params[k] is not None:
+            if (
+                k not in openai_params
+                and k not in LITELLM_INTERNAL_PASSTHROUGH_BLOCKLIST
+                and passed_params[k] is not None
+            ):
                 if _should_drop_param(
                     k=k, additional_drop_params=additional_drop_params
                 ):
