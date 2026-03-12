@@ -3300,3 +3300,56 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+@pytest.mark.parametrize("service_tier", ["auto", "standard_only"])
+def test_service_tier_forwarded_to_anthropic(service_tier: str):
+    """
+    service_tier must be forwarded as-is to the Anthropic API request body.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23398
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="claude-sonnet-4-6",
+        drop_params=False,
+    )
+
+    assert result.get("service_tier") == service_tier
+
+
+def test_service_tier_in_supported_params():
+    """
+    service_tier must appear in get_supported_openai_params so it is not
+    silently dropped before map_openai_params is called.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23398
+    """
+    config = AnthropicConfig()
+    assert "service_tier" in config.get_supported_openai_params(
+        model="claude-sonnet-4-6"
+    )
+
+
+@pytest.mark.parametrize("service_tier", ["default", "flex", "scale"])
+def test_service_tier_any_string_forwarded_to_anthropic(service_tier: str):
+    """
+    service_tier is forwarded as-is to the Anthropic API for all string
+    values. Anthropic validates the value and returns an error for
+    unsupported tiers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23398
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="claude-sonnet-4-6",
+        drop_params=False,
+    )
+
+    assert result.get("service_tier") == service_tier
