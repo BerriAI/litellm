@@ -24,20 +24,15 @@ else:
 class RecraftImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
         https://www.recraft.ai/docs#generate-image
         """
-        return [
-            "n",
-            "response_format",
-            "size",
-            "style"
-        ]
-    
+        return ["n", "response_format", "size", "style"]
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -74,9 +69,7 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         Some providers need `model` in `api_base`
         """
         complete_url: str = (
-            api_base 
-            or get_secret_str("RECRAFT_API_BASE") 
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
@@ -93,17 +86,12 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("RECRAFT_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
-        
-        headers["Authorization"] = f"Bearer {final_api_key}"        
+
+        headers["Authorization"] = f"Bearer {final_api_key}"
         return headers
-
-
 
     def transform_image_generation_request(
         self,
@@ -118,10 +106,12 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
 
         https://www.recraft.ai/docs#generate-image
         """
-        recratft_image_generation_request_body: RecraftImageGenerationRequestParams = RecraftImageGenerationRequestParams(
-            prompt=prompt,
-            model=model,
-            **optional_params,
+        recratft_image_generation_request_body: RecraftImageGenerationRequestParams = (
+            RecraftImageGenerationRequestParams(
+                prompt=prompt,
+                model=model,
+                **optional_params,
+            )
         )
         return dict(recratft_image_generation_request_body)
 
@@ -153,11 +143,13 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
             )
         if not model_response.data:
             model_response.data = []
-        
+
         for image_data in response_data["data"]:
-            model_response.data.append(ImageObject(
-                url=image_data.get("url", None),
-                b64_json=image_data.get("b64_json", None),
-            ))
-        
+            model_response.data.append(
+                ImageObject(
+                    url=image_data.get("url", None),
+                    b64_json=image_data.get("b64_json", None),
+                )
+            )
+
         return model_response

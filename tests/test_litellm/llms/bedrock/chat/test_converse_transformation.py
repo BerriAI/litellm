@@ -43,6 +43,29 @@ def test_transform_usage():
     )
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
+    # completion_tokens_details should always be populated
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens == 0
+    assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
+
+
+def test_transform_usage_with_reasoning_content():
+    """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 10,
+            "outputTokens": 100,
+            "totalTokens": 110,
+        }
+    )
+    config = AmazonConverseConfig()
+    reasoning_text = "Let me think about this step by step."
+    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens > 0
+    assert openai_usage.completion_tokens_details.text_tokens == (
+        usage["outputTokens"] - openai_usage.completion_tokens_details.reasoning_tokens
+    )
 
 
 def test_transform_system_message():
@@ -2616,11 +2639,11 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
-    # Import the litellm module that factory.py uses to ensure we patch the correct reference
-    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3135,7 +3158,12 @@ def test_native_structured_output_no_fake_stream():
 
 def test_transform_request_with_output_config():
     """Test that outputConfig flows through _transform_request_helper into the final request."""
-    from litellm.types.llms.bedrock import OutputConfigBlock, OutputFormat, OutputFormatStructure, JsonSchemaDefinition
+    from litellm.types.llms.bedrock import (
+        JsonSchemaDefinition,
+        OutputConfigBlock,
+        OutputFormat,
+        OutputFormatStructure,
+    )
 
     config = AmazonConverseConfig()
 
@@ -3168,6 +3196,29 @@ def test_transform_request_with_output_config():
     assert "outputConfig" in result
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
     assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "TestSchema"
+
+
+def test_transform_request_strips_anthropic_output_config():
+    """
+    output_config is Anthropic-specific and must never be forwarded to Bedrock.
+    """
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hello"}]
+
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params={
+            "maxTokens": 64,
+            "output_config": {"effort": "low"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "outputConfig" not in result
+    additional_fields = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional_fields
 
 
 def test_transform_response_native_structured_output():

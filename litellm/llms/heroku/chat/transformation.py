@@ -12,9 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
+
 # Base error class for Heroku
 class HerokuError(Exception):
     pass
+
 
 class HerokuChatConfig(OpenAIGPTConfig):
     @overload
@@ -49,19 +51,31 @@ class HerokuChatConfig(OpenAIGPTConfig):
                 messages=messages, model=model, is_async=False
             )
 
-    def _get_openai_compatible_provider_info(self, api_base: Optional[str], api_key: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or os.getenv("HEROKU_API_BASE")
         api_key = api_key or os.getenv("HEROKU_API_KEY")
-            
+
         return api_base, api_key
 
-    def get_complete_url(self, api_base: Optional[str], api_key: Optional[str], model: str, optional_params: dict, litellm_params: dict, stream: Optional[bool] = None) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
 
         if not api_base:
-            raise HerokuError("No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable.")
-        
+            raise HerokuError(
+                "No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable."
+            )
+
         if not api_base.endswith("/v1/chat/completions"):
-            api_base = f"{api_base}/v1/chat/completions"    
+            api_base = f"{api_base}/v1/chat/completions"
 
         return api_base

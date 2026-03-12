@@ -1644,3 +1644,88 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         timezone_offset_minutes=480,
     )
+
+
+@pytest.mark.asyncio
+async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
+    """
+    Test that delete_user removes invitation links where the deleted user is the
+    creator (created_by) or updater (updated_by), not just the invited person (user_id).
+
+    This prevents FK constraint violations when deleting a user who created pending invites.
+    """
+    from litellm.proxy._types import DeleteUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock user lookup
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "admin-creator"
+    mock_user_row.user_email = "admin@example.com"
+    mock_user_row.teams = []
+    mock_user_row.json.return_value = "{}"
+    mock_user_row.model_dump.return_value = {
+        "user_id": "admin-creator",
+        "user_email": "admin@example.com",
+        "teams": [],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        return mock_user_row
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Mock find_many for teams (no teams)
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
+
+    # Mock all delete_many calls
+    mock_prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(
+        return_value=0
+    )
+    mock_prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(
+        return_value=1
+    )
+    mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(
+        return_value=0
+    )
+    mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(
+        return_value=0
+    )
+    mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(
+        return_value=1
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Call delete_user
+    data = DeleteUserRequest(user_ids=["admin-creator"])
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    await delete_user(data=data, user_api_key_dict=user_api_key_dict)
+
+    # Verify invitation link deletion uses OR with user_id, created_by, updated_by
+    mock_prisma_client.db.litellm_invitationlink.delete_many.assert_called_once()
+    call_kwargs = mock_prisma_client.db.litellm_invitationlink.delete_many.call_args
+    where_clause = call_kwargs.kwargs.get("where") or call_kwargs[1].get("where")
+
+    assert "OR" in where_clause, "Should use OR to match user_id, created_by, and updated_by"
+    or_conditions = where_clause["OR"]
+    assert len(or_conditions) == 3, "Should have 3 OR conditions"
+
+    # Verify all three FK fields are covered
+    condition_keys = [list(c.keys())[0] for c in or_conditions]
+    assert "user_id" in condition_keys
+    assert "created_by" in condition_keys
+    assert "updated_by" in condition_keys
+
+    # Verify each condition uses {"in": ["admin-creator"]}
+    for condition in or_conditions:
+        field = list(condition.keys())[0]
+        assert condition[field] == {"in": ["admin-creator"]}

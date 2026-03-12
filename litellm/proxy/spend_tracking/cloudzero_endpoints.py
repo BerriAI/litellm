@@ -303,6 +303,7 @@ def is_cloudzero_setup_in_config() -> bool:
         bool: True if CloudZero is configured, False otherwise
     """
     import litellm
+
     return "cloudzero" in litellm.callbacks
 
 
@@ -312,7 +313,7 @@ async def is_cloudzero_setup() -> bool:
 
     CloudZero is considered setup if:
     - CloudZero is configured in config.yaml callbacks, OR
-    - CloudZero environment variables are set, OR  
+    - CloudZero environment variables are set, OR
     - CloudZero settings exist in the database
 
     Returns:
@@ -322,11 +323,11 @@ async def is_cloudzero_setup() -> bool:
         # Check config.yaml/environment variables first
         if is_cloudzero_setup_in_config():
             return True
-            
+
         # Check database as fallback
         if await is_cloudzero_setup_in_db():
             return True
-            
+
         return False
 
     except Exception as e:
@@ -425,9 +426,7 @@ async def cloudzero_dry_run_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
-        dry_run_result = await logger.dry_run_export_usage_data(
-            limit=request.limit
-        )
+        dry_run_result = await logger.dry_run_export_usage_data(limit=request.limit)
 
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
 
@@ -470,7 +469,6 @@ async def cloudzero_export(
     Only admin users can perform CloudZero exports.
     """
 
-
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -500,10 +498,10 @@ async def cloudzero_export(
         verbose_proxy_logger.info("CloudZero export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero export completed successfully", 
+            message="CloudZero export completed successfully",
             status="success",
             dry_run_data=None,
-            summary=None
+            summary=None,
         )
 
     except Exception as e:
