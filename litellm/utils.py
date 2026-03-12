@@ -8748,6 +8748,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.PIXVERSE == provider:
+            from litellm.llms.pixverse.videos.transformation import PixverseVideoConfig
+
+            return PixverseVideoConfig()
         return None
 
     @staticmethod

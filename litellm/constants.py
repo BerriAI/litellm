@@ -194,6 +194,13 @@ RUNWAYML_POLLING_TIMEOUT = int(
     os.getenv("RUNWAYML_POLLING_TIMEOUT", 600)
 )  # 10 minutes default for image generation
 
+PIXVERSE_DEFAULT_API_VERSION = str(
+    os.getenv("PIXVERSE_DEFAULT_API_VERSION", "v2")
+)
+PIXVERSE_POLLING_TIMEOUT = int(
+    os.getenv("PIXVERSE_POLLING_TIMEOUT", 600)
+)  # 10 minutes default for video generation
+
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
