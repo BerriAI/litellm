@@ -90,7 +90,7 @@ def test_supports_function_calling_github_openai_alias():
 def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
-            model="github/claude-3-5-sonnet-latest"
+            model="github/claude-3-7-sonnet-20250219"
         )
         is True
     )
@@ -619,6 +619,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
@@ -700,6 +701,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
@@ -738,6 +740,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
+                "supports_multimodal": {"type": "boolean"},
+                "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
