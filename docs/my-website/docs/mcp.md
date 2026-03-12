@@ -133,6 +133,21 @@ LiteLLM attempts [OAuth 2.0 Authorization Server Discovery](https://datatracker.
 
 <br/>
 
+### AWS SigV4 Authentication
+
+For MCP servers hosted on [AWS Bedrock AgentCore](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html), select **AWS SigV4** as the authentication type. LiteLLM will sign every outgoing MCP request with your AWS credentials using [Signature Version 4](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html).
+
+<Image
+  img={require('../img/mcp_aws_sigv4_ui.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+Fill in your AWS region, service name (defaults to `bedrock-agentcore`), and optionally your AWS access key and secret. If credentials are omitted, LiteLLM falls back to the boto3 credential chain (IAM roles, environment variables, etc.).
+
+[**See full SigV4 setup guide**](./mcp_aws_sigv4.md)
+
+<br/>
+
 ### Static Headers
 
 Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.

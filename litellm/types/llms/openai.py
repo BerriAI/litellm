@@ -1200,6 +1200,14 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     cost: Optional[float] = None
     """The cost of the request."""
 
+    @field_validator("cost", mode="before")
+    @classmethod
+    def parse_cost(cls, v: Any) -> Optional[float]:
+        """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
+        if isinstance(v, dict):
+            return v.get("total_cost")
+        return v
+
     model_config = {"extra": "allow"}
 
 

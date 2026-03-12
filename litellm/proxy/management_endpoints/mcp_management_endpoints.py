@@ -410,6 +410,17 @@ if MCP_AVAILABLE:
             inherited_credentials["client_secret"] = existing_server.client_secret
         if existing_server.scopes:
             inherited_credentials["scopes"] = existing_server.scopes
+        # AWS SigV4 fields
+        if existing_server.aws_access_key_id:
+            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
+        if existing_server.aws_secret_access_key:
+            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
+        if existing_server.aws_session_token:
+            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
+        if existing_server.aws_region_name:
+            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
+        if existing_server.aws_service_name:
+            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
 
         if not inherited_credentials:
             return payload
@@ -711,7 +722,8 @@ if MCP_AVAILABLE:
                     check_db_only=True,
                 )
                 user_in_team = any(
-                    m.user_id is not None and m.user_id == user_api_key_dict.user_id
+                    m.user_id is not None
+                    and m.user_id == user_api_key_dict.user_id
                     for m in team_obj.members_with_roles
                 )
                 if not user_in_team:
@@ -720,26 +732,20 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(
-                sanitized_team_id
-            )
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
         else:
             user_mcp_management_mode = _get_user_mcp_management_mode()
 
             if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-                servers = (
-                    await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-                )
+                servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
                 redacted_mcp_servers = _redact_mcp_credentials_list(servers)
             else:
                 auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
                 aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
                 for auth_context in auth_contexts:
-                    servers = (
-                        await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                            user_api_key_auth=auth_context
-                        )
+                    servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                        user_api_key_auth=auth_context
                     )
                     for server in servers:
                         if server.server_id not in aggregated_servers:

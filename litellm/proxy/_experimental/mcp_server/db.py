@@ -104,6 +104,50 @@ def encrypt_credentials(
             value=client_secret,
             new_encryption_key=encryption_key,
         )
+    # AWS SigV4 credential fields
+    aws_access_key_id = credentials.get("aws_access_key_id")
+    if aws_access_key_id is not None:
+        credentials["aws_access_key_id"] = encrypt_value_helper(
+            value=aws_access_key_id,
+            new_encryption_key=encryption_key,
+        )
+    aws_secret_access_key = credentials.get("aws_secret_access_key")
+    if aws_secret_access_key is not None:
+        credentials["aws_secret_access_key"] = encrypt_value_helper(
+            value=aws_secret_access_key,
+            new_encryption_key=encryption_key,
+        )
+    aws_session_token = credentials.get("aws_session_token")
+    if aws_session_token is not None:
+        credentials["aws_session_token"] = encrypt_value_helper(
+            value=aws_session_token,
+            new_encryption_key=encryption_key,
+        )
+    # aws_region_name and aws_service_name are NOT secrets — stored as-is
+    return credentials
+
+
+def decrypt_credentials(
+    credentials: MCPCredentials,
+) -> MCPCredentials:
+    """Decrypt all secret fields in an MCPCredentials dict using the global salt key."""
+    secret_fields = [
+        "auth_value",
+        "client_id",
+        "client_secret",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    ]
+    for field in secret_fields:
+        value = credentials.get(field)
+        if value is not None:
+            credentials[field] = decrypt_value_helper(
+                value=value,
+                key=field,
+                exception_type="debug",
+                return_original_value=True,
+            )
     return credentials
 
 
@@ -354,8 +398,56 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
+    import json
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
     # Use helper to prepare data with proper JSON serialization
     data_dict = _prepare_mcp_server_data(data)
+
+    # Pre-fetch existing record once if we need it for auth_type or credential logic
+    existing = None
+    has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
+    if data.auth_type or has_credentials:
+        existing = await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={"server_id": data.server_id}
+        )
+
+    # Clear stale credentials when auth_type changes but no new credentials provided
+    if (
+        data.auth_type
+        and "credentials" not in data_dict
+        and existing
+        and existing.auth_type is not None
+        and existing.auth_type != data.auth_type
+    ):
+        data_dict["credentials"] = None
+
+    # Merge credentials: preserve existing fields not present in the update.
+    # Without this, a partial credential update (e.g. changing only region)
+    # would wipe encrypted secrets that the UI cannot display back.
+    if "credentials" in data_dict and data_dict["credentials"] is not None:
+        if existing and existing.credentials:
+            # Only merge when auth_type is unchanged. Switching auth types
+            # (e.g. oauth2 → api_key) should replace credentials entirely
+            # to avoid stale secrets from the previous auth type lingering.
+            auth_type_unchanged = (
+                data.auth_type is None or data.auth_type == existing.auth_type
+            )
+            if auth_type_unchanged:
+                existing_creds = (
+                    json.loads(existing.credentials)
+                    if isinstance(existing.credentials, str)
+                    else dict(existing.credentials)
+                )
+                new_creds = (
+                    json.loads(data_dict["credentials"])
+                    if isinstance(data_dict["credentials"], str)
+                    else dict(data_dict["credentials"])
+                )
+                # New values override existing; existing keys not in update are preserved
+                merged = {**existing_creds, **new_creds}
+                data_dict["credentials"] = safe_dumps(merged)
 
     # Add audit fields
     data_dict["updated_by"] = touched_by
@@ -378,8 +470,12 @@ async def rotate_mcp_server_credentials_master_key(
             continue
 
         credentials_copy = dict(credentials)
-        encrypted_credentials = encrypt_credentials(
+        # Decrypt with current key first, then re-encrypt with new key
+        decrypted_credentials = decrypt_credentials(
             credentials=cast(MCPCredentials, credentials_copy),
+        )
+        encrypted_credentials = encrypt_credentials(
+            credentials=decrypted_credentials,
             encryption_key=new_master_key,
         )
 

@@ -9038,9 +9038,7 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
 };
 
 
-// ============================================================
 // Claude Code Marketplace Networking Functions
-// ============================================================
 
 /**
  * Get public marketplace catalog (no authentication required)
@@ -9386,7 +9384,7 @@ export interface ToolPolicyOption {
   description: string;
 }
 
-interface ToolPolicyOptionsResponse {
+export interface ToolPolicyOptionsResponse {
   input_policies: ToolPolicyOption[];
   output_policies: ToolPolicyOption[];
 }
@@ -9439,12 +9437,12 @@ export interface ToolPolicyOverrideRow {
   updated_at?: string;
 }
 
-interface ToolDetailResponse {
+export interface ToolDetailResponse {
   tool: ToolRow;
   overrides: ToolPolicyOverrideRow[];
 }
 
-interface ToolUsageLogEntry {
+export interface ToolUsageLogEntry {
   id: string;
   timestamp: string;
   model?: string | null;
@@ -9453,7 +9451,7 @@ interface ToolUsageLogEntry {
   input_snippet?: string | null;
 }
 
-interface ToolUsageLogsResponse {
+export interface ToolUsageLogsResponse {
   logs: ToolUsageLogEntry[];
   total: number;
   page: number;

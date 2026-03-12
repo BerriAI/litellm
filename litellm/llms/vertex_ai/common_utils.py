@@ -249,23 +249,27 @@ def _get_embedding_url(
     - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
     - numeric model -> routes to endpoints/
     - regular model -> routes to publishers/google/models/
+    - models with uses_embed_content flag -> use embedContent endpoint instead of predict
     """
-    endpoint = "predict"
-
-    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+    original_model = model
     model = get_vertex_base_model_name(model=model)
 
-    # Get base URL (handles global vs regional)
+    try:
+        model_info = litellm.get_model_info(
+            model=original_model,
+            custom_llm_provider="vertex_ai",
+        )
+        uses_embed_content = model_info.get("uses_embed_content", False)
+    except Exception:
+        uses_embed_content = False
+
+    endpoint = "embedContent" if uses_embed_content else "predict"
+
     base_url = get_vertex_base_url(vertex_location)
 
     if model.isdigit():
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
-        # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/endpoints/$ENDPOINT_ID:predict
         url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     else:
-        # Regular model -> publisher model
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/publishers/google/models/{model}:predict
-        # https://aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/global/publishers/google/models/{model}:predict
         url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
     return url, endpoint
@@ -514,6 +518,29 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     if add_property_ordering:
         set_schema_property_ordering(parameters)
+
+    return parameters
+
+
+def _build_vertex_schema_for_gemini_2(parameters: dict) -> dict:
+    """
+    Minimal schema builder for Gemini 2.0+ tool parameters.
+
+    Gemini 2.0+ accepts standard JSON Schema natively in tool parameters,
+    including lowercase types, anyOf with null, and bare {} (TYPE_UNSPECIFIED).
+    The only transformation needed is resolving $ref/$defs, which Gemini does
+    NOT support in tool parameters (returns 400).
+
+    This avoids the harmful transforms in _build_vertex_schema that break
+    JsonValue/Any semantics by coercing {} to {"type": "object"}.
+    """
+    valid_schema_fields = set(get_type_hints(Schema).keys())
+
+    parameters = dict(parameters)  # shallow copy to avoid mutating caller's dict
+    defs = parameters.pop("$defs", {})
+    unpack_defs(parameters, defs)
+
+    parameters = filter_schema_fields(parameters, valid_schema_fields)
 
     return parameters
 

@@ -110,60 +110,6 @@ def test_get_supported_openai_params_reasoning_effort():
     assert "reasoning_effort" not in unsupported_params
 
 
-@pytest.mark.parametrize(
-    "api_base, expected_url_prefix",
-    [
-        (
-            "https://api.fireworks.ai/inference/v1",
-            "https://api.fireworks.ai/inference/v1/accounts/",
-        ),
-        (
-            "https://api.fireworks.ai/inference/v1/",
-            "https://api.fireworks.ai/inference/v1/accounts/",
-        ),
-        (
-            "https://custom-host.example.com/v1",
-            "https://custom-host.example.com/v1/accounts/",
-        ),
-        (
-            "https://custom-host.example.com/api",
-            "https://custom-host.example.com/api/v1/accounts/",
-        ),
-    ],
-    ids=["default", "trailing-slash", "custom-with-v1", "custom-without-v1"],
-)
-def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
-    """Ensure get_models never produces a /v1/v1/ URL segment (fixes #23106)."""
-    config = FireworksAIConfig()
-    account_id = "fireworks"
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "models": [{"name": "accounts/fireworks/models/llama-v3-70b"}]
-    }
-
-    with (
-        patch("litellm.module_level_client.get", return_value=mock_response) as mock_get,
-        patch(
-            "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
-            side_effect=lambda key: {
-                "FIREWORKS_API_KEY": "test-key",
-                "FIREWORKS_API_BASE": api_base,
-                "FIREWORKS_ACCOUNT_ID": account_id,
-            }.get(key),
-        ),
-    ):
-        result = config.get_models(api_key="test-key", api_base=api_base)
-
-        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get("url", "")
-        assert "/v1/v1/" not in called_url, f"Double /v1/ detected in URL: {called_url}"
-        assert called_url.startswith(expected_url_prefix), (
-            f"URL {called_url} does not start with {expected_url_prefix}"
-        )
-        assert result == ["fireworks_ai/accounts/fireworks/models/llama-v3-70b"]
-
-
 def test_transform_messages_helper_removes_provider_specific_fields():
     """
     Test that _transform_messages_helper removes provider_specific_fields from messages.

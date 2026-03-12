@@ -97,6 +97,7 @@ from ..common_utils import (
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
+    _build_vertex_schema_for_gemini_2,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -467,7 +468,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return None
 
     def _map_function(  # noqa: PLR0915
-        self, value: List[dict], optional_params: dict
+        self, value: List[dict], optional_params: dict, model: str = ""
     ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -510,10 +511,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
-                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = _build_vertex_schema(
-                        _openai_function_object["parameters"]
-                    )
+                ):
+                    if supports_response_json_schema(model):
+                        # Gemini 2.0+: minimal transform (resolve $ref only)
+                        _openai_function_object["parameters"] = (
+                            _build_vertex_schema_for_gemini_2(
+                                _openai_function_object["parameters"]
+                            )
+                        )
+                    else:
+                        # Gemini 1.5: full OpenAPI-style transform
+                        _openai_function_object["parameters"] = (
+                            _build_vertex_schema(
+                                _openai_function_object["parameters"]
+                            )
+                        )
 
                 openai_function_object = _openai_function_object
 
@@ -1048,7 +1060,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = self._map_function(
-                    value=value, optional_params=optional_params
+                    value=value, optional_params=optional_params, model=model
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, mapped_tools
@@ -1227,27 +1239,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
+    _GEMINI_FINISH_REASON_KEYS = frozenset({
+        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "FINISH_REASON_UNSPECIFIED",
+        "MALFORMED_FUNCTION_CALL", "LANGUAGE", "OTHER", "BLOCKLIST",
+        "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+        "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE",
+    })
+
     @staticmethod
     def get_finish_reason_mapping() -> Dict[str, OpenAIChatCompletionFinishReason]:
         """
-        Return Dictionary of finish reasons which indicate response was flagged
-
-        and what it means
+        Return Dictionary of Gemini/Vertex AI finish reasons and their
+        OpenAI-compatible mappings.
         """
+        from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
+
         return {
-            "FINISH_REASON_UNSPECIFIED": "finish_reason_unspecified",
-            "STOP": "stop",
-            "MAX_TOKENS": "length",
-            "SAFETY": "content_filter",
-            "RECITATION": "content_filter",
-            "LANGUAGE": "content_filter",
-            "OTHER": "content_filter",
-            "BLOCKLIST": "content_filter",
-            "PROHIBITED_CONTENT": "content_filter",
-            "SPII": "content_filter",
-            "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
-            "IMAGE_SAFETY": "content_filter",
-            "IMAGE_PROHIBITED_CONTENT": "content_filter",
+            k: v
+            for k, v in _FINISH_REASON_MAP.items()
+            if k in VertexGeminiConfig._GEMINI_FINISH_REASON_KEYS
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -1766,15 +1776,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
     ) -> OpenAIChatCompletionFinishReason:
-        mapped_finish_reason = VertexGeminiConfig.get_finish_reason_mapping()
+        from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
         if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
         elif chat_completion_message and chat_completion_message.get("tool_calls"):
             return "tool_calls"
-        elif (
-            finish_reason and finish_reason in mapped_finish_reason.keys()
-        ):  # vertex ai
-            return mapped_finish_reason[finish_reason]
+        elif finish_reason:
+            return map_finish_reason(finish_reason)
         else:
             return "stop"
 
@@ -2362,7 +2371,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: Optional[AsyncHTTPHandler],  # module-level client
+    gemini_client: Optional[AsyncHTTPHandler],  # if passed by user
     api_base: str,
     headers: dict,
     data: str,
@@ -2370,6 +2380,8 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
+    if gemini_client is not None:
+        client = gemini_client
     if client is None:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -2541,7 +2553,11 @@ class VertexLLM(VertexBase):
             completion_stream=None,
             make_call=partial(
                 make_call,
-                client=client,
+                gemini_client=(
+                    client
+                    if client is not None and isinstance(client, AsyncHTTPHandler)
+                    else None
+                ),
                 api_base=api_base,
                 headers=headers,
                 data=request_body_str,

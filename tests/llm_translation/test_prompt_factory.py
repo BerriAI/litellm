@@ -1601,3 +1601,346 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     error_msg = str(exc_info.value)
     assert "test_tool" in error_msg
     assert "test context" in error_msg
+
+
+
+def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
+    """
+    Test that thinking blocks are interleaved with server tool calls (web search)
+    instead of being prepended all at once.
+
+    When Anthropic returns a response with extended thinking + multiple web searches,
+    the content blocks are interleaved:
+    [thinking_1, server_tool_use_1, result_1, thinking_2, server_tool_use_2, result_2]
+
+    On round-trip through OpenAI format, thinking_blocks and tool_calls are separate
+    fields. anthropic_messages_pt must reconstruct the interleaved order, otherwise
+    Anthropic rejects the request because thinking block signatures are position-dependent.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    messages = [
+        {"role": "user", "content": "Search for news about fast.ai and answer.ai"},
+        {
+            "role": "assistant",
+            "content": "Here is what I found.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I need to search for fast.ai news.",
+                    "signature": "sig_thinking_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now I should also search for answer.ai.",
+                    "signature": "sig_thinking_2",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01SEARCH1",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "fast.ai news"}',
+                    },
+                },
+                {
+                    "id": "srvtoolu_01SEARCH2",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "answer.ai news"}',
+                    },
+                },
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01SEARCH1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://fast.ai",
+                                "title": "fast.ai",
+                                "snippet": "fast.ai news",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01SEARCH2",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://answer.ai",
+                                "title": "answer.ai",
+                                "snippet": "answer.ai news",
+                            }
+                        ],
+                    },
+                ]
+            },
+        },
+        {"role": "user", "content": "Now search for news about solveit"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    # Find the assistant message
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    # Extract types in order
+    types = [c.get("type") for c in content]
+
+    # The correct interleaved order should be:
+    # thinking_1, server_tool_use_1, web_search_tool_result_1,
+    # thinking_2, server_tool_use_2, web_search_tool_result_2,
+    # text
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ], f"Expected interleaved order but got: {types}"
+
+    # Verify thinking blocks preserved their content and signatures
+    thinking_1 = content[0]
+    assert thinking_1["thinking"] == "I need to search for fast.ai news."
+    assert thinking_1["signature"] == "sig_thinking_1"
+
+    thinking_2 = content[3]
+    assert thinking_2["thinking"] == "Now I should also search for answer.ai."
+    assert thinking_2["signature"] == "sig_thinking_2"
+
+    # Verify server_tool_use blocks preserved their IDs
+    assert content[1]["id"] == "srvtoolu_01SEARCH1"
+    assert content[4]["id"] == "srvtoolu_01SEARCH2"
+
+    # Verify web_search_tool_result blocks are paired correctly
+    assert content[2]["tool_use_id"] == "srvtoolu_01SEARCH1"
+    assert content[5]["tool_use_id"] == "srvtoolu_01SEARCH2"
+
+    # Verify text block is present at the end
+    assert content[6]["text"] == "Here is what I found."
+
+
+def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
+    """
+    Test that the existing behavior is preserved when thinking blocks exist
+    but there are no server tool calls (only regular tool_use).
+
+    Thinking blocks should still be prepended first in this case.
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": "Let me check.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I should check the weather.",
+                    "signature": "sig_1",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_01REG",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "SF"}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01REG",
+            "content": "72F and sunny",
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    # Original behavior: thinking first, then text, then tool_use
+    assert types == ["thinking", "text", "tool_use"], f"Expected sequential order but got: {types}"
+
+
+def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
+    """
+    Test interleaving when there are more thinking blocks than server tool groups.
+    Extra thinking blocks should appear before the text block.
+    """
+    messages = [
+        {"role": "user", "content": "Search for something"},
+        {
+            "role": "assistant",
+            "content": "Found it.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "First thought",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Second thought",
+                    "signature": "sig_2",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Third thought after search",
+                    "signature": "sig_3",
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ONLY",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "something"}',
+                    },
+                },
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01ONLY",
+                        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Test", "snippet": "result"}],
+                    },
+                ]
+            },
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    # thinking_1 paired with tool group, thinking_2 and thinking_3 before text
+    assert types == [
+        "thinking",            # paired with tool group
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",            # extra - before text
+        "thinking",            # extra - before text
+        "text",
+    ], f"Expected order but got: {types}"
+
+
+def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
+    """
+    Test that when assistant content is already a list containing interleaved
+    thinking blocks and server tool blocks, the thinking_blocks from
+    provider_specific_fields are NOT duplicated/prepended.
+
+    This covers the gap identified by Greptile where list-content messages
+    bypass INTERLEAVED MODE and fall into SEQUENTIAL MODE, which previously
+    would prepend all thinking_blocks again, causing duplication and
+    breaking Anthropic's position-dependent signature verification.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23047
+    """
+    messages = [
+        {"role": "user", "content": "Search for AI news"},
+        {
+            "role": "assistant",
+            # Content is already a list with interleaved thinking + server tool blocks
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01SEARCH1",
+                    "name": "web_search",
+                    "input": {"query": "AI news"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01SEARCH1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "AI News",
+                            "snippet": "Latest AI news",
+                        }
+                    ],
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the AI news summary.",
+                },
+            ],
+            # thinking_blocks also present in provider_specific_fields
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me search for AI news.",
+                    "signature": "sig_1",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Now let me summarize.",
+                    "signature": "sig_2",
+                },
+            ],
+        },
+        {"role": "user", "content": "Tell me more"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    # The list content already has the correct interleaved order.
+    # thinking_blocks should NOT be prepended again (which would cause
+    # duplication and break signature verification).
+    assert types == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "text",
+    ], f"Expected preserved list order without duplicate thinking blocks, but got: {types}"
+
+    # Verify no duplicate thinking blocks
+    thinking_count = sum(1 for t in types if t == "thinking")
+    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+
+    # Verify signatures preserved in correct positions
+    assert content[0]["signature"] == "sig_1"
+    assert content[3]["signature"] == "sig_2"
