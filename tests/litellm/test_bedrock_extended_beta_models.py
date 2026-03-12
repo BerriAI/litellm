@@ -187,7 +187,11 @@ class TestModelSpecificFeatures:
                 f"Bedrock constraint: input_tokens + max_tokens <= context_window"
             )
 
-        # Also check the bare model entry (bedrock_converse provider)
+        # Also check the bare model entries
+        bare_bedrock_info = get_model_info("bedrock/moonshotai.kimi-k2.5")
+        assert bare_bedrock_info["max_output_tokens"] == 65536
+        assert bare_bedrock_info["max_input_tokens"] == 262144
+
         bare_info = get_model_info("moonshotai.kimi-k2.5")
         assert bare_info["max_output_tokens"] == 65536
         assert bare_info["max_input_tokens"] == 262144
