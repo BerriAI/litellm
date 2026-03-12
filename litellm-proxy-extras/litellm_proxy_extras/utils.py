@@ -449,11 +449,14 @@ class ProxyExtrasDBManager:
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(
-                                "Baseline migration created, running deploy with idempotent resolution "
-                                "to apply remaining migrations..."
+                                "Baseline migration created, marking all existing migrations as applied. "
+                                "This is the standard Prisma baselining approach for databases "
+                                "previously managed by db push."
                             )
-                            ProxyExtrasDBManager._deploy_with_idempotent_resolution()
-                            logger.info("✅ All migrations applied.")
+                            ProxyExtrasDBManager._mark_all_migrations_applied(
+                                migrations_dir
+                            )
+                            logger.info("✅ All migrations marked as applied.")
                             return True
                         else:
                             raise
