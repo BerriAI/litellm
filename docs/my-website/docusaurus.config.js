@@ -93,11 +93,21 @@ const config = {
         path: './release_notes',
         routeBasePath: 'release_notes',
         sidebarPath: require.resolve('./sidebars-release-notes.js'),
-        async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
-          const items = await defaultSidebarItemsGenerator(args);
-          function parseVersion(label) {
-            // Extract numeric parts from version string like "v1.82.0" or "v1.81.3-stable"
-            const match = label.match(/v?(\d+)\.(\d+)\.(\d+)/);
+        async sidebarItemsGenerator({defaultSidebarItemsGenerator, docs, ...args}) {
+          const items = await defaultSidebarItemsGenerator({docs, ...args});
+
+          // Build map of doc id -> year from frontmatter date
+          const docYearMap = {};
+          for (const doc of docs) {
+            const date = doc.frontMatter && doc.frontMatter.date;
+            if (date) {
+              const year = new Date(date).getFullYear();
+              docYearMap[doc.id] = year;
+            }
+          }
+
+          function parseVersion(str) {
+            const match = (str || '').match(/v?(\d+)\.(\d+)\.(\d+)/);
             if (!match) return [0, 0, 0];
             return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
           }
@@ -108,28 +118,53 @@ const config = {
             if (bMin !== aMin) return bMin - aMin;
             return bPatch - aPatch;
           }
-          function transformItems(list) {
-            const transformed = list
-              .filter(item => !(item.type === 'doc' && item.id === 'index'))
-              .map(item => {
-                if (item.type === 'doc') {
-                  // Shorten label to just the version string
-                  const label = item.id.replace(/\/index$/, '');
-                  return {...item, label};
+
+          // Flatten and transform doc items (filter index, shorten labels)
+          // Handles both plain .md docs and directory-based docs (category with link + no items)
+          function flattenDocs(list) {
+            const result = [];
+            for (const item of list) {
+              if (item.type === 'doc' && item.id === 'index') continue;
+              if (item.type === 'doc') {
+                const label = item.id.replace(/\/index$/, '');
+                result.push({...item, label});
+              } else if (item.type === 'category') {
+                if (item.link && item.link.type === 'doc' && item.link.id !== 'index') {
+                  // Directory-based doc: category with a link doc and no children
+                  const id = item.link.id;
+                  const label = id.replace(/\/index$/, '');
+                  result.push({type: 'doc', id, label});
+                } else {
+                  result.push(...flattenDocs(item.items));
                 }
-                if (item.type === 'category') {
-                  return {...item, items: transformItems(item.items)};
-                }
-                return item;
-              });
-            // Sort docs by version descending (latest first)
-            transformed.sort((a, b) => {
-              if (a.type === 'doc' && b.type === 'doc') return compareVersionsDesc(a, b);
-              return 0;
-            });
-            return transformed;
+              }
+            }
+            return result;
           }
-          return transformItems(items);
+
+          const docItems = flattenDocs(items);
+
+          // Group by year
+          const byYear = {};
+          for (const item of docItems) {
+            const year = docYearMap[item.id] || 'Other';
+            if (!byYear[year]) byYear[year] = [];
+            byYear[year].push(item);
+          }
+
+          // Sort each year's items by version descending
+          for (const year of Object.keys(byYear)) {
+            byYear[year].sort(compareVersionsDesc);
+          }
+
+          // Build categories sorted by year descending
+          const years = Object.keys(byYear).sort((a, b) => b - a);
+          return years.map(year => ({
+            type: 'category',
+            label: String(year),
+            collapsed: year !== String(years[0]), // expand latest year by default
+            items: byYear[year],
+          }));
         },
       },
     ],
