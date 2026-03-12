@@ -511,6 +511,9 @@ async def aresponses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
+            # Stamp custom_llm_provider so callbacks can identify the provider
+            # (mirrors litellm/main.py:1371 for chat completions)
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise ValueError(
@@ -785,6 +788,9 @@ def responses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
+            # Stamp custom_llm_provider so callbacks can identify the provider
+            # (mirrors litellm/main.py:1371 for chat completions)
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
 
         return response
     except Exception as e:

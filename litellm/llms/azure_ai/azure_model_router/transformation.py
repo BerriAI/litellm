@@ -63,25 +63,18 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
     ) -> ModelResponse:
         """
         Transform response for Model Router.
-
-        Preserves the original model path (including model_router/ prefix) in the response
-        for proper cost tracking and logging.
+        
+        Extracts the actual model used from the Azure response (e.g., gpt-5-nano-2025-08-07)
+        and returns it with the azure_ai/ prefix for proper display and cost tracking.
         """
         from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
-        # Preserve the original model from litellm_params (includes routing prefixes like model_router/)
-        # This ensures cost tracking and logging use the full model path
-        original_model: str = litellm_params.get("model") or model
-        if not original_model.startswith("azure_ai/"):
-            # Add provider prefix if not already present
-            model_response.model = f"azure_ai/{original_model}"
-        else:
-            model_response.model = original_model
-
         # Get base model for the parent call (strips routing prefixes for API compatibility)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
-
-        return super().transform_response(
+        
+        # Call parent transform_response first - this will extract the actual model 
+        # from the raw response (e.g., "gpt-5-nano-2025-08-07")
+        model_response = super().transform_response(
             model=base_model,
             raw_response=raw_response,
             model_response=model_response,
@@ -94,6 +87,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        return model_response
 
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int
