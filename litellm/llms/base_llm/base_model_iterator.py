@@ -141,8 +141,12 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events)
-                if not str_line or not str_line.strip():
+                # Skip empty lines (common in SSE streams between events).
+                # Only apply to str chunks — non-string objects (e.g. Pydantic
+                # BaseModel events from the Responses API) must pass through.
+                if isinstance(str_line, str) and (
+                    not str_line or not str_line.strip()
+                ):
                     continue
 
                 # chunk is a str at this point
@@ -177,8 +181,12 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events)
-                if not str_line or not str_line.strip():
+                # Skip empty lines (common in SSE streams between events).
+                # Only apply to str chunks — non-string objects (e.g. Pydantic
+                # BaseModel events from the Responses API) must pass through.
+                if isinstance(str_line, str) and (
+                    not str_line or not str_line.strip()
+                ):
                     continue
 
                 # chunk is a str at this point
