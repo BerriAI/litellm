@@ -63,6 +63,7 @@ from litellm.utils import exception_type, get_litellm_params, get_optional_param
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,

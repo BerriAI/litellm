@@ -1200,6 +1200,9 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
+        # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
+        # will reject `output_config` if it leaks through pass-through routes.
+        inference_params.pop("output_config", None)
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)

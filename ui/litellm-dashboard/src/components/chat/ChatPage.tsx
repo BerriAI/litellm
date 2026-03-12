@@ -11,6 +11,7 @@ import {
   SearchOutlined,
   MessageOutlined,
   AppstoreOutlined,
+  KeyOutlined,
   ArrowLeftOutlined,
   DownOutlined,
   CloseOutlined,
@@ -24,6 +25,7 @@ import ConversationList from "./ConversationList";
 import ChatMessages from "./ChatMessages";
 import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
+import MCPCredentialsTab from "./MCPCredentialsTab";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
 import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
@@ -142,7 +144,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarView, setSidebarView] = useState<"chats" | "apps">("chats");
+  const _oauthReturn = searchParams?.get("mcpOauthReturn");
+  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">(
+    _oauthReturn === "apps" ? "apps" : "chats"
+  );
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
   // Comparison mode state (active when selectedModels.length > 1)
@@ -169,6 +174,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     deleteConversation,
     renameConversation,
   } = useChatHistory(activeConversationId);
+
+  // Clean up the OAuth return param after it's been consumed
+  useEffect(() => {
+    if (_oauthReturn && typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("mcpOauthReturn");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load models
   useEffect(() => {
@@ -859,6 +873,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         <div style={{ padding: "4px 8px", flexShrink: 0 }}>
           {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
           {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
+          {sidebarNavItem(<KeyOutlined />, "Credentials", () => setSidebarView("credentials"), sidebarView === "credentials")}
           <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
             <a
               href={dashboardUrl}
@@ -967,6 +982,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 selectedServers={selectedMCPServers}
                 onChange={setSelectedMCPServers}
               />
+            </div>
+
+          ) : sidebarView === "credentials" ? (
+            /* ---- Credentials view ---- */
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", maxWidth: 800, margin: "0 auto", width: "100%", padding: "32px 24px" }}>
+              <MCPCredentialsTab accessToken={accessToken} />
             </div>
 
           ) : showBlankState ? (
