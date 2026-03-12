@@ -289,6 +289,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    _is_azure_model_router_request,
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -5424,6 +5425,10 @@ def _restamp_streaming_chunk_model(
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
     if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+        return chunk, model_mismatch_logged
+
+    # For Azure Model Router, preserve the actual model used in each chunk
+    if _is_azure_model_router_request(requested_model_from_client):
         return chunk, model_mismatch_logged
 
     downstream_model = (
