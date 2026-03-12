@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -431,3 +432,163 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+# Tests for Voyage 4 Large text embedding (standard /v1/embeddings endpoint)
+class TestVoyage4LargeTextEmbedding:
+    """Test suite for voyage-4-large text embedding (non-multimodal, non-contextual)."""
+
+    def test_voyage_4_large_uses_standard_embedding_config(self):
+        """voyage-4-large must use VoyageEmbeddingConfig (standard /v1/embeddings), not multimodal or contextual."""
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            "voyage-4-large", LlmProviders.VOYAGE
+        )
+        assert config is not None
+        assert type(config).__name__ == "VoyageEmbeddingConfig"
+
+    def test_voyage_4_large_embedding_url(self):
+        """voyage-4-large must use the standard Voyage embeddings URL."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        url = config.get_complete_url(
+            None, None, "voyage-4-large", {}, {}
+        )
+        assert url == "https://api.voyageai.com/v1/embeddings"
+
+    def test_voyage_4_large_request_transformation(self):
+        """voyage-4-large request body must use 'input' (singular) and pass model through.
+        In production, get_llm_provider strips the provider prefix, so transform_embedding_request
+        receives "voyage-4-large", not "voyage/voyage-4-large"."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-4-large", ["Hello world"], {}, {}
+        )
+        assert "input" in transformed
+        assert transformed["input"] == ["Hello world"]
+        assert transformed["model"] == "voyage-4-large"
+
+    def test_voyage_4_large_supported_params(self):
+        """voyage-4-large must support encoding_format and dimensions."""
+        from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+
+        config = VoyageEmbeddingConfig()
+        params = config.get_supported_openai_params("voyage-4-large")
+        assert "encoding_format" in params
+        assert "dimensions" in params
+
+
+# Tests for Voyage multimodal embeddings (voyage-multimodal-3, voyage-multimodal-3.5)
+@contextmanager
+def _ensure_multimodal_registry():
+    """Ensure voyage multimodal models have supports_multimodal_embedding in registry.
+    Needed because the cost map may be loaded from a remote URL that does not yet
+    include the flag (e.g. before PR merge). Restores state after the test.
+    """
+    to_restore = {}
+    for key in ("voyage/voyage-multimodal-3", "voyage/voyage-multimodal-3.5"):
+        if key in litellm.model_cost:
+            to_restore[key] = dict(litellm.model_cost[key])
+            litellm.model_cost[key]["supports_multimodal_embedding"] = True
+        else:
+            to_restore[key] = None
+            litellm.model_cost[key] = {
+                "supports_multimodal_embedding": True,
+                "litellm_provider": "voyage",
+            }
+    try:
+        yield
+    finally:
+        for k, v in to_restore.items():
+            if v is None:
+                litellm.model_cost.pop(k, None)
+            else:
+                litellm.model_cost[k] = v
+
+
+class TestVoyageMultimodalEmbeddings:
+    """Test suite for Voyage multimodal embedding models (VoyageMultimodalEmbeddingConfig)."""
+
+    def test_multimodal_embedding_model_detection(self):
+        """voyage-multimodal-3 and voyage-multimodal-3.5 must be detected as multimodal."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        with _ensure_multimodal_registry():
+            assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3") is True
+            assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-multimodal-3.5") is True
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-3-lite") is False
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embedding("voyage-4-large") is False
+
+    def test_multimodal_embedding_uses_multimodal_config(self):
+        """voyage-multimodal-3 and voyage-multimodal-3.5 must use VoyageMultimodalEmbeddingConfig."""
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        with _ensure_multimodal_registry():
+            for model in ("voyage-multimodal-3", "voyage-multimodal-3.5"):
+                config = ProviderConfigManager.get_provider_embedding_config(
+                    model, LlmProviders.VOYAGE
+                )
+                assert config is not None
+                assert type(config).__name__ == "VoyageMultimodalEmbeddingConfig"
+
+    def test_multimodal_embedding_url(self):
+        """Multimodal models must use /v1/multimodalembeddings URL."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        url = config.get_complete_url(None, None, "voyage-multimodal-3.5", {}, {})
+        assert url == "https://api.voyageai.com/v1/multimodalembeddings"
+
+    def test_multimodal_embedding_request_transformation(self):
+        """Request must use 'inputs' (plural), model stripped; Voyage-native content passed through."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        native_input = [
+            {"content": [{"type": "text", "text": "Hello"}, {"type": "image_url", "image_url": "https://example.com/img.jpg"}]}
+        ]
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3.5", native_input, {}, {}
+        )
+        assert "inputs" in transformed
+        assert transformed["inputs"] == native_input
+        assert transformed["model"] == "voyage-multimodal-3.5"
+
+    def test_multimodal_embedding_text_input_normalized(self):
+        """OpenAI-style list of strings must be normalized to Voyage content format."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-multimodal-3", ["Hello", "world"], {}, {}
+        )
+        assert transformed["inputs"] == [
+            {"content": [{"type": "text", "text": "Hello"}]},
+            {"content": [{"type": "text", "text": "world"}]},
+        ]
+        assert transformed["model"] == "voyage-multimodal-3"
+
+    def test_multimodal_embedding_supported_params(self):
+        """Multimodal models must support input_type and truncation."""
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        config = VoyageMultimodalEmbeddingConfig()
+        params = config.get_supported_openai_params("voyage-multimodal-3.5")
+        assert "input_type" in params
+        assert "truncation" in params
