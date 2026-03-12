@@ -577,7 +577,6 @@ publicai_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
-crusoe_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
@@ -825,8 +824,6 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
-        elif value.get("litellm_provider") == "crusoe":
-            crusoe_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
             hyperbolic_models.add(key)
         elif value.get("litellm_provider") == "black_forest_labs":
@@ -1062,7 +1059,6 @@ models_by_provider: dict = {
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
-    "crusoe": crusoe_models,
     "hyperbolic": hyperbolic_models,
     "black_forest_labs": black_forest_labs_models,
     "recraft": recraft_models,

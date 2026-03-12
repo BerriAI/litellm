@@ -315,9 +315,6 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
-                    elif endpoint == "https://managed-inference-api-proxy.crusoecloud.com/v1/":
-                        custom_llm_provider = "crusoe"
-                        dynamic_api_key = get_secret_str("CRUSOE_API_KEY")
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
@@ -881,13 +878,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
-        )
-    elif custom_llm_provider == "crusoe":
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.CrusoeChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "hyperbolic":
