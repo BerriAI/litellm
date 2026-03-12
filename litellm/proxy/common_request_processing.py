@@ -744,6 +744,8 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
