@@ -1,0 +1,24 @@
+# Tone Detection — CPU-only regex detection of inappropriate chatbot tone
+#
+# Detects 6 categories of inappropriate tone in customer-facing chatbot responses:
+#   - Dismissive language ("that's not my problem", "just read the FAQ")
+#   - Blaming the customer ("you should have read the terms", "that's your fault")
+#   - Refusal to help ("I can't help you", "figure it out yourself")
+#   - Sarcasm / condescension ("if you'd been paying attention", "let me spell it out")
+#   - Impatience / frustration ("I've already told you", "are you even listening")
+#   - Unprofessional casual language ("bruh", "lol", "sounds like a you problem")
+#
+# This category uses regex-based pattern matching (not keyword lists).
+# When selected, it enables the ToneChecker engine which runs on LLM responses only.
+#
+# Advanced configuration (safe_phrases, blocked_phrases) can be set via
+# tone_detection_config in litellm_params for programmatic use.
+
+category_name: "tone_detection"
+display_name: "Tone Detection"
+description: "Detects dismissive, blaming, condescending, impatient, or unprofessional tone in customer-facing chatbot responses"
+default_action: "BLOCK"
+
+# No keywords — tone detection uses the ToneChecker regex engine
+keywords: []
+exceptions: []

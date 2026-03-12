@@ -47,6 +47,9 @@ def initialize_guardrail(
         competitor_intent_config=getattr(
             litellm_params, "competitor_intent_config", None
         ),
+        tone_detection_config=getattr(
+            litellm_params, "tone_detection_config", None
+        ),
         end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
         on_violation=getattr(litellm_params, "on_violation", None),
         realtime_violation_message=getattr(litellm_params, "realtime_violation_message", None),
