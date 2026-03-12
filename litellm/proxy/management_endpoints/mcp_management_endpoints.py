@@ -1313,7 +1313,10 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            )
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
