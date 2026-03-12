@@ -1770,14 +1770,14 @@ async def test_block_user_basic_functionality(mocker):
         side_effect=mock_update
     )
 
-    # Mock find_many to return user's keys
-    mock_key_1 = mocker.MagicMock()
-    mock_key_1.token = "hashed_token_1"
-    mock_key_2 = mocker.MagicMock()
-    mock_key_2.token = "hashed_token_2"
-
+    # Mock find_many to return user's keys on first call, empty on second
+    call_count = {"count": 0}
+    
     async def mock_find_many(*args, **kwargs):
-        return [mock_key_1, mock_key_2]
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return [mock_key_1, mock_key_2]
+        return []  # Return empty list on subsequent calls to break pagination loop
 
     mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
         side_effect=mock_find_many
@@ -2025,14 +2025,14 @@ async def test_unblock_user_basic_functionality(mocker):
         side_effect=mock_update
     )
 
-    # Mock find_many to return user's keys
-    mock_key_1 = mocker.MagicMock()
-    mock_key_1.token = "hashed_token_3"
-    mock_key_2 = mocker.MagicMock()
-    mock_key_2.token = "hashed_token_4"
-
+    # Mock find_many to return user's keys on first call, empty on second
+    call_count = {"count": 0}
+    
     async def mock_find_many(*args, **kwargs):
-        return [mock_key_1, mock_key_2]
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return [mock_key_1, mock_key_2]
+        return []  # Return empty list on subsequent calls to break pagination loop
 
     mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
         side_effect=mock_find_many
