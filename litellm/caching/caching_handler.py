@@ -508,12 +508,13 @@ class LLMCachingHandler:
             if item is None and embedding_response.data is not None:
                 api_item = embedding_response.data[idx]
                 # api_item can be either a dict or an object (e.g., Embedding).
+                # Use shallow copy — only the index field is mutated, not the
+                # embedding vector itself, so deepcopy is unnecessary overhead.
                 if isinstance(api_item, dict):
-                    api_item_copy = copy.deepcopy(api_item)
-                    api_item_copy["index"] = len(final_data_list)
+                    api_item_copy = {**api_item, "index": len(final_data_list)}
                     final_data_list.append(api_item_copy)
                 else:
-                    api_item_copy = copy.deepcopy(api_item)
+                    api_item_copy = copy.copy(api_item)
                     api_item_copy.index = len(final_data_list)
                     final_data_list.append(api_item_copy)
                 idx += 1
