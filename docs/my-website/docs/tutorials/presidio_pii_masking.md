@@ -592,6 +592,21 @@ def test_pii_masking_allows_normal_text():
 
 ## Part 7: Troubleshooting
 
+### Issue: Guardrail failure: non-JSON response from Presidio
+
+**Symptom:** You receive an error indicating `expected application/json Content-Type but received text/html` or similar.
+
+**Root cause:** Your ingress controller or reverse proxy might be routing the `/analyze` or `/anonymize` POST request to a health endpoint (like `/health` or `/presidio-analyzer/health`) which returns plain text instead of JSON.
+
+**Fix:** Ensure your `PRESIDIO_ANALYZER_API_BASE` and `PRESIDIO_ANONYMIZER_API_BASE` are correctly pointing directly to the Presidio API endpoints, or that your ingress routes the path correctly without stripping it and inadvertently forwarding to a plain-text health check endpoint.
+
+**Verification:** You can verify your endpoints using `curl`. It should return a JSON array, not `text/html`:
+```bash
+curl -sv -X POST http://your-analyzer-endpoint/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text":"test","language":"en"}'
+```
+
 ### Issue: Presidio Not Detecting PII
 
 **Check 1: Language Configuration**

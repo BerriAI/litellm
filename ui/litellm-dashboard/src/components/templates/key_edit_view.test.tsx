@@ -31,9 +31,6 @@ vi.mock("../networking", async () => {
     vectorStoreListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
-    mcpToolsCall: vi.fn().mockResolvedValue({
-      data: [],
-    }),
     agentListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
@@ -374,7 +371,7 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable guardrails selector when user is not premium", async () => {
+  it("should disable guardrails selector when user is not premium and has no write access role", async () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}

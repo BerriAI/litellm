@@ -1417,7 +1417,9 @@ class PrometheusLogger(CustomLogger):
                 _sanitize_prometheus_label_value(user_api_team),
                 _sanitize_prometheus_label_value(user_api_team_alias),
                 _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
+                _sanitize_prometheus_label_value(
+                    standard_logging_payload.get("model_id", "")
+                ),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -2686,6 +2688,8 @@ class PrometheusLogger(CustomLogger):
 
         if team_info:
             team_object.budget_reset_at = team_info.budget_reset_at
+            if team_object.max_budget is None and team_info.max_budget is not None:
+                team_object.max_budget = team_info.max_budget
 
         return team_object
 
@@ -2903,6 +2907,8 @@ class PrometheusLogger(CustomLogger):
 
         if user_info:
             user_object.budget_reset_at = user_info.budget_reset_at
+            if user_object.max_budget is None and user_info.max_budget is not None:
+                user_object.max_budget = user_info.max_budget
 
         return user_object
 

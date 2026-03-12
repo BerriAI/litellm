@@ -1,9 +1,9 @@
 import json
+import re
 import traceback
 from typing import Any, Optional
 
 import httpx
-import re
 
 import litellm
 from litellm._logging import verbose_logger
@@ -73,7 +73,10 @@ class ExceptionCheckers:
         # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
         if "string_above_max_length" in _error_str_lowercase:
             return False
-        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+        if (
+            "invalid 'user'" in _error_str_lowercase
+            and "string too long" in _error_str_lowercase
+        ):
             return False
         known_exception_substrings = [
             "exceed context limit",
@@ -97,7 +100,7 @@ class ExceptionCheckers:
             return True
 
         return False
-    
+
     @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
         """
@@ -442,6 +445,30 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                    )
+                elif (
+                    "invalid_encrypted_content" in error_str
+                    or "could not be verified" in error_str
+                ):
+                    exception_mapping_worked = True
+                    helpful_message = (
+                        f"{exception_provider} - {message}\n\n"
+                        " This error occurs when load balancing Responses API across deployments with different API keys.\n"
+                        "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
+                        "   Solution: Enable 'encrypted_content_affinity' to route follow-up requests to the correct deployment:\n\n"
+                        "   router_settings:\n"
+                        "     enable_pre_call_checks: true\n"
+                        "     optional_pre_call_checks:\n"
+                        "       - encrypted_content_affinity\n\n"
+                        "   Learn more: https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing"
+                    )
+                    raise BadRequestError(
+                        message=helpful_message,
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                        litellm_debug_info=extra_information,
+                        body=getattr(original_exception, "body", None),
                     )
                 elif (
                     "invalid_request_error" in error_str
@@ -2072,13 +2099,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             # content policy violation even when the top-level
                             # code is generic (e.g. "invalid_request_error").
                             if azure_error_code != "content_policy_violation":
-                                _inner = (
-                                    body_dict["error"].get("inner_error")  # type: ignore[index]
-                                    or body_dict["error"].get("innererror")  # type: ignore[index]
-                                )
-                                if isinstance(_inner, dict) and _inner.get(
-                                    "code"
-                                ) == "ResponsibleAIPolicyViolation":
+                                _inner = body_dict["error"].get(
+                                    "inner_error"
+                                ) or body_dict[  # type: ignore[index]
+                                    "error"
+                                ].get(
+                                    "innererror"
+                                )  # type: ignore[index]
+                                if (
+                                    isinstance(_inner, dict)
+                                    and _inner.get("code")
+                                    == "ResponsibleAIPolicyViolation"
+                                ):
                                     azure_error_code = "content_policy_violation"
                         else:
                             azure_error_code = body_dict.get("code")
@@ -2114,19 +2146,45 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif (
                     azure_error_code == "content_policy_violation"
-                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(
+                        error_str
+                    )
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (
                         AzureOpenAIExceptionMapping,
                     )
+
                     raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
                         message=message,
                         model=model,
                         extra_information=extra_information,
                         original_exception=original_exception,
                     )
-                    
+                elif (
+                    azure_error_code == "invalid_encrypted_content"
+                    or "could not be verified" in error_str
+                ):
+                    exception_mapping_worked = True
+                    helpful_message = (
+                        f"AzureException - {message}\n\n"
+                        "This error occurs when load balancing Responses API across deployments with different API keys.\n"
+                        "   Encrypted content is tied to the organization that created it and cannot be decrypted by other organizations.\n\n"
+                        "   Solution: Enable 'encrypted_content_affinity' to route follow-up requests to the correct deployment:\n\n"
+                        "   router_settings:\n"
+                        "     enable_pre_call_checks: true\n"
+                        "     optional_pre_call_checks:\n"
+                        "       - encrypted_content_affinity\n\n"
+                        "   Learn more: https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing"
+                    )
+                    raise BadRequestError(
+                        message=helpful_message,
+                        llm_provider="azure",
+                        model=model,
+                        litellm_debug_info=extra_information,
+                        response=getattr(original_exception, "response", None),
+                        body=getattr(original_exception, "body", None),
+                    )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(

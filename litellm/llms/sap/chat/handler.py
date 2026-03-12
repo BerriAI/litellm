@@ -181,7 +181,7 @@ class AsyncSAPStreamIterator:
 
     def __init__(
         self,
-        response:AsyncIterator,
+        response: AsyncIterator,
         event_prefix: str = "data: ",
         final_msg: str = "[DONE]",
     ):
@@ -251,11 +251,8 @@ class AsyncSAPStreamIterator:
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
     def _add_stream_param_to_request_body(
-            self,
-            data: dict,
-            provider_config: BaseConfig,
-            fake_stream: bool
-            ):
+        self, data: dict, provider_config: BaseConfig, fake_stream: bool
+    ):
         if data.get("config", {}).get("stream", None) is not None:
             data["config"]["stream"]["enabled"] = True
         else:

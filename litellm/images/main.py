@@ -50,6 +50,10 @@ from litellm.main import (
     openai_image_variations,
 )
 
+# BFL handlers
+from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
+from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+
 ###########################################
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -80,7 +84,6 @@ def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
         _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
     assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
     return _ImageEditRequestUtils_cache
-
 
 
 ##### Image Generation #######################
@@ -208,10 +211,7 @@ def image_generation(  # noqa: PLR0915
     api_version: Optional[str] = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[
-    ImageResponse,
-    Coroutine[Any, Any, ImageResponse],
-]:
+) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -342,7 +342,7 @@ def image_generation(  # noqa: PLR0915
             azure_ad_token = optional_params.pop(
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
-            
+
             # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
             if azure_ad_token_provider is None:
                 from litellm.llms.azure.common_utils import (
@@ -353,8 +353,11 @@ def image_generation(  # noqa: PLR0915
                 tenant_id = litellm_params_dict.get("tenant_id")
                 client_id = litellm_params_dict.get("client_id")
                 client_secret = litellm_params_dict.get("client_secret")
-                azure_scope = litellm_params_dict.get("azure_scope") or "https://cognitiveservices.azure.com/.default"
-                
+                azure_scope = (
+                    litellm_params_dict.get("azure_scope")
+                    or "https://cognitiveservices.azure.com/.default"
+                )
+
                 # Create token provider if credentials are available
                 if tenant_id and client_id and client_secret:
                     azure_ad_token_provider = get_azure_ad_token_from_entra_id(
@@ -371,7 +374,7 @@ def image_generation(  # noqa: PLR0915
             # Azure AD authentication will use Authorization header instead
             if api_key is not None:
                 default_headers["api-key"] = api_key
-            
+
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -404,7 +407,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
-            litellm.LlmProviders.OPENROUTER
+            litellm.LlmProviders.OPENROUTER,
         ):
             if image_generation_config is None:
                 raise ValueError(
@@ -427,6 +430,22 @@ def image_generation(  # noqa: PLR0915
                 timeout=timeout,
                 client=client,
             )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            return bfl_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                aimg_generation=aimg_generation,
+            )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
@@ -442,7 +461,7 @@ def image_generation(  # noqa: PLR0915
             # Azure AD authentication will use Authorization header instead
             if api_key is not None:
                 default_headers["api-key"] = api_key
-            
+
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -469,6 +488,8 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
@@ -483,6 +504,7 @@ def image_generation(  # noqa: PLR0915
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:
@@ -715,7 +737,7 @@ def image_variation(
 @client
 def image_edit(  # noqa: PLR0915
     image: Optional[Union[FileTypes, List[FileTypes]]] = None,
-    prompt: Optional[str]= None,
+    prompt: Optional[str] = None,
     model: Optional[str] = None,
     mask: Optional[str] = None,
     n: Optional[int] = None,
@@ -739,23 +761,23 @@ def image_edit(  # noqa: PLR0915
     local_vars = locals()
     try:
         openai_params = [
-                "user",
-                "request_timeout",
-                "api_base",
-                "api_version",
-                "api_key",
-                "deployment_id",
-                "organization",
-                "base_url",
-                "default_headers",
-                "timeout",
-                "max_retries",
-                "n",
-                "quality",
-                "size",
-                "style",
-                "async_call",
-            ]
+            "user",
+            "request_timeout",
+            "api_base",
+            "api_version",
+            "api_key",
+            "deployment_id",
+            "organization",
+            "base_url",
+            "default_headers",
+            "timeout",
+            "max_retries",
+            "n",
+            "quality",
+            "size",
+            "style",
+            "async_call",
+        ]
         litellm_params_list = all_litellm_params
         default_params = openai_params + litellm_params_list
         non_default_params = {
@@ -763,10 +785,14 @@ def image_edit(  # noqa: PLR0915
         }  # model-specific params - pass them straight to the model/provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        model_info = kwargs.get("model_info", None)
+        metadata = kwargs.get("metadata", {})
         _is_async = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
-        images = image if isinstance(image, list) else ([image] if image is not None else [])
+        images = (
+            image if isinstance(image, list) else ([image] if image is not None else [])
+        )
 
         headers_from_kwargs = kwargs.get("headers")
         merged_extra_headers: Dict[str, Any] = {}
@@ -839,11 +865,11 @@ def image_edit(  # noqa: PLR0915
                 )
 
         # get provider config
-        image_edit_provider_config: Optional[BaseImageEditConfig] = (
-            ProviderConfigManager.get_provider_image_edit_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        image_edit_provider_config: Optional[
+            BaseImageEditConfig
+        ] = ProviderConfigManager.get_provider_image_edit_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if image_edit_provider_config is None:
@@ -852,7 +878,9 @@ def image_edit(  # noqa: PLR0915
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: ImageEditOptionalRequestParams = (
-            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
+                local_vars
+            )
         )
         # Get optional parameters for the responses API
         image_edit_request_params: Dict = (
@@ -871,8 +899,10 @@ def image_edit(  # noqa: PLR0915
             user=user,
             optional_params=dict(image_edit_request_params),
             litellm_params={
-                "litellm_call_id": litellm_call_id,
                 **image_edit_request_params,
+                "litellm_call_id": litellm_call_id,
+                "model_info": model_info,
+                "metadata": metadata,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -899,20 +929,37 @@ def image_edit(  # noqa: PLR0915
         elif custom_llm_provider == "stability":
             image_edit_request_params.update(non_default_params)
             return base_llm_http_handler.image_edit_handler(
-            model=model,
-            image=images,
-            prompt=prompt,
-            image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-        )
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_request_params=image_edit_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+            )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            image_edit_request_params.update(non_default_params)
+            return bfl_image_edit.image_edit(
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_optional_request_params=image_edit_request_params,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                extra_headers=extra_headers,
+                client=kwargs.get("client"),
+                aimage_edit=_is_async,
+            )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,

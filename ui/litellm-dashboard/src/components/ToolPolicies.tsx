@@ -1,33 +1,46 @@
 "use client";
 
-import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
-import { Select, Switch, Tooltip } from "antd";
-import { Select, Tooltip } from "antd";
-import {
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { Button, Switch, Tooltip } from "antd";
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { TimeCell } from "./view_logs/time_cell";
-import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
-import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
+import { MetricCard } from "./GuardrailsMonitor/MetricCard";
+import { PolicySelect, INPUT_POLICY_OPTIONS, OUTPUT_POLICY_OPTIONS } from "./ToolPolicies/PolicySelect";
+import {
+  fetchToolsList,
+  updateToolPolicy,
+  ToolRow,
+} from "./networking";
 
-const POLICY_OPTIONS = [
-  { value: "trusted",   label: "trusted",   color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
-  { value: "blocked",   label: "blocked",   color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
-] as const;
+function getUTCDateKey(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
 
-type PolicyValue = "trusted" | "blocked";
+function isCreatedInUTCDay(createdAt: string | undefined, utcDateKey: string): boolean {
+  if (!createdAt) return false;
+  try {
+    const d = new Date(createdAt);
+    return getUTCDateKey(d) === utcDateKey;
+  } catch {
+    return false;
+  }
+}
 
-const policyStyle = (p: string) =>
-  POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
+function countToolsInUTCDay(tools: ToolRow[], utcDateKey: string): number {
+  return tools.filter((t) => isCreatedInUTCDay(t.created_at, utcDateKey)).length;
+}
 
-type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
+function getTrendSubtitle(newToday: number, newYesterday: number): string | undefined {
+  const diff = newToday - newYesterday;
+  if (diff === 0) return undefined;
+  if (diff > 0) return `+${diff} since yesterday`;
+  return `${diff} since yesterday`;
+}
+
+type SortField = "tool_name" | "input_policy" | "output_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
 
 interface FilterValues {
   [key: string]: string;
@@ -36,77 +49,16 @@ interface FilterValues {
 interface ToolPoliciesProps {
   accessToken: string | null;
   userRole?: string;
+  onSelectTool?: (toolName: string) => void;
 }
 
-const PolicySelect: React.FC<{
-  value: string;
-  toolName: string;
-  saving: boolean;
-  onChange: (toolName: string, policy: string) => void;
-}> = ({ value, toolName, saving, onChange }) => {
-  const style = policyStyle(value);
-  return (
-    <Select
-      size="small"
-      value={value}
-      disabled={saving}
-      loading={saving}
-      onChange={(v) => onChange(toolName, v)}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        minWidth: 110,
-        fontWeight: 500,
-      }}
-      styles={{
-        selector: {
-          backgroundColor: style.bg,
-          borderColor: style.border,
-          color: style.color,
-          borderRadius: 999,
-          fontSize: 11,
-          fontWeight: 600,
-          paddingLeft: 8,
-          paddingRight: 4,
-        },
-      }}
-      popupMatchSelectWidth={false}
-      options={POLICY_OPTIONS.map((o) => ({
-        value: o.value,
-        label: (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              fontWeight: 500,
-              color: o.color,
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: o.color,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            {o.label}
-          </span>
-        ),
-      }))}
-    />
-  );
-};
-
-export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
+export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelectTool }) => {
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
+  const [savingInput, setSavingInput] = useState<string | null>(null);
+  const [savingOutput, setSavingOutput] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<SortField>("created_at");
@@ -134,7 +86,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     }
   }, [accessToken]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   useEffect(() => {
     if (!isLiveTail) return;
@@ -142,18 +96,29 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     return () => clearInterval(id);
   }, [isLiveTail, load]);
 
-  const handlePolicyChange = async (toolName: string, newPolicy: string) => {
+  const handleInputPolicyChange = async (toolName: string, newPolicy: string) => {
     if (!accessToken) return;
-    setSaving(toolName);
+    setSavingInput(toolName);
     try {
-      await updateToolPolicy(accessToken, toolName, newPolicy);
-      setTools((prev) =>
-        prev.map((t) => (t.tool_name === toolName ? { ...t, call_policy: newPolicy } : t))
-      );
+      await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
+      setTools((prev) => prev.map((t) => (t.tool_name === toolName ? { ...t, input_policy: newPolicy } : t)));
     } catch (e: any) {
-      alert(`Failed to update policy: ${e.message}`);
+      alert(`Failed to update input policy: ${e.message}`);
     } finally {
-      setSaving(null);
+      setSavingInput(null);
+    }
+  };
+
+  const handleOutputPolicyChange = async (toolName: string, newPolicy: string) => {
+    if (!accessToken) return;
+    setSavingOutput(toolName);
+    try {
+      await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
+      setTools((prev) => prev.map((t) => (t.tool_name === toolName ? { ...t, output_policy: newPolicy } : t)));
+    } catch (e: any) {
+      alert(`Failed to update output policy: ${e.message}`);
+    } finally {
+      setSavingOutput(null);
     }
   };
 
@@ -178,19 +143,25 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     setCurrentPage(1);
   };
 
-  // Build unique team/key options from loaded data
-  const teamOptions = Array.from(new Set(tools.map((t) => t.team_id).filter(Boolean))).map(
-    (v) => ({ label: v as string, value: v as string })
-  );
-  const keyAliasOptions = Array.from(new Set(tools.map((t) => t.key_alias).filter(Boolean))).map(
-    (v) => ({ label: v as string, value: v as string })
-  );
+  const teamOptions = Array.from(new Set(tools.map((t) => t.team_id).filter(Boolean))).map((v) => ({
+    label: v as string,
+    value: v as string,
+  }));
+  const keyAliasOptions = Array.from(new Set(tools.map((t) => t.key_alias).filter(Boolean))).map((v) => ({
+    label: v as string,
+    value: v as string,
+  }));
 
   const filterOptions: FilterOption[] = [
     {
-      name: "Policy",
-      label: "Policy",
-      options: POLICY_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
+      name: "Input Policy",
+      label: "Input Policy",
+      options: INPUT_POLICY_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
+    },
+    {
+      name: "Output Policy",
+      label: "Output Policy",
+      options: OUTPUT_POLICY_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
     },
     {
       name: "Team Name",
@@ -203,6 +174,39 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
       options: keyAliasOptions,
     },
   ];
+
+  const { newToday, newYesterday, trendSubtitle, totalTools, blockedCount, activeTeamsCount, needsReviewTools } =
+    useMemo(() => {
+      const now = new Date();
+      const todayKey = getUTCDateKey(now);
+      const yesterday = new Date(now);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayKey = getUTCDateKey(yesterday);
+
+      const newToday = countToolsInUTCDay(tools, todayKey);
+      const newYesterday = countToolsInUTCDay(tools, yesterdayKey);
+      const trendSubtitle = getTrendSubtitle(newToday, newYesterday);
+
+      const totalTools = tools.length;
+      const blockedCount = tools.filter((t) => t.input_policy === "blocked").length;
+      const activeTeamsCount = new Set(tools.map((t) => t.team_id).filter(Boolean)).size;
+
+      const needsReviewTools = tools.filter(
+        (t) =>
+          isCreatedInUTCDay(t.created_at, todayKey) &&
+          t.input_policy === "untrusted"
+      );
+
+      return {
+        newToday,
+        newYesterday,
+        trendSubtitle,
+        totalTools,
+        blockedCount,
+        activeTeamsCount,
+        needsReviewTools,
+      };
+    }, [tools]);
 
   const SortHeader = ({ label, field }: { label: string; field: SortField }) => (
     <div className="flex items-center gap-1">
@@ -222,10 +226,12 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
         (t.team_id ?? "").toLowerCase().includes(q) ||
         (t.key_alias ?? "").toLowerCase().includes(q) ||
         (t.key_hash ?? "").toLowerCase().includes(q) ||
-        t.call_policy.toLowerCase().includes(q);
+        t.input_policy.toLowerCase().includes(q) ||
+        t.output_policy.toLowerCase().includes(q);
       if (!matchesSearch) return false;
     }
-    if (activeFilters["Policy"] && t.call_policy !== activeFilters["Policy"]) return false;
+    if (activeFilters["Input Policy"] && t.input_policy !== activeFilters["Input Policy"]) return false;
+    if (activeFilters["Output Policy"] && t.output_policy !== activeFilters["Output Policy"]) return false;
     if (activeFilters["Team Name"] && t.team_id !== activeFilters["Team Name"]) return false;
     if (activeFilters["Key Name"] && t.key_alias !== activeFilters["Key Name"]) return false;
     return true;
@@ -242,12 +248,74 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-  return (
-    <div className="p-6 w-full">
-      <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
-      <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+  const scrollToToolRow = (toolId: string) => {
+    const idx = sorted.findIndex((t) => t.tool_id === toolId);
+    if (idx >= 0) {
+      const page = Math.floor(idx / pageSize) + 1;
+      if (page !== currentPage) setCurrentPage(page);
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          document.getElementById(`tool-row-${toolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+      });
+    }
+  };
 
-        {/* Toolbar */}
+  return (
+    <div className="w-full">
+      <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <MetricCard
+          label="New Today"
+          value={newToday}
+          valueColor="text-green-600"
+          subtitle={trendSubtitle}
+          icon={
+            <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          }
+        />
+        <MetricCard label="Total Tools Discovered" value={totalTools} />
+        <MetricCard
+          label="Blocked Tools"
+          value={blockedCount}
+          valueColor={blockedCount > 0 ? "text-red-600" : undefined}
+        />
+        <MetricCard label="Active Teams" value={activeTeamsCount > 0 ? activeTeamsCount : "—"} />
+      </div>
+
+      {needsReviewTools.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <h2 className="text-sm font-semibold text-amber-900 mb-1">Needs Review</h2>
+          <p className="text-sm text-amber-800 mb-3">
+            {needsReviewTools.length} new tool{needsReviewTools.length !== 1 ? "s" : ""} discovered that require
+            policy decisions.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {needsReviewTools.map((t) => (
+              <span
+                key={t.tool_id}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-amber-200 rounded-md text-sm"
+              >
+                <span className="font-mono text-amber-900 truncate max-w-[200px]" title={t.tool_name}>
+                  {t.tool_name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => scrollToToolRow(t.tool_id)}
+                  className="text-amber-700 hover:text-amber-900 font-medium text-xs whitespace-nowrap"
+                >
+                  Review
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
         <div className="border-b px-6 py-4 w-full max-w-full box-border">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
             <div className="flex flex-wrap items-center gap-3">
@@ -257,16 +325,29 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                   placeholder="Search by Tool Name"
                   className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   value={searchTerm}
-                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
                 />
-                <svg className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                <svg
+                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
                 </svg>
               </div>
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">Live Tail</span>
-                <Switch color="green" checked={isLiveTail} onChange={setIsLiveTail} />
+                <Switch checked={isLiveTail} onChange={setIsLiveTail} />
               </div>
 
               <button
@@ -274,8 +355,18 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                 disabled={isButtonLoading}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-60"
               >
-                <svg className={`w-4 h-4 ${isButtonLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <svg
+                  className={`w-4 h-4 ${isButtonLoading ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
                 </svg>
                 {isButtonLoading ? "Fetching" : "Fetch"}
               </button>
@@ -283,19 +374,31 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
 
             <div className="flex items-center gap-4 text-sm text-gray-600 whitespace-nowrap">
               <span>
-                Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} results
+                Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
+                {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} results
               </span>
-              <span>Page {currentPage} of {totalPages}</span>
+              <span>
+                Page {currentPage} of {totalPages}
+              </span>
               <div className="flex gap-1">
-                <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}
-                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40">Previous</button>
-                <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
-                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40">Next</button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Next
+                </button>
               </div>
             </div>
           </div>
 
-          {/* Filter row */}
           <div className="mt-3">
             <FilterComponent
               options={filterOptions}
@@ -306,11 +409,12 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           </div>
         </div>
 
-        {/* Auto-refresh banner */}
         {isLiveTail && (
           <div className="bg-green-50 border-b border-green-100 px-6 py-2 flex items-center justify-between">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
-            <button onClick={() => setIsLiveTail(false)} className="text-xs text-green-600 underline">Stop</button>
+            <button onClick={() => setIsLiveTail(false)} className="text-xs text-green-600 underline">
+              Stop
+            </button>
           </div>
         )}
 
@@ -318,54 +422,86 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>
         )}
 
-        {/* Table */}
         <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
           <TableHead>
             <TableRow>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Discovered" field="created_at" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Tool Name" field="tool_name" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Policy" field="call_policy" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="# Calls" field="call_count" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Team Name" field="team_id" /></TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Discovered" field="created_at" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Tool Name" field="tool_name" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Input Policy" field="input_policy" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Output Policy" field="output_policy" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="# Calls" field="call_count" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Team Name" field="team_id" />
+              </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">Key Hash</TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Key Name" field="key_alias" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8">Origin</TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Key Name" field="key_alias" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">User Agent</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-8 text-center text-gray-500">Loading tools…</TableCell>
+                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
+                  Loading tools…
+                </TableCell>
               </TableRow>
             ) : paginated.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={9} className="h-8 text-center text-gray-500">
                   No tools discovered yet. Make a chat completion that returns tool_calls to start auto-discovery.
                 </TableCell>
               </TableRow>
             ) : (
               paginated.map((tool) => (
-                <TableRow key={tool.tool_id} className="h-8 hover:bg-gray-50">
+                <TableRow key={tool.tool_id} id={`tool-row-${tool.tool_id}`} className="h-8 hover:bg-gray-50">
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <TimeCell utcTime={tool.created_at ?? ""} />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden">
-                    <Tooltip title={tool.tool_name}>
-                      <span className="font-mono text-xs max-w-[20ch] truncate block font-medium">
-                        {tool.tool_name}
-                      </span>
-                    </Tooltip>
+                    <button
+                      type="button"
+                      onClick={() => onSelectTool?.(tool.tool_name)}
+                      className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-0"
+                    >
+                      <Tooltip title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
+                        <span>{tool.tool_name}</span>
+                      </Tooltip>
+                    </button>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8">
                     <PolicySelect
-                      value={tool.call_policy}
+                      value={tool.input_policy}
                       toolName={tool.tool_name}
-                      saving={saving === tool.tool_name}
-                      onChange={handlePolicyChange}
+                      saving={savingInput === tool.tool_name}
+                      onChange={handleInputPolicyChange}
+                      policyType="input"
                     />
                   </TableCell>
-                  <TableCell className="py-0.5 max-h-8 text-right tabular-nums text-sm font-mono text-gray-700">
-                    {(tool.call_count ?? 0).toLocaleString()}
+                  <TableCell className="py-0.5 max-h-8">
+                    <PolicySelect
+                      value={tool.output_policy}
+                      toolName={tool.tool_name}
+                      saving={savingOutput === tool.tool_name}
+                      onChange={handleOutputPolicyChange}
+                      policyType="output"
+                    />
+                  </TableCell>
+                  <TableCell className="py-0.5 max-h-8">
+                    <div className="flex items-center justify-end h-8 tabular-nums text-sm font-mono text-gray-700">
+                      {(tool.call_count ?? 0).toLocaleString()}
+                    </div>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.team_id ?? "-"}>
@@ -385,8 +521,8 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                     </Tooltip>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
-                    <Tooltip title={tool.origin ?? "-"}>
-                      <span className="max-w-[15ch] truncate block">{tool.origin ?? "-"}</span>
+                    <Tooltip title={tool.user_agent ?? "-"}>
+                      <span className="font-mono max-w-[20ch] truncate block text-xs text-gray-500">{tool.user_agent ?? "-"}</span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
@@ -395,19 +531,32 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           </TableBody>
         </Table>
 
-        {/* Bottom pagination (only when > 1 page) */}
         {totalPages > 1 && (
           <div className="border-t px-6 py-3 flex items-center justify-between text-sm text-gray-600">
-            <span>Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, sorted.length)} of {sorted.length}</span>
+            <span>
+              Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, sorted.length)} of{" "}
+              {sorted.length}
+            </span>
             <div className="flex gap-1">
-              <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}
-                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40">Previous</button>
-              <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
-                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40">Next</button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40"
+              >
+                Next
+              </button>
             </div>
           </div>
         )}
       </div>
+
     </div>
   );
 };
