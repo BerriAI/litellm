@@ -35,6 +35,21 @@ pytestmark = pytest.mark.skipif(
     reason="OPENAI_API_KEY not set - skipping OpenAI realtime integration tests",
 )
 
+
+def _ws_connect(url, headers):
+    """Version-portable websockets.connect wrapper.
+
+    websockets < 14 (legacy asyncio API) uses ``extra_headers``,
+    websockets >= 14 (new asyncio API) uses ``additional_headers``.
+    """
+    import websockets
+
+    try:
+        return websockets.connect(url, additional_headers=headers)
+    except TypeError:
+        return websockets.connect(url, extra_headers=headers)
+
+
 # A unique phrase guaranteed NOT to appear in normal assistant output.
 BLOCKED_PHRASE = "XSECRETBLOCKTESTPHRASEX"
 
@@ -111,17 +126,15 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
       - Send response.audio_transcript.delta with the block message to client.
       - NOT forward response.create to OpenAI (no AI response).
     """
-    import websockets
-
     guardrail = _make_guardrail(GuardrailEventHooks.pre_call)
     litellm.callbacks = [guardrail]
 
     client_events: List[dict] = []
 
     try:
-        async with websockets.connect(
+        async with _ws_connect(
             OPENAI_REALTIME_URL,
-            additional_headers={
+            {
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1",
             },
@@ -288,17 +301,15 @@ async def test_clean_text_message_passes_through_to_openai():
     A clean message (no blocked phrase) must pass the guardrail and result in a real
     AI response from OpenAI (response.done with non-empty output).
     """
-    import websockets
-
     guardrail = _make_guardrail(GuardrailEventHooks.pre_call)
     litellm.callbacks = [guardrail]
 
     client_events: List[dict] = []
 
     try:
-        async with websockets.connect(
+        async with _ws_connect(
             OPENAI_REALTIME_URL,
-            additional_headers={
+            {
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1",
             },

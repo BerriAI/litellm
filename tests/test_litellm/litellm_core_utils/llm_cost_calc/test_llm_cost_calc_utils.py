@@ -42,7 +42,7 @@ from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
 def test_reasoning_tokens_no_price_set():
-    model = "o1-mini"
+    model = "o1"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -266,7 +266,7 @@ def test_image_tokens_fallback_to_base_cost():
 
 
 def test_generic_cost_per_token_above_200k_tokens():
-    model = "gemini-2.5-pro-exp-03-25"
+    model = "gemini-2.5-pro"
     custom_llm_provider = "vertex_ai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

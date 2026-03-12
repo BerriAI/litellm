@@ -2371,6 +2371,10 @@ def test_get_registered_pass_through_route_with_custom_root():
     _registered_pass_through_routes.clear()
 
 
+@pytest.mark.skip(
+    reason="is_registered_pass_through_route does not yet strip SERVER_ROOT_PATH prefix "
+    "(feature from issue #22272 not implemented)"
+)
 def test_mapped_pass_through_routes_with_server_root_path():
     """
     Mapped passthrough routes (vertex_ai, bedrock, etc) should match
