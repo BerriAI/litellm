@@ -11,10 +11,11 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
     UpdateKeyRequest,
+    ProxyException,
 )
 from . import zixun_auth
 from . import zx_development_data
-from .token_util import set_store, get_store, create_or_get_user_key
+from .token_util import set_store, get_store, create_or_get_user_key, ClientError
 
 auth = zixun_auth.ZixunAuth(
     os.environ.get("ZX_AUTH_HOST"),
@@ -170,7 +171,7 @@ async def auth_callback(auth_key: str, code: str, request: Request):
                 key_hash=key_hash,
                 return_full_object=True,
                 include_team_keys=True,
-                include_created_by_keys=True,
+                include_created_by_keys=False,
                 sort_by=None,
                 sort_order="desc",
                 expand=None,
@@ -180,9 +181,7 @@ async def auth_callback(auth_key: str, code: str, request: Request):
             existing_key: Optional[UserAPIKeyAuth] = None
             key_total_count = keys.get("total_count", 0) or 0
             if key_total_count > 1:
-                raise RuntimeError(
-                    f"user [{org_email}] 有多个匹配的 key，无法确定: {key_total_count}"
-                )
+                logger.warning(f"user [{org_email}] 有多个匹配的 key，无法确定: {key_total_count}")
             if key_total_count == 1:
                 existing_key = keys.get('keys', [])[0] # type: ignore
 
@@ -194,10 +193,12 @@ async def auth_callback(auth_key: str, code: str, request: Request):
                 if device_name:
                     new_metadata["device_name"] = device_name
                 
+                user_name = org_email.split('@')[0]
                 key_alias = existing_key.key_alias
                 if existing_key.key_alias == org_email:
                     key_alias = f"{org_email}--default--{device_id}"
-                elif existing_key.key_alias == f"assistant-openclaw--{org_email.split('@')[0]}":
+                    new_metadata["key_type"] = "default"
+                elif existing_key.key_alias == f"assistant-openclaw--{user_name}" or existing_key.key_alias == f"{user_name}--assistant-openclaw":
                     new_metadata["key_type"] = "assistant-openclaw"
                     key_alias = f"{org_email}--assistant-openclaw--{device_id}"
 
@@ -290,7 +291,6 @@ async def cli_get_key(
 
     # 准备 key_metadata，包含 device_id 和 device_name
     key_metadata = store.data.get("key_metadata", {}).copy()
-    key_metadata["user_email"] = org_email
     if device_id:
         key_metadata["device_id"] = device_id
         key_metadata["device_name"] = device_name
@@ -303,16 +303,25 @@ async def cli_get_key(
     # 添加设备级 key_alias 规则
     key_alias = f"{org_email}--{type}--{device_id}"
 
-    (created, key_or_key_id) = await create_or_get_user_key(
-        "ai_developer",
-        user_id,
-        user_name,
-        org_email,
-        dept_id,
-        user_api_key_dict,
-        key_alias,
-        key_metadata=key_metadata,
-    )
+    try:
+        (created, key_or_key_id) = await create_or_get_user_key(
+            "ai_developer",
+            user_id,
+            user_name,
+            org_email,
+            dept_id,
+            user_api_key_dict,
+            key_alias,
+            key_metadata=key_metadata,
+        )
+    except ClientError as e:
+        logger.warning(f"user[{user_id}] recreate key error: {e}")
+        raise ProxyException(
+            message=f"创建或者获取Key失败: {e.args}",
+            type="cli_get_key",
+            param="create_or_get_user_key",
+            code=400,
+        )
     key = None
     if created:
         key = key_or_key_id
