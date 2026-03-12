@@ -1940,16 +1940,25 @@ def add_provider_specific_headers_to_request(
     # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
     # This needs to be handled via provider-specific headers to ensure it only
     # goes to Anthropic-compatible providers, not all providers in the router
+    has_anthropic_oauth_token = False
     for header, value in headers.items():
         if header.lower() == "authorization" and is_anthropic_oauth_key(value):
             anthropic_headers[header] = value
             added_header = True
+            has_anthropic_oauth_token = True
             break
     if added_header is True:
-        # Anthropic headers work across multiple providers
-        # Store as comma-separated list so retrieval can match any of them
+        # Anthropic OAuth tokens (sk-ant-oat*) are Anthropic-specific credentials and
+        # must NOT be forwarded to Vertex AI or Bedrock — those providers use their own
+        # auth (Google Cloud / AWS), and forwarding an Anthropic token causes a 401.
+        # Non-auth Anthropic headers (anthropic-version, anthropic-beta) are safe to
+        # forward to compatible providers.
+        if has_anthropic_oauth_token:
+            provider_list = LlmProviders.ANTHROPIC.value
+        else:
+            provider_list = f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}"
         data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider=f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}",
+            custom_llm_provider=provider_list,
             extra_headers=anthropic_headers,
         )
 

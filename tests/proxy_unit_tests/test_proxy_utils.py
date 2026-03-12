@@ -1901,6 +1901,38 @@ def test_provider_specific_header_multi_provider():
     }
 
 
+def test_anthropic_oauth_token_not_forwarded_to_vertex_ai():
+    """Test that Anthropic OAuth tokens are not forwarded to Vertex AI in provider_specific_header."""
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_provider_specific_headers_to_request,
+    )
+
+    data = {}
+    headers = {
+        "authorization": "Bearer sk-ant-oat01-testtoken",
+        "anthropic-version": "2023-06-01",
+    }
+
+    add_provider_specific_headers_to_request(data=data, headers=headers)
+
+    assert "provider_specific_header" in data
+    provider_list = data["provider_specific_header"]["custom_llm_provider"]
+    # Anthropic OAuth token must NOT be forwarded to vertex_ai or bedrock
+    assert "vertex_ai" not in provider_list
+    assert "bedrock" not in provider_list
+    assert "anthropic" in provider_list
+    # The token itself should be in the extra_headers for anthropic
+    assert (
+        data["provider_specific_header"]["extra_headers"]["authorization"]
+        == "Bearer sk-ant-oat01-testtoken"
+    )
+    # The non-auth Anthropic header should also be bundled for anthropic-only forwarding
+    assert (
+        data["provider_specific_header"]["extra_headers"].get("anthropic-version")
+        == "2023-06-01"
+    )
+
+
 # @pytest.mark.parametrize(
 #     "custom_llm_provider, expected_result",
 #     [
