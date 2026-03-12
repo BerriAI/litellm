@@ -456,6 +456,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
                 continue
 
+            # Tone detection is a special category — it enables the ToneChecker
+            # regex engine rather than loading keyword lists.
+            if category_name == "tone_detection":
+                if self._tone_checker is None:
+                    self._init_tone_checker({})
+                    verbose_proxy_logger.info(
+                        "Loaded tone_detection category (ToneChecker enabled)"
+                    )
+                continue
+
             # Load category file (custom or default)
             if custom_file:
                 category_file_path = self._resolve_category_file_path(custom_file)

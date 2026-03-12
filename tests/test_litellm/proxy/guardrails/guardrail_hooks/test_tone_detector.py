@@ -425,6 +425,36 @@ class TestInit:
         g = ContentFilterGuardrail(guardrail_name="test-no-tone")
         assert g._tone_checker is None
 
+    def test_tone_checker_enabled_via_category(self):
+        """Selecting tone_detection as a category should enable the ToneChecker."""
+        g = ContentFilterGuardrail(
+            guardrail_name="test-category-tone",
+            categories=[{"category": "tone_detection", "enabled": True, "action": "BLOCK"}],
+        )
+        assert g._tone_checker is not None
+
+    @pytest.mark.asyncio
+    async def test_tone_detection_via_category_blocks(self):
+        """Tone detection enabled via category selection should block bad tone."""
+        g = ContentFilterGuardrail(
+            guardrail_name="test-category-tone",
+            categories=[{"category": "tone_detection", "enabled": True, "action": "BLOCK"}],
+        )
+        with pytest.raises(HTTPException):
+            await g.apply_guardrail(
+                _inputs("That's not my problem."),
+                {},
+                "response",
+            )
+
+    def test_tone_detection_category_disabled(self):
+        """Disabling the tone_detection category should NOT enable ToneChecker."""
+        g = ContentFilterGuardrail(
+            guardrail_name="test-category-disabled",
+            categories=[{"category": "tone_detection", "enabled": False, "action": "BLOCK"}],
+        )
+        assert g._tone_checker is None
+
     def test_invalid_regex_degrades_gracefully(self):
         """Invalid regex in blocked_phrases should degrade gracefully (tone checker disabled)."""
         g = _make_guardrail(blocked_phrases=[r"(unclosed"])
