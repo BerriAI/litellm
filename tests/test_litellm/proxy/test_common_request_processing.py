@@ -1371,29 +1371,22 @@ class TestOverrideOpenAIResponseModel:
 
     def test_override_model_preserves_azure_model_router_actual_model(self):
         """
-        Test that when the requested model is an Azure Model Router,
-        the actual model used (returned in the response) is preserved
-        instead of being overridden with the router model.
-        
-        This ensures users can see which model actually handled their request
-        when using Azure Model Router.
+        Test that when the requested model is an Azure Model Router, the actual
+        model used (returned in the response) is preserved instead of being
+        overridden.
         """
         requested_model = "azure_ai/model_router"
         actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
-        
-        # Create a mock object response with the actual model used
+
         response_obj = MagicMock()
         response_obj.model = actual_model_used
         response_obj._hidden_params = {"additional_headers": {}}
-        
-        # Call the function - should preserve the actual model
+
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
-        # Verify the model was NOT overridden - should still be the actual model
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
 
@@ -1404,20 +1397,16 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "azure_ai/model_router/my-deployment"
         actual_model_used = "azure_ai/gpt-4.1-nano-2025-04-14"
-        
-        # Create a mock object response
+
         response_obj = MagicMock()
         response_obj.model = actual_model_used
         response_obj._hidden_params = {"additional_headers": {}}
-        
-        # Call the function - should preserve the actual model
+
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
-        # Verify the model was NOT overridden
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
 
@@ -1428,20 +1417,16 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "azure_ai/model-router"
         actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
-        
-        # Create a mock object response
+
         response_obj = MagicMock()
         response_obj.model = actual_model_used
         response_obj._hidden_params = {"additional_headers": {}}
-        
-        # Call the function - should preserve the actual model
+
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
-        # Verify the model was NOT overridden
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
 
