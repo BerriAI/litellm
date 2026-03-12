@@ -191,11 +191,15 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
     def _read_image_bytes(self, image: Any) -> bytes:
         """Read image bytes from various input types."""
+        # Unwrap nested lists iteratively to avoid recursion
+        for _ in range(10):
+            if isinstance(image, list):
+                image = image[0]
+            else:
+                break
+
         if isinstance(image, bytes):
             return image
-        elif isinstance(image, list):
-            # If it's a list, take the first image
-            return self._read_image_bytes(image[0])
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
                 # Download image from URL
