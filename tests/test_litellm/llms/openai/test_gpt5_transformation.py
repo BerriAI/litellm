@@ -366,10 +366,10 @@ def test_gpt5_xhigh_dict_accepted_for_supported_model(config: OpenAIConfig):
 
 
 def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
-    """Dict with effort='none' and tools: no tool-drop, reasoning_effort preserved.
+    """Dict with effort='none' and tools: reasoning_effort dropped for gpt-5.4.
 
-    Regression: effective_effort='none' must be used for tool-drop guard so
-    {"effort": "none", "summary": "detailed"} is not incorrectly treated as non-none.
+    gpt-5.4 drops all reasoning_effort when tools are present,
+    since that combination is only supported in the Responses API.
     """
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
@@ -378,7 +378,7 @@ def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert "reasoning_effort" not in params
     assert params["tools"] == tools
 
 
@@ -414,7 +414,7 @@ def test_gpt5_preserves_reasoning_effort_dict_with_summary_from_optional_params(
     assert params["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
 
 
-def test_gpt5_4_drops_reasoning_effort_when_tools_present(config: OpenAIConfig):
+def test_gpt5_4_drops_reasoning_effort_when_user_sends_reasoning_and_tools(config: OpenAIConfig):
     """gpt-5.4: function calls not supported with reasoning_effort != 'none'. Drop reasoning_effort."""
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
@@ -438,8 +438,8 @@ def test_gpt5_4_keeps_reasoning_effort_when_no_tools(config: OpenAIConfig):
     assert params["reasoning_effort"] == "high"
 
 
-def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
-    """reasoning_effort='none' is kept when tools are present."""
+def test_gpt5_4_drops_reasoning_effort_none_with_tools(config: OpenAIConfig):
+    """reasoning_effort='none' is also dropped when tools are present for gpt-5.4."""
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "none", "tools": tools},
@@ -447,7 +447,7 @@ def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in params
     assert params["tools"] == tools
 
 
