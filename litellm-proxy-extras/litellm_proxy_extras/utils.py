@@ -293,7 +293,7 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-        for attempt in range(4):
+        for attempt in range(5):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
             os.chdir(migrations_dir)
@@ -321,46 +321,51 @@ class ProxyExtrasDBManager:
                             migration_match = re.search(
                                 r"`(\d+_.*)` migration", e.stderr
                             )
-                            if migration_match:
-                                failed_migration = migration_match.group(1)
-                                if ProxyExtrasDBManager._is_idempotent_error(e.stderr):
-                                    logger.info(
-                                        f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
-                                    )
+                            if not migration_match:
+                                # Cannot identify which migration failed — fail fast
+                                raise RuntimeError(
+                                    f"Migration failed (P3009) but could not extract migration name. "
+                                    f"Manual intervention required. Error: {e.stderr}"
+                                ) from e
+
+                            failed_migration = migration_match.group(1)
+                            if ProxyExtrasDBManager._is_idempotent_error(e.stderr):
+                                logger.info(
+                                    f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
+                                )
+                                ProxyExtrasDBManager._roll_back_migration(
+                                    failed_migration
+                                )
+                                ProxyExtrasDBManager._resolve_specific_migration(
+                                    failed_migration
+                                )
+                                logger.info(
+                                    f"✅ Migration {failed_migration} resolved."
+                                )
+                                return True
+                            else:
+                                logger.error(
+                                    f"❌ Migration {failed_migration} failed with a non-idempotent error. "
+                                    f"This requires manual intervention. Error: {e.stderr}"
+                                )
+                                # Mark as rolled back so the migration can be retried after manual fix
+                                try:
                                     ProxyExtrasDBManager._roll_back_migration(
                                         failed_migration
                                     )
-                                    ProxyExtrasDBManager._resolve_specific_migration(
-                                        failed_migration
-                                    )
                                     logger.info(
-                                        f"✅ Migration {failed_migration} resolved."
+                                        f"Migration {failed_migration} marked as rolled back"
                                     )
-                                    return True
-                                else:
-                                    logger.error(
-                                        f"❌ Migration {failed_migration} failed with a non-idempotent error. "
-                                        f"This requires manual intervention. Error: {e.stderr}"
+                                except Exception as rollback_error:
+                                    logger.warning(
+                                        f"Failed to mark migration as rolled back: {rollback_error}"
                                     )
-                                    # Mark as rolled back so the migration can be retried after manual fix
-                                    try:
-                                        ProxyExtrasDBManager._roll_back_migration(
-                                            failed_migration
-                                        )
-                                        logger.info(
-                                            f"Migration {failed_migration} marked as rolled back"
-                                        )
-                                    except Exception as rollback_error:
-                                        logger.warning(
-                                            f"Failed to mark migration as rolled back: {rollback_error}"
-                                        )
-                                    raise RuntimeError(
-                                        f"Migration {failed_migration} failed and requires manual intervention. "
-                                        f"Please inspect the migration and database state, then either:\n"
-                                        f"  - Fix the issue and restart, or\n"
-                                        f"  - Run: prisma migrate resolve --applied {failed_migration}\n"
-                                        f"Original error: {e.stderr}"
-                                    ) from e
+                                raise RuntimeError(
+                                    f"Migration {failed_migration} failed and requires manual intervention. "
+                                    f"Please inspect the migration and database state, fix the issue, "
+                                    f"and restart.\n"
+                                    f"Original error: {e.stderr}"
+                                ) from e
                         elif (
                             "P3005" in e.stderr
                             and "database schema is not empty" in e.stderr
@@ -477,7 +482,7 @@ class ProxyExtrasDBManager:
                 logger.info(f"Attempt {attempt + 1} timed out")
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
-                attempts_left = 3 - attempt
+                attempts_left = 4 - attempt
                 retry_msg = (
                     f" Retrying... ({attempts_left} attempts left)"
                     if attempts_left > 0

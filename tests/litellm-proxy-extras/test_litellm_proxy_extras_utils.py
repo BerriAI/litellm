@@ -228,6 +228,30 @@ class TestSetupDatabaseFailFast:
         ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
     )
     @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_p3009_unmatched_regex_raises_runtime_error(
+        self, mock_run, mock_dir, mock_getcwd, mock_chdir
+    ):
+        """P3009 with unparseable migration name should fail fast, not silently retry"""
+        error = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3009: migrate found failed migrations in the target database, unexpected format",
+            output="",
+        )
+        mock_run.side_effect = error
+
+        with pytest.raises(RuntimeError, match="could not extract migration name"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True)
+
+        # Should fail on first attempt, not retry
+        assert mock_run.call_count == 1
+
+    @patch("litellm_proxy_extras.utils.os.chdir")
+    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
+    @patch.object(
+        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
+    )
+    @patch("litellm_proxy_extras.utils.subprocess.run")
     def test_successful_deploy_does_not_call_resolve_all(
         self, mock_run, mock_dir, mock_getcwd, mock_chdir
     ):
