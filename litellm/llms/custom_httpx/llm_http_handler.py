@@ -3036,10 +3036,11 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
+            file_request = cast(Dict[str, Any], transformed_request)
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                files=transformed_request,
+                files=file_request,
                 timeout=timeout,
             )
         else:
@@ -4870,6 +4871,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
+            assert provider_config is not None
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -4954,6 +4956,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
+            assert provider_config is not None
             raise self._handle_error(
                 e=e,
                 provider_config=provider_config,
@@ -8026,7 +8029,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params = {}
+        params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -8108,7 +8111,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params = {}
+        params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -8170,7 +8173,7 @@ class BaseLLMHTTPHandler:
 
         url = f"{api_base}/{vector_store_id}"
 
-        request_body = dict(vector_store_update_optional_params)
+        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
@@ -8253,7 +8256,7 @@ class BaseLLMHTTPHandler:
 
         url = f"{api_base}/{vector_store_id}"
 
-        request_body = dict(vector_store_update_optional_params)
+        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
