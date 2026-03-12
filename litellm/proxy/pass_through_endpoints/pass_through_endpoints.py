@@ -2065,10 +2065,11 @@ class InitPassThroughEndpointHelpers:
         if root_path and root_path != "/":
             if route.startswith(root_path):
                 normalized_route = route[len(root_path):]
-                for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                    if normalized_route.startswith(mapped_route):
-                        return True
-            # Route lacks expected prefix — not a mapped pass-through route
+                if normalized_route:  # guard against route == root_path exactly
+                    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+                        if normalized_route.startswith(mapped_route):
+                            return True
+            # Route lacks expected prefix (or is exactly root_path) — not a mapped pass-through route
         else:
             for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
                 if route.startswith(mapped_route):
