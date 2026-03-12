@@ -384,14 +384,14 @@ def test_all_model_configs():
     assert (
         "max_completion_tokens"
         in VertexAIAnthropicConfig().get_supported_openai_params(
-            model="claude-3-5-sonnet-20240620"
+            model="claude-sonnet-4-6"
         )
     )
 
     assert VertexAIAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-6",
         drop_params=False,
     ) == {"max_tokens": 10}
 
@@ -1136,7 +1136,7 @@ def test_get_model_info_shows_supports_computer_use():
     [
         ("gpt-3.5-turbo", "openai"),
         ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
-        ("gemini-1.5-pro", "vertex_ai"),
+        ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
 def test_pre_process_non_default_params(model, custom_llm_provider):
@@ -1225,14 +1225,14 @@ class TestProxyFunctionCalling:
             ),
             # Anthropic models (Claude supports function calling)
             (
-                "claude-3-5-sonnet-20240620",
-                "litellm_proxy/claude-3-5-sonnet-20240620",
+                "claude-sonnet-4-6",
+                "litellm_proxy/claude-sonnet-4-6",
                 True,
             ),
             # Google models
-            ("gemini-pro", "litellm_proxy/gemini-pro", True),
-            ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
-            ("gemini/gemini-1.5-flash", "litellm_proxy/gemini/gemini-1.5-flash", True),
+            ("gemini-2.5-pro", "litellm_proxy/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
@@ -1437,8 +1437,8 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/gpt-3.5-turbo", True),
             ("litellm_proxy/gpt-4", True),
             ("litellm_proxy/gpt-4o", True),
-            ("litellm_proxy/claude-3-5-sonnet-20240620", True),
-            ("litellm_proxy/gemini/gemini-1.5-pro", True),
+            ("litellm_proxy/claude-sonnet-4-6", True),
+            ("litellm_proxy/gemini/gemini-2.5-pro", True),
             # Test proxy models that should not support function calling
             ("litellm_proxy/command-nightly", False),
             ("litellm_proxy/anthropic.claude-instant-v1", False),
@@ -1483,8 +1483,8 @@ class TestProxyFunctionCalling:
         [
             "litellm_proxy/gpt-3.5-turbo",
             "litellm_proxy/gpt-4",
-            "litellm_proxy/claude-3-5-sonnet-20240620",
-            "litellm_proxy/gemini/gemini-1.5-pro",
+            "litellm_proxy/claude-sonnet-4-6",
+            "litellm_proxy/gemini/gemini-2.5-pro",
         ],
     )
     def test_proxy_model_with_custom_llm_provider_none(self, model_name):
