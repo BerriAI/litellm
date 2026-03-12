@@ -673,32 +673,45 @@ def generic_cost_per_token(  # noqa: PLR0915
         or prompt_tokens_details["character_count"] > 0
         or prompt_tokens_details["video_length_seconds"] > 0
     )
+    should_fill_unaccounted_tokens = (
+        accounted_tokens < usage.prompt_tokens
+        and not (accounted_tokens == 0 and has_alternative_billing)
+    )
  
     if has_double_counting:
         # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
-        text_tokens = (
+        # Clamp to 0 to prevent negative cost when cache_hit exceeds prompt_tokens
+        text_tokens = max(
+            0,
             usage.prompt_tokens
             - cache_hit
             - audio_tokens
             - cache_creation
-            - image_tokens
+            - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
     elif (text_tokens == 0 and not has_alternative_billing):
         # text_tokens not set by provider and no alternative billing dimensions:
         # calculate text_tokens as the remainder of prompt_tokens
-        text_tokens = (
+        text_tokens = max(
+            0,
             usage.prompt_tokens
             - cache_hit
             - audio_tokens
             - cache_creation
-            - image_tokens
+            - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif accounted_tokens < usage.prompt_tokens and not has_alternative_billing:
+    elif should_fill_unaccounted_tokens:
         # Unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
         # in prompt_tokens by the provider but not broken out into any detail field.
         # Add the gap to text_tokens so they are costed at input_cost_per_token.
+        #
+        # The guard above only skips when there is ZERO token-level accounting
+        # AND alternative billing is active (e.g. Bedrock Nova image-only
+        # embeddings where prompt_tokens are entirely explained by image_count).
+        # Mixed requests (PDF + image_count) where the provider reports
+        # text_tokens > 0 still have their gap filled correctly.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
  
@@ -711,6 +724,16 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_read_cost,
     ) = _get_token_base_cost(
         model_info=model_info, usage=usage, service_tier=service_tier
+    )
+ 
+    prompt_cost = _calculate_input_cost(
+        prompt_tokens_details=prompt_tokens_details,
+        model_info=model_info,
+        prompt_base_cost=prompt_base_cost,
+        cache_read_cost=cache_read_cost,
+        cache_creation_cost=cache_creation_cost,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        service_tier=service_tier,
     )
  
     prompt_cost = _calculate_input_cost(
