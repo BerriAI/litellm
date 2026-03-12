@@ -197,6 +197,22 @@ class TestMarkAllMigrationsApplied:
         # Should not raise
         ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
 
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    @patch.object(
+        ProxyExtrasDBManager,
+        "_get_migration_names",
+        return_value=["20250326162113_baseline"],
+    )
+    def test_raises_on_unexpected_error(self, mock_get_names, mock_run):
+        """Verify non-'already applied' errors are propagated, not silently swallowed"""
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="connection refused",
+        )
+        with pytest.raises(RuntimeError, match="Failed to mark migration"):
+            ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
+
 
 class TestSetupDatabaseFailFast:
     """Test that setup_database fails fast on non-recoverable migration errors"""
@@ -211,16 +227,22 @@ class TestSetupDatabaseFailFast:
         self, mock_run, mock_dir, mock_getcwd, mock_chdir
     ):
         """P3009 with non-idempotent error should raise RuntimeError, not silently retry"""
-        error = subprocess.CalledProcessError(
+        deploy_error = subprocess.CalledProcessError(
             1,
             "prisma",
             stderr="P3009: migrate found failed migrations in the target database, `20250329084805_new_cron_job_table` migration. Error: syntax error at or near 'ALTR'",
             output="",
         )
-        mock_run.side_effect = error
+        # First call (migrate deploy) raises P3009; subsequent calls (roll_back) succeed
+        mock_run.side_effect = [deploy_error, MagicMock(returncode=0)]
 
         with pytest.raises(RuntimeError, match="requires manual intervention"):
             ProxyExtrasDBManager.setup_database(use_migrate=True)
+
+        # Verify rollback was called (second subprocess call)
+        assert mock_run.call_count == 2
+        rollback_cmd = mock_run.call_args_list[1][0][0]
+        assert "--rolled-back" in rollback_cmd
 
     @patch("litellm_proxy_extras.utils.os.chdir")
     @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
@@ -245,6 +267,38 @@ class TestSetupDatabaseFailFast:
 
         # Should fail on first attempt, not retry
         assert mock_run.call_count == 1
+
+    @patch("litellm_proxy_extras.utils.os.chdir")
+    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
+    @patch.object(
+        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
+    )
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_p3009_idempotent_redeploys_remaining_migrations(
+        self, mock_run, mock_dir, mock_getcwd, mock_chdir
+    ):
+        """P3009 with idempotent error should resolve the failed migration then re-deploy"""
+        deploy_error = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3009: migrate found failed migrations in the target database, `20250329084805_new_cron_job_table` migration. Error: column 'status' already exists",
+            output="",
+        )
+        # Call sequence: deploy (fails P3009), roll_back, resolve, re-deploy (succeeds)
+        mock_run.side_effect = [
+            deploy_error,
+            MagicMock(returncode=0),  # roll_back
+            MagicMock(returncode=0),  # resolve
+            MagicMock(stdout="All migrations applied", returncode=0),  # re-deploy
+        ]
+
+        result = ProxyExtrasDBManager.setup_database(use_migrate=True)
+
+        assert result is True
+        assert mock_run.call_count == 4
+        # Last call should be prisma migrate deploy (re-deploy)
+        last_cmd = mock_run.call_args_list[3][0][0]
+        assert last_cmd == ["prisma", "migrate", "deploy"]
 
     @patch("litellm_proxy_extras.utils.os.chdir")
     @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")

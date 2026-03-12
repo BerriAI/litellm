@@ -274,10 +274,14 @@ class ProxyExtrasDBManager:
                 )
                 logger.debug(f"Resolved migration: {migration_name}")
             except subprocess.CalledProcessError as e:
-                if "is already recorded as applied in the database." not in e.stderr:
-                    logger.warning(
-                        f"Failed to resolve migration {migration_name}: {e.stderr}"
+                if "is already recorded as applied in the database." in e.stderr:
+                    logger.debug(
+                        f"Migration {migration_name} already recorded as applied"
                     )
+                else:
+                    raise RuntimeError(
+                        f"Failed to mark migration {migration_name} as applied: {e.stderr}"
+                    ) from e
 
     @staticmethod
     def setup_database(use_migrate: bool = False) -> bool:
@@ -340,8 +344,19 @@ class ProxyExtrasDBManager:
                                     failed_migration
                                 )
                                 logger.info(
-                                    f"✅ Migration {failed_migration} resolved."
+                                    f"✅ Migration {failed_migration} resolved. Re-deploying remaining migrations..."
                                 )
+                                # Re-run deploy to apply any migrations after the resolved one
+                                result = subprocess.run(
+                                    [_get_prisma_command(), "migrate", "deploy"],
+                                    timeout=60,
+                                    check=True,
+                                    capture_output=True,
+                                    text=True,
+                                    env=_get_prisma_env(),
+                                )
+                                logger.info(f"prisma migrate deploy stdout: {result.stdout}")
+                                logger.info("✅ All migrations applied.")
                                 return True
                             else:
                                 logger.error(
