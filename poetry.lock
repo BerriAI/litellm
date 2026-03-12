@@ -954,7 +954,7 @@ files = [
     {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
     {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
 ]
-markers = {main = "platform_system == \"Windows\" or sys_platform == \"win32\" and python_version < \"3.14\" and (extra == \"utils\" or extra == \"semantic-router\") or sys_platform == \"win32\" and extra == \"utils\" or python_version < \"3.14\" and extra == \"semantic-router\"", dev = "platform_system == \"Windows\" or sys_platform == \"win32\"", proxy-dev = "platform_system == \"Windows\""}
+markers = {main = "platform_system == \"Windows\" or sys_platform == \"win32\" and python_version <= \"3.13\" and (extra == \"utils\" or extra == \"semantic-router\") or sys_platform == \"win32\" and extra == \"utils\" or python_version <= \"3.13\" and extra == \"semantic-router\"", dev = "platform_system == \"Windows\" or sys_platform == \"win32\"", proxy-dev = "platform_system == \"Windows\""}
 
 [[package]]
 name = "coloredlogs"
@@ -2711,7 +2711,7 @@ description = "Lightweight in-process concurrent programming"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "(platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\") and extra == \"mlflow\" and python_version >= \"3.10\""
+markers = "extra == \"mlflow\" and (platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\") and python_version >= \"3.10\""
 files = [
     {file = "greenlet-3.3.2-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:9bc885b89709d901859cf95179ec9f6bb67a3d2bb1f0e88456461bd4b7f8fd0d"},
     {file = "greenlet-3.3.2-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b568183cf65b94919be4438dc28416b234b678c608cafac8874dfeeb2a9bbe13"},
@@ -2860,7 +2860,7 @@ files = [
     {file = "grpcio-1.78.0-cp39-cp39-win_amd64.whl", hash = "sha256:5361a0630a7fdb58a6a97638ab70e1dae2893c4d08d7aba64ded28bb9e7a29df"},
     {file = "grpcio-1.78.0.tar.gz", hash = "sha256:7382b95189546f375c174f53a5fa873cef91c4b8005faa05cc5b3beea9c4f1c5"},
 ]
-markers = {main = "(python_version < \"3.14\" or extra == \"google\" or extra == \"extra-proxy\" or extra == \"grpc\") and (extra == \"extra-proxy\" or extra == \"google\" or extra == \"grpc\")"}
+markers = {main = "(python_version <= \"3.13\" or extra == \"google\" or extra == \"extra-proxy\" or extra == \"grpc\") and (extra == \"extra-proxy\" or extra == \"google\" or extra == \"grpc\")"}
 
 [package.dependencies]
 typing-extensions = ">=4.12,<5.0"
@@ -2893,7 +2893,7 @@ description = "WSGI HTTP Server for UNIX"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "platform_system != \"Windows\" and python_version >= \"3.10\" and (extra == \"mlflow\" or extra == \"proxy\") or extra == \"proxy\""
+markers = "(extra == \"mlflow\" or extra == \"proxy\") and platform_system != \"Windows\" and python_version >= \"3.10\" or extra == \"proxy\""
 files = [
     {file = "gunicorn-23.0.0-py3-none-any.whl", hash = "sha256:ec400d38950de4dfd418cff8328b2c8faed0edb0d517d3394e457c317908ca4d"},
     {file = "gunicorn-23.0.0.tar.gz", hash = "sha256:f014447a0101dc57e294f6c18ca6b40227a4c90e9bdb586042628030cba004ec"},
@@ -4141,8 +4141,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.3", markers = "python_version >= \"3.11\""},
-    {version = ">=1.21.2", markers = "python_version >= \"3.10\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.21.2", markers = "python_version >= \"3.10\""},
     {version = ">1.20"},
 ]
 
@@ -5179,8 +5179,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.2", markers = "python_version == \"3.11\""},
-    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
 ]
 python-dateutil = ">=2.8.2"
 pytz = ">=2020.1"
@@ -5935,7 +5935,7 @@ files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
 ]
-markers = {main = "implementation_name != \"PyPy\" and (platform_python_implementation != \"PyPy\" or extra == \"proxy\") and python_version >= \"3.10\" and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\")", dev = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\" and python_version >= \"3.10\"", proxy-dev = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\" and python_version >= \"3.10\""}
+markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and implementation_name != \"PyPy\" and python_version >= \"3.10\" and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\")", dev = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" and python_version >= \"3.10\"", proxy-dev = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" and python_version >= \"3.10\""}
 
 [[package]]
 name = "pydantic"
@@ -6157,7 +6157,7 @@ files = [
     {file = "pyjwt-2.12.0-py3-none-any.whl", hash = "sha256:9bb459d1bdd0387967d287f5656bf7ec2b9a26645d1961628cda1764e087fd6e"},
     {file = "pyjwt-2.12.0.tar.gz", hash = "sha256:2f62390b667cd8257de560b850bb5a883102a388829274147f1d724453f8fb02"},
 ]
-markers = {main = "(python_version < \"3.14\" or extra == \"proxy\" or extra == \"extra-proxy\") and (extra == \"extra-proxy\" or extra == \"proxy\")", dev = "python_version < \"3.14\""}
+markers = {main = "(python_version <= \"3.13\" or extra == \"proxy\" or extra == \"extra-proxy\") and (extra == \"extra-proxy\" or extra == \"proxy\")", dev = "python_version < \"3.14\""}
 
 [package.dependencies]
 cryptography = {version = ">=3.4.0", optional = true, markers = "extra == \"crypto\""}
@@ -6234,7 +6234,7 @@ description = "A python implementation of GNU readline."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"extra-proxy\" and python_version < \"3.14\" and sys_platform == \"win32\""
+markers = "sys_platform == \"win32\" and extra == \"extra-proxy\" and python_version < \"3.14\""
 files = [
     {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
     {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
@@ -6487,7 +6487,7 @@ description = "Python for Window Extensions"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "sys_platform == \"win32\" and (extra == \"proxy\" or extra == \"mlflow\") and python_version >= \"3.10\""
+markers = "(extra == \"proxy\" or extra == \"mlflow\") and sys_platform == \"win32\" and python_version >= \"3.10\""
 files = [
     {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
     {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
@@ -8886,7 +8886,7 @@ files = [
     {file = "tzdata-2025.3-py2.py3-none-any.whl", hash = "sha256:06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1"},
     {file = "tzdata-2025.3.tar.gz", hash = "sha256:de39c2ca5dc7b0344f2eba86f49d614019d29f060fc4ebc8a417896a620b56a7"},
 ]
-markers = {main = "(platform_system == \"Windows\" or extra == \"mlflow\") and python_version >= \"3.10\" and (extra == \"proxy\" or extra == \"mlflow\") or extra == \"proxy\" and platform_system == \"Windows\" and python_version == \"3.9\"", dev = "sys_platform == \"win32\""}
+markers = {main = "(extra == \"proxy\" or extra == \"mlflow\") and (platform_system == \"Windows\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"proxy\" and platform_system == \"Windows\" and python_version == \"3.9\"", dev = "sys_platform == \"win32\""}
 
 [[package]]
 name = "tzlocal"
@@ -9046,7 +9046,7 @@ description = "Waitress WSGI server"
 optional = true
 python-versions = ">=3.9.0"
 groups = ["main"]
-markers = "platform_system == \"Windows\" and extra == \"mlflow\" and python_version >= \"3.10\""
+markers = "extra == \"mlflow\" and platform_system == \"Windows\" and python_version >= \"3.10\""
 files = [
     {file = "waitress-3.0.2-py3-none-any.whl", hash = "sha256:c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e"},
     {file = "waitress-3.0.2.tar.gz", hash = "sha256:682aaaf2af0c44ada4abfb70ded36393f0e307f4ab9456a215ce0020baefc31f"},
