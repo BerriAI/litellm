@@ -147,6 +147,18 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
         const group = grouped[op];
         if (group.length === 0) return null;
 
+        // If a search filter is active and no tools in this group match, hide the
+        // entire group — including its header — to avoid empty visual blocks.
+        if (searchFilter) {
+          const lf = searchFilter.toLowerCase();
+          const hasMatch = group.some(
+            (t) =>
+              t.name.toLowerCase().includes(lf) ||
+              (t.description ?? "").toLowerCase().includes(lf)
+          );
+          if (!hasMatch) return null;
+        }
+
         const meta = CRUD_GROUP_META[op];
         const fullyAllowed = isGroupFullyAllowed(op);
         const partial = isGroupPartiallyAllowed(op);

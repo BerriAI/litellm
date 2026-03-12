@@ -100,12 +100,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
 
   // Refs keep the latest values for the auto-enable effect so it always reads
-  // the current servers/selectedServers without needing them as dependencies
-  // (which would cause the effect to fire on every render).
+  // the current servers/selectedServers/onChange without needing them as
+  // dependencies (which would cause the effect to fire on every render).
   const serversRef = useRef<MCPServer[]>([]);
   useEffect(() => { serversRef.current = servers; }, [servers]);
   const selectedServersRef = useRef<string[]>(selectedServers);
   useEffect(() => { selectedServersRef.current = selectedServers; }, [selectedServers]);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
@@ -165,17 +167,17 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
   // Auto-enable oauth2 servers for the current chat session when a valid
   // credential is detected (either on mount or after a fresh OAuth sign-in).
-  // Uses refs for servers/selectedServers to avoid stale closures without
-  // adding them as deps (which would cause the effect to re-fire on every render).
+  // Uses refs for servers/selectedServers/onChange to avoid stale closures
+  // without adding them as dependencies (which would re-fire on every render).
   useEffect(() => {
     if (oauthConnected.size === 0) return;
     const namesToAdd = serversRef.current
       .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
       .map(nameOf);
     if (namesToAdd.length > 0) {
-      onChange([...selectedServersRef.current, ...namesToAdd]);
+      onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
     }
-  }, [oauthConnected, onChange]);
+  }, [oauthConnected]);
 
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {

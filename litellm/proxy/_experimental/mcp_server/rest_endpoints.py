@@ -108,6 +108,42 @@ if MCP_AVAILABLE:
             )
         return None
 
+    async def _get_bulk_user_oauth_headers(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Fetch ALL OAuth2 credentials for the current user in a single DB query and
+        return a mapping of server_id → {"Authorization": "Bearer <token>"}.
+
+        This is the batch alternative to calling _get_user_oauth_extra_headers
+        per-server inside a loop (N+1 DB queries).
+        """
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        if not user_id:
+            return {}
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                list_user_oauth_credentials,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            creds = await list_user_oauth_credentials(prisma_client, user_id)
+            return {
+                c["server_id"]: {"Authorization": f"Bearer {c['access_token']}"}
+                for c in creds
+                if c.get("access_token") and c.get("server_id")
+            }
+        except Exception:
+            verbose_logger.debug(
+                "Failed to bulk-fetch OAuth credentials for user %r",
+                str(user_id).replace("\n", "\\n").replace("\r", "\\r"),
+                exc_info=True,
+            )
+            return {}
+
     def _create_tool_response_objects(tools, server_mcp_info):
         """Helper function to create tool response objects."""
         return [
@@ -333,6 +369,11 @@ if MCP_AVAILABLE:
             list_tools_result = []
             error_message = None
 
+            # Bulk-fetch all OAuth credentials for this user in a single DB query
+            # so per-server calls below can use a dict lookup (O(1)) instead of
+            # issuing one DB query per server (N+1 pattern).
+            bulk_oauth_headers = await _get_bulk_user_oauth_headers(user_api_key_dict)
+
             # If server_id is specified, only query that specific server
             if server_id:
                 # Resolve a server name to its UUID if needed (MCPConnectPicker passes
@@ -381,7 +422,7 @@ if MCP_AVAILABLE:
                 server_auth_header = _get_server_auth_header(
                     server, mcp_server_auth_headers, mcp_auth_header
                 )
-                user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
+                user_oauth_extra_headers = bulk_oauth_headers.get(server.server_id)
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
@@ -435,7 +476,7 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
-                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
+                    user_oauth_extra_headers = bulk_oauth_headers.get(server.server_id)
 
                     try:
                         tools_result = await _get_tools_for_single_server(
