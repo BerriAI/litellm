@@ -8397,11 +8397,6 @@ class ProviderConfigManager:
                 or (supports_reasoning(model) and not is_gpt_model)
             )
 
-            is_o_series = model and (
-                "o_series" in model.lower()
-                or (supports_reasoning(model) and not is_gpt_model)
-            )
-
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
