@@ -129,6 +129,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       );
     }
     const sorted = [...filtered].sort((a, b) => {
+      if (!a.created_at && !b.created_at) return 0;
       if (!a.created_at) return 1;
       if (!b.created_at) return -1;
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();

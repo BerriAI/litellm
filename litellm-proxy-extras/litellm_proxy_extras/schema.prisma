@@ -315,11 +315,6 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
-  approval_status       String    @default("approved")
-  submitted_by          String?
-  submitted_at          DateTime?
-  reviewed_at           DateTime?
-  review_notes          String?
 }
 
 // Per-user BYOK credentials for MCP servers

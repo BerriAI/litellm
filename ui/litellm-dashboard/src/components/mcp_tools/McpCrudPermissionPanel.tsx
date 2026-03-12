@@ -30,8 +30,8 @@ interface McpCrudPermissionPanelProps {
    * An empty array means "allow none".
    */
   value: string[] | undefined;
-  /** Called whenever the allowed set changes. */
-  onChange: (allowed: string[] | undefined) => void;
+  /** Called whenever the allowed set changes. Always emits a concrete string[]. */
+  onChange: (allowed: string[]) => void;
   readOnly?: boolean;
 }
 
@@ -205,9 +205,9 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                   return (
                     <div
                       key={tool.name}
-                      className={`flex items-start gap-3 px-4 py-2.5 cursor-pointer transition-colors hover:bg-gray-50 ${
-                        allowed ? "" : "opacity-60"
-                      }`}
+                      className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
+                        !readOnly ? "cursor-pointer" : ""
+                      } ${allowed ? "" : "opacity-60"}`}
                       onClick={() => toggleTool(tool.name)}
                     >
                       <Checkbox

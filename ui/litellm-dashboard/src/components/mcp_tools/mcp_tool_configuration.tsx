@@ -453,11 +453,27 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
 
             {/* CRUD grouped view */}
             {viewMode === "crud" && (
-              <McpCrudPermissionPanel
-                tools={tools}
-                value={allowedTools}
-                onChange={(allowed) => onAllowedToolsChange(allowed ?? tools.map((t) => t.name))}
-              />
+              <>
+                <Input
+                  placeholder="Search tools by name or description..."
+                  prefix={<SearchOutlined className="text-gray-400" />}
+                  value={toolSearchTerm}
+                  onChange={(e) => setToolSearchTerm(e.target.value)}
+                  allowClear
+                  className="rounded-lg"
+                  size="large"
+                />
+                <McpCrudPermissionPanel
+                  tools={tools.filter(
+                    (t) =>
+                      !toolSearchTerm ||
+                      t.name.toLowerCase().includes(toolSearchTerm.toLowerCase()) ||
+                      (t.description ?? "").toLowerCase().includes(toolSearchTerm.toLowerCase())
+                  )}
+                  value={allowedTools}
+                  onChange={(allowed) => onAllowedToolsChange(allowed)}
+                />
+              </>
             )}
 
             {/* Flat list view */}
