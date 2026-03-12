@@ -38,6 +38,10 @@ class TokenStore:
 token_stores: Dict[str, TokenStore] = {}
 
 
+class ClientError(Exception):
+    pass
+
+
 def set_store(
     type: TokenType,
     token: str,
@@ -117,7 +121,7 @@ async def create_or_get_user_key(
         key_hash=None,
         return_full_object=False,
         include_team_keys=True,
-        include_created_by_keys=True,
+        include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
         expand=None,
@@ -126,7 +130,7 @@ async def create_or_get_user_key(
 
     key_total_count = keys.get("total_count", 0) or 0
     if key_total_count > 1:
-        raise RuntimeError(
+        raise ClientError(
             f"user [{org_email}] 的 key[{key_alias}] 有多个匹配的 key，无法确定: {key_total_count}"
         )
     if key_total_count == 1:
@@ -183,12 +187,12 @@ async def create_or_get_user_key(
     )
     user_total_count = users.get("total", 0) or 0
     if user_total_count > 1:
-        raise RuntimeError(f"user [{org_email}]在系统中重复: {user_total_count}")
+        raise ClientError(f"user [{org_email}]在系统中重复: {user_total_count}")
     uid = None
     if user_total_count == 1:
         user: LiteLLM_UserTableWithKeyCount = users.get("users", [None])[0]
         if user is None:
-            raise RuntimeError(f"user [{org_email}]不存在")
+            raise ClientError(f"user [{org_email}]不存在")
         uid = user.user_id
     else:
         metadata = {"provider": provider}
