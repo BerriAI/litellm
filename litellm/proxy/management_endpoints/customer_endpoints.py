@@ -167,7 +167,10 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
 
     if budget_kv_pairs:
         budget_request = BudgetNewRequest(**budget_kv_pairs)
-        if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
+        if (
+            budget_request.budget_reset_at is None
+            and budget_request.budget_duration is not None
+        ):
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
             )

@@ -84,10 +84,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        reasoning_effort_value = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-        )
+        reasoning_effort_value = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
@@ -100,7 +99,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             ):
                 non_default_params = non_default_params.copy()
                 optional_params = optional_params.copy()
-                if _get_effort_level(non_default_params.get("reasoning_effort")) == "none":
+                if (
+                    _get_effort_level(non_default_params.get("reasoning_effort"))
+                    == "none"
+                ):
                     non_default_params.pop("reasoning_effort")
                 if _get_effort_level(optional_params.get("reasoning_effort")) == "none":
                     optional_params.pop("reasoning_effort")

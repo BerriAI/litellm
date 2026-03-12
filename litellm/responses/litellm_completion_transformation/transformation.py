@@ -859,8 +859,10 @@ class LiteLLMCompletionResponsesConfig:
                 str(tool_call_id_raw) if tool_call_id_raw is not None else ""
             )
 
-            prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
-                fixed_messages, i
+            prev_assistant_idx = (
+                LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
+                    fixed_messages, i
+                )
             )
 
             # Try to recover empty tool_call_id from previous assistant message

@@ -249,24 +249,21 @@ async def create_response(
 def _is_azure_model_router_request(model: str) -> bool:
     """
     Check if the requested model is an Azure Model Router.
-    
+
     Azure Model Router models follow the pattern:
     - azure_ai/model_router/<deployment-name>
     - azure_ai/model-router
     - model_router/<deployment-name>
     - model-router
-    
+
     Args:
         model: The requested model name
-    
+
     Returns:
         bool: True if this is an Azure Model Router request
     """
     model_lower = model.lower()
-    return (
-        "model-router" in model_lower 
-        or "model_router" in model_lower
-    )
+    return "model-router" in model_lower or "model_router" in model_lower
 
 
 def _override_openai_response_model(
@@ -1233,7 +1230,9 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
-                request_headers=(self.data.get("proxy_server_request") or {}).get("headers", {}),
+                request_headers=(self.data.get("proxy_server_request") or {}).get(
+                    "headers", {}
+                ),
             )
             if callback_headers:
                 headers.update(callback_headers)

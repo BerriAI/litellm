@@ -915,7 +915,9 @@ if MCP_AVAILABLE:
                 prisma_client = get_prisma_client_or_throw(
                     "Database not connected. Connect a database to use OAuth2 MCP tools."
                 )
-                cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+                cred = await get_user_oauth_credential(
+                    prisma_client, user_id, server_id
+                )
             if cred and cred.get("access_token"):
                 if is_oauth_credential_expired(cred):
                     verbose_logger.debug(
@@ -938,7 +940,9 @@ if MCP_AVAILABLE:
 
         Returns a dict keyed by server_id to avoid N+1 queries in asyncio.gather loops.
         """
-        user_id = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        user_id = (
+            getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        )
         if not user_id:
             return {}
         try:
@@ -1131,7 +1135,9 @@ if MCP_AVAILABLE:
                 # If no OAuth2 token came from request headers, fall back to pre-fetched creds
                 if extra_headers is None and server.auth_type == MCPAuth.oauth2:
                     extra_headers = await _get_user_oauth_extra_headers_from_db(
-                        server, user_api_key_auth, prefetched_creds=_prefetched_oauth_creds
+                        server,
+                        user_api_key_auth,
+                        prefetched_creds=_prefetched_oauth_creds,
                     )
 
                 try:

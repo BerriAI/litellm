@@ -929,20 +929,20 @@ def image_edit(  # noqa: PLR0915
         elif custom_llm_provider == "stability":
             image_edit_request_params.update(non_default_params)
             return base_llm_http_handler.image_edit_handler(
-            model=model,
-            image=images,
-            prompt=prompt,
-            image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-        )
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_request_params=image_edit_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+            )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
             if model is None:

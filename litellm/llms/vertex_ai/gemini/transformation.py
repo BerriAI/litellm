@@ -704,7 +704,9 @@ def _transform_request_body(  # noqa: PLR0915
                     max_media_resolution
                 )
                 if media_resolution_value and generation_config is not None:
-                    generation_config["mediaResolution"] = media_resolution_value["level"]
+                    generation_config["mediaResolution"] = media_resolution_value[
+                        "level"
+                    ]
 
         data = RequestBody(contents=content)
         if system_instructions is not None:

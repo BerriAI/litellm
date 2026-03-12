@@ -329,7 +329,9 @@ async def authorize(
     lookup_name: Optional[str] = mcp_server_name or client_id
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = (
-        global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
+        global_mcp_server_manager.get_mcp_server_by_name(
+            lookup_name, client_ip=client_ip
+        )
         if lookup_name
         else None
     )

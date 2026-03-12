@@ -5197,7 +5197,9 @@ def embedding(  # noqa: PLR0915
             )
 
             try:
-                model_info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+                model_info = get_model_info(
+                    model=model, custom_llm_provider="vertex_ai"
+                )
                 uses_embed_content = model_info.get("uses_embed_content", False)
             except Exception:
                 uses_embed_content = False
@@ -7634,12 +7636,15 @@ async def acount_tokens(
     from litellm.utils import ProviderConfigManager
 
     # Determine provider from model string
-    resolved_model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        get_llm_provider(
-            model=model,
-            api_base=api_base,
-            api_key=api_key,
-        )
+    (
+        resolved_model,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = get_llm_provider(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
     )
 
     # Use dynamic key/base if not explicitly provided

@@ -63,7 +63,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
     ) -> ModelResponse:
         """
         Transform response for Model Router.
-        
+
         Extracts the actual model used from the Azure response (e.g., gpt-5-nano-2025-08-07)
         and returns it with the azure_ai/ prefix for proper display and cost tracking.
         """
@@ -71,8 +71,8 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
 
         # Get base model for the parent call (strips routing prefixes for API compatibility)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
-        
-        # Call parent transform_response first - this will extract the actual model 
+
+        # Call parent transform_response first - this will extract the actual model
         # from the raw response (e.g., "gpt-5-nano-2025-08-07")
         model_response = super().transform_response(
             model=base_model,

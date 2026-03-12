@@ -25,13 +25,17 @@ class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
             or ""
         )
 
-    def get_complete_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
+    def get_complete_url(
+        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
+    ) -> str:
         base = self.get_api_base(api_base).rstrip("/")
         if base.endswith("/v1"):
             base = base[:-3]
         return f"{base}/v1/realtime/client_secrets"
 
-    def get_realtime_calls_url(self, api_base: Optional[str], model: str, api_version: Optional[str] = None) -> str:
+    def get_realtime_calls_url(
+        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
+    ) -> str:
         base = self.get_api_base(api_base).rstrip("/")
         if base.endswith("/v1"):
             base = base[:-3]

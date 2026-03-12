@@ -1992,7 +1992,9 @@ class ProxyLogging:
         merged_headers: Dict[str, str] = {}
         try:
             # Build litellm_call_info — normalized routing metadata for callbacks
-            litellm_call_info = self._build_litellm_call_info(data=data, response=response)
+            litellm_call_info = self._build_litellm_call_info(
+                data=data, response=response
+            )
 
             for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
@@ -2029,9 +2031,7 @@ class ProxyLogging:
         return merged_headers
 
     @staticmethod
-    def _build_litellm_call_info(
-        data: dict, response: Any
-    ) -> Dict[str, Any]:
+    def _build_litellm_call_info(data: dict, response: Any) -> Dict[str, Any]:
         """
         Build a normalized dict of routing metadata from response._hidden_params
         and data, abstracting away the metadata vs litellm_metadata split.

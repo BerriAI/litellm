@@ -289,7 +289,9 @@ def get_model_cost_map(url: str) -> dict:
             url,
         )
         _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        _cost_map_source_info.fallback_reason = (
+            "Remote data failed integrity validation"
+        )
         return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
     _cost_map_source_info.source = "remote"

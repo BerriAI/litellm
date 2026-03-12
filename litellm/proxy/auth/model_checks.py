@@ -107,9 +107,13 @@ def get_key_models(
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
-        all_models = list(user_api_key_dict.models)  # copy to avoid mutating cached objects
+        all_models = list(
+            user_api_key_dict.models
+        )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_team_models.value in all_models:
-            all_models = list(user_api_key_dict.team_models)  # copy to avoid mutating cached objects
+            all_models = list(
+                user_api_key_dict.team_models
+            )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
             if include_model_access_groups:

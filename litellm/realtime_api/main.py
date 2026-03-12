@@ -78,11 +78,7 @@ def _get_realtime_http_provider_config(
         resolved_api_key = provider_config.get_api_key(api_key=raw_api_key)
     else:
         # Fallback for providers without a dedicated HTTP config (treated as OpenAI-compatible).
-        resolved_api_base = (
-            raw_api_base
-            or litellm.api_base
-            or "https://api.openai.com"
-        )
+        resolved_api_base = raw_api_base or litellm.api_base or "https://api.openai.com"
         resolved_api_key = (
             raw_api_key
             or litellm.api_key
@@ -115,12 +111,21 @@ async def acreate_realtime_client_secret(
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
 
-    model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+    (
+        model_name,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = get_llm_provider(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    provider_config, resolved_api_base, resolved_api_key = _get_realtime_http_provider_config(
+    (
+        provider_config,
+        resolved_api_base,
+        resolved_api_key,
+    ) = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
@@ -160,7 +165,12 @@ async def arealtime_calls(
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
 
-    model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+    (
+        model_name,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = get_llm_provider(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,

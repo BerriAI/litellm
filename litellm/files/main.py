@@ -15,11 +15,24 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 # Type aliases for provider parameters
-FileCreateProvider = Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus", "anthropic"]
-FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
+FileCreateProvider = Literal[
+    "openai",
+    "azure",
+    "gemini",
+    "vertex_ai",
+    "bedrock",
+    "hosted_vllm",
+    "manus",
+    "anthropic",
+]
+FileRetrieveProvider = Literal[
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"
+]
 FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
 FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
-FileContentProvider = Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"]
+FileContentProvider = Literal[
+    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
+]
 
 import litellm
 from litellm import get_secret_str
