@@ -10,12 +10,28 @@ export interface MCPToolEntry {
   description?: string;
 }
 
+/**
+ * Classifies a tool by its name first; falls back to description only when
+ * the name alone yields no match. This prevents incidental phrasing in
+ * free-form descriptions (e.g. "removes noise from…") from promoting a safe
+ * tool into a high-risk bucket.
+ */
 export function classifyToolOp(name: string, description = ""): CrudOp {
-  const text = (name + " " + description).toLowerCase();
-  if (DELETE_RE.test(text)) return "delete";
-  if (UPDATE_RE.test(text)) return "update";
-  if (CREATE_RE.test(text)) return "create";
-  if (READ_RE.test(text)) return "read";
+  const nameLower = name.toLowerCase();
+  if (DELETE_RE.test(nameLower)) return "delete";
+  if (UPDATE_RE.test(nameLower)) return "update";
+  if (CREATE_RE.test(nameLower)) return "create";
+  if (READ_RE.test(nameLower)) return "read";
+
+  // Only consult description when the name is unrecognised.
+  if (description) {
+    const descLower = description.toLowerCase();
+    if (DELETE_RE.test(descLower)) return "delete";
+    if (UPDATE_RE.test(descLower)) return "update";
+    if (CREATE_RE.test(descLower)) return "create";
+    if (READ_RE.test(descLower)) return "read";
+  }
+
   return "unknown";
 }
 

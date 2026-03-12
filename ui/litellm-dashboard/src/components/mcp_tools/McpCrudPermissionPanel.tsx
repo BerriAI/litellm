@@ -10,7 +10,7 @@
  */
 
 import React, { useMemo, useState } from "react";
-import { Checkbox, Switch } from "antd";
+import { Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import {
@@ -33,12 +33,6 @@ interface McpCrudPermissionPanelProps {
   /** Called whenever the allowed set changes. */
   onChange: (allowed: string[] | undefined) => void;
   readOnly?: boolean;
-  /**
-   * When true, "delete" operations are blocked by default when the panel
-   * first renders without an existing value (useful for key/team assignment
-   * where the safer default is to deny destructive ops).
-   */
-  blockDeleteByDefault?: boolean;
 }
 
 const CRUD_ORDER: CrudOp[] = ["read", "create", "update", "delete", "unknown"];
@@ -73,7 +67,6 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   value,
   onChange,
   readOnly = false,
-  blockDeleteByDefault = false,
 }) => {
   const [collapsed, setCollapsed] = useState<Record<CrudOp, boolean>>({
     read: false,
@@ -168,7 +161,13 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                 )}
                 <span className="font-semibold text-gray-900 text-sm">{meta.label}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${RISK_BADGE[meta.risk]}`}>
-                  {meta.risk === "high" ? "High Risk" : meta.risk === "medium" ? "Medium Risk" : meta.risk === "low" ? "Safe" : "Unclassified"}
+                  {meta.risk === "high"
+                    ? "High Risk"
+                    : meta.risk === "medium"
+                    ? "Medium Risk"
+                    : meta.risk === "low"
+                    ? "Safe"
+                    : "Unclassified"}
                 </span>
                 <span className="text-xs text-gray-500 ml-1">
                   {group.filter((t) => effectiveAllowed.has(t.name)).length}/{group.length} allowed
@@ -180,11 +179,12 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                   <Text className="text-xs text-gray-500">
                     {fullyAllowed ? "All on" : partial ? "Partial" : "All off"}
                   </Text>
-                  <Switch
-                    size="small"
+                  {/* Checkbox supports `indeterminate`; Switch does not. */}
+                  <Checkbox
                     checked={fullyAllowed}
                     indeterminate={partial}
-                    onChange={(checked) => toggleGroup(op, checked)}
+                    onChange={(e) => toggleGroup(op, e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
                   />
                 </div>
               )}
@@ -219,7 +219,9 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                       <div className="flex-1 min-w-0">
                         <Text className="font-medium text-gray-900 text-sm">{tool.name}</Text>
                         {tool.description && (
-                          <Text className="text-xs text-gray-500 mt-0.5 leading-snug">{tool.description}</Text>
+                          <Text className="text-xs text-gray-500 mt-0.5 leading-snug">
+                            {tool.description}
+                          </Text>
                         )}
                       </div>
                       <span

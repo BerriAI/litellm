@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
@@ -29,6 +29,14 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
 
+  // Keep a ref to the latest toolPermissions so async fetch callbacks always
+  // read the current value and do not overwrite sibling servers' results when
+  // multiple fetches complete out-of-order (stale-closure race condition).
+  const toolPermissionsRef = useRef(toolPermissions);
+  useEffect(() => {
+    toolPermissionsRef.current = toolPermissions;
+  }, [toolPermissions]);
+
   // Filter servers based on selectedServers
   const servers = useMemo(() => {
     if (selectedServers.length === 0) return [];
@@ -51,11 +59,13 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
 
         // For servers that have no permissions stored yet, block delete tools by default.
-        if (!toolPermissions[serverId] && fetchedTools.length > 0) {
+        // Read latest permissions from the ref to avoid clobbering concurrent results.
+        const latestPermissions = toolPermissionsRef.current;
+        if (!latestPermissions[serverId] && fetchedTools.length > 0) {
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);
-          onChange({ ...toolPermissions, [serverId]: nonDeleteTools });
+          onChange({ ...latestPermissions, [serverId]: nonDeleteTools });
         }
       }
     } catch (err) {
@@ -101,6 +111,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const selectedTools = toolPermissions[server.server_id] || [];
         const isLoading = loadingTools[server.server_id];
         const error = toolErrors[server.server_id];
+        const viewMode = viewModes[server.server_id] ?? "crud";
 
         return (
           <div key={server.server_id} className="border rounded-lg bg-gray-50">
@@ -113,7 +124,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               <div className="flex items-center gap-3">
                 {!disabled && tools.length > 0 && (
                   <Radio.Group
-                    value={viewModes[server.server_id] ?? "crud"}
+                    value={viewMode}
                     onChange={(e) =>
                       setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))
                     }
@@ -177,18 +188,17 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               )}
 
               {/* CRUD grouped view */}
-              {!isLoading && !error && tools.length > 0 && (viewModes[server.server_id] ?? "crud") === "crud" && (
+              {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
                 <McpCrudPermissionPanel
                   tools={tools}
                   value={selectedTools.length === 0 && !toolPermissions[server.server_id] ? undefined : selectedTools}
                   onChange={(allowed) => handleCrudPanelChange(server.server_id, allowed)}
                   readOnly={disabled}
-                  blockDeleteByDefault
                 />
               )}
 
               {/* Flat list view */}
-              {!isLoading && !error && tools.length > 0 && (viewModes[server.server_id] ?? "crud") === "flat" && (
+              {!isLoading && !error && tools.length > 0 && viewMode === "flat" && (
                 <div className="space-y-2">
                   {tools.map((tool) => {
                     const isSelected = selectedTools.includes(tool.name);
@@ -210,7 +220,9 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
+                            <Text className="text-sm text-gray-500">
+                              - {tool.description || "No description"}
+                            </Text>
                           </div>
                         </div>
                       </div>
