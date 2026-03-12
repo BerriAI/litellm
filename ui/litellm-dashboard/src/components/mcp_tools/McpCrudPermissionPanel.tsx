@@ -244,5 +244,3 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
 };
 
 export default McpCrudPermissionPanel;
-
-export { classifyToolOp, groupToolsByCrud };

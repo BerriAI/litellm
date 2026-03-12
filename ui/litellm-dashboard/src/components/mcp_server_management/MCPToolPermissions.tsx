@@ -3,7 +3,6 @@ import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
 import { Spin, Radio } from "antd";
-import { XIcon } from "lucide-react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
 import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
@@ -157,15 +156,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </button>
                   </>
                 )}
-                <button
-                  type="button"
-                  className="text-gray-400 hover:text-gray-600"
-                  onClick={() => {
-                    // Handle remove server if needed
-                  }}
-                >
-                  <XIcon className="w-4 h-4" />
-                </button>
               </div>
             </div>
 
@@ -191,7 +181,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
                 <McpCrudPermissionPanel
                   tools={tools}
-                  value={selectedTools.length === 0 && !toolPermissions[server.server_id] ? undefined : selectedTools}
+                  value={!toolPermissions[server.server_id] ? undefined : selectedTools}
                   onChange={(allowed) => handleCrudPanelChange(server.server_id, allowed)}
                   readOnly={disabled}
                 />

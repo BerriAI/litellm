@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
@@ -99,6 +99,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   // OAuth2 connect state — tracks which server_ids have a stored user credential
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
 
+  // Refs keep the latest values for the auto-enable effect so it always reads
+  // the current servers/selectedServers without needing them as dependencies
+  // (which would cause the effect to fire on every render).
+  const serversRef = useRef<MCPServer[]>([]);
+  useEffect(() => { serversRef.current = servers; }, [servers]);
+  const selectedServersRef = useRef<string[]>(selectedServers);
+  useEffect(() => { selectedServersRef.current = selectedServers; }, [selectedServers]);
+
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
   useEffect(() => {
@@ -157,15 +165,17 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
   // Auto-enable oauth2 servers for the current chat session when a valid
   // credential is detected (either on mount or after a fresh OAuth sign-in).
+  // Uses refs for servers/selectedServers to avoid stale closures without
+  // adding them as deps (which would cause the effect to re-fire on every render).
   useEffect(() => {
     if (oauthConnected.size === 0) return;
-    const namesToAdd = servers
-      .filter((s) => oauthConnected.has(s.server_id) && !selectedServers.includes(nameOf(s)))
+    const namesToAdd = serversRef.current
+      .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
       .map(nameOf);
     if (namesToAdd.length > 0) {
-      onChange([...selectedServers, ...namesToAdd]);
+      onChange([...selectedServersRef.current, ...namesToAdd]);
     }
-  }, [oauthConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [oauthConnected, onChange]);
 
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
