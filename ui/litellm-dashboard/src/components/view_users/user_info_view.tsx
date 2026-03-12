@@ -218,14 +218,7 @@ export default function UserInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             Back to Users
           </Button>
-          <div className="flex items-center gap-3">
-            <Title>{userData.user_info?.user_email || "User"}</Title>
-            {userData.user_info?.blocked && (
-              <Badge color="red" size="xs">
-                BLOCKED
-              </Badge>
-            )}
-          </div>
+          <Title>{userData.user_info?.user_email || "User"}</Title>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
             <AntdButton
