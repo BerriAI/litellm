@@ -182,6 +182,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
+      // Also clear from oauthConnected so the auto-enable effect doesn't re-add it.
+      if (serverId) {
+        setOauthConnected((prev) => {
+          const next = new Set(prev);
+          next.delete(serverId);
+          return next;
+        });
+      }
       return;
     }
     setTogglingOn((prev) => new Set(prev).add(serverName));
