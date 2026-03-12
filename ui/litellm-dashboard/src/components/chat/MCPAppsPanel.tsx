@@ -331,7 +331,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 accessToken={accessToken}
                 onConnect={(id) => {
                   setOauthConnected((prev) => new Set(prev).add(id));
-                  handleToggle(name, true, detailServer.server_id);
                 }}
                 variant="button"
               />
@@ -559,7 +558,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                       accessToken={accessToken}
                       onConnect={(id) => {
                         setOauthConnected((prev) => new Set(prev).add(id));
-                        handleToggle(nameOf(server), true, server.server_id);
                       }}
                       variant="badge"
                     />
