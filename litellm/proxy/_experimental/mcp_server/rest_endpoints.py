@@ -1,6 +1,6 @@
 import importlib
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -68,6 +68,21 @@ if MCP_AVAILABLE:
             if server_auth is not None:
                 return server_auth
         return mcp_auth_header
+
+    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
+        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no
+        OAuth2 servers are involved in the current request.
+        """
+        return {
+            sid
+            for sid in allowed_server_ids
+            if getattr(
+                global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None
+            )
+            == MCPAuth.oauth2
+        }
 
     async def _get_user_oauth_extra_headers(
         server,
@@ -506,15 +521,9 @@ if MCP_AVAILABLE:
 
                 # Pre-fetch OAuth credentials only when at least one allowed server uses OAuth2,
                 # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
-                _oauth2_server_ids = {
-                    sid for sid in allowed_server_ids
-                    if getattr(
-                        global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None
-                    ) == MCPAuth.oauth2
-                }
                 prefetched_oauth_creds = (
                     await _prefetch_user_oauth_creds(user_api_key_dict)
-                    if _oauth2_server_ids
+                    if _get_oauth2_server_ids(allowed_server_ids)
                     else {}
                 )
 

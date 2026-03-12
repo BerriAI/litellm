@@ -1342,6 +1342,17 @@ if MCP_AVAILABLE:
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
+        if not resolved_client_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "missing_client_id",
+                    "message": (
+                        "No client_id available for this MCP server. "
+                        "Either configure the server with a client_id or supply one in the request."
+                    ),
+                },
+            )
         return await authorize_with_server(
             request=request,
             mcp_server=mcp_server,
@@ -1370,6 +1381,17 @@ if MCP_AVAILABLE:
     ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
         resolved_client_id = mcp_server.client_id or client_id or ""
+        if not resolved_client_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "missing_client_id",
+                    "message": (
+                        "No client_id available for this MCP server. "
+                        "Either configure the server with a client_id or supply one in the request."
+                    ),
+                },
+            )
         return await exchange_token_with_server(
             request=request,
             mcp_server=mcp_server,
