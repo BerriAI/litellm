@@ -195,24 +195,18 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
             return value
     return rg_cred.default
 
-def _get_function_to_resolve_old_documented_and_correct_service_key(
-        service_key: Union[str, dict], cv: CredentialsValue):
-    if isinstance(service_key, str):
-        try:
-            service_key = json.loads(service_key)
-        except json.JSONDecodeError:
-            verbose_logger.warning(
-                "SAP service key or VCAP service is a string but not valid JSON."
-            )
-            return None
-    if service_key is not None and "credentials" in service_key:
-        return _str_or_none(
+def _function_to_resolve_cv_from_service_key(
+        service_key: Optional[Union[str, dict]], cv: CredentialsValue):
+    if service_key is None:
+        return None
+    val = _str_or_none(
         _get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
         )
-    else:
+    if val is None:
         return _str_or_none(
             _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
-        ) if service_key else None
+        )
+    return val
 
 
 
@@ -241,7 +235,7 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
         Source("kwargs",
                lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source("service key",
-               lambda cv: _get_function_to_resolve_old_documented_and_correct_service_key(service_key, cv)), # type: ignore[arg-type]
+               lambda cv: _function_to_resolve_cv_from_service_key(service_key, cv)), # type: ignore[arg-type]
         Source("environment variables",
                lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
         Source("config file",
