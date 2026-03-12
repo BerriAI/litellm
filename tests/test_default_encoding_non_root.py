@@ -29,10 +29,13 @@ def test_default_encoding_uses_bundled_tokenizers_by_default(monkeypatch):
 
 def test_custom_tiktoken_cache_dir_override(monkeypatch, tmp_path):
     """
-    CUSTOM_TIKTOKEN_CACHE_DIR must override the default bundled directory.
+    CUSTOM_TIKTOKEN_CACHE_DIR must override the default bundled directory
+    and the directory should be created if it does not exist.
     """
     custom_dir = tmp_path / "tiktoken_cache"
     monkeypatch.setenv("CUSTOM_TIKTOKEN_CACHE_DIR", str(custom_dir))
     _reload_default_encoding(monkeypatch)
 
-    assert os.environ.get("TIKTOKEN_CACHE_DIR") == str(custom_dir)
+    cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR")
+    assert cache_dir == str(custom_dir)
+    assert os.path.isdir(cache_dir)
