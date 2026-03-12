@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import smtplib
+import sys
 import threading
 import time
 import traceback
@@ -3603,7 +3604,11 @@ class PrismaClient:
         Returns a set of reaped PIDs.  As PID 1 in Docker (or any
         process that spawns children), we must reap ALL terminated
         children to prevent zombie accumulation.
+
+        No-op on Windows: os.waitpid and os.WNOHANG are Unix-only.
         """
+        if sys.platform == "win32":
+            return set()
         reaped: set = set()
         while True:
             try:
@@ -3624,7 +3629,11 @@ class PrismaClient:
         via call_soon_threadsafe.
 
         Returns True if the thread was started, False on failure.
+        On Windows, returns False immediately (os.waitpid/WNOHANG are Unix-only);
+        caller falls back to os.kill polling.
         """
+        if sys.platform == "win32":
+            return False
         try:
             probe_pid, _ = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
