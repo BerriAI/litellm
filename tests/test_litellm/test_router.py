@@ -1593,6 +1593,74 @@ def test_completion_streaming_iterator_proxies_unknown_attrs():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_getattr_does_not_shadow_own_attrs():
+    """FallbackStreamWrapper.__getattr__ must not shadow CustomStreamWrapper's own attributes."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "original-model-on-wrapped"
+    mock_response.custom_llm_provider = "original-provider-on-wrapped"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {}
+
+    async def _empty():
+        return
+        yield
+
+    mock_response.__aiter__ = lambda self: _empty().__aiter__()
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    # .model is set by CustomStreamWrapper.__init__, not proxied from _wrapped_response
+    assert result.model == "original-model-on-wrapped"
+    assert result.custom_llm_provider == "original-provider-on-wrapped"
+
+
+def test_completion_streaming_iterator_getattr_does_not_shadow_own_attrs():
+    """SyncFallbackStreamWrapper.__getattr__ must not shadow CustomStreamWrapper's own attributes."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "original-model-on-wrapped"
+    mock_response.custom_llm_provider = "original-provider-on-wrapped"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {}
+    mock_response.__iter__ = MagicMock(return_value=iter([]))
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    # .model is set by CustomStreamWrapper.__init__, not proxied from _wrapped_response
+    assert result.model == "original-model-on-wrapped"
+    assert result.custom_llm_provider == "original-provider-on-wrapped"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
     """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
     from unittest.mock import MagicMock
