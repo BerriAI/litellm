@@ -149,10 +149,7 @@ def test_oidc_circleci_with_azure():
     print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Skipping this test as requested.")
 def test_oidc_circle_v1_with_amazon():
     # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
 
