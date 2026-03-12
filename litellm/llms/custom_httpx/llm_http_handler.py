@@ -9329,6 +9329,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> Any:
         """
@@ -9346,6 +9347,7 @@ class BaseLLMHTTPHandler:
                 generate_content_provider_config=generate_content_provider_config,
                 generate_content_config_dict=generate_content_config_dict,
                 tools=tools,
+                tool_config=tool_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -9384,6 +9386,7 @@ class BaseLLMHTTPHandler:
             model=model,
             contents=contents,
             tools=tools,
+            tool_config=tool_config,
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
@@ -9456,6 +9459,7 @@ class BaseLLMHTTPHandler:
         client: Optional[AsyncHTTPHandler] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> Any:
         """
@@ -9493,6 +9497,7 @@ class BaseLLMHTTPHandler:
             model=model,
             contents=contents,
             tools=tools,
+            tool_config=tool_config,
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
