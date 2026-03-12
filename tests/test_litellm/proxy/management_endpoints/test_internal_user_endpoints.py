@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -11,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
+    BlockUserRequest,
     LiteLLM_UserTableFiltered,
     LitellmUserRoles,
     NewUserRequest,
@@ -1770,6 +1772,12 @@ async def test_block_user_basic_functionality(mocker):
         side_effect=mock_update
     )
 
+    # Define mock keys before they're used in mock_find_many
+    mock_key_1 = mocker.MagicMock()
+    mock_key_1.token = "hashed_token_1"
+    mock_key_2 = mocker.MagicMock()
+    mock_key_2.token = "hashed_token_2"
+
     # Mock find_many to return user's keys on first call, empty on second
     call_count = {"count": 0}
     
@@ -2025,13 +2033,19 @@ async def test_unblock_user_basic_functionality(mocker):
         side_effect=mock_update
     )
 
+    # Define mock keys before they're used in mock_find_many
+    mock_key_3 = mocker.MagicMock()
+    mock_key_3.token = "hashed_token_3"
+    mock_key_4 = mocker.MagicMock()
+    mock_key_4.token = "hashed_token_4"
+
     # Mock find_many to return user's keys on first call, empty on second
     call_count = {"count": 0}
     
     async def mock_find_many(*args, **kwargs):
         call_count["count"] += 1
         if call_count["count"] == 1:
-            return [mock_key_1, mock_key_2]
+            return [mock_key_3, mock_key_4]
         return []  # Return empty list on subsequent calls to break pagination loop
 
     mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
@@ -2077,6 +2091,16 @@ async def test_unblock_user_basic_functionality(mocker):
 
     # Verify all keys were invalidated
     assert mock_delete_cache_key.call_count == 2
+    mock_delete_cache_key.assert_any_call(
+        hashed_token="hashed_token_3",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
+    mock_delete_cache_key.assert_any_call(
+        hashed_token="hashed_token_4",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
 
 
 
