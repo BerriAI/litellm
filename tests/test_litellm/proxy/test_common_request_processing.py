@@ -17,6 +17,7 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _response_model_has_provider_prefix,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -1211,127 +1212,150 @@ class TestOverrideOpenAIResponseModel:
         assert response_obj.model == fallback_model
         assert response_obj.model != requested_model
 
-    def test_override_model_overrides_when_no_fallback_dict(self):
+    def test_override_model_strips_provider_prefix_dict(self):
         """
-        Test that when no fallback occurred, the model is overridden
-        to match the requested model (dict response).
+        Test that when the downstream model has a provider prefix (e.g. hosted_vllm/...),
+        it gets overridden to the requested model (dict response).
         """
-        requested_model = "gpt-4"
-        downstream_model = "gpt-3.5-turbo"
+        requested_model = "my-model-alias"
+        downstream_model = "hosted_vllm/meta-llama/Llama-3-8b"
 
-        # Create a dict response without fallback
-        # For dict responses, _hidden_params won't be found via getattr,
-        # so the fallback check won't trigger and model will be overridden
         response_obj = {"model": downstream_model}
 
-        # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model WAS overridden to requested model
         assert response_obj["model"] == requested_model
 
-    def test_override_model_overrides_when_no_fallback_object(self):
+    def test_override_model_strips_provider_prefix_object(self):
         """
-        Test that when no fallback occurred (object response), the model is overridden
-        to match the requested model.
+        Test that when the downstream model has a provider prefix,
+        it gets overridden to the requested model (object response).
         """
-        requested_model = "gpt-4"
-        downstream_model = "gpt-3.5-turbo"
+        requested_model = "my-model-alias"
+        downstream_model = "azure/gpt-4"
 
-        # Create a mock object response without fallback
         response_obj = MagicMock()
         response_obj.model = downstream_model
         response_obj._hidden_params = {
-            "additional_headers": {}  # No attempted_fallbacks header
+            "additional_headers": {}
         }
 
-        # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
+
+    def test_override_model_preserves_clean_downstream_model_dict(self):
+        """
+        Test that when the downstream provider returns a clean model name
+        (no provider prefix), it is preserved — not replaced with the alias.
+        This matches OpenAI behavior where response model is the resolved version.
+        """
+        requested_model = "conversation.voice"
+        downstream_model = "gpt-4.1-2025-04-14"
+
+        response_obj = {"model": downstream_model}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj["model"] == downstream_model
+
+    def test_override_model_preserves_clean_downstream_model_object(self):
+        """
+        Test that when the downstream provider returns a clean model name
+        (no provider prefix), it is preserved on object responses.
+        """
+        requested_model = "conversation.voice"
+        downstream_model = "gpt-4.1-2025-04-14"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {}
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == downstream_model
 
     def test_override_model_overrides_when_attempted_fallbacks_is_zero(self):
         """
         Test that when attempted_fallbacks is 0 (no fallback occurred),
-        the model is overridden to match the requested model.
+        the model is overridden if it has a provider prefix.
         """
         requested_model = "gpt-4"
-        downstream_model = "gpt-3.5-turbo"
+        downstream_model = "azure/gpt-4"
 
-        # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = downstream_model
         response_obj._hidden_params = {
             "additional_headers": {
-                "x-litellm-attempted-fallbacks": 0  # Zero means no fallback occurred
+                "x-litellm-attempted-fallbacks": 0
             }
         }
 
-        # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
     def test_override_model_overrides_when_attempted_fallbacks_is_none(self):
         """
         Test that when attempted_fallbacks is None (not set),
-        the model is overridden to match the requested model.
+        the model is overridden if it has a provider prefix.
         """
         requested_model = "gpt-4"
-        downstream_model = "gpt-3.5-turbo"
+        downstream_model = "azure/gpt-4"
 
-        # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = downstream_model
         response_obj._hidden_params = {
             "additional_headers": {"x-litellm-attempted-fallbacks": None}
         }
 
-        # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
-    def test_override_model_no_hidden_params(self):
+    def test_override_model_no_hidden_params_with_prefix(self):
         """
-        Test that when _hidden_params is not present, the model is overridden
-        to match the requested model.
+        Test that when _hidden_params is not present and model has a provider prefix,
+        the model is overridden.
         """
         requested_model = "gpt-4"
-        downstream_model = "gpt-3.5-turbo"
+        downstream_model = "hosted_vllm/gpt-4"
 
-        # Create a mock object response without _hidden_params
         response_obj = MagicMock()
         response_obj.model = downstream_model
-        # Don't set _hidden_params - getattr will return {}
 
-        # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
 
-        # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
     def test_override_model_no_requested_model(self):
@@ -1341,32 +1365,41 @@ class TestOverrideOpenAIResponseModel:
         """
         fallback_model = "gpt-3.5-turbo"
 
-        # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = fallback_model
         response_obj._hidden_params = {
             "additional_headers": {"x-litellm-attempted-fallbacks": 1}
         }
 
-        # Call the function with None requested_model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=None,
             log_context="test_context",
         )
 
-        # Verify the model was not changed
         assert response_obj.model == fallback_model
 
-        # Call with empty string
-        _override_openai_response_model(
-            response_obj=response_obj,
-            requested_model="",
-            log_context="test_context",
-        )
 
-        # Verify the model was not changed
-        assert response_obj.model == fallback_model
+class TestResponseModelHasProviderPrefix:
+    """Tests for _response_model_has_provider_prefix helper"""
+
+    def test_known_provider_prefix(self):
+        assert _response_model_has_provider_prefix("hosted_vllm/meta-llama/Llama-3") is True
+        assert _response_model_has_provider_prefix("azure/gpt-4") is True
+        assert _response_model_has_provider_prefix("openai/gpt-4") is True
+        assert _response_model_has_provider_prefix("bedrock/anthropic.claude-v2") is True
+
+    def test_clean_model_name(self):
+        assert _response_model_has_provider_prefix("gpt-4.1-2025-04-14") is False
+        assert _response_model_has_provider_prefix("claude-haiku-4-5-20251001") is False
+        assert _response_model_has_provider_prefix("meta-llama/Llama-3-8b") is False
+
+    def test_none_and_empty(self):
+        assert _response_model_has_provider_prefix(None) is False
+        assert _response_model_has_provider_prefix("") is False
+
+    def test_no_slash(self):
+        assert _response_model_has_provider_prefix("gpt-4") is False
 
 
 class TestStreamingOverheadHeader:

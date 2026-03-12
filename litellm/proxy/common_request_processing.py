@@ -246,6 +246,40 @@ async def create_response(
     )
 
 
+def _get_provider_prefix_set() -> frozenset:
+    """
+    Return a cached frozenset of known LiteLLM provider prefix strings.
+
+    Built lazily on first call from ``litellm.provider_list`` and cached for the
+    lifetime of the process so that per-chunk lookups in streaming responses are O(1).
+    """
+    cached = getattr(_get_provider_prefix_set, "_cache", None)
+    if cached is not None:
+        return cached
+    result = frozenset(
+        p.value if hasattr(p, "value") else str(p) for p in litellm.provider_list
+    )
+    _get_provider_prefix_set._cache = result  # type: ignore[attr-defined]
+    return result
+
+
+def _response_model_has_provider_prefix(model: Optional[str]) -> bool:
+    """
+    Check if a model string contains a LiteLLM-internal provider prefix (e.g. ``hosted_vllm/...``, ``azure/...``).
+
+    Returns ``True`` when the model value looks like ``<provider>/<actual_model>`` and the
+    provider part is a known LiteLLM provider.  This is used to decide whether the response
+    ``model`` field should be overwritten: we only want to strip internal prefixes, not replace
+    a clean provider-returned model name with the client-requested alias/group name.
+    """
+    if not model or not isinstance(model, str):
+        return False
+    parts = model.split("/", 1)
+    if len(parts) < 2:
+        return False
+    return parts[0] in _get_provider_prefix_set()
+
+
 def _override_openai_response_model(
     *,
     response_obj: Any,
@@ -253,20 +287,16 @@ def _override_openai_response_model(
     log_context: str,
 ) -> None:
     """
-    Force the OpenAI-compatible `model` field in the response to match what the client requested.
+    Override the OpenAI-compatible ``model`` field only when it contains a LiteLLM-internal
+    provider prefix (e.g. ``hosted_vllm/...``, ``azure/...``).
 
-    LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
-    That internal identifier should not be returned to clients in the OpenAI `model` field.
-
-    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
-    model identifier is being stamped/preserved somewhere in the request/response pipeline.
-    We log mismatches as warnings (and then restamp to the client-requested value) so these
-    paths stay observable for maintainers/operators without breaking client compatibility.
-
-    Errors are reserved for cases where the proxy cannot read/override the response model field.
+    When the downstream provider already returns a clean model name (e.g. ``gpt-4.1-2025-04-14``),
+    it is preserved so that callers can see which actual model served the request.  This matches
+    OpenAI's own behaviour where the response ``model`` is the *resolved* version, not the alias
+    the client sent.
 
     Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-    we should preserve the actual model that was used (the fallback model) rather than
+    we preserve the actual model that was used (the fallback model) rather than
     overriding it with the originally requested model.
     """
     if not requested_model:
@@ -290,13 +320,20 @@ def _override_openai_response_model(
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
-        if downstream_model != requested_model:
+        if not _response_model_has_provider_prefix(downstream_model):
             verbose_proxy_logger.debug(
-                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                "%s: preserving downstream model=%r (no provider prefix). client requested=%r",
                 log_context,
-                requested_model,
                 downstream_model,
+                requested_model,
             )
+            return
+        verbose_proxy_logger.debug(
+            "%s: stripping provider prefix - downstream=%r -> requested=%r",
+            log_context,
+            downstream_model,
+            requested_model,
+        )
         response_obj["model"] = requested_model
         return
 
@@ -309,13 +346,21 @@ def _override_openai_response_model(
         return
 
     downstream_model = getattr(response_obj, "model", None)
-    if downstream_model != requested_model:
+    if not _response_model_has_provider_prefix(downstream_model):
         verbose_proxy_logger.debug(
-            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+            "%s: preserving downstream model=%r (no provider prefix). client requested=%r",
             log_context,
-            requested_model,
             downstream_model,
+            requested_model,
         )
+        return
+
+    verbose_proxy_logger.debug(
+        "%s: stripping provider prefix - downstream=%r -> requested=%r",
+        log_context,
+        downstream_model,
+        requested_model,
+    )
 
     try:
         setattr(response_obj, "model", requested_model)
