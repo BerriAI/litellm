@@ -629,6 +629,100 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception(f"Error downloading from S3: {str(e)}")
             return None
 
+    async def _delete_object_from_s3(self, s3_object_key: str) -> bool:
+        """
+        Delete an object from S3.
+
+        Args:
+            s3_object_key: The S3 object key to delete
+
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        try:
+            import hashlib
+
+            import requests
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
+
+        try:
+            from litellm.litellm_core_utils.asyncify import asyncify
+
+            # Get AWS credentials
+            asyncified_get_credentials = asyncify(self.get_credentials)
+            credentials = await asyncified_get_credentials(
+                aws_access_key_id=self.s3_aws_access_key_id,
+                aws_secret_access_key=self.s3_aws_secret_access_key,
+                aws_session_token=self.s3_aws_session_token,
+                aws_region_name=self.s3_region_name,
+                aws_session_name=self.s3_aws_session_name,
+                aws_profile_name=self.s3_aws_profile_name,
+                aws_role_name=self.s3_aws_role_name,
+                aws_web_identity_token=self.s3_aws_web_identity_token,
+                aws_sts_endpoint=self.s3_aws_sts_endpoint,
+            )
+
+            verbose_logger.debug(
+                f"s3_v2 logger - deleting object from s3 - {s3_object_key}"
+            )
+
+            # Prepare the URL
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
+
+            if self.s3_endpoint_url and self.s3_bucket_name:
+                if self.s3_use_virtual_hosted_style:
+                    endpoint_host = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
+                    protocol = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{s3_object_key}"
+                else:
+                    url = (
+                        self.s3_endpoint_url
+                        + "/"
+                        + self.s3_bucket_name
+                        + "/"
+                        + s3_object_key
+                    )
+
+            # For DELETE requests, use hash of empty string
+            empty_string_hash = hashlib.sha256(b"").hexdigest()
+            headers = {
+                "x-amz-content-sha256": empty_string_hash,
+            }
+            req = requests.Request("DELETE", url, headers=headers)
+            prepped = req.prepare()
+
+            # Sign the request
+            aws_request = AWSRequest(
+                method=prepped.method,
+                url=prepped.url,
+                headers=prepped.headers,
+            )
+            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+
+            # Prepare the signed headers
+            signed_headers = dict(aws_request.headers.items())
+
+            # Make the request
+            response = await self.async_httpx_client.request("DELETE", url, headers=signed_headers)
+
+            if response.status_code in (200, 204):
+                return True
+
+            verbose_logger.warning(
+                "S3 delete returned status %s for key %s: %s",
+                response.status_code,
+                s3_object_key,
+                response.text,
+            )
+            return False
+
+        except Exception as e:
+            verbose_logger.exception(f"Error deleting from S3: {str(e)}")
+            return False
+
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
@@ -654,3 +748,24 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 f"Error retrieving object {object_key} from cold storage: {str(e)}"
             )
             return None
+
+    async def delete_object_from_cold_storage(
+        self,
+        object_key: str,
+    ) -> bool:
+        """
+        Delete an object from cold storage (S3).
+
+        Args:
+            object_key: The S3 object key to delete
+
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        try:
+            return await self._delete_object_from_s3(object_key)
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error deleting object {object_key} from cold storage: {str(e)}"
+            )
+            return False
