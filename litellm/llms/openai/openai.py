@@ -20,6 +20,7 @@ import httpx
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from litellm.llms.custom_httpx.httpx_stream_handler import HttpxStreamHandler
 
 import openai
 from openai import AsyncOpenAI, OpenAI
@@ -1537,7 +1538,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         shared_session: Optional["ClientSession"] = None,
         stream: Optional[bool] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "HttpxStreamHandler"]:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
                 model=model,
@@ -1607,7 +1608,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         shared_session: Optional["ClientSession"] = None,
         stream: Optional[bool] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "HttpxStreamHandler"]:
         openai_client = cast(
             AsyncOpenAI,
             self._get_openai_client(

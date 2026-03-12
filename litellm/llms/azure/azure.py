@@ -1,7 +1,10 @@
 import asyncio
 import json
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional, Union
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.httpx_stream_handler import HttpxStreamHandler
 
 import httpx  # type: ignore
 from openai import (
@@ -1306,7 +1309,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
         stream: Optional[bool] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "HttpxStreamHandler"]:
         max_retries = optional_params.pop("max_retries", 2)
 
         if aspeech is not None and aspeech is True:
@@ -1378,7 +1381,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
         stream: Optional[bool] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "HttpxStreamHandler"]:
         azure_client: AsyncAzureOpenAI = self.get_azure_openai_client(
             api_base=api_base,
             api_version=api_version,
