@@ -101,9 +101,9 @@ if MCP_AVAILABLE:
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception:
             verbose_logger.debug(
-                "Failed to fetch OAuth credential for user %s / server %s",
-                user_id,
-                server_id,
+                "Failed to fetch OAuth credential for user %r / server %r",
+                str(user_id).replace("\n", "\\n").replace("\r", "\\r"),
+                str(server_id).replace("\n", "\\n").replace("\r", "\\r"),
                 exc_info=True,
             )
         return None
