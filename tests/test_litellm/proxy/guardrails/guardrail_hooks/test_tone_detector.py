@@ -12,6 +12,7 @@ Covers:
 
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,6 +23,7 @@ from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
+from litellm.types.utils import ModelResponseStream
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -495,3 +497,91 @@ class TestInputTypeGuard:
                 {},
                 "response",
             )
+
+
+# ---------------------------------------------------------------------------
+# STREAMING — tone detection in during_call (streaming) mode
+# ---------------------------------------------------------------------------
+
+def _make_stream_chunk(content, finish_reason=None):
+    """Build a minimal ModelResponseStream chunk."""
+    delta = MagicMock()
+    delta.content = content
+    choice = MagicMock()
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    chunk = MagicMock(spec=ModelResponseStream)
+    chunk.choices = [choice]
+    return chunk
+
+
+async def _iter_chunks(chunks):
+    for c in chunks:
+        yield c
+
+
+class TestStreamingToneDetection:
+
+    @pytest.mark.asyncio
+    async def test_streaming_blocks_tone_violation(self):
+        """Tone checker should fire in streaming mode and raise on violation."""
+        g = _make_guardrail()
+        chunks = [
+            _make_stream_chunk("That's not my problem.", finish_reason="stop"),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            async for _ in g.async_post_call_streaming_iterator_hook(
+                MagicMock(), _iter_chunks(chunks), {},
+            ):
+                pass
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_streaming_passes_clean_text(self):
+        """Clean text should stream through without raising."""
+        g = _make_guardrail()
+        chunks = [
+            _make_stream_chunk("Thank you for reaching out!", finish_reason="stop"),
+        ]
+        yielded = []
+        async for item in g.async_post_call_streaming_iterator_hook(
+            MagicMock(), _iter_chunks(chunks), {},
+        ):
+            yielded.append(item)
+        assert len(yielded) > 0
+
+
+# ---------------------------------------------------------------------------
+# LOGGING HELPERS — tone detections should be correctly labeled
+# ---------------------------------------------------------------------------
+
+class TestLoggingHelpers:
+
+    def test_get_detection_methods_tone(self):
+        """Tone detections should report 'regex' as detection method."""
+        g = _make_guardrail()
+        detections = [{"type": "tone", "category": "dismissive", "matched_text": "x"}]
+        result = g._get_detection_methods(detections)
+        assert result == "regex"
+
+    def test_get_detection_methods_tone_and_keyword(self):
+        """Mixed detections should report both methods."""
+        g = _make_guardrail()
+        detections = [
+            {"type": "tone", "category": "dismissive", "matched_text": "x"},
+            {"type": "blocked_word", "keyword": "bad", "action": "BLOCK", "description": None},
+        ]
+        result = g._get_detection_methods(detections)
+        assert "regex" in result
+        assert "keyword" in result
+
+    def test_build_match_details_tone(self):
+        """Tone detections should produce correct match_details entries."""
+        g = _make_guardrail()
+        detections = [{"type": "tone", "category": "impatience", "matched_text": "x"}]
+        details = g._build_match_details(detections)
+        assert len(details) == 1
+        assert details[0]["type"] == "tone"
+        assert details[0]["detection_method"] == "regex"
+        assert details[0]["category"] == "impatience"
+        assert details[0]["action_taken"] == "BLOCK"

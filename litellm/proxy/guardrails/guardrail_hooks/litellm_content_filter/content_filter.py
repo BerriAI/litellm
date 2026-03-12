@@ -1626,6 +1626,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detail["detection_method"] = "intent"
                 detail["snippet"] = detection.get("intent", "")
                 detail["confidence"] = detection.get("confidence")
+            elif detection["type"] == "tone":
+                detail["detection_method"] = "regex"
+                tone_det = cast(ToneDetection, detection)
+                detail["category"] = tone_det.get("category", "")
+                detail["action_taken"] = "BLOCK"
             match_details.append(detail)
         return match_details
 
@@ -1633,7 +1638,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """Get comma-separated detection methods used."""
         methods: set = set()
         for detection in detections:
-            if detection["type"] == "pattern":
+            if detection["type"] in ("pattern", "tone"):
                 methods.add("regex")
             elif detection["type"] == "competitor_intent":
                 methods.add("intent")
@@ -1956,6 +1961,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                     text_to_check += " "
 
                 try:
+                    # Tone detection on streaming responses (during_call is always a response)
+                    if self._tone_checker and text_to_check:
+                        tone_result = self._tone_checker.run(text_to_check)
+                        if tone_result is not None:
+                            self._apply_tone_detection_policy(tone_result, [])
                     masked_text = self._filter_single_text(text_to_check)
                     if is_final and masked_text.endswith(" "):
                         masked_text = masked_text[:-1]
