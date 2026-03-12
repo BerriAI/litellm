@@ -4735,6 +4735,153 @@ class BaseLLMHTTPHandler:
                         f"Unexpected error while closing WebSocket: {close_error}"
                     )
 
+    async def async_realtime_client_secret_handler(
+        self,
+        api_base: str,
+        api_key: str,
+        request_data: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """
+        Forward POST /v1/realtime/client_secrets to upstream provider.
+
+        Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
+        header auth when available; falls back to the legacy OpenAI-style defaults.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+            )
+        else:
+            async_httpx_client = client
+
+        if provider_config is not None:
+            url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
+            headers: Dict[str, Any] = provider_config.validate_environment(
+                headers={}, model=model or "", api_key=api_key
+            )
+        else:
+            url = f"{api_base.rstrip('/')}/v1/realtime/client_secrets"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "OpenAI-Beta": "realtime=v1",
+            }
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        logging_obj.pre_call(
+            input=request_data,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            return await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+    async def async_realtime_calls_handler(
+        self,
+        api_base: str,
+        openai_ephemeral_key: str,
+        sdp_body: bytes,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        provider_config: Optional[Any] = None,
+        model: Optional[str] = None,
+        session_config: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        api_version: Optional[str] = None,
+    ) -> httpx.Response:
+        """
+        Forward POST /v1/realtime/calls (SDP exchange) to upstream provider.
+
+        Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
+        header auth when available; falls back to the legacy OpenAI-style defaults.
+
+        OpenAI's GA realtime API expects multipart/form-data with:
+          - sdp: the SDP offer (text)
+          - session: JSON string with {"type": "realtime", "model": "...", ...}
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.OPENAI,
+            )
+        else:
+            async_httpx_client = client
+
+        if provider_config is not None:
+            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            headers: Dict[str, Any] = provider_config.get_realtime_calls_headers(
+                ephemeral_key=openai_ephemeral_key
+            )
+        else:
+            url = f"{api_base.rstrip('/')}/v1/realtime/calls"
+            headers = {
+                "Authorization": f"Bearer {openai_ephemeral_key}",
+            }
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        # Build multipart form data: sdp + session JSON
+        session_data = session_config or {}
+        if "type" not in session_data:
+            session_data["type"] = "realtime"
+        if "model" not in session_data and model:
+            session_data["model"] = model
+
+        sdp_text = sdp_body.decode("utf-8") if isinstance(sdp_body, bytes) else sdp_body
+
+        files = {
+            "sdp": (None, sdp_text, "text/plain"),
+            "session": (None, json.dumps(session_data), "application/json"),
+        }
+
+        logging_obj.pre_call(
+            input="realtime_sdp_offer",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "session": session_data,
+            },
+        )
+
+        try:
+            return await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                files=files,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
     async def async_responses_websocket(
         self,
         model: str,
