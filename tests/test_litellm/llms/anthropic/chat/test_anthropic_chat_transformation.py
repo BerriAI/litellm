@@ -3335,35 +3335,10 @@ def test_service_tier_in_supported_params():
 
 
 @pytest.mark.parametrize("service_tier", ["default", "flex", "scale"])
-def test_service_tier_invalid_value_raises_when_drop_params_false(
-    service_tier: str,
-):
+def test_service_tier_openai_values_not_forwarded_to_anthropic(service_tier: str):
     """
-    When drop_params=False, an unrecognised service_tier must raise
-    UnsupportedParamsError so the caller knows the value was not forwarded.
-
-    Fixes https://github.com/BerriAI/litellm/issues/23398
-    """
-    import litellm
-
-    config = AnthropicConfig()
-
-    with pytest.raises(litellm.UnsupportedParamsError):
-        config.map_openai_params(
-            non_default_params={"service_tier": service_tier},
-            optional_params={},
-            model="claude-sonnet-4-6",
-            drop_params=False,
-        )
-
-
-@pytest.mark.parametrize("service_tier", ["default", "flex", "scale"])
-def test_service_tier_invalid_value_silently_dropped_when_drop_params_true(
-    service_tier: str,
-):
-    """
-    When drop_params=True, an unrecognised service_tier must be silently
-    dropped with no error.
+    OpenAI-specific service_tier values must be silently dropped to avoid
+    hard API errors when routing across providers.
 
     Fixes https://github.com/BerriAI/litellm/issues/23398
     """
@@ -3373,6 +3348,7 @@ def test_service_tier_invalid_value_silently_dropped_when_drop_params_true(
         non_default_params={"service_tier": service_tier},
         optional_params={},
         model="claude-sonnet-4-6",
-        drop_params=True,
+        drop_params=False,
     )
+
     assert "service_tier" not in result
