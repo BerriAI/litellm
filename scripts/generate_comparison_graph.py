@@ -16,58 +16,57 @@ import matplotlib.ticker as ticker
 
 
 BEFORE_CSV = """elapsed_s,rss_mb,fd_count,requests_sent,rps
-0.0,569.34,70,0,0.0
-0.0,569.34,70,0,0.0
-15.5,619.24,120,1450,93.8
-30.5,620.84,120,2899,96.6
-45.5,622.13,120,4299,93.3
-60.5,621.38,118,5599,86.6
-75.9,632.70,118,6950,87.4
-90.9,633.59,118,8363,94.2
-105.9,634.92,118,9800,95.8
-120.9,636.50,118,11199,93.2
-136.3,637.33,118,12609,91.6
-151.3,639.59,118,14050,96.0
-166.3,639.79,118,15499,96.6
-181.3,639.81,118,16900,93.4
-196.8,640.68,118,18236,86.2
-211.9,640.88,118,19656,94.6
-226.9,640.00,118,21101,96.3
-241.9,640.02,118,22516,94.3
-257.4,640.89,118,24031,97.5
-272.4,641.12,118,25450,94.6
-287.4,640.14,118,26900,96.6
-302.4,640.16,68,28100,80.0"""
+0.0,569.50,70,0,0.0
+0.0,569.50,70,0,0.0
+15.4,615.90,121,1471,95.4
+30.4,617.38,121,2999,101.8
+45.4,618.59,121,4501,100.1
+60.4,619.44,119,6050,103.2
+75.8,630.95,119,7600,101.0
+90.8,631.15,119,9110,100.6
+105.8,631.46,119,10650,102.6
+120.8,631.48,119,12136,99.0
+136.1,631.78,119,13700,101.9
+151.1,632.49,119,15199,99.9
+166.1,632.96,119,16526,88.4
+181.2,633.00,119,17920,92.9
+196.8,633.18,119,19400,94.8
+211.8,633.19,119,20820,94.6
+226.8,633.27,119,22197,91.8
+241.8,633.72,119,23554,90.4
+257.2,633.89,119,25099,100.2
+272.2,634.10,119,26508,93.9
+287.2,634.30,119,28037,101.9
+302.2,634.48,69,29350,87.5"""
 
 AFTER_CSV = """elapsed_s,rss_mb,fd_count,requests_sent,rps
-0.0,570.18,70,0,0.0
-0.0,570.18,70,0,0.0
-15.4,612.54,120,1501,97.6
-30.4,608.96,120,3000,99.9
-45.4,615.77,120,4550,103.3
-60.4,609.82,118,6001,96.7
-75.7,616.18,118,7550,101.3
-90.7,610.00,118,9050,100.0
-105.7,613.53,118,10600,103.3
-120.7,608.31,118,12056,97.0
-136.0,612.61,118,13602,101.3
-151.0,607.01,118,15101,99.9
-166.0,612.73,118,16650,103.2
-181.0,618.67,118,18199,103.2
-196.3,612.33,118,19699,97.7
-211.3,616.50,118,21050,90.1
-226.3,611.43,118,22550,100.0
-241.3,617.59,118,24050,100.0
-256.7,610.75,118,25591,100.4
-271.7,617.40,118,27100,100.6
-286.7,612.33,118,28599,99.9
-301.7,614.95,68,29950,90.0
-317.0,606.12,68,29950,0.0"""
+0.0,569.42,70,0,0.0
+0.0,569.42,70,0,0.0
+15.4,610.18,120,1499,97.3
+30.4,617.07,120,2999,100.0
+45.4,605.94,120,4500,100.0
+60.4,618.02,118,6003,100.2
+76.0,629.87,118,7550,99.3
+91.0,630.23,118,9050,100.0
+106.0,606.46,118,10050,66.6
+121.0,617.81,118,11399,89.8
+136.4,630.02,118,12872,95.9
+151.4,630.68,118,14300,95.2
+166.4,607.14,118,15750,96.6
+181.4,619.03,118,17296,103.0
+196.8,631.25,118,18792,97.4
+211.8,631.54,118,19950,77.2
+226.8,605.76,118,21300,90.0
+241.8,618.51,118,22801,100.0
+257.2,631.75,118,24317,98.5
+272.2,631.98,118,25800,98.8
+287.2,632.02,118,27000,80.0
+302.2,619.48,68,28300,86.6"""
 
 
 def parse_csv(csv_text):
     reader = csv.DictReader(io.StringIO(csv_text.strip()))
-    data = {"elapsed_s": [], "rss_mb": [], "requests_sent": []}
+    data = {"elapsed_s": [], "rss_mb": [], "requests_sent": [], "rps": []}
     for row in reader:
         elapsed = float(row["elapsed_s"])
         if elapsed == 0.0 and len(data["elapsed_s"]) > 0 and data["elapsed_s"][-1] == 0.0:
@@ -75,6 +74,7 @@ def parse_csv(csv_text):
         data["elapsed_s"].append(elapsed)
         data["rss_mb"].append(float(row["rss_mb"]))
         data["requests_sent"].append(int(row["requests_sent"]))
+        data["rps"].append(float(row["rps"]))
     return data
 
 
@@ -82,8 +82,8 @@ def main():
     before = parse_csv(BEFORE_CSV)
     after = parse_csv(AFTER_CSV)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=False)
-    fig.suptitle("LiteLLM Memory Leak: Before vs After Fix", fontsize=14, fontweight="bold")
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 11), sharex=False)
+    fig.suptitle("LiteLLM Memory Leak: Before vs After Fix (malloc_trim only, 60s interval)", fontsize=14, fontweight="bold")
 
     # --- Plot 1: RSS over time ---
     ax1.plot(before["elapsed_s"], before["rss_mb"], "r-o", markersize=3, label="Before fix", linewidth=1.5)
@@ -144,6 +144,36 @@ def main():
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
     ax2.text(0.02, 0.98, textstr, transform=ax2.transAxes, fontsize=8,
+             verticalalignment="top", bbox=props)
+
+    # --- Plot 3: RPS over time ---
+    # Filter out 0 rps points (start/end)
+    before_rps = [(t, r) for t, r in zip(before["elapsed_s"], before["rps"]) if r > 0]
+    after_rps = [(t, r) for t, r in zip(after["elapsed_s"], after["rps"]) if r > 0]
+    
+    if before_rps:
+        ax3.plot([t for t, _ in before_rps], [r for _, r in before_rps], "r-o", markersize=3, label="Before fix", linewidth=1.5)
+    if after_rps:
+        ax3.plot([t for t, _ in after_rps], [r for _, r in after_rps], "g-o", markersize=3, label="After fix", linewidth=1.5)
+    ax3.set_xlabel("Elapsed time (seconds)")
+    ax3.set_ylabel("Requests per second")
+    ax3.set_title("RPS Over Time (throughput impact check)")
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    ax3.set_ylim(50, 120)
+
+    # Add avg RPS annotations
+    before_avg_rps = sum(r for _, r in before_rps) / len(before_rps) if before_rps else 0
+    after_avg_rps = sum(r for _, r in after_rps) / len(after_rps) if after_rps else 0
+    rps_diff = ((after_avg_rps - before_avg_rps) / before_avg_rps * 100) if before_avg_rps else 0
+    
+    rps_text = (
+        f"Avg RPS:\n"
+        f"  Before: {before_avg_rps:.1f}\n"
+        f"  After:  {after_avg_rps:.1f}\n"
+        f"  Impact: {rps_diff:+.1f}%"
+    )
+    ax3.text(0.02, 0.98, rps_text, transform=ax3.transAxes, fontsize=8,
              verticalalignment="top", bbox=props)
 
     plt.tight_layout()
