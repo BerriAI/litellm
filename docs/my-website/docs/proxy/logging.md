@@ -20,6 +20,56 @@ Log Proxy input, output, and exceptions using:
 - DynamoDB
 - etc.
 
+## Compatibility Anchors
+
+### Prometheus {#prometheus}
+
+See [Prometheus Metrics](/docs/proxy/prometheus).
+
+### Prometheus Metrics {#prometheus-metrics}
+
+See [Prometheus Metrics](/docs/proxy/prometheus).
+
+### Braintrust {#braintrust}
+
+See [Braintrust](/docs/observability/braintrust).
+
+### Opik {#opik}
+
+See [Opik](/docs/observability/opik_integration).
+
+### Helicone {#helicone}
+
+See [Helicone](/docs/observability/helicone_integration).
+
+### CloudZero {#cloudzero}
+
+See [CloudZero](/docs/observability/cloudzero).
+
+### Generic API Logger {#generic-api-logger}
+
+See [Generic API Logging](/docs/observability/generic_api).
+
+### S3 {#s3}
+
+See the S3/GCS callback-loading notes below.
+
+### Sumo Logic {#sumologic}
+
+See [Sumo Logic](/docs/observability/sumologic_integration).
+
+### OpenTelemetry {#opentelemetry}
+
+See the OpenTelemetry section below.
+
+### AWS SQS {#aws-sqs}
+
+See the AWS SQS section below.
+
+### Langfuse Cache Tags {#litellm-specific-tags-on-langfuse---cache_hit-cache_key}
+
+See the Langfuse metadata section below.
+
 
 
 ## Getting the LiteLLM Call ID
@@ -737,7 +787,7 @@ You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL comma
 
 <Image img={require('../../img/debug_langfuse.png')} />
 
-## OpenTelemetry
+## OpenTelemetry {#otel}
 
 :::info 
 
@@ -1103,7 +1153,7 @@ litellm_settings:
   forward_traceparent_to_llm_provider: True
 ```
 
-## Google Cloud Storage Buckets
+## Google Cloud Storage Buckets {#google-cloud-storage}
 
 Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
 
@@ -1410,7 +1460,7 @@ On s3 bucket, you will see the object key as `my-test-path/my-key-alias/...`
 if both team alias and key alias are enabled then the path becomes
 `my-test-path/my-team-alias/my-key-alias/...`
 
-## AWS SQS
+## AWS SQS {#sqs}
 
 
 | Property             | Details                                                                               |
@@ -2178,7 +2228,7 @@ Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
 
-## Arize AI
+## Arize AI {#arize}
 
 1. Set `success_callback: ["arize"]` on litellm config.yaml
 

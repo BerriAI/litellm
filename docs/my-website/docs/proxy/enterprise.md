@@ -9,10 +9,22 @@ To get a license, get in touch with us [here](https://calendly.com/d/cx9p-5yf-2n
 
 :::
 
+## Audit Logs {#audit-logs}
+
+See [Deleted Keys & Teams Audit Logs](/docs/proxy/deleted_keys_teams).
+
+## Tracking Spend for Custom Tags {#tracking-spend-for-custom-tags}
+
+See [Provider Budget Routing](/docs/proxy/provider_budget_routing#-tag-budgets).
+
+## Tracking Spend with Custom Metadata {#tracking-spend-with-custom-metadata}
+
+See [Cost Tracking](/docs/proxy/cost_tracking#add-custom-headers-to-spend-tracking).
+
 Features: 
 
 - **Security**
-    - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
+    - ✅ [SSO for Admin UI](./ui.md)
     - ✅ [Audit Logs with retention policy](#audit-logs)
     - ✅ [JWT-Auth](./token_auth.md)
     - ✅ [Control available public, private routes](./public_routes.md)
@@ -30,11 +42,11 @@ Features:
     - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
     - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](../observability/gcs_bucket_integration)
-    - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+    - ✅ [`/spend/report` API endpoint](cost_tracking.md)
 - **Control Guardrails per API Key/Team**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
+    - ✅ [Custom Email Branding](./email.md)
 
 
 ### Blocking web crawlers
@@ -57,7 +69,7 @@ Disallow: /
 
 
 
-### Required Params for LLM Requests
+### Required Params for LLM Requests {#enforce-required-params-for-llm-requests}
 Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
 
 

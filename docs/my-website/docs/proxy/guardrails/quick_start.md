@@ -4,6 +4,14 @@ import TabItem from '@theme/TabItem';
 
 # Guardrails - Quick Start
 
+## Spec: `guardrails` Parameter {#spec-guardrails-parameter}
+
+See the request examples on this page.
+
+## Combining Multiple Guardrails {#combining-multiple-guardrails}
+
+See the multiple-guardrail examples on this page.
+
 Setup Prompt Injection Detection, PII Masking on LiteLLM Proxy (AI Gateway)
 
 ## 1. Define guardrails on your LiteLLM config.yaml
@@ -99,7 +107,7 @@ litellm --config config.yaml --detailed_debug
 
 ## 3. Test request 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
@@ -429,7 +437,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 
 
-### ✨ Control Guardrails per API Key
+### ✨ Control Guardrails per API Key {#-control-guardrails-per-api-key}
 
 :::info
 
@@ -572,7 +580,7 @@ guardrails:
 </Tabs>
 
 
-### ✨ Model-level Guardrails
+### ✨ Model-level Guardrails {#model-level-guardrails}
 
 :::info
 

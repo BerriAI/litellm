@@ -132,9 +132,9 @@ curl http://0.0.0.0:4000/rerank \
 | AWS Bedrock              | [Usage](../docs/providers/bedrock#rerank-api)        |  
 | HuggingFace              | [Usage](../docs/providers/huggingface_rerank)        |  
 | Infinity                 | [Usage](../docs/providers/infinity)                  |  
-| vLLM                     | [Usage](../docs/providers/vllm#rerank-endpoint)      |  
+| vLLM                     | [Usage](../docs/providers/vllm)      |  
 | DeepInfra                | [Usage](../docs/providers/deepinfra#rerank-endpoint) |
 | Vertex AI                | [Usage](../docs/providers/vertex#rerank-api)         |
-| Fireworks AI             | [Usage](../docs/providers/fireworks_ai#rerank-endpoint) |
+| Fireworks AI             | [Usage](../docs/providers/fireworks_ai) |
 | Voyage AI                | [Usage](../docs/providers/voyage#rerank)             |  
 | IBM watsonx.ai           | [Usage](../docs/providers/watsonx/rerank)            |  

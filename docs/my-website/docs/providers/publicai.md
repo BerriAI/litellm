@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # PublicAI
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -11,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `publicai/` |
 | Link to Provider Doc | [PublicAI ↗](https://platform.publicai.co/) |
 | Base URL | `https://platform.publicai.co/` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | `/chat/completions` |
 
 <br />
 <br />

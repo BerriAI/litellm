@@ -221,7 +221,7 @@ pip install litellm==1.80.0
 
 #### Features
 
-- **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
+- **[OpenTelemetry](../../docs/proxy/logging#otel)**
     - Enable OpenTelemetry context propagation by external tracers - [PR #15940](https://github.com/BerriAI/litellm/pull/15940)
     - Ensure error information is logged on OTEL - [PR #15978](https://github.com/BerriAI/litellm/pull/15978)
 
@@ -351,4 +351,3 @@ pip install litellm==1.80.0
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.79.0-stable...v1.80.0-stable)**
-

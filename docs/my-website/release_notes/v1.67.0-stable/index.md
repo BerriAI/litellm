@@ -65,7 +65,7 @@ This release allows you to call Azure OpenAI, Anthropic, AWS Bedrock, and Google
     2. o4 - correctly map o4 to openai o_series model
 - **Azure AI**
     1. Phi-4 output cost per token fix - [PR](https://github.com/BerriAI/litellm/pull/9880)
-    2. Responses API support [Get Started](../../docs/providers/azure#azure-responses-api),[PR](https://github.com/BerriAI/litellm/pull/10116)
+    2. Responses API support [Get Started](../../docs/providers/azure/azure_responses),[PR](https://github.com/BerriAI/litellm/pull/10116)
 - **Anthropic**
     1. redacted message thinking support - [Get Started](../../docs/providers/anthropic#usage---thinking--reasoning_content),[PR](https://github.com/BerriAI/litellm/pull/10129)
 - **Cohere**
@@ -150,4 +150,3 @@ This release allows you to call Azure OpenAI, Anthropic, AWS Bedrock, and Google
 - **Model Discovery** - Check provider’s `/models` endpoints when calling proxy’s `/v1/models` endpoint - [Get Started](../../docs/proxy/model_discovery), [PR](https://github.com/BerriAI/litellm/pull/9958)
 - **`/utils/token_counter`** - fix retrieving custom tokenizer for db models - [Get Started](../../docs/proxy/configs#set-custom-tokenizer), [PR](https://github.com/BerriAI/litellm/pull/10047)
 - **Prisma migrate** - handle existing columns in db table - [PR](https://github.com/BerriAI/litellm/pull/10138)
-

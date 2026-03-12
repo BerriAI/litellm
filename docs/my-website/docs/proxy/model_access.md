@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Restrict Model Access
 
+## Control Access on Wildcard Models {#-control-access-on-wildcard-models}
+
+See the wildcard-routing guidance on this page.
+
 ## **Restrict models by Virtual Key**
 
 Set allowed models for a key using the `models` param

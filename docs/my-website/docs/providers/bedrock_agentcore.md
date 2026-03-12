@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Bedrock AgentCore
 
+## LiteLLM A2A Gateway {#litellm-a2a-gateway}
+
+See the AgentCore and A2A gateway documentation on this page.
+
 Call Bedrock AgentCore in the OpenAI Request/Response format.
 
 | Property | Details |
@@ -249,4 +253,3 @@ model_list:
 
 - [AWS Bedrock AgentCore Documentation](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgentRuntime.html)
 - [LiteLLM Authentication to Bedrock](https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication)
-

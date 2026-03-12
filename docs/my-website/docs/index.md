@@ -332,7 +332,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-👉 [Full proxy quickstart with Docker →](./proxy/docker_quick_start.md)
+👉 [Full proxy quickstart with Docker →](./proxy/docker_quick_start)
 
 ---
 

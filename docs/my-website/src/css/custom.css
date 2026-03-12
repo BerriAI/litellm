@@ -617,6 +617,68 @@ video {
 }
 
 /* =========================================
+   NAVBAR — mobile fixes
+   ========================================= */
+
+/* On small screens: hide icon links (GitHub, Discord) and text links
+   from the right section. Keep only the color mode toggle.
+   All nav items remain accessible inside the hamburger drawer. */
+@media (max-width: 996px) {
+  /* Hide GitHub and Discord icon links */
+  .header-github-link,
+  .header-discord-link {
+    display: none !important;
+  }
+
+  /* Hide anchor links in the right section (e.g. Cost Map) */
+  .navbar__items--right > a.navbar__link {
+    display: none !important;
+  }
+
+  /* Keep the right section visible (color mode toggle lives here) */
+  .navbar__items--right {
+    display: flex !important;
+    flex: 0 0 auto;
+  }
+
+  /* Force navbar to stay on a single row, no wrapping */
+  .navbar__inner {
+    flex-wrap: nowrap !important;
+    align-items: center;
+  }
+
+  /* Keep hamburger and logo side by side (not stacked) */
+  .navbar__brand-col {
+    display: flex !important;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Ensure hamburger is always shown */
+  .navbar__toggle {
+    display: flex !important;
+  }
+}
+
+/* Hide theme toggle in mobile sidebar (slide-out drawer) */
+.navbar-sidebar .navbar-sidebar__brand [class*="toggle"] {
+  display: none !important;
+}
+
+/* =========================================
+   SCALAR API REFERENCE — mobile fixes
+   ========================================= */
+
+/* Hide Scalar's own mobile header/hamburger row — Docusaurus already
+   provides the top navbar hamburger on mobile. Showing both creates a
+   broken duplicate-hamburger layout on the /api-reference page.       */
+@media (max-width: 996px) {
+  .references-mobile-header {
+    display: none !important;
+  }
+}
+
+/* =========================================
    LOGO (existing logo toggle logic)
    ========================================= */
 .levo-logo-container {

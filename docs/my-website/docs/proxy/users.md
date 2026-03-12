@@ -3,6 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # Budgets, Rate Limits
 
+## Beta Multi-Instance Rate Limiting {#beta-multi-instance-rate-limiting}
+
+See the rate-limiting configuration on this page.
+
+## Set Rate Limit {#set-rate-limit}
+
+See the rate-limiting configuration on this page.
+
 :::info **Budget Setup Options**
 **Personal budgets**: Create virtual keys without team_id for individual spending limits
 
@@ -363,7 +371,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 We expect the first request to succeed, and the second request to fail since we cross the budget for `gpt-4o` on the Virtual Key
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](./user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call " value = "allowed">

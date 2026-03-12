@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # CLI - Quick Start
 
+## Other Supported Models {#other-supported-models}
+
+See the supported-models section on this page.
+
+## Multiple Models - Quick Start {#multiple-models---quick-start}
+
+See the config-based quick start on this page.
+
+## Multiple Instances of 1 Model {#multiple-instances-of-1-model}
+
+See the config-based quick start on this page.
+
 Setup LiteLLM Proxy quickly via CLI. 
 
 LiteLLM Server (LLM Gateway) manages:
@@ -255,7 +267,7 @@ litellm --config your_config.yaml
 ```
 
 
-## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
+## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain {#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js}
 
 :::info
 LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)

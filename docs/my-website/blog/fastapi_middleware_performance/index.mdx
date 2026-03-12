@@ -59,7 +59,7 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
 
 </details>
 
-Looks harmless. Subclass `BaseHTTPMiddleware`, implement `dispatch()`, done. This is what you will see in Starlette's documentation<sup>[1](#footnote-1)</sup>.
+Looks harmless. Subclass `BaseHTTPMiddleware`, implement `dispatch()`, done. This is what you will see in Starlette's documentation<sup>[1](https://starlette.dev/middleware/#basehttpmiddleware)</sup>.
 
 {/* truncate */}
 
@@ -87,7 +87,7 @@ Our middleware is doing something really simple. For the vast majority of reques
 
 ## Comparing Both
 
-We replaced the `BaseHTTPMiddleware` subclass with a pure ASGI middleware. To benchmark the difference, we used Apache Bench<sup>[2](#footnote-2)</sup> to compare both configurations of LiteLLM's middleware stack: the old setup (1 pure ASGI + 1 `BaseHTTPMiddleware`) against the new setup (2 pure ASGI).
+We replaced the `BaseHTTPMiddleware` subclass with a pure ASGI middleware. To benchmark the difference, we used Apache Bench<sup>[2](https://httpd.apache.org/docs/2.4/programs/ab.html)</sup> to compare both configurations of LiteLLM's middleware stack: the old setup (1 pure ASGI + 1 `BaseHTTPMiddleware`) against the new setup (2 pure ASGI).
 
 A minimal FastAPI app serves `GET /health` → `PlainTextResponse("ok")`. The endpoint does zero work to isolate the middleware overhead: any difference between configs is purely the cost of the middleware plumbing itself. Both middlewares are just calling the next layer. Same work, different base class.
 
@@ -204,8 +204,6 @@ This middleware change was one part of a broader optimization effort on the Lite
 
 ---
 
-<a id="footnote-1"></a>
 <sup>1</sup> [Starlette Middleware — BaseHTTPMiddleware](https://starlette.dev/middleware/#basehttpmiddleware)
 
-<a id="footnote-2"></a>
 <sup>2</sup> [Apache HTTP server benchmarking tool (`ab`)](https://httpd.apache.org/docs/2.4/programs/ab.html)

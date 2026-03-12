@@ -54,7 +54,7 @@ general_settings:
 We expect the first request to succeed, and the second request to fail since we cross the budget for `openai`
 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](./user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call " value = "allowed">
@@ -220,7 +220,7 @@ model_list:
 
 We expect the first request to succeed, and the second request to fail since we cross the budget for `openai/gpt-4o`
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](./user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call " value = "allowed">
@@ -306,7 +306,7 @@ litellm_settings:
 
 We expect the first request to succeed, and the second request to fail since we cross the budget for `openai/gpt-4o`
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](./user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call " value = "allowed">

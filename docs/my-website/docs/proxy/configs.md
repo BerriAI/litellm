@@ -3,6 +3,14 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Overview
+
+## Router Settings {#router-settings}
+
+See the proxy configuration examples on this page.
+
+## All Settings {#all-settings}
+
+See the proxy configuration examples on this page.
 Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
 | Param Name           | Description                                                   |
@@ -104,7 +112,7 @@ Sends request to model where `model_name=gpt-4o` on config.yaml.
 
 If multiple with `model_name=gpt-4o` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](./user_keys#request-format)**
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \

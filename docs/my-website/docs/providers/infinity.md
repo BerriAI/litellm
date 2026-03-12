@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Infinity
 
+## Usage - Returning Documents {#usage---returning-documents}
+
+See the rerank examples on this page.
+
 | Property                  | Details                                                                                                    |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | Description               | Infinity is a high-throughput, low-latency REST API for serving text-embeddings, reranking models and clip |

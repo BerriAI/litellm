@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Lambda AI
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -11,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `lambda_ai/` |
 | Link to Provider Doc | [Lambda AI API Documentation ↗](https://docs.lambda.ai/api) |
 | Base URL | `https://api.lambda.ai/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | `/chat/completions` |
 
 <br />
 <br />

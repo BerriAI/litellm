@@ -1,6 +1,10 @@
 
 # Dynamic TPM/RPM Allocation 
 
+## Priority Quota Reservation {#priority-quota-reservation}
+
+See the dynamic-allocation examples on this page.
+
 Prevent projects from gobbling too much tpm/rpm.
 
 **See Also:** [Request Prioritization](../scheduler.md) - Prioritize LLM API requests in high-traffic by adding them to a priority queue.
@@ -304,4 +308,3 @@ This video walks through setting up dynamic rate limiting with priority reservat
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/1b54b93139ee415d959402cc0629f3f7
 " frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
-

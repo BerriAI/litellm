@@ -15,6 +15,10 @@ Use JWT's to auth admins / users / projects into the proxy.
 
 :::
 
+## Enforce Role-Based Access Control (RBAC) {#enforce-role-based-access-control-rbac}
+
+See the RBAC configuration details on this page.
+
 
 ## Usage
 
@@ -1146,5 +1150,4 @@ curl -X POST http://localhost:4000/jwt/key/mapping/delete \
 ## All JWT Params
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
-
 

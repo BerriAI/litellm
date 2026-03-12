@@ -62,7 +62,7 @@ litellm --config config.yaml --detailed_debug
 
 ### 3. Test request 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Prompt Injection Detection" value = "prompt-injection">

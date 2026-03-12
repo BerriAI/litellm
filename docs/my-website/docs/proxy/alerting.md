@@ -20,6 +20,18 @@ Works across:
 - [Discord](#advanced---using-discord-webhooks)
 - [Microsoft Teams](#advanced---using-ms-teams-webhooks)
 
+## Specific Alert Types {#opting-into-specific-alert-types}
+
+See the alert-type configuration on this page.
+
+## Slack Channels per Alert Type {#set-specific-slack-channels-per-alert-type}
+
+See the Slack-channel mapping section on this page.
+
+## Spend Report Frequency {#spend-report-frequency}
+
+See the digest-mode configuration on this page.
+
 ## Quick Start
 
 Set up a slack alert channel to receive alerts from proxy.
@@ -284,7 +296,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```
 
 
-### MS Teams Webhooks
+### MS Teams Webhooks {#advanced---using-ms-teams-webhooks}
 
 MS Teams provides a slack compatible webhook url that you can use for alerting
 
@@ -326,11 +338,11 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 
 <Image img={require('../../img/ms_teams_alerting.png')}/>
 
-### Discord Webhooks
+### Discord Webhooks {#advanced---using-discord-webhooks}
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
-##### Quick Start
+##### Quick Start {#using-discord-webhooks}
 
 1. Get a webhook url for your discord channel 
 

@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 
 # Claude Code Quickstart
 
+## Connecting MCP Servers {#connecting-mcp-servers}
+
+See the MCP setup walkthrough on this page.
+
 This tutorial shows how to call Claude models through LiteLLM proxy from Claude Code.
 
 :::info 
@@ -264,4 +268,3 @@ claude --model anthropic-vertex
 </Tabs>
 
 <Image img={require('../../img/release_notes/claude_code_demo.png')} style={{ width: '500px', height: 'auto' }} />
-

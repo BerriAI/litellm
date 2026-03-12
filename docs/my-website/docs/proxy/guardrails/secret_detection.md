@@ -95,7 +95,7 @@ https://api.groq.com/openai/v1/ \
 
 ## Turn on/off per project (API KEY/Team)
 
-[**See Here**](./quick_start.md#-control-guardrails-per-project-api-key)
+[**See Here**](./quick_start.md)
 
 ## Control secret detectors
 

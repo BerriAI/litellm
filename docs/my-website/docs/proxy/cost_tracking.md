@@ -4,6 +4,10 @@ import Image from '@theme/IdealImage';
 
 # Spend Tracking
 
+## Custom Tags {#-custom-tags}
+
+See the custom-tag examples on this page.
+
 Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)

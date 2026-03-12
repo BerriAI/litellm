@@ -49,7 +49,7 @@ Here's a Demo Instance to test changes:
 
 ## LLM Translation
 
-1. Infinity Rerank - support returning documents when return_documents=True [Start here](../../docs/providers/infinity#usage---returning-documents)
+1. Infinity Rerank - support returning documents when return_documents=True [Start here](../../docs/providers/infinity)
 2. Amazon Deepseek - `<think>` param extraction into ‘reasoning_content’ [Start here](https://docs.litellm.ai/docs/providers/bedrock#bedrock-imported-models-deepseek-deepseek-r1)
 3. Amazon Titan Embeddings - filter out ‘aws_’ params from request body [Start here](https://docs.litellm.ai/docs/providers/bedrock#bedrock-embedding)
 4. Anthropic ‘thinking’ + ‘reasoning_content’ translation support (Anthropic API, Bedrock, Vertex AI)  [Start here](https://docs.litellm.ai/docs/reasoning_content)

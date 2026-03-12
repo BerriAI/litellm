@@ -14,6 +14,36 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
   LiteLLM MCP Architecture: Use MCP tools with all LiteLLM supported models
 </p>
 
+## Compatibility Anchors
+
+### MCP Permission Management {#-mcp-permission-management}
+
+See [MCP Permission Management](/docs/mcp_control).
+
+### Using your MCP {#using-your-mcp}
+
+Start with [Adding your MCP](#adding-your-mcp).
+
+### MCP Cost Tracking {#-mcp-cost-tracking}
+
+See [MCP Cost Tracking](/docs/mcp_cost).
+
+### Adding a STDIO MCP Server {#adding-a-stdio-mcp-server}
+
+See [Add STDIO MCP Server](#add-stdio-mcp-server).
+
+### Grouping MCPs (Access Groups) {#grouping-mcps-access-groups}
+
+See [MCP Access Groups](/docs/mcp_control).
+
+### MCP Namespacing {#mcp-namespacing}
+
+LiteLLM namespaces tools by MCP server name. See the overview below.
+
+### MCP Gateway Features {#mcp-gateway-features}
+
+See the feature overview on this page and the [MCP Gateway walkthrough](#litellm-proxy---walk-through-mcp-gateway).
+
 ## Overview
 | Feature | Description |
 |---------|-------------|

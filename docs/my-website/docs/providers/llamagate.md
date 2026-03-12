@@ -1,5 +1,9 @@
 # LlamaGate
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -8,7 +12,7 @@
 | Provider Route on LiteLLM | `llamagate/` |
 | Link to Provider Doc | [LlamaGate Documentation ↗](https://llamagate.dev/docs) |
 | Base URL | `https://api.llamagate.dev/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage), [`/embeddings`](#embeddings) |
+| Supported Operations | `/chat/completions`, `/embeddings` |
 
 <br />
 

@@ -1,5 +1,9 @@
 # Reliability - Retries, Fallbacks
 
+## Fallbacks {#fallbacks-1}
+
+See the fallback sections on this page.
+
 LiteLLM helps prevent failed requests in 2 ways: 
 - Retries
 - Fallbacks: Context Window + General
@@ -73,7 +77,7 @@ response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
     fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
 ```
 
-[Check out this section for implementation details](#fallbacks-1)
+[Check out this section for implementation details](#implementation-details-sdk)
 
 ## Implementation Details (SDK)
 

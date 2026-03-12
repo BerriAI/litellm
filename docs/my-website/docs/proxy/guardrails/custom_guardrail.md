@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 
 # Custom Guardrail
 
+## Custom Guardrail {#custom-guardrail}
+
+See the implementation guide on this page.
+
 Use this if you want to write code to run a custom guardrail
 
 ## Quick Start 
@@ -178,7 +182,7 @@ litellm --config config.yaml --detailed_debug
 
 ### 4. Test it 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Blocked Request" value = "blocked">

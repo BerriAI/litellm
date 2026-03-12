@@ -116,7 +116,7 @@ Use [Email Notifications](./email.md) to email users onboarding links
 
 :::info 
 
-LiteLLM Enterprise: Enable [SSO login](./ui.md#setup-ssoauth-for-ui)
+LiteLLM Enterprise: Enable [SSO login](./admin_ui_sso)
 
 :::
 

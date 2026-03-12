@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Using PDF Input
 
+## OpenAI File Message Type {#openai-file-message-type}
+
+See the document-understanding examples on this page for the current file-message format.
+
 How to send / receive pdf's (other document types) to a `/chat/completions` endpoint
 
 Works for:

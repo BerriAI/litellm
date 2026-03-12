@@ -4,6 +4,30 @@ import TabItem from '@theme/TabItem';
 
 # VertexAI [Gemini]
 
+## Model Garden {#model-garden}
+
+See [Vertex Self-Deployed / Model Garden](/docs/providers/vertex_self_deployed).
+
+## Thinking / `reasoning_content` {#usage---thinking--reasoning_content}
+
+See the thinking section on this page.
+
+## Meta Llama API {#metallama-api}
+
+See [Vertex AI Partner Models](/docs/providers/vertex_partner).
+
+## Text-to-Speech APIs {#text-to-speech-apis}
+
+See [Vertex Speech](/docs/providers/vertex_speech).
+
+## Batch APIs {#batch-apis}
+
+See [Vertex Batch](/docs/providers/vertex_batch).
+
+## Image Generation Models {#image-generation-models}
+
+See [Vertex Image Generation](/docs/providers/vertex_image).
+
 ## Overview
 
 | Property | Details |
@@ -1141,7 +1165,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 #### Calling provider api directly
 
-[**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
+[**Go straight to provider**](../pass_through/vertex_ai.md)
 
 ##### 1. Create the Cache
 

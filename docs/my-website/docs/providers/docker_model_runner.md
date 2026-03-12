@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Docker Model Runner
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -11,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `docker_model_runner/` |
 | Link to Provider Doc | [Docker Model Runner ↗](https://docs.docker.com/ai/model-runner/) |
 | Base URL | `http://localhost:22088` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | `/chat/completions` |
 
 <br />
 <br />
@@ -274,4 +278,3 @@ For more detailed information on using the LiteLLM Proxy, see the [LiteLLM Proxy
 ## API Reference
 
 For detailed API information, see the [Docker Model Runner API Reference](https://docs.docker.com/ai/model-runner/api-reference/).
-

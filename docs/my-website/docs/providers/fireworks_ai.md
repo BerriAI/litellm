@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Fireworks AI
 
+## Rerank Endpoint {#rerank-endpoint}
+
+See the rerank section on this page.
+
 
 :::info
 **We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests**
@@ -396,7 +400,7 @@ response = transcription(
 )
 ```
 
-[Pass API Key/API Base in `.transcription`](../set_keys.md#passing-args-to-completion)
+[Pass API Key/API Base in `.transcription`](../set_keys.md)
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
@@ -464,7 +468,7 @@ response = rerank(
 print(response)
 ```
 
-[Pass API Key/API Base in `.rerank`](../set_keys.md#passing-args-to-completion)
+[Pass API Key/API Base in `.rerank`](../set_keys.md)
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">

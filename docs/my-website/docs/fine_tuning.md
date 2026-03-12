@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # /fine_tuning
 
+## Supported Providers {#supported-providers}
+
+See the provider table on this page.
+
 
 :::info
 
@@ -132,7 +136,7 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
     **Type:** `Literal["azure", "openai", "vertex_ai"]`
 
     **Required:** Yes
-    The name of the model to fine-tune. You can select one of the [**supported providers**](#supported-providers)
+    The name of the model to fine-tune. You can select one of the supported providers listed above.
 
 * `training_file`
 

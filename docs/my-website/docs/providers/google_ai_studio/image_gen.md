@@ -211,4 +211,4 @@ Google AI Studio Image Generation supports the following OpenAI-compatible param
 
 - [Google AI Studio Documentation](https://ai.google.dev/gemini-api/docs)
 - [Imagen Model Overview](https://ai.google.dev/gemini-api/docs/imagen)
-- [LiteLLM Image Generation Guide](../../completion/image_generation)
+- [LiteLLM Image Generation Guide](../../image_generation)

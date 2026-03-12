@@ -24,7 +24,7 @@ LiteLLM Proxy is **Anthropic-compatible**:
 * /messages 
 
 LiteLLM Proxy is **Vertex AI compatible**:
-- [Supports ALL Vertex Endpoints](../vertex_ai)
+- [Supports ALL Vertex Endpoints](../providers/vertex)
 
 This doc covers:
 
@@ -1143,6 +1143,5 @@ Get a list of responses when `model` is passed as a list
 
 </TabItem>
 </Tabs>
-
 
 

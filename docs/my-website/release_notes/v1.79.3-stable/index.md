@@ -305,7 +305,7 @@ This update significantly improves `/responses` latency by integrating our inter
     - Add allowing Key based prefix to s3 path - [PR #16237](https://github.com/BerriAI/litellm/pull/16237)
     - Add Prometheus metric to track callback logging failures in S3 - [PR #16209](https://github.com/BerriAI/litellm/pull/16209)
 
-- **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
+- **[OpenTelemetry](../../docs/proxy/logging#otel)**
     - OTEL - Log Cost Breakdown on OTEL Logger - [PR #16334](https://github.com/BerriAI/litellm/pull/16334)
 
 - **[DataDog](../../docs/proxy/logging#datadog)**
@@ -440,5 +440,4 @@ This update significantly improves `/responses` latency by integrating our inter
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.79.1-nightly...v1.79.2.rc.1)**
-
 

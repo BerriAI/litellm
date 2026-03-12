@@ -1,5 +1,9 @@
 # Setting API Keys, Base, Version
 
+## Passing Args to Completion {#passing-args-to-completion}
+
+See the examples on this page for passing provider-specific keys, base URLs, and versions.
+
 LiteLLM allows you to specify the following:
 * API Key
 * API Base

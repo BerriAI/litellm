@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+## Anthropic Hosted Tools: Computer, Text Editor, Web Search {#anthropic-hosted-tools-computer-text-editor-web-search}
+
+See the hosted-tools documentation on this page.
+
 - `claude-opus-4-6` (`claude-opus-4-6-20260205`)
 - `claude-sonnet-4-6`
 - `claude-sonnet-4-5-20250929`

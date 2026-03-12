@@ -1,5 +1,9 @@
 # Apertis AI (Stima API)
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -8,7 +12,7 @@
 | Provider Route on LiteLLM | `apertis/` |
 | Link to Provider Doc | [Apertis AI Website ↗](https://api.stima.tech) |
 | Base URL | `https://api.stima.tech/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | `/chat/completions` |
 
 <br />
 

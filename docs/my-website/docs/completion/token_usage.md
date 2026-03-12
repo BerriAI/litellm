@@ -1,4 +1,8 @@
 # Completion Token Usage & Cost
+
+## `api.litellm.ai` {#10-apilitellmai}
+
+See the model-cost section on this page.
 By default LiteLLM returns token usage in all completion requests ([See here](https://litellm.readthedocs.io/en/latest/output/))
 
 LiteLLM returns `response_cost` in all calls. 
@@ -35,7 +39,7 @@ LiteLLM also exposes some helper functions:
 
 - `register_model`: This registers new / overrides existing models (and their pricing details) in the model cost dictionary. [**Jump to code**](#9-register_model)
 
-- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). [**Jump to code**](#10-apilitellmai)
+- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
 📣 [This is a community maintained list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). Contributions are welcome! ❤️
 

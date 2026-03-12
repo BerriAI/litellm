@@ -70,7 +70,7 @@ litellm --config config.yaml --detailed_debug
 
 ### 4. Test Request
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call" value="allowed">
@@ -273,4 +273,3 @@ Set `block_on_violation: false` to continue processing even when violations are 
 For more information about EnkryptAI:
 - Documentation: [https://docs.enkryptai.com](https://docs.enkryptai.com)
 - Website: [https://enkryptai.com](https://enkryptai.com)
-

@@ -229,6 +229,5 @@ If the score is above your `score_threshold`, the request gets blocked (if `bloc
 
 ## Further Reading
 
-- [Control Guardrails per API Key](./quick_start#-control-guardrails-per-api-key)
+- [Control Guardrails per API Key](./quick_start.md)
 - [IBM FMS Guardrails on GitHub](https://github.com/foundation-model-stack/fms-guardrails-orchestr8)
-

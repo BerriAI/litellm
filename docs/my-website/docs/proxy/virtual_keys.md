@@ -5,6 +5,26 @@ import Image from '@theme/IdealImage';
 # Virtual Keys
 Track Spend, and control model access via virtual keys for the proxy
 
+## Custom Auth {#custom-auth}
+
+See [Custom Auth](/docs/proxy/custom_auth).
+
+## Custom Key Generate {#custom--key-generate}
+
+See the key-generation examples on this page.
+
+## Custom Headers {#custom-headers}
+
+See [Request Headers](/docs/proxy/request_headers).
+
+## Client-Side Credentials {#client-side-credentials}
+
+See [Pass-Through Vertex AI](/docs/pass_through/vertex_ai).
+
+## Guardrails {#guardrails}
+
+See [Guardrails Quick Start](/docs/proxy/guardrails/quick_start).
+
 :::info
 
 - 🔑 [UI to Generate, Edit, Delete Keys (with SSO)](https://docs.litellm.ai/docs/proxy/ui)
@@ -763,7 +783,6 @@ class LitellmUserRoles(str, enum.Enum):
 ### Teams
 
 #### [**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/team%20management)
-
 
 
 

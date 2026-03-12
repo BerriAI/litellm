@@ -417,7 +417,7 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Pass span_attributes in async logging and skip tags on non-root spans - [PR #18409](https://github.com/BerriAI/litellm/pull/18409)
 - **[CloudZero](../../docs/proxy/logging#cloudzero)**
     - Add user email to CloudZero - [PR #18584](https://github.com/BerriAI/litellm/pull/18584)
-- **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
+- **[OpenTelemetry](../../docs/proxy/logging#otel)**
     - Use already configured opentelemetry providers - [PR #18279](https://github.com/BerriAI/litellm/pull/18279)
     - Prevent LiteLLM from closing external OTEL spans - [PR #18553](https://github.com/BerriAI/litellm/pull/18553)
     - Allow configuring arize project name for OpenTelemetry service name - [PR #18738](https://github.com/BerriAI/litellm/pull/18738)
@@ -639,4 +639,3 @@ Users can now see Endpoint Activity Metrics in the UI.
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.11.rc.1...v1.80.15-stable.1)**
-

@@ -48,7 +48,7 @@ litellm --config config.yaml --detailed_debug
 
 ### 4. Test Request
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Successful Call" value="allowed">
@@ -211,4 +211,3 @@ The guardrail handles errors gracefully:
 For more information about DynamoAI:
 - Website: [https://dynamo.ai](https://dynamo.ai)
 - Documentation: Contact DynamoAI for API documentation
-

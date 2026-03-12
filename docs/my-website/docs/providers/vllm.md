@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # VLLM
 
+## Rerank Endpoint {#rerank-endpoint}
+
+See the rerank section on this page.
+
 LiteLLM supports all models on VLLM.
 
 | Property | Details |
@@ -616,4 +620,3 @@ test_vllm_custom_model()
 ```
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/6b3cb1898382f2e4e80fd372308ea232868c78d1/litellm/utils.py#L1414)
-

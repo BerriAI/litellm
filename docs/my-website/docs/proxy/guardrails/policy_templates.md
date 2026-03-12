@@ -292,5 +292,5 @@ See the [full patterns list](https://github.com/BerriAI/litellm/blob/main/litell
 
 - [Guardrail Policies](./guardrail_policies)
 - [Policy Tags](./policy_tags)
-- [Content Filter Patterns](../hooks/content_filter)
-- [Custom Code Guardrails](../hooks/custom_code)
+- [Content Filter Patterns](./litellm_content_filter)
+- [Custom Code Guardrails](./custom_code_guardrail)

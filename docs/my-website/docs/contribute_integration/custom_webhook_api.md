@@ -105,7 +105,7 @@ If you're adding a new integration, please add documentation for it under the `o
 
 5. File a PR! 
 
-- Review our contribution guide [here](../../extras/contributing_code)
+- Review our contribution guide [here](../extras/contributing_code)
 - Push your fork to your GitHub repo
 - Submit a PR from there
 

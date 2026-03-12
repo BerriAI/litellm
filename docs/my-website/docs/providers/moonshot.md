@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Moonshot AI
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -11,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `moonshot/` |
 | Link to Provider Doc | [Moonshot AI ↗](https://platform.moonshot.ai/) |
 | Base URL | `https://api.moonshot.ai/` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | `/chat/completions` |
 
 <br />
 <br />

@@ -1,5 +1,9 @@
 # GMI Cloud
 
+## Sample Usage {#sample-usage}
+
+See the usage examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -8,7 +12,7 @@
 | Provider Route on LiteLLM | `gmi/` |
 | Link to Provider Doc | [GMI Cloud Docs ↗](https://docs.gmicloud.ai) |
 | Base URL | `https://api.gmi-serving.com/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage), [`/models`](#supported-models) |
+| Supported Operations | `/chat/completions`, [`/models`](#supported-models) |
 
 <br />
 

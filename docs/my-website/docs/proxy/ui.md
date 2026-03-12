@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # Quick Start
 
+## Enterprise Features {#✨-enterprise-features}
+
+See the enterprise-linked UI features on this page.
+
+## Restrict UI Access {#restrict-ui-access}
+
+See the UI access controls on this page.
+
+## Setup SSO/Auth for UI {#setup-ssoauth-for-ui}
+
+See [Admin UI SSO](/docs/proxy/admin_ui_sso).
+
 Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 
 <Image img={require('../../img/litellm_ui_create_key.png')} />

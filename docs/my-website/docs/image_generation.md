@@ -317,7 +317,7 @@ print(f"response: {response}")
 | Provider | Documentation Link |
 |----------|-------------------|
 | OpenAI | [OpenAI Image Generation →](./providers/openai) |
-| Azure OpenAI | [Azure OpenAI Image Generation →](./providers/azure/azure) |
+| Azure OpenAI | [Azure OpenAI Image Generation →](./providers/azure) |
 | Google AI Studio | [Google AI Studio Image Generation →](./providers/google_ai_studio/image_gen) |
 | Vertex AI | [Vertex AI Image Generation →](./providers/vertex_image) |
 | AWS Bedrock | [Bedrock Image Generation →](./providers/bedrock) |

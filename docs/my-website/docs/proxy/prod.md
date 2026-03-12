@@ -4,6 +4,10 @@ import Image from '@theme/IdealImage';
 
 # ⚡ Best Practices for Production
 
+## If running LiteLLM on VPC, gracefully handle DB unavailability {#5-if-running-litellm-on-vpc-gracefully-handle-db-unavailability}
+
+See the production guidance on this page.
+
 ## 1. Use this config.yaml
 Use this config.yaml in production (with your own LLMs)
 

@@ -201,7 +201,7 @@ pip install litellm==1.79.0
 
 #### Features
 
-- **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
+- **[OpenTelemetry](../../docs/proxy/logging#otel)**
     - Fix OpenTelemetry Logging functionality - [PR #15645](https://github.com/BerriAI/litellm/pull/15645)
     - Fix issue where headers were not being split correctly - [PR #15916](https://github.com/BerriAI/litellm/pull/15916)
 
@@ -319,4 +319,3 @@ pip install litellm==1.79.0
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.78.5-stable...v1.79.0-stable)**
-

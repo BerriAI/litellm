@@ -686,7 +686,7 @@ The proxy provides:
 
 ### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
-Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
+Go here for a complete tutorial with keys + rate limits - [**here**](/docs/proxy/docker_quick_start)
 
 ### Quick Start Proxy - CLI
 

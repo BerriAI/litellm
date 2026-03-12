@@ -3,6 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # Input Params
 
+## Provider-Specific Params {#provider-specific-params}
+
+LiteLLM forwards unsupported OpenAI params as provider-specific kwargs where supported.
+
 ## Common Params 
 LiteLLM accepts and translates the [OpenAI Chat Completion params](https://platform.openai.com/docs/api-reference/chat/create) across all providers. 
 

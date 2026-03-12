@@ -1,5 +1,17 @@
 # NanoGPT
 
+## Sample Usage {#sample-usage}
+
+See the NanoGPT usage examples on this page.
+
+## Text Completion {#text-completion}
+
+See the text-completion examples on this page.
+
+## Embeddings {#embeddings}
+
+See the embeddings examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -8,7 +20,7 @@
 | Provider Route on LiteLLM | `nano-gpt/` |
 | Link to Provider Doc | [NanoGPT Website ↗](https://nano-gpt.com) |
 | Base URL | `https://nano-gpt.com/api/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage), [`/completions`](#text-completion), [`/embeddings`](#embeddings) |
+| Supported Operations | `/chat/completions`, `/completions`, `/embeddings` |
 
 <br />
 

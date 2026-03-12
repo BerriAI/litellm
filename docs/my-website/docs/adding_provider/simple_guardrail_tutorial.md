@@ -37,7 +37,7 @@ Two files: `my_guardrail.py` (main class) and `__init__.py` (initialization).
 
 `my_guardrail.py`:
 
-Follow from [Custom Guardrail](../proxy/guardrails/custom_guardrail#custom-guardrail) tutorial.
+Follow from the [Custom Guardrail](../proxy/guardrails/custom_guardrail.md) tutorial.
 
 ### Create the Init File
 
@@ -128,6 +128,5 @@ curl --location 'http://localhost:4000/chat/completions' \
 ## Testing
 
 Add unit tests inside `test_litellm/` folder.
-
 
 

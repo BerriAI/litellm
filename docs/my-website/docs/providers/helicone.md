@@ -3,6 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # Helicone
 
+## Sample Usage {#sample-usage}
+
+See the Helicone usage examples on this page.
+
+## Embeddings {#embeddings}
+
+See the embeddings examples on this page.
+
 ## Overview
 
 | Property | Details |
@@ -11,7 +19,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `helicone/` |
 | Link to Provider Doc | [Helicone Documentation ↗](https://docs.helicone.ai) |
 | Base URL | `https://ai-gateway.helicone.ai/` |
-| Supported Operations | [`/chat/completions`](#sample-usage), [`/completions`](#text-completion), [`/embeddings`](#embeddings) |
+| Supported Operations | `/chat/completions`, `/completions`, `/embeddings` |
 
 <br />
 
@@ -265,4 +273,3 @@ Visit [Helicone Pricing](https://helicone.ai/pricing) for details.
 - [Helicone Dashboard](https://helicone.ai)
 - [Helicone GitHub](https://github.com/Helicone/helicone)
 - [API Reference](https://docs.helicone.ai/rest/ai-gateway/post-v1-chat-completions)
-

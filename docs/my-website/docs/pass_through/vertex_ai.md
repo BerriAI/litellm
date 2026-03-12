@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 
 # Vertex AI SDK
 
+## Context Caching {#context-caching}
+
+See the passthrough examples on this page together with the linked Gemini context-caching docs.
+
 Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
 
 | Feature | Supported | Notes | 

@@ -99,13 +99,13 @@ litellm --config /path/to/config.yaml
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | OpenAI      |   [Usage](#quick-start)                 |
-| Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
+| Azure OpenAI|   [Usage](./providers/azure/azure_speech.md)                 |
 | Azure AI Speech Service (AVA)|   [Usage](../docs/providers/azure_ai_speech)                 |
 | AWS Polly   |   [Usage](#aws-polly-text-to-speech)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 | ElevenLabs  |   [Usage](../docs/providers/elevenlabs#text-to-speech-tts)                 |
-| MiniMax     |   [Usage](../docs/providers/minimax#minimax---text-to-speech)                 |
+| MiniMax     |   [Usage](./providers/minimax.md)                 |
 
 ## `/audio/speech` to `/chat/completions` Bridge
 

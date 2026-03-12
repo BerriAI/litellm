@@ -40,4 +40,4 @@ LiteLLM proxy can send continuous CPU profiles to [Grafana Pyroscope](https://gr
 
 - **Optional dependency**: `pyroscope-io` is an optional dependency. If it is not installed and `LITELLM_ENABLE_PYROSCOPE=true`, the proxy will log a warning and continue without profiling.
 - **Platform support**: The `pyroscope-io` package uses a native extension and is not available on all platforms (e.g. Windows is excluded by the package).
-- **Other settings**: See [Configuration settings](/proxy/config_settings) for all proxy environment variables.
+- **Other settings**: See [Configuration settings](./config_settings) for all proxy environment variables.

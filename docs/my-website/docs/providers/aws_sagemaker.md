@@ -2,6 +2,10 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem'
 
 # AWS Sagemaker
+
+## Provider-Specific Params {#provider-specific-params}
+
+See [Input Params](/docs/completion/input).
 LiteLLM supports All Sagemaker Huggingface Jumpstart Models
 
 :::tip
@@ -524,5 +528,3 @@ os.environ["AWS_REGION_NAME"] = ""
 response = litellm.embedding(model="sagemaker/<your-deployment-name>", input=["good morning from litellm", "this is another item"])
 print(f"response: {response}")
 ```
-
-

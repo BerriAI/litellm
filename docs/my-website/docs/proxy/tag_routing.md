@@ -7,8 +7,8 @@ This is useful for
 
 :::info
 ## See here for spend tags
-- [Track spend per tag](cost_tracking#-custom-tags)
-- [Setup Budgets per Virtual Key, Team](users)
+- [Track spend per tag](./cost_tracking#custom-tags)
+- [Setup Budgets per Virtual Key, Team](./users)
 :::
 
 ## Quick Start
@@ -329,5 +329,4 @@ Here's how to set up and use team-based tag routing using curl commands:
    ```
 
 By following these steps and using these curl commands, you can implement and test team-based tag routing in your LiteLLM Proxy setup, ensuring that different teams are routed to the appropriate models or deployments based on their assigned tags.
-
 

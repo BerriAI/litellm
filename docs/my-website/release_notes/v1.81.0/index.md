@@ -347,7 +347,7 @@ LiteLLM now provides a comprehensive audit table for deleted API keys and teams 
 
 ### Logging
 
-- **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
+- **[OpenTelemetry](../../docs/proxy/logging#otel)**
   - Update semantic conventions to 1.38 (gen_ai attributes) - [PR #18793](https://github.com/BerriAI/litellm/pull/18793)
 
 - **[LangSmith](../../docs/proxy/logging#langsmith)**

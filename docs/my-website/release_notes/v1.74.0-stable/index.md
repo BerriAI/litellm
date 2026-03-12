@@ -306,7 +306,7 @@ This release brings significant performance improvements to the Python SDK with 
   - Langfuse prompt_version support - [PR](https://github.com/BerriAI/litellm/pull/12301)
 - **[Sentry Integration](../../docs/observability/sentry)**
   - Add sentry scrubbing - [PR](https://github.com/BerriAI/litellm/pull/12210)
-- **[AWS SQS Logging](../../docs/proxy/logging#aws-sqs)**
+- **[AWS SQS Logging](../../docs/proxy/logging#sqs)**
   - New AWS SQS Logging Integration - [PR](https://github.com/BerriAI/litellm/pull/12176)
 - **[S3 Logger](../../docs/proxy/logging#s3-buckets)**
   - Add failure logging support - [PR](https://github.com/BerriAI/litellm/pull/12299)
@@ -372,4 +372,3 @@ This release brings significant performance improvements to the Python SDK with 
 * @takashiishida made their first contribution in https://github.com/BerriAI/litellm/pull/12239
 
 ## **[Git Diff](https://github.com/BerriAI/litellm/compare/v1.73.6-stable...v1.74.0-stable)**
-

@@ -280,5 +280,5 @@ export LITELLM_LOG=DEBUG
 ## Related Documentation
 
 - [Vertex AI Live API Reference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/multimodal-live)
-- [LiteLLM Proxy Configuration](../proxy/)
+- [LiteLLM Proxy Configuration](../proxy/quick_start)
 - [Vertex AI Passthrough Endpoints](./vertex_ai.md)

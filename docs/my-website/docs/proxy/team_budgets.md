@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 
 # Setting Team Budgets
 
+## Dynamic TPM/RPM Allocation {#dynamic-tpmrpm-allocation}
+
+See [Dynamic TPM/RPM Allocation](/docs/proxy/dynamic_rate_limit).
+
 
 # Pre-Requisites
 

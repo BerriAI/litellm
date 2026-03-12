@@ -1,4 +1,8 @@
 # Health Checks
+
+## Health Endpoints {#health-endpoints}
+
+See the endpoint overview on this page.
 Use this to health check all LLMs defined in your config.yaml
 
 ## When to Use Each Endpoint
@@ -451,4 +455,3 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 }
 '
 ```
-
