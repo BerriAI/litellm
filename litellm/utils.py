@@ -260,6 +260,9 @@ if TYPE_CHECKING:
     )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.llms.base_llm.realtime.http_transformation import (
+        BaseRealtimeHTTPConfig,
+    )
     from litellm.proxy._types import AllowedModelRegion
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
