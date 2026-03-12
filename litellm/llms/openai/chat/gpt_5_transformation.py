@@ -194,7 +194,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if has_tools and reasoning_effort not in (None, "none"):
                 non_default_params.pop("reasoning_effort", None)
                 optional_params.pop("reasoning_effort", None)
-                reasoning_effort = None
+                reasoning_effort = None  # noqa: F841
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")

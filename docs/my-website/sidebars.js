@@ -100,6 +100,7 @@ const sidebars = {
       label: "Policies",
       items: [
         "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/policy_flow_builder",
         "proxy/guardrails/policy_templates",
         "proxy/guardrails/policy_tags",
       ],
@@ -668,6 +669,7 @@ const sidebars = {
         "rag_ingest",
         "rag_query",
         "realtime",
+        "proxy/realtime_webrtc",
         "rerank",
         "response_api",
         "response_api_compact",

@@ -97,7 +97,6 @@ from ..common_utils import (
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
-    _build_vertex_schema_for_gemini_2,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -468,7 +467,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return None
 
     def _map_function(  # noqa: PLR0915
-        self, value: List[dict], optional_params: dict, model: str = ""
+        self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1058,7 +1057,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = self._map_function(
-                    value=value, optional_params=optional_params, model=model
+                    value=value, optional_params=optional_params
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, mapped_tools
