@@ -1,5 +1,6 @@
 # Start tracing memory allocations
 import asyncio
+import ctypes
 import gc
 import json
 import os
@@ -17,6 +18,83 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+
+# ─── Periodic memory management ──────────────────────────────────────
+
+# Default interval in seconds between malloc_trim calls.
+# Override with LITELLM_MALLOC_TRIM_INTERVAL_SECONDS env var. Set to 0 to disable.
+_DEFAULT_MALLOC_TRIM_INTERVAL = 10
+
+# Reference to the background task so it doesn't get GC'd
+_malloc_trim_task: Optional[asyncio.Task] = None
+
+
+def _try_malloc_trim() -> bool:
+    """
+    Call glibc ``malloc_trim(0)`` to release free heap pages back to the OS.
+
+    On high-throughput Python services, glibc's malloc arenas grow but never
+    shrink — ``free()`` returns blocks to the arena without releasing the
+    underlying pages via ``madvise(MADV_DONTNEED)``.  ``malloc_trim`` forces
+    that release, preventing RSS from growing monotonically.
+
+    Returns True if memory was released, False otherwise.
+    Safe to call on non-glibc systems (returns False).
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        return bool(libc.malloc_trim(0))
+    except (OSError, AttributeError):
+        # Not on glibc (e.g. musl/alpine, macOS) — silently skip
+        return False
+
+
+async def _periodic_malloc_trim(interval_seconds: int):
+    """
+    Background coroutine that periodically runs ``gc.collect()`` +
+    ``malloc_trim(0)`` to keep RSS in check.
+
+    This is the standard pattern used by Instagram, Dropbox, and other
+    large-scale Python services to combat glibc malloc fragmentation.
+    """
+    verbose_proxy_logger.info(
+        "Memory management: starting periodic malloc_trim every %ds",
+        interval_seconds,
+    )
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            gc.collect()
+            _try_malloc_trim()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            verbose_proxy_logger.debug("malloc_trim background task error: %s", e)
+
+
+def start_malloc_trim_background_task() -> Optional[asyncio.Task]:
+    """
+    Start the periodic malloc_trim background task.
+
+    Reads ``LITELLM_MALLOC_TRIM_INTERVAL_SECONDS`` from the environment
+    (default: 10).  Set to ``0`` to disable.
+
+    Should be called once during proxy startup (inside the running event loop).
+    """
+    global _malloc_trim_task
+
+    interval = int(os.environ.get("LITELLM_MALLOC_TRIM_INTERVAL_SECONDS", _DEFAULT_MALLOC_TRIM_INTERVAL))
+    if interval <= 0:
+        verbose_proxy_logger.info("Memory management: periodic malloc_trim disabled (interval=0)")
+        return None
+
+    # Don't start twice
+    if _malloc_trim_task is not None and not _malloc_trim_task.done():
+        return _malloc_trim_task
+
+    _malloc_trim_task = asyncio.create_task(_periodic_malloc_trim(interval))
+    return _malloc_trim_task
 
 # Configure garbage collection thresholds from environment variables
 def configure_gc_thresholds():

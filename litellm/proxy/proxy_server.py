@@ -948,6 +948,10 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## Start periodic memory management (malloc_trim) to prevent RSS growth
+    from litellm.proxy.common_utils.debug_utils import start_malloc_trim_background_task
+    _malloc_trim_task = start_malloc_trim_background_task()
+
     # End of startup event
     yield
 
