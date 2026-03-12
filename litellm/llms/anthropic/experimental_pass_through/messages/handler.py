@@ -235,6 +235,12 @@ def anthropic_messages_handler(
     """
     from litellm.types.utils import LlmProviders
 
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        sanitize_anthropic_native_messages_for_tool_calling,
+    )
+
+    messages = sanitize_anthropic_native_messages_for_tool_calling(messages)
+
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars = locals()

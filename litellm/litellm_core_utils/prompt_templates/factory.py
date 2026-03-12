@@ -1035,13 +1035,9 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         parsed_args = parse_tool_call_arguments(
             tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
         )
-        if isinstance(parsed_args, dict):
-            parameters = "".join(
-                f"<{param}>{val}</{param}>\n"
-                for param, val in parsed_args.items()
-            )
-        else:
-            parameters = f"<result>{parsed_args}</result>\n"
+        parameters = "".join(
+            f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items()
+        )
         invokes += (
             "<invoke>\n"
             f"<tool_name>{tool_name}</tool_name>\n"
@@ -2204,6 +2200,45 @@ def _is_orphaned_tool_result(
     return False
 
 
+
+
+def _merge_consecutive_assistant_messages(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    if not messages:
+        return []
+    
+    merged: List[AllMessageValues] = []
+    current_msg: Optional[AllMessageValues] = None
+    
+    for msg in messages:
+        if current_msg is None:
+            current_msg = copy.deepcopy(msg)
+            continue
+        
+        if msg.get("role") == "assistant" and current_msg.get("role") == "assistant":
+            # Merge content
+            if isinstance(current_msg.get("content"), str) and isinstance(msg.get("content"), str):
+                current_msg["content"] += "\n" + msg["content"]
+            elif isinstance(current_msg.get("content"), list) and isinstance(msg.get("content"), list):
+                current_msg["content"].extend(msg["content"])
+            elif isinstance(current_msg.get("content"), str) and isinstance(msg.get("content"), list):
+                current_msg["content"] = [{"type": "text", "text": current_msg["content"]}] + msg["content"]
+            elif isinstance(current_msg.get("content"), list) and isinstance(msg.get("content"), str):
+                current_msg["content"].append({"type": "text", "text": msg["content"]})
+            
+            # Merge tool_calls
+            if "tool_calls" in msg:
+                if "tool_calls" not in current_msg:
+                    current_msg["tool_calls"] = []
+                current_msg["tool_calls"].extend(msg["tool_calls"])
+        else:
+            merged.append(current_msg)
+            current_msg = copy.deepcopy(msg)
+    
+    if current_msg:
+        merged.append(current_msg)
+        
+    return merged
+
 def sanitize_messages_for_tool_calling(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -2231,6 +2266,11 @@ def sanitize_messages_for_tool_calling(
     """
     if not litellm.modify_params:
         return messages
+    
+    # Merge consecutive assistant messages to ensure tool results are correctly associated
+    messages = _merge_consecutive_assistant_messages(messages)
+
+
     
     sanitized_messages: List[AllMessageValues] = []
     i = 0
@@ -2305,6 +2345,160 @@ def sanitize_messages_for_tool_calling(
         ]
 
     return sanitized_messages
+
+
+def sanitize_anthropic_native_messages_for_tool_calling(
+    messages: List[Dict],
+) -> List[Dict]:
+    """
+    Sanitize Anthropic-native format messages for tool calling issues.
+
+    This handles the case where messages use Anthropic's native format
+    (content is a list containing tool_use/tool_result blocks) rather than
+    OpenAI format (tool_calls field). This is needed for /v1/messages pass-through
+    requests where modify_params=True is set.
+
+    Case A: Orphaned tool_use blocks in assistant messages
+    - If an assistant message has tool_use blocks in its content list, but the
+      next user message does not have corresponding tool_result blocks, add
+      dummy tool_result blocks to the next user message (or insert a new user
+      message if none exists).
+
+    Case B: Orphaned tool_result blocks in user messages
+    - If a user message has tool_result blocks that reference tool_use ids
+      not found in the previous assistant message, remove those tool_result blocks.
+
+    Only applies when litellm.modify_params is True.
+    """
+    if not litellm.modify_params:
+        return messages
+
+    if not messages:
+        return messages
+
+    sanitized: List[Dict] = []
+    i = 0
+
+    while i < len(messages):
+        current_msg = messages[i]
+        role = current_msg.get("role")
+
+        if role == "assistant":
+            content = current_msg.get("content")
+            if isinstance(content, list):
+                # Case C: Reorder blocks so all text blocks precede tool_use blocks.
+                # Anthropic rejects content where a text block appears after a tool_use block
+                # (e.g. the pattern [text, tool_use, text, tool_use] produced by context
+                # compaction merging two assistant turns into one).
+                has_text_after_tool_use = False
+                seen_tool_use = False
+                for block in content:
+                    if isinstance(block, dict):
+                        btype = block.get("type")
+                        if btype == "tool_use":
+                            seen_tool_use = True
+                        elif btype == "text" and seen_tool_use:
+                            has_text_after_tool_use = True
+                            break
+
+                if has_text_after_tool_use:
+                    import copy as _copy
+                    text_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                    non_text_blocks = [b for b in content if not (isinstance(b, dict) and b.get("type") == "text")]
+                    reordered_msg = _copy.deepcopy(current_msg)
+                    reordered_msg["content"] = text_blocks + non_text_blocks
+                    current_msg = reordered_msg
+                    verbose_logger.debug(
+                        "sanitize_anthropic_native_messages_for_tool_calling: "
+                        "Reordered assistant content blocks to put text before tool_use."
+                    )
+                    content = reordered_msg["content"]
+
+            # Collect tool_use ids from this assistant message (Anthropic native format)
+            tool_use_ids: List[str] = []
+            tool_use_names: Dict[str, str] = {}
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_id = block.get("id")
+                        if tool_id:
+                            tool_use_ids.append(tool_id)
+                            tool_use_names[tool_id] = block.get("name", "unknown_tool")
+
+            if tool_use_ids:
+                # Look ahead: find tool_result blocks in the next user message
+                found_tool_result_ids: set = set()
+                next_user_msg: Optional[Dict] = None
+                next_user_idx: Optional[int] = None
+
+                if i + 1 < len(messages):
+                    candidate = messages[i + 1]
+                    if candidate.get("role") == "user":
+                        next_user_msg = candidate
+                        next_user_idx = i + 1
+                        candidate_content = candidate.get("content", [])
+                        if isinstance(candidate_content, list):
+                            for block in candidate_content:
+                                if (
+                                    isinstance(block, dict)
+                                    and block.get("type") == "tool_result"
+                                ):
+                                    tid = block.get("tool_use_id")
+                                    if tid:
+                                        found_tool_result_ids.add(tid)
+
+                missing_ids = [
+                    tid for tid in tool_use_ids if tid not in found_tool_result_ids
+                ]
+
+                if missing_ids:
+                    verbose_logger.debug(
+                        f"sanitize_anthropic_native_messages_for_tool_calling: "
+                        f"Found {len(missing_ids)} orphaned tool_use blocks. Adding dummy tool_results."
+                    )
+                    sanitized.append(current_msg)
+
+                    dummy_tool_results = [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tid,
+                            "content": (
+                                f"[System: Tool execution skipped/interrupted. "
+                                f"No result provided for tool '{tool_use_names.get(tid, 'unknown_tool')}'.]"
+                            ),
+                        }
+                        for tid in missing_ids
+                    ]
+
+                    if next_user_msg is not None and next_user_idx is not None:
+                        # Prepend dummy results to existing user message content
+                        existing_content = next_user_msg.get("content", [])
+                        if isinstance(existing_content, list):
+                            merged_content = dummy_tool_results + existing_content
+                        else:
+                            # existing_content is a string; wrap it
+                            merged_content = dummy_tool_results + [
+                                {"type": "text", "text": existing_content}
+                            ]
+                        import copy
+
+                        patched_user_msg = copy.deepcopy(next_user_msg)
+                        patched_user_msg["content"] = merged_content
+                        sanitized.append(patched_user_msg)
+                        i = next_user_idx + 1
+                    else:
+                        # No following user message; insert one
+                        sanitized.append(
+                            {"role": "user", "content": dummy_tool_results}
+                        )
+                        i += 1
+                    continue
+
+        # Default: keep message as-is
+        sanitized.append(current_msg)
+        i += 1
+
+    return sanitized
 
 
 def anthropic_messages_pt(  # noqa: PLR0915
