@@ -1817,23 +1817,23 @@ def test_get_max_tokens_for_model_claude_3():
     """
     config = AnthropicConfig()
 
-    # Claude 3 Sonnet should return 4096
-    max_tokens = config.get_max_tokens_for_model("claude-3-sonnet-20240229")
+    # Claude 3 Opus should return 4096
+    max_tokens = config.get_max_tokens_for_model("claude-3-opus-20240229")
     assert max_tokens == 4096
 
 
 def test_get_max_tokens_for_model_claude_35():
     """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
-    Claude 3.5 models have max_output_tokens of 8192.
+    Test that get_max_tokens_for_model returns correct value for Claude 4.5 Sonnet models.
+    Claude 4.5 Sonnet has max_output_tokens of 64000.
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
     config = AnthropicConfig()
 
-    # Claude 3.5 Sonnet should return 8192
-    max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
-    assert max_tokens == 8192
+    # Claude 4.5 Sonnet should return 64000
+    max_tokens = config.get_max_tokens_for_model("claude-sonnet-4-5-20250929")
+    assert max_tokens == 64000
 
 
 def test_get_max_tokens_for_model_claude_37():
@@ -1880,12 +1880,12 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
     # Claude 3 model should get 4096
-    config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
+    config_claude3 = AnthropicConfig.get_config(model="claude-3-opus-20240229")
     assert config_claude3["max_tokens"] == 4096
 
-    # Claude 3.5 model should get 8192
-    config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
-    assert config_claude35["max_tokens"] == 8192
+    # Claude 4.5 Sonnet should get 64000
+    config_claude45 = AnthropicConfig.get_config(model="claude-sonnet-4-5-20250929")
+    assert config_claude45["max_tokens"] == 64000
 
     # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
     config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
