@@ -823,7 +823,7 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_id: str = (
                 str(tool_call_id_raw) if tool_call_id_raw is not None else ""
             )
-
+            
             prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
                 fixed_messages, i
             )
