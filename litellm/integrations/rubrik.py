@@ -440,14 +440,17 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             blocked_indices, explanation = await self._get_blocked_anthropic_tool_calls(accumulated_tools)
 
             # Emit allowed chunks with sequential content block reindexing
+            index_remap: Dict[int, int] = {}
             for buffered_chunk in buffered_chunks:
                 if not self._should_yield_anthropic_chunk(buffered_chunk, blocked_indices):
                     continue
 
                 if buffered_chunk.get("type") in _CONTENT_BLOCK_EVENTS:
+                    original_index = buffered_chunk.get("index", 0)
                     if buffered_chunk.get("type") == _EVENT_CONTENT_BLOCK_START:
                         current_content_index += 1
-                    buffered_chunk["index"] = current_content_index
+                        index_remap[original_index] = current_content_index
+                    buffered_chunk["index"] = index_remap.get(original_index, current_content_index)
                 yield self._encode_anthropic_chunk_to_sse(buffered_chunk)
 
             # Add explanation text block if any tools were blocked
@@ -856,12 +859,3 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         original_response["stop_reason"] = anthropic_response.get("stop_reason", "end_turn")
 
 
-# Module-level handler instance for use with litellm_settings.callbacks
-try:
-    rubrik_handler = RubrikLogger()
-except (ValueError, RuntimeError) as e:
-    verbose_logger.warning(
-        f"Rubrik handler not initialised ({e}). "
-        "Set RUBRIK_WEBHOOK_URL to enable the plugin."
-    )
-    rubrik_handler = None  # type: ignore[assignment]
