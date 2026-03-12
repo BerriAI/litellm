@@ -24,6 +24,10 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFAULT_ASSISTANT_CONTINUE_MESSAGE,
+)
+
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from .utils import AnthropicMessagesRequestUtils, mock_response
@@ -47,6 +51,58 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _sanitize_anthropic_messages(messages: List[Dict]) -> List[Dict]:
+    """
+    Sanitize messages for the /v1/messages endpoint.
+
+    The Anthropic API can return assistant messages with empty text blocks
+    alongside tool_use blocks (e.g., {"type": "text", "text": ""}). While
+    the API returns these, it rejects them when sent back in subsequent
+    requests with "text content blocks must be non-empty".
+
+    This is particularly common in multi-turn tool-use conversations (e.g.,
+    Claude Code / Agent SDK) where the model starts a text block but
+    immediately switches to a tool_use block.
+
+    The /v1/chat/completions path already handles this via
+    process_empty_text_blocks() in factory.py, but the /v1/messages path
+    was missing sanitization.
+    """
+    for i, message in enumerate(messages):
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        # Filter out empty text blocks, keeping non-empty text and other types.
+        # Use `(... or "")` to guard against None text values.
+        filtered = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not (block.get("text") or "").strip()
+            )
+        ]
+
+        # Only update if we actually removed something.
+        # Avoid mutating the caller's dicts — create a shallow copy.
+        if len(filtered) < len(content):
+            if len(filtered) > 0:
+                messages[i] = {**message, "content": filtered}
+            else:
+                # All blocks were empty text — replace with a continuation
+                # message rather than leaving empty blocks that trigger 400
+                # errors. Matches behavior of process_empty_text_blocks()
+                # in factory.py.
+                messages[i] = {
+                    **message,
+                    "content": [{"type": "text", "text": DEFAULT_ASSISTANT_CONTINUE_MESSAGE.get("content", "Please continue.")}],
+                }
+
+    return messages
 
 
 async def _execute_pre_request_hooks(
@@ -137,6 +193,10 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
+    # Sanitize empty text blocks from messages before processing.
+    # See: https://github.com/BerriAI/litellm/issues/22930
+    messages = _sanitize_anthropic_messages(messages)
+
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
         model=model,

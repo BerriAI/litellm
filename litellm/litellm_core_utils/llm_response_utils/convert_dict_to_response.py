@@ -46,6 +46,20 @@ from litellm.types.utils import (
 
 from .get_headers import get_response_headers
 
+def _normalize_images(
+    images: Optional[List[Dict[str, object]]],
+) -> Optional[List[Dict[str, object]]]:
+    """Normalize image items to include required 'index' field if missing."""
+    if images is None:
+        return None
+    normalized: List[Dict[str, object]] = []
+    for i, img in enumerate(images):
+        if isinstance(img, dict) and "index" not in img:
+            img = {**img, "index": i}
+        normalized.append(img)
+    return normalized
+
+
 _MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {

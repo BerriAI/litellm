@@ -3,6 +3,7 @@
 This section covers integrations with various tools and services that can be used with LiteLLM (either Proxy or SDK).
 
 ## AI Agent Frameworks
+- **[AgentField](../tutorials/agentfield.md)** - Open-source control plane for building and orchestrating autonomous AI agents
 - **[Letta](./letta.md)** - Build stateful LLM agents with persistent memory using LiteLLM Proxy
 
 ## Development Tools

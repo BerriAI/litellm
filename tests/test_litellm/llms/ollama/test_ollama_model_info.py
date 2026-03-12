@@ -219,6 +219,36 @@ class TestOllamaGetModelInfo:
         config.get_model_info("ollama_chat/llama3", api_base="http://localhost:11434")
         assert captured_json[1]["name"] == "llama3"
 
+    def test_get_model_info_strips_endpoint_paths_from_api_base(self, monkeypatch):
+        """When api_base contains endpoint paths like /api/generate, they should be stripped before appending /api/show."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+
+        # Test with /api/generate endpoint already appended
+        config.get_model_info("llama3", api_base="http://my-server:11434/api/generate")
+        assert captured_urls[0] == "http://my-server:11434/api/show"
+
+        # Test with /api/chat endpoint already appended
+        config.get_model_info("llama3", api_base="http://my-server:11434/api/chat")
+        assert captured_urls[1] == "http://my-server:11434/api/show"
+
+        # Test with /api/embed endpoint already appended
+        config.get_model_info("llama3", api_base="http://my-server:11434/api/embed")
+        assert captured_urls[2] == "http://my-server:11434/api/show"
+
+        # Test with clean base URL (should still work)
+        config.get_model_info("llama3", api_base="http://my-server:11434")
+        assert captured_urls[3] == "http://my-server:11434/api/show"
+
 
 class TestOllamaAuthHeaders:
     """Tests for Ollama authentication header handling in completion calls."""

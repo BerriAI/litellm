@@ -233,6 +233,7 @@ LLM_CONFIG_NAMES = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "OVHCloudResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -929,6 +930,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OpenRouterResponsesAPIConfig": (
         ".llms.openrouter.responses.transformation",
         "OpenRouterResponsesAPIConfig",
+    ),
+    "OVHCloudResponsesAPIConfig": (
+        ".llms.ovhcloud.responses.transformation",
+        "OVHCloudResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",

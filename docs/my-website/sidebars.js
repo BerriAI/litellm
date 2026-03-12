@@ -187,6 +187,7 @@ const sidebars = {
         slug: "/agent_sdks"
       },
       items: [
+        "tutorials/agentfield",
         "tutorials/openai_agents_sdk",
         "tutorials/claude_agent_sdk",
         "tutorials/copilotkit_sdk",
