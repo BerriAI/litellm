@@ -17,7 +17,7 @@ SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
 @pytest.fixture(autouse=True)
 def _enable_redaction():
-    """Enable secret redaction for all tests in this module."""
+    """Ensure secret redaction is on (the default) for all tests in this module."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", True):
         yield
 
@@ -133,7 +133,7 @@ def test_filter_redacts_extra_fields():
 
 
 def test_disable_redaction_passes_secrets_through():
-    """When _ENABLE_SECRET_REDACTION is False, secrets pass through."""
+    """When LITELLM_DISABLE_REDACT_SECRETS=true, secrets pass through."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
         record = logging.LogRecord(
             name="test",

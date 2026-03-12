@@ -17,7 +17,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_REDACT_SECRETS", "").lower() == "true"
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 _REDACTED = "REDACTED"
 
