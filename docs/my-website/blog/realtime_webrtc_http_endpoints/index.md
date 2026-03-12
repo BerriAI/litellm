@@ -22,31 +22,16 @@ hide_table_of_contents: false
 
 import WebRTCTester from '@site/src/components/WebRTCTester';
 
-Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management; audio streams directly to OpenAI/Azure.
-
-**Providers:** OpenAI · Azure OpenAI
-
-:::info **WebRTC vs WebSocket**
-- **WebSocket** (`/v1/realtime`) — server-to-server
-- **WebRTC** (`/v1/realtime/client_secrets` + `/v1/realtime/calls`) — browser/mobile, lower latency
-:::
+Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management.
 
 ## How it works
 
-LiteLLM issues tokens and relays SDP; audio never passes through the proxy.
+![WebRTC flow: Browser, LiteLLM Proxy, and OpenAI/Azure](../../img/webrtc_flow.png)
 
-```
-Browser                  LiteLLM Proxy              OpenAI/Azure
-  |                           |                          |
-  |-- POST /v1/realtime/      |                          |
-  |   client_secrets -------->|-- POST sessions -------->|
-  |                           |<-- { ek_... } -----------|
-  |<-- { encrypted_token } ---|                          |
-  |-- POST /v1/realtime/calls |-- POST calls ----------->|
-  |   [SDP + token] --------->|                          |
-  |<-- SDP answer ------------|<-- SDP answer -----------|
-  |===== audio P2P direct to OpenAI/Azure =============>|
-```
+**Flow of generating ephemeral token**
+
+![Ephemeral token flow: Browser requests token, LiteLLM gets real token from OpenAI, returns encrypted token](../../img/ephemeral_token.png)
+
 
 ## Proxy Setup
 
@@ -72,11 +57,11 @@ litellm --config /path/to/config.yaml
 
 ## Client Usage
 
-**1. Get token** — `POST /v1/realtime/client_secrets` with LiteLLM API key and `{ model }`.
+**1. Get token** - `POST /v1/realtime/client_secrets` with LiteLLM API key and `{ model }`.
 
-**2. WebRTC handshake** — Create `RTCPeerConnection`, add mic track, create data channel `oai-events`, send SDP offer to `POST /v1/realtime/calls` with `Authorization: Bearer <encrypted_token>` and `Content-Type: application/sdp`.
+**2. WebRTC handshake** - Create `RTCPeerConnection`, add mic track, create data channel `oai-events`, send SDP offer to `POST /v1/realtime/calls` with `Authorization: Bearer <encrypted_token>` and `Content-Type: application/sdp`.
 
-**3. Events** — Use the data channel for `session.update` and other events.
+**3. Events** - Use the data channel for `session.update` and other events.
 
 <details>
 <summary>Full code example</summary>

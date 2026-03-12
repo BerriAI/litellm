@@ -2383,7 +2383,7 @@ def test_mapped_pass_through_routes_with_server_root_path():
     )
 
     with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+        "litellm.proxy.utils.get_server_root_path"
     ) as mock_get_root:
         mock_get_root.return_value = "/litellm"
 

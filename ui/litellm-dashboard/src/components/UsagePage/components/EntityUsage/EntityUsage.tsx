@@ -465,7 +465,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
           <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-          {entityType === "team" && <Tab>Agent Activity</Tab>}
+          {entityType === "team" ? <Tab>Agent Activity</Tab> : <></>}
           <Tab>Key Activity</Tab>
           <Tab>Endpoint Activity</Tab>
         </TabList>
@@ -768,11 +768,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           <TabPanel>
             <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
-          {entityType === "team" && (
+          {entityType === "team" ? (
             <TabPanel>
               <ActivityMetrics modelMetrics={agentMetrics} />
             </TabPanel>
-          )}
+          ) : <></>}
           <TabPanel>
             <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
