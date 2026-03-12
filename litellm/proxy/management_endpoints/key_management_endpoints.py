@@ -1229,6 +1229,60 @@ async def generate_key_fn(
                 prisma_client=prisma_client,
             )
 
+            # Validate key models against effective team models for the target user
+            from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES_ENABLED
+            from litellm.secret_managers.main import str_to_bool
+
+            if (
+                str_to_bool(LITELLM_TEAM_MODEL_OVERRIDES_ENABLED)
+                and data.models
+                and data.team_id
+            ):
+                from litellm.proxy.auth.auth_checks import (
+                    get_effective_team_models,
+                )
+
+                # Use target user's membership, not the requester's
+                _target_user_id = data.user_id or user_api_key_dict.user_id
+                _target_member_models = None
+                if _target_user_id:
+                    _target_membership = await prisma_client.db.litellm_teammembership.find_unique(
+                        where={
+                            "user_id_team_id": {
+                                "user_id": _target_user_id,
+                                "team_id": data.team_id,
+                            }
+                        }
+                    )
+                    _target_member_models = (
+                        _target_membership.models
+                        if _target_membership and _target_membership.models
+                        else []
+                    )
+
+                _effective = get_effective_team_models(
+                    team_object=team_table,
+                    team_member_models=_target_member_models,
+                    team_metadata=(
+                        team_table.metadata
+                        if isinstance(team_table.metadata, dict)
+                        else {}
+                    ),
+                )
+                if _effective:  # only enforce when effective models is non-empty
+                    from litellm.proxy._types import SpecialModelNames
+
+                    _special_values = {m.value for m in SpecialModelNames}
+                    disallowed = (set(data.models) - _special_values) - set(_effective)
+                    if disallowed:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": f"Key models {sorted(disallowed)} not in target user's effective team models. "
+                                f"Effective models: {_effective}"
+                            },
+                        )
+
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
             await _check_project_key_limits(

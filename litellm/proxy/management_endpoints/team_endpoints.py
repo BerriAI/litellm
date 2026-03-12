@@ -1449,6 +1449,36 @@ async def update_team(   # noqa: PLR0915
                 existing_team_row=existing_team_row,
             )
 
+        # Handle team_default_models → store in metadata
+        if data.team_default_models is not None:
+            # Validate: team_default_models must be a subset of team.models
+            _existing_models = (
+                data.models
+                if data.models is not None
+                else (existing_team_row.models or [])
+            )
+            if _existing_models:  # only validate if team has model restrictions
+                disallowed = set(data.team_default_models) - set(_existing_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"team_default_models contains models not in team.models: {sorted(disallowed)}"
+                        },
+                    )
+            # Merge into metadata
+            if "metadata" not in updated_kv or updated_kv["metadata"] is None:
+                existing_metadata = (
+                    existing_team_row.metadata
+                    if isinstance(existing_team_row.metadata, dict)
+                    else {}
+                )
+                updated_kv["metadata"] = existing_metadata
+            updated_kv["metadata"]["team_default_models"] = data.team_default_models
+
+        # Pop team_default_models from updated_kv so it doesn't go to prisma directly
+        updated_kv.pop("team_default_models", None)
+
         # update team metadata fields
         _update_metadata_fields(updated_kv=updated_kv)
 
@@ -1677,6 +1707,20 @@ async def _process_team_members(
     litellm_proxy_admin_name: str,
 ) -> Tuple[List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
     """Process and add new team members."""
+    # Validate member models are a subset of team.models
+    if data.models is not None:
+        _team_allowed = set(complete_team_data.models or [])
+        if _team_allowed:  # only enforce when team has explicit restrictions
+            _disallowed = set(data.models) - _team_allowed
+            if _disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Member models {sorted(_disallowed)} are not in team.models. "
+                        f"Allowed team models: {sorted(_team_allowed)}"
+                    },
+                )
+
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
 
@@ -1696,6 +1740,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                models=data.models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1720,6 +1765,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    models=data.models,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2339,18 +2385,55 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
-    ### upsert new budget
+    ### upsert new budget (only when there are budget-related params to process)
+    _has_budget_params = (
+        data.max_budget_in_team is not None
+        or data.tpm_limit is not None
+        or data.rpm_limit is not None
+    )
     async with prisma_client.db.tx() as tx:
-        await _upsert_budget_and_membership(
-            tx=tx,
-            team_id=data.team_id,
-            user_id=received_user_id,
-            max_budget=data.max_budget_in_team,
-            existing_budget_id=identified_budget_id,
-            user_api_key_dict=user_api_key_dict,
-            tpm_limit=data.tpm_limit,
-            rpm_limit=data.rpm_limit,
-        )
+        if _has_budget_params:
+            await _upsert_budget_and_membership(
+                tx=tx,
+                team_id=data.team_id,
+                user_id=received_user_id,
+                max_budget=data.max_budget_in_team,
+                existing_budget_id=identified_budget_id,
+                user_api_key_dict=user_api_key_dict,
+                tpm_limit=data.tpm_limit,
+                rpm_limit=data.rpm_limit,
+            )
+
+        ### update team member models (inside transaction for atomicity)
+        if data.models is not None:
+            # Validate member models are a subset of team.models
+            _team_allowed = set(existing_team_row.models or [])
+            if _team_allowed:  # only enforce when team has explicit restrictions
+                _disallowed = set(data.models) - _team_allowed
+                if _disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Member models {sorted(_disallowed)} are not in team.models. "
+                            f"Allowed team models: {sorted(_team_allowed)}"
+                        },
+                    )
+            await tx.litellm_teammembership.upsert(
+                where={
+                    "user_id_team_id": {
+                        "user_id": received_user_id,
+                        "team_id": data.team_id,
+                    }
+                },
+                data={
+                    "create": {
+                        "user_id": received_user_id,
+                        "team_id": data.team_id,
+                        "models": data.models,
+                    },
+                    "update": {"models": data.models},
+                },
+            )
 
     ### update team member role
     if data.role is not None:
@@ -2382,6 +2465,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        models=data.models,
     )
 
 

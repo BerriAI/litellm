@@ -393,14 +393,24 @@ async def common_checks(  # noqa: PLR0915
 
     # 2. If team can call model
     if _model and team_object:
+        _effective_models = get_effective_team_models(
+            team_object=team_object,
+            team_member_models=(
+                valid_token.team_member_models if valid_token else None
+            ),
+            team_metadata=(
+                valid_token.team_metadata if valid_token else None
+            ),
+        )
         if not await can_team_access_model(
             model=_model,
             team_object=team_object,
             llm_router=llm_router,
             team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+            effective_models=_effective_models,
         ):
             raise ProxyException(
-                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {_effective_models}",
                 type=ProxyErrorTypes.team_model_access_denied,
                 param="model",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -2662,11 +2672,57 @@ def can_org_access_model(
     )
 
 
+def get_effective_team_models(
+    team_object: Optional[LiteLLM_TeamTable] = None,
+    team_models: Optional[List[str]] = None,
+    team_member_models: Optional[List[str]] = None,
+    team_metadata: Optional[Dict] = None,
+) -> List[str]:
+    """
+    Compute the effective model set for a team member.
+
+    When LITELLM_TEAM_MODEL_OVERRIDES_ENABLED is enabled and team_default_models is
+    configured in team metadata, returns the union of team_default_models and
+    the member's per-user model overrides.  Otherwise returns the full team
+    model list (unchanged behavior).
+    """
+    from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES_ENABLED
+    from litellm.secret_managers.main import str_to_bool
+
+    _team_models = team_models if team_models is not None else (team_object.models if team_object else [])
+
+    if not str_to_bool(LITELLM_TEAM_MODEL_OVERRIDES_ENABLED):
+        return _team_models
+
+    metadata = (
+        team_metadata
+        if isinstance(team_metadata, dict)
+        else (
+            team_object.metadata
+            if team_object and isinstance(team_object.metadata, dict)
+            else {}
+        )
+    )
+    team_default = metadata.get("team_default_models", None)
+    if team_default is None:
+        return _team_models
+    if not isinstance(team_default, list):
+        return _team_models
+
+    member_models = team_member_models or []
+    effective = list(dict.fromkeys(team_default + member_models))
+    # An empty effective set would be interpreted as "no restrictions" by
+    # _check_model_access_helper, granting all-model access.  Fall back to
+    # the full team model list to maintain team-level restrictions.
+    return effective if effective else _team_models
+
+
 async def can_team_access_model(
     model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    effective_models: Optional[List[str]] = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -2674,11 +2730,16 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    _models = (
+        effective_models
+        if effective_models is not None
+        else (team_object.models if team_object else [])
+    )
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=_models,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             object_type="team",
@@ -2692,6 +2753,13 @@ async def can_team_access_model(
             models_from_groups = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
             )
+            # When per-user effective_models narrows the allowed set,
+            # only honour access-group models that are also in that set.
+            if effective_models is not None and models_from_groups:
+                _effective_set = set(effective_models)
+                models_from_groups = [
+                    m for m in models_from_groups if m in _effective_set
+                ]
             if models_from_groups:
                 return _can_object_call_model(
                     model=model,

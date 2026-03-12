@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -146,6 +146,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -220,13 +221,28 @@ async def add_new_member(
     else:
         _budget_id = default_team_budget_id
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
+    if (_budget_id is not None or models is not None) and returned_user is not None and returned_user.user_id is not None:
+        _create_data: dict = {
+            "team_id": team_id,
+            "user_id": returned_user.user_id,
+            "budget_id": _budget_id,
+            "models": models or [],
+        }
         _returned_team_membership = (
-            await prisma_client.db.litellm_teammembership.create(
+            await prisma_client.db.litellm_teammembership.upsert(
+                where={
+                    "user_id_team_id": {
+                        "user_id": returned_user.user_id,
+                        "team_id": team_id,
+                    }
+                },
                 data={
-                    "team_id": team_id,
-                    "user_id": returned_user.user_id,
-                    "budget_id": _budget_id,
+                    "create": _create_data,
+                    "update": {
+                        k: v
+                        for k, v in _create_data.items()
+                        if k not in ("team_id", "user_id") and v is not None
+                    },
                 },
                 include={"litellm_budget_table": True},
             )
