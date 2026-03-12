@@ -690,7 +690,13 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif (text_tokens == 0 and not has_alternative_billing):
+    elif text_tokens == 0 and not has_alternative_billing:
+        # text_tokens not set by provider; no alternative billing dimensions active.
+        # NOTE: This branch was formerly `text_tokens == 0 and image_count == 0`,
+        # which unintentionally filled text_tokens even for character- or
+        # video-billed models. The broader `not has_alternative_billing` guard
+        # correctly prevents that over-billing, but it is a silent behaviour
+        # change for providers that previously relied on the fill.
         # text_tokens not set by provider and no alternative billing dimensions:
         # calculate text_tokens as the remainder of prompt_tokens
         text_tokens = max(
