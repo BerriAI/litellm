@@ -1,4 +1,13 @@
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import aiohttp
 import httpx  # type: ignore
@@ -14,7 +23,9 @@ from litellm.llms.base_llm.image_variations.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
+    HTTPClientAdapterAsync,
     HTTPHandler,
+    HTTPResponse,
     _get_httpx_client,
 )
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
@@ -32,6 +43,127 @@ else:
 DEFAULT_TIMEOUT = 600
 
 
+class AiohttpResponseWrapper(HTTPResponse):
+    def __init__(self, response: aiohttp.ClientResponse):
+        self._response = response
+        self._body: Optional[bytes] = None
+
+    @property
+    def status_code(self) -> int:
+        return self._response.status
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        return self._response.headers  # type: ignore
+
+    @property
+    def text(self) -> str:
+        if self._body is not None:
+            encoding = self._response.get_encoding()
+            try:
+                return self._body.decode(encoding or "utf-8", errors="replace")
+            except Exception:
+                return self._body.decode("utf-8", errors="replace")
+        return ""
+
+    @property
+    def ok(self) -> bool:
+        return self._response.ok
+
+    @property
+    def content(self) -> bytes:
+        if self._body is not None:
+            return self._body
+        return b""
+
+    def raise_for_status(self) -> None:
+        self._response.raise_for_status()
+
+    async def aread(self) -> bytes:
+        self._body = await self._response.read()
+        return self._body
+
+    def read(self) -> bytes:
+        if self._body is not None:
+            return self._body
+        return b""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+
+class AiohttpAdapter(HTTPClientAdapterAsync):
+    def __init__(self, session: "aiohttp.ClientSession"):
+        self.session = session
+
+    async def get(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        response = AiohttpResponseWrapper(await self.session.get(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
+
+    async def post(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        response = AiohttpResponseWrapper(await self.session.post(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
+
+    async def put(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        response = AiohttpResponseWrapper(await self.session.put(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
+
+    async def patch(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        response = AiohttpResponseWrapper(await self.session.patch(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
+
+    async def delete(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        response = AiohttpResponseWrapper(await self.session.delete(url, **kwargs))
+        if not stream:
+            await response.aread()
+        return response
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        # aiohttp doesn't have a direct equivalent of build_request like httpx
+        # We might need to store the parameters and send them later,
+        # or just return a dummy object if we can't easily implement it.
+        # For now, let's return a dictionary that we can use in send().
+        return {"method": method, "url": url, **kwargs}
+
+    async def send(self, request: Any, **kwargs) -> HTTPResponse:
+        if isinstance(request, dict):
+            request_copy = request.copy()
+            method = request_copy.pop("method")
+            url = request_copy.pop("url")
+            # Merge kwargs
+            request_copy.update(kwargs)
+            stream = request_copy.pop("stream", False)
+            response = AiohttpResponseWrapper(
+                await self.session.request(method, url, **request_copy)
+            )
+            if not stream:
+                await response.aread()
+            return response
+        else:
+            raise ValueError(
+                f"Unsupported request type for AiohttpAdapter: {type(request)}"
+            )
+
+    async def close(self) -> None:
+        await self.session.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.session, name)
+
+
 class BaseLLMAIOHTTPHandler:
     def __init__(
         self,
@@ -43,6 +175,9 @@ class BaseLLMAIOHTTPHandler:
         self._owns_session = (
             client_session is None
         )  # Track if we own the session for cleanup
+        self._adapter: Optional[HTTPClientAdapterAsync] = None
+        if client_session is not None:
+            self._adapter = AiohttpAdapter(client_session)
 
         self.transport = transport
         self._owns_transport = (
@@ -109,8 +244,32 @@ class BaseLLMAIOHTTPHandler:
         else:
             # Create client session using transport/connector if available
             self.client_session = self._create_client_session_with_transport()
+            self._adapter = AiohttpAdapter(self.client_session)
             self._owns_session = True  # We created this session, so we own it
             return self.client_session
+
+    def _get_adapter(
+        self,
+        async_client_session: Optional[Union[ClientSession, HTTPClientAdapterAsync]],
+    ) -> HTTPClientAdapterAsync:
+        if isinstance(async_client_session, HTTPClientAdapterAsync):
+            return async_client_session
+
+        if async_client_session is not None:
+            # Check if it matches our cached session
+            if async_client_session is self.client_session and self._adapter:
+                return self._adapter
+            return AiohttpAdapter(async_client_session)
+
+        if self._adapter:
+            return self._adapter
+
+        # Trigger session creation if none exists
+        self._get_async_client_session()
+        if self._adapter:
+            return self._adapter
+
+        raise ValueError("Could not create adapter")
 
     async def close(self):
         """Close the aiohttp client session and transport if we own them."""
@@ -171,7 +330,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def _make_common_async_call(
         self,
-        async_client_session: Optional[ClientSession],
+        async_client_session: Optional[Union[ClientSession, HTTPClientAdapterAsync]],
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
@@ -180,30 +339,26 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         form_data: Optional[FormData] = None,
         stream: bool = False,
-    ) -> aiohttp.ClientResponse:
+    ) -> HTTPResponse:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
 
-        response: Optional[aiohttp.ClientResponse] = None
-        async_client_session = self._get_async_client_session(
-            dynamic_client_session=async_client_session
-        )
+        response: Optional[HTTPResponse] = None
+        adapter = self._get_adapter(async_client_session=async_client_session)
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-                response = await async_client_session.post(
+                response = await adapter.post(
                     url=api_base,
                     headers=headers,
                     json=data,
                     data=form_data,
+                    stream=stream,
                 )
                 if not response.ok:
                     response.raise_for_status()
-            except aiohttp.ClientResponseError as e:
-                setattr(e, "text", e.message)
-                raise self._handle_error(e=e, provider_config=provider_config)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
             break
@@ -292,8 +447,8 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         encoding: Any,
         api_key: Optional[str] = None,
-        client: Optional[ClientSession] = None,
-    ):
+        client: Optional[Union[ClientSession, HTTPClientAdapterAsync]] = None,
+    ) -> Any:
         _response = await self._make_common_async_call(
             async_client_session=client,
             provider_config=provider_config,
@@ -335,7 +490,9 @@ class BaseLLMAIOHTTPHandler:
         fake_stream: bool = False,
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, ClientSession]] = None,
+        client: Optional[
+            Union[HTTPHandler, AsyncHTTPHandler, ClientSession, HTTPClientAdapterAsync]
+        ] = None,
     ):
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -401,7 +558,11 @@ class BaseLLMAIOHTTPHandler:
                 encoding=encoding,
                 client=(
                     client
-                    if client is not None and isinstance(client, ClientSession)
+                    if client is not None
+                    and (
+                        isinstance(client, ClientSession)
+                        or isinstance(client, HTTPClientAdapterAsync)
+                    )
                     else None
                 ),
             )
@@ -514,7 +675,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def async_image_variations(
         self,
-        client: Optional[ClientSession],
+        client: Optional[Union[ClientSession, HTTPClientAdapterAsync]],
         provider_config: BaseImageVariationConfig,
         api_base: str,
         headers: dict,
@@ -702,11 +863,25 @@ class BaseLLMAIOHTTPHandler:
             api_key=api_key,
         )
 
-    def _handle_error(self, e: Exception, provider_config: BaseConfig):
-        status_code = getattr(e, "status_code", 500)
+    def _handle_error(
+        self,
+        e: Exception,
+        provider_config: BaseConfig,
+        response: Optional[HTTPResponse] = None,
+    ):
+        status_code = getattr(e, "status_code", None)
+        if status_code is None:
+            status_code = getattr(e, "status", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
         error_response = getattr(e, "response", None)
+
+        if response is not None:
+            if error_headers is None:
+                error_headers = response.headers
+            if not error_text or error_text == str(e):
+                error_text = response.text
+
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):

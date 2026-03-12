@@ -11,8 +11,10 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Protocol,
     Tuple,
     Union,
+    runtime_checkable,
 )
 
 import certifi
@@ -51,6 +53,214 @@ try:
 except Exception:
     version = "0.0.0"
 
+
+@runtime_checkable
+class HTTPResponse(Protocol):
+    @property
+    def status_code(self) -> int:
+        ...
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        ...
+
+    @property
+    def text(self) -> str:
+        ...
+
+    @property
+    def ok(self) -> bool:
+        ...
+
+    @property
+    def content(self) -> bytes:
+        ...
+
+    def raise_for_status(self) -> None:
+        ...
+
+    async def aread(self) -> bytes:
+        ...
+
+    def read(self) -> bytes:
+        ...
+
+
+@runtime_checkable
+class HTTPClientAdapterSync(Protocol):
+    def get(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def post(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def put(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def patch(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def delete(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    def send(self, request: Any, **kwargs) -> HTTPResponse:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@runtime_checkable
+class HTTPClientAdapterAsync(Protocol):
+    async def get(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def post(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def put(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def patch(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    async def delete(self, url: str, **kwargs) -> HTTPResponse:
+        ...
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        ...
+
+    async def send(self, request: Any, **kwargs) -> HTTPResponse:
+        ...
+
+    async def close(self) -> None:
+        ...
+
+
+class HTTPXResponseWrapper(HTTPResponse):
+    def __init__(self, response: httpx.Response):
+        self._response = response
+
+    @property
+    def status_code(self) -> int:
+        return self._response.status_code
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        return self._response.headers
+
+    @property
+    def text(self) -> str:
+        return self._response.text
+
+    @property
+    def ok(self) -> bool:
+        return self._response.is_success
+
+    @property
+    def content(self) -> bytes:
+        return self._response.content
+
+    def raise_for_status(self) -> None:
+        self._response.raise_for_status()
+
+    async def aread(self) -> bytes:
+        return await self._response.aread()
+
+    def read(self) -> bytes:
+        return self._response.read()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+
+class HTTPXAdapter(HTTPClientAdapterSync):
+    def __init__(self, client: httpx.Client):
+        self.client = client
+
+    def get(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("GET", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
+
+    def post(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("POST", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
+
+    def put(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PUT", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
+
+    def patch(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PATCH", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
+
+    def delete(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("DELETE", url, **kwargs)
+        return HTTPXResponseWrapper(self.client.send(request, stream=stream))
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    def send(self, request: Any, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(self.client.send(request, **kwargs))
+
+    def close(self) -> None:
+        self.client.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
+
+
+class HTTPXAsyncAdapter(HTTPClientAdapterAsync):
+    def __init__(self, client: httpx.AsyncClient):
+        self.client = client
+
+    async def get(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("GET", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
+
+    async def post(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("POST", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
+
+    async def put(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PUT", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
+
+    async def patch(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("PATCH", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
+
+    async def delete(self, url: str, **kwargs) -> HTTPResponse:
+        stream = kwargs.pop("stream", False)
+        request = self.client.build_request("DELETE", url, **kwargs)
+        return HTTPXResponseWrapper(await self.client.send(request, stream=stream))
+
+    def build_request(self, method: str, url: str, **kwargs) -> Any:
+        return self.client.build_request(method, url, **kwargs)
+
+    async def send(self, request: Any, **kwargs) -> HTTPResponse:
+        return HTTPXResponseWrapper(await self.client.send(request, **kwargs))
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.client, name)
+
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -63,6 +273,7 @@ def get_default_headers() -> dict:
         return {"User-Agent": user_agent}
 
     return {"User-Agent": f"litellm/{version}"}
+
 
 # Initialize headers (User-Agent)
 headers = get_default_headers()
@@ -349,15 +560,26 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        client: Optional[Union[httpx.AsyncClient, HTTPClientAdapterAsync]] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
-        )
+        if client is not None:
+            if litellm.use_http_client_adapters and isinstance(
+                client, httpx.AsyncClient
+            ):
+                self.client: Union[httpx.AsyncClient, HTTPClientAdapterAsync] = (
+                    HTTPXAsyncAdapter(client)
+                )
+            else:
+                self.client = client
+        else:
+            self.client = self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
         self.client_alias = client_alias
 
     def create_client(
@@ -366,7 +588,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> httpx.AsyncClient:
+    ) -> Union[httpx.AsyncClient, HTTPClientAdapterAsync]:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
 
@@ -387,7 +609,7 @@ class AsyncHTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
-        return httpx.AsyncClient(
+        client = httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
@@ -397,16 +619,32 @@ class AsyncHTTPHandler:
             follow_redirects=True,
         )
 
+        if litellm.use_http_client_adapters:
+            return HTTPXAsyncAdapter(client)
+        return client
+
     async def close(self):
         # Close the client when you're done with it
-        await self.client.aclose()
+        if hasattr(self.client, "aclose"):
+            await self.client.aclose()
+        elif hasattr(self.client, "close"):
+            await self.client.close()
+
+    async def _safe_close_client(self, client: Any):
+        """Helper to safely close either an adapter or a raw httpx client."""
+        if client is None:
+            return
+        if hasattr(client, "aclose"):
+            await client.aclose()
+        elif hasattr(client, "close"):
+            await client.close()
 
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         # close the client when exiting
-        await self.client.aclose()
+        await self.close()
 
     async def get(
         self,
@@ -482,7 +720,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 3)
@@ -554,7 +792,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -620,7 +858,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await self._safe_close_client(new_client)
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -686,7 +924,7 @@ class AsyncHTTPHandler:
                     stream=stream,
                 )
             finally:
-                await new_client.aclose()
+                await self._safe_close_client(new_client)
         except httpx.HTTPStatusError as e:
             setattr(e, "status_code", e.response.status_code)
             if stream is True:
@@ -700,7 +938,7 @@ class AsyncHTTPHandler:
     async def single_connection_post_request(
         self,
         url: str,
-        client: httpx.AsyncClient,
+        client: HTTPClientAdapterAsync,
         data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
@@ -915,7 +1153,7 @@ class HTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
-        client: Optional[httpx.Client] = None,
+        client: Optional[Union[httpx.Client, HTTPClientAdapterSync]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
         disable_default_headers: Optional[
             bool
@@ -938,7 +1176,7 @@ class HTTPHandler:
             transport = self._create_sync_transport()
 
             # Create a client with a connection pool
-            self.client = httpx.Client(
+            httpx_client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
                 verify=ssl_config,
@@ -946,8 +1184,18 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
+
+            if litellm.use_http_client_adapters:
+                self.client: Union[httpx.Client, HTTPClientAdapterSync] = HTTPXAdapter(
+                    httpx_client
+                )
+            else:
+                self.client = httpx_client
         else:
-            self.client = client
+            if litellm.use_http_client_adapters and isinstance(client, httpx.Client):
+                self.client = HTTPXAdapter(client)
+            else:
+                self.client = client
 
     def close(self):
         # Close the client when you're done with it
@@ -1235,7 +1483,9 @@ def get_async_httpx_client(
 
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
@@ -1284,7 +1534,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))

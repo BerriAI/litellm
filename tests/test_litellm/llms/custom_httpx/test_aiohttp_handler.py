@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import aiohttp
 import pytest
@@ -428,3 +428,77 @@ class TestBaseLLMAIOHTTPHandler:
         # Should use transport, not connector
         mock_transport._get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport
+
+    @pytest.mark.asyncio
+    async def test_aiohttp_handler_wraps_raw_session(self):
+        """
+        Test that BaseLLMAIOHTTPHandler wraps a raw session in an adapter for calls.
+        """
+        from litellm.llms.base_llm.chat.transformation import BaseConfig
+
+        mock_session = MagicMock(spec=aiohttp.ClientSession)
+        mock_response = AsyncMock()
+        mock_response.ok = True
+        mock_session.post = AsyncMock(return_value=mock_response)
+
+        handler = BaseLLMAIOHTTPHandler(client_session=mock_session)
+        provider_config = MagicMock(spec=BaseConfig)
+        provider_config.max_retry_on_unprocessable_entity_error = 1
+
+        # Act
+        await handler._make_common_async_call(
+            async_client_session=mock_session,
+            provider_config=provider_config,
+            api_base="https://example.com",
+            headers={},
+            data={},
+            timeout=5.0,
+            litellm_params={},
+        )
+
+        # Assert - session.post should have been called via AiohttpAdapter.post()
+        mock_session.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_aiohttp_handler_with_custom_adapter(self):
+        """
+        Test that BaseLLMAIOHTTPHandler works with a custom adapter.
+        """
+        from litellm.llms.custom_httpx.http_handler import HTTPClientAdapterAsync
+        from litellm.llms.base_llm.chat.transformation import BaseConfig
+
+        mock_adapter = AsyncMock(spec=HTTPClientAdapterAsync)
+        mock_response = AsyncMock()
+        mock_response.ok = True
+        mock_adapter.post.return_value = mock_response
+
+        handler = BaseLLMAIOHTTPHandler()
+        provider_config = MagicMock(spec=BaseConfig)
+        provider_config.max_retry_on_unprocessable_entity_error = 1
+
+        # Act
+        await handler._make_common_async_call(
+            async_client_session=mock_adapter,
+            provider_config=provider_config,
+            api_base="https://example.com",
+            headers={},
+            data={},
+            timeout=5.0,
+            litellm_params={},
+        )
+
+        # Assert
+        mock_adapter.post.assert_called_once()
+
+    def test_aiohttp_handler_adapter_caching(self):
+        """
+        Test that BaseLLMAIOHTTPHandler caches the adapter for the same session.
+        """
+        mock_session = MagicMock(spec=aiohttp.ClientSession)
+        handler = BaseLLMAIOHTTPHandler(client_session=mock_session)
+
+        adapter1 = handler._get_adapter(async_client_session=mock_session)
+        adapter2 = handler._get_adapter(async_client_session=mock_session)
+
+        assert adapter1 is adapter2
+        assert adapter1 is handler._adapter
