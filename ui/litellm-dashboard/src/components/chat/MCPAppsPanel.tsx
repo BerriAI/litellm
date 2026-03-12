@@ -1,11 +1,69 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
-import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined } from "@ant-design/icons";
-import { fetchMCPServers, listMCPTools } from "../networking";
+import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
 import { message } from "antd";
+import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+
+// ── OAuth2 connect button ─────────────────────────────────────────────────────
+// Wraps useUserMcpOAuthFlow so each server card can hold its own hook instance.
+interface OAuth2ConnectButtonProps {
+  server: MCPServer;
+  accessToken: string;
+  onConnect: (serverId: string) => void;
+  /** "badge" = small inline chip (grid card), "button" = full Ant Button (detail view) */
+  variant?: "badge" | "button";
+}
+
+const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
+  server,
+  accessToken,
+  onConnect,
+  variant = "badge",
+}) => {
+  const name = server.server_name ?? server.alias ?? server.server_id;
+  const { startOAuthFlow, status } = useUserMcpOAuthFlow({
+    accessToken,
+    serverId: server.server_id,
+    serverAlias: name,
+    onSuccess: useCallback(() => onConnect(server.server_id), [onConnect, server.server_id]),
+  });
+
+  const loading = status === "authorizing" || status === "exchanging";
+
+  if (variant === "button") {
+    return (
+      <Button
+        type="primary"
+        loading={loading}
+        onClick={startOAuthFlow}
+        style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+      >
+        {loading ? "Connecting…" : "Connect"}
+      </Button>
+    );
+  }
+
+  return (
+    <span
+      onClick={(e) => { e.stopPropagation(); if (!loading) startOAuthFlow(); }}
+      style={{
+        fontSize: 11, fontWeight: 600,
+        color: loading ? "#9ca3af" : "#fff",
+        background: loading ? "#e5e7eb" : "#1677ff",
+        borderRadius: 6, padding: "2px 8px",
+        cursor: loading ? "default" : "pointer",
+        flexShrink: 0, whiteSpace: "nowrap",
+      }}
+    >
+      {loading ? "Connecting…" : "Connect"}
+    </span>
+  );
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface Props {
   accessToken: string;
@@ -38,6 +96,18 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   // tool counts per server name, preloaded in background
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
+  // OAuth2 connect state — tracks which server_ids have a stored user credential
+  const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
+
+  // Refs keep the latest values for the auto-enable effect so it always reads
+  // the current servers/selectedServers/onChange without needing them as
+  // dependencies (which would cause the effect to fire on every render).
+  const serversRef = useRef<MCPServer[]>([]);
+  useEffect(() => { serversRef.current = servers; }, [servers]);
+  const selectedServersRef = useRef<string[]>(selectedServers);
+  useEffect(() => { selectedServersRef.current = selectedServers; }, [selectedServers]);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
@@ -72,6 +142,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               if (remaining === 0) setLoadingCounts(false);
             });
         });
+
+        // 3. Check OAuth credential status for OAuth2 servers in parallel
+        const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
+        oauthServers.forEach((s) => {
+          getMCPOAuthUserCredentialStatus(accessToken, s.server_id)
+            .then((status) => {
+              if (cancelled) return;
+              if (status.has_credential && !status.is_expired) {
+                setOauthConnected((prev) => new Set(prev).add(s.server_id));
+              }
+            })
+            .catch(() => {});
+        });
       })
       .catch(() => {
         if (!cancelled) {
@@ -82,9 +165,31 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     return () => { cancelled = true; };
   }, [accessToken]);
 
+  // Auto-enable oauth2 servers for the current chat session when a valid
+  // credential is detected (either on mount or after a fresh OAuth sign-in).
+  // Uses refs for servers/selectedServers/onChange to avoid stale closures
+  // without adding them as dependencies (which would re-fire on every render).
+  useEffect(() => {
+    if (oauthConnected.size === 0) return;
+    const namesToAdd = serversRef.current
+      .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
+      .map(nameOf);
+    if (namesToAdd.length > 0) {
+      onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
+    }
+  }, [oauthConnected]);
+
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
+      // Also clear from oauthConnected so the auto-enable effect doesn't re-add it.
+      if (serverId) {
+        setOauthConnected((prev) => {
+          const next = new Set(prev);
+          next.delete(serverId);
+          return next;
+        });
+      }
       return;
     }
     setTogglingOn((prev) => new Set(prev).add(serverName));
@@ -96,7 +201,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         message.warning(`Could not load tools for ${serverName}`);
         return;
       }
-      onChange([...selectedServers, serverName]);
+      // Use the ref so we read the most up-to-date list; guard against duplicates
+      // that the oauthConnected effect may have already added while we awaited.
+      if (!selectedServersRef.current.includes(serverName)) {
+        onChange([...selectedServersRef.current, serverName]);
+      }
     } catch {
       message.warning(`Could not load tools for ${serverName}`);
     } finally {
@@ -170,9 +279,25 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
         {/* Avatar + name + connect */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
+          {detailServer.mcp_info?.logo_url ? (
+            <img
+              src={detailServer.mcp_info.logo_url}
+              alt={`${name} logo`}
+              style={{
+                width: 64, height: 64, borderRadius: 16,
+                objectFit: "contain", flexShrink: 0,
+                background: "#f9fafb",
+              }}
+              onError={(e) => {
+                const el = e.target as HTMLImageElement;
+                el.style.display = "none";
+                if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
+              }}
+            />
+          ) : null}
           <div style={{
             width: 64, height: 64, borderRadius: 16,
-            background: color, display: "flex",
+            background: color, display: detailServer.mcp_info?.logo_url ? "none" : "flex",
             alignItems: "center", justifyContent: "center",
             color: "#fff", fontWeight: 700, fontSize: 28, flexShrink: 0,
           }}>
@@ -182,14 +307,45 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: "#111827" }}>{name}</h2>
             <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{detailServer.description ?? "MCP server"}</p>
           </div>
-          <Button
-            type={isConnected ? "default" : "primary"}
-            loading={isTogglingOn}
-            onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-            style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
-          >
-            {isConnected ? "Disconnect" : "Connect"}
-          </Button>
+          {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
+            oauthConnected.has(detailServer.server_id) ? (
+              <Button
+                type="default"
+                danger
+                onClick={async () => {
+                  try {
+                    await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
+                  } catch (_) {
+                    // Ignore — credential may already be gone; update UI regardless.
+                  }
+                  setOauthConnected((prev) => { const n = new Set(prev); n.delete(detailServer.server_id); return n; });
+                  onChange(selectedServers.filter((s) => s !== name));
+                }}
+                style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <OAuth2ConnectButton
+                server={detailServer}
+                accessToken={accessToken}
+                onConnect={(id) => {
+                  setOauthConnected((prev) => new Set(prev).add(id));
+                  handleToggle(name, true, detailServer.server_id);
+                }}
+                variant="button"
+              />
+            )
+          ) : (
+            <Button
+              type={isConnected ? "default" : "primary"}
+              loading={isTogglingOn}
+              onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
+              style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+            >
+              {isConnected ? "Disconnect" : "Connect"}
+            </Button>
+          )}
         </div>
 
         {/* Info table */}
@@ -351,9 +507,26 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fafafa"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#fff"; }}
               >
+                {server.mcp_info?.logo_url ? (
+                  <img
+                    src={server.mcp_info.logo_url}
+                    alt={`${name} logo`}
+                    style={{
+                      width: 38, height: 38, borderRadius: 10,
+                      objectFit: "contain", flexShrink: 0,
+                      background: "#f9fafb",
+                    }}
+                    onError={(e) => {
+                      const el = e.target as HTMLImageElement;
+                      el.style.display = "none";
+                      if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
+                    }}
+                  />
+                ) : null}
                 <div style={{
                   width: 38, height: 38, borderRadius: 10, background: color,
-                  display: "flex", alignItems: "center", justifyContent: "center",
+                  display: server.mcp_info?.logo_url ? "none" : "flex",
+                  alignItems: "center", justifyContent: "center",
                   color: "#fff", fontWeight: 700, fontSize: 16, flexShrink: 0,
                 }}>
                   {name.charAt(0).toUpperCase()}
@@ -377,24 +550,30 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     ) : null}
                   </div>
                 </div>
-                {isConnected && (
+                {server.auth_type === AUTH_TYPE.OAUTH2 ? (
+                  oauthConnected.has(server.server_id) ? (
+                    <CheckCircleOutlined style={{ fontSize: 14, color: "#52c41a", flexShrink: 0 }} />
+                  ) : (
+                    <OAuth2ConnectButton
+                      server={server}
+                      accessToken={accessToken}
+                      onConnect={(id) => {
+                        setOauthConnected((prev) => new Set(prev).add(id));
+                        handleToggle(nameOf(server), true, server.server_id);
+                      }}
+                      variant="badge"
+                    />
+                  )
+                ) : isConnected ? (
                   <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
-                )}
-                {server.auth_type === AUTH_TYPE.OAUTH2 && (
-                  <span style={{
-                    fontSize: 10, fontWeight: 600, color: "#7c3aed",
-                    background: "#f3e8ff", borderRadius: 4, padding: "1px 5px",
-                    letterSpacing: "0.03em", flexShrink: 0, whiteSpace: "nowrap",
-                  }}>
-                    OAuth2
-                  </span>
-                )}
+                ) : null}
                 <RightOutlined style={{ fontSize: 11, color: "#d1d5db", flexShrink: 0 }} />
               </div>
             );
           })}
         </div>
       )}
+
     </div>
   );
 };

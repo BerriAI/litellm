@@ -11,6 +11,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
+import MCPLogoSelector from "./MCPLogoSelector";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -32,7 +33,7 @@ interface CreateMCPServerProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
 const reduceStaticHeaders = (list: unknown): Record<string, string> => {
@@ -70,6 +71,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [searchValue, setSearchValue] = useState<string>("");
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
@@ -83,6 +85,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
@@ -101,6 +104,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           allowedTools,
           searchValue,
           aliasManuallyEdited,
+          logoUrl,
         }),
       );
     } catch (err) {
@@ -201,6 +205,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (typeof parsed.aliasManuallyEdited === "boolean") {
         setAliasManuallyEdited(parsed.aliasManuallyEdited);
+      }
+      if (parsed.logoUrl) {
+        setLogoUrl(parsed.logoUrl);
       }
     } catch (err) {
       console.error("Failed to restore MCP create state", err);
@@ -357,6 +364,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_info: {
           server_name: restValues.server_name || restValues.url,
           description: restValues.description,
+          logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
@@ -394,6 +402,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         clearTools();
         setAllowedTools([]);
         setAliasManuallyEdited(false);
+        setLogoUrl(undefined);
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -414,6 +423,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     clearTools();
     setAllowedTools([]);
     setAliasManuallyEdited(false);
+    setLogoUrl(undefined);
     setModalVisible(false);
   };
 
@@ -590,6 +600,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               />
             </Form.Item>
 
+            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
+
             <Form.Item
               label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
               name="source_url"
@@ -645,6 +657,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   setFormValues((prev) => ({ ...prev, ...updates }))
                 }
                 onKeyToolsChange={setKeyTools}
+                onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
               />
             )}
@@ -755,6 +768,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="token">Token</Select.Option>
                             <Select.Option value="basic">Basic Auth</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
+                            <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                           </Select>
                         </Form.Item>
 
@@ -804,6 +818,122 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   },
                 ]}
               />
+            )}
+
+            {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && (
+              <>
+                <p className="text-sm text-gray-500 mb-2">
+                  For MCP servers hosted on AWS Bedrock AgentCore.{" "}
+                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                    View docs &rarr;
+                  </a>
+                </p>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Region
+                      <Tooltip title="AWS region for SigV4 signing (e.g., us-east-1)">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_region_name"]}
+                  rules={[{ required: true, message: "AWS region is required for SigV4 auth" }]}
+                >
+                  <Input
+                    placeholder="us-east-1"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Service Name
+                      <Tooltip title="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_service_name"]}
+                >
+                  <Input
+                    placeholder="bedrock-agentcore"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Access Key ID
+                      <Tooltip title="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_access_key_id"]}
+                  dependencies={[["credentials", "aws_secret_access_key"]]}
+                  rules={[
+                    ({ getFieldValue }) => ({
+                      validator(_, value) {
+                        const secretKey = getFieldValue(["credentials", "aws_secret_access_key"]);
+                        if (secretKey && !value) {
+                          return Promise.reject(new Error("Access Key ID is required when Secret Access Key is provided"));
+                        }
+                        return Promise.resolve();
+                      },
+                    }),
+                  ]}
+                >
+                  <Input.Password
+                    placeholder="AKIA... (optional — uses IAM role if blank)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Secret Access Key
+                      <Tooltip title="Optional. Required if AWS Access Key ID is provided.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_secret_access_key"]}
+                  dependencies={[["credentials", "aws_access_key_id"]]}
+                  rules={[
+                    ({ getFieldValue }) => ({
+                      validator(_, value) {
+                        const accessKeyId = getFieldValue(["credentials", "aws_access_key_id"]);
+                        if (accessKeyId && !value) {
+                          return Promise.reject(new Error("Secret Access Key is required when Access Key ID is provided"));
+                        }
+                        return Promise.resolve();
+                      },
+                    }),
+                  ]}
+                >
+                  <Input.Password
+                    placeholder="Enter secret key (optional — uses IAM role if blank)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Session Token
+                      <Tooltip title="Optional. Only needed for temporary STS credentials.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_session_token"]}
+                >
+                  <Input.Password
+                    placeholder="Enter session token (optional)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+              </>
             )}
 
             {/* Stdio Configuration - only show for stdio transport */}

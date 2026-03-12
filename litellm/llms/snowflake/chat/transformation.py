@@ -212,6 +212,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         """
         Transform OpenAI tool_choice format to Snowflake format.
 
+        Snowflake requires tool_choice to be an object, not a string.
+        Ref: https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/reference/cortex-inference#post--api-v2-cortex-inference-complete-req-body-schema
+
         Args:
             tool_choice: Tool choice in OpenAI format (str or dict)
 
