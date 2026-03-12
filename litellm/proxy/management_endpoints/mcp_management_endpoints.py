@@ -558,12 +558,14 @@ if MCP_AVAILABLE:
         team_id: str,
     ) -> List[LiteLLM_MCPServerTable]:
         """
-        Return MCP servers scoped to a team: team's allowed servers + allow_all_keys servers.
+        Return MCP servers explicitly allowed by the team.
         Used by the Create Key UI to populate the MCP server dropdown.
+
+        Does NOT include allow_all_keys servers — those are globally
+        accessible at request time and don't need to be attached to a key.
         """
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.management_helpers.object_permission_utils import (
-            _get_allow_all_keys_server_ids,
             _get_team_allowed_mcp_servers,
         )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -575,9 +577,7 @@ if MCP_AVAILABLE:
             check_db_only=True,
         )
 
-        team_server_ids = await _get_team_allowed_mcp_servers(team_obj)
-        allow_all_server_ids = _get_allow_all_keys_server_ids()
-        all_allowed_ids = team_server_ids | allow_all_server_ids
+        all_allowed_ids = await _get_team_allowed_mcp_servers(team_obj)
 
         if not all_allowed_ids:
             return []
@@ -605,7 +605,7 @@ if MCP_AVAILABLE:
         team_id: Optional[str] = Query(
             None,
             description="Filter MCP servers by team scope. When provided, returns only "
-            "servers the team has access to plus globally available (allow_all_keys) servers. "
+            "servers the team has explicit access to. "
             "Used by the Create Key UI to show team-scoped MCP servers.",
         ),
     ):
