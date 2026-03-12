@@ -2514,7 +2514,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         if isinstance(_tc, dict)
                         else getattr(_tc, "id", None)
                     )
-                    if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
+                    if (
+                        _tc_id
+                        and isinstance(_tc_id, str)
+                        and _tc_id.startswith("srvtoolu_")
+                    ):
                         _has_server_tool_calls = True
                         break
 
@@ -2590,9 +2594,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         original_content_element=dict(assistant_content_block),
                     )
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_text_content_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
                     text_element = _anthropic_text_content_element
 
                 # Interleave: each thinking block precedes its server tool group.
@@ -2681,13 +2685,15 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _list_has_thinking = False
                 if _content_is_list:
                     for _item in assistant_content_block["content"]:
-                        if isinstance(_item, dict) and _item.get("type") in ("thinking", "redacted_thinking"):
+                        if isinstance(_item, dict) and _item.get("type") in (
+                            "thinking",
+                            "redacted_thinking",
+                        ):
                             _list_has_thinking = True
                             break
 
                 if (
-                    thinking_blocks is not None
-                    and not _list_has_thinking
+                    thinking_blocks is not None and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list:
@@ -2745,9 +2751,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element["cache_control"] = _content_element[
+                        _anthropic_text_content_element[
                             "cache_control"
-                        ]
+                        ] = _content_element["cache_control"]
 
                     assistant_content.append(_anthropic_text_content_element)
 

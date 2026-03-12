@@ -404,7 +404,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 headers=headers,
                 params=requested_query_params,
             )
-        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True and not _parsed_body:
+        elif (
+            HttpPassThroughEndpointHelpers.is_multipart(request) is True
+            and not _parsed_body
+        ):
             # Only use multipart handler if we don't have a parsed body
             # (parsed body means it was JSON despite multipart content-type header)
             return await HttpPassThroughEndpointHelpers.make_multipart_http_request(
@@ -681,8 +684,10 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
-        is_multipart = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
-        
+        is_multipart = (
+            HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
+        )
+
         if custom_body:
             _parsed_body = custom_body
         elif is_multipart:
@@ -1133,7 +1138,9 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
-            custom_body: Optional[dict] = None,  # caller-supplied body takes precedence over request-parsed body
+            custom_body: Optional[
+                dict
+            ] = None,  # caller-supplied body takes precedence over request-parsed body
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -2062,7 +2069,9 @@ class InitPassThroughEndpointHelpers:
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            full_mapped_route = InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
+            full_mapped_route = (
+                InitPassThroughEndpointHelpers._build_full_path_with_root(mapped_route)
+            )
             if route.startswith(full_mapped_route):
                 return True
 

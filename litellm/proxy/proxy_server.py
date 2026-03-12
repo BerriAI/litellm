@@ -5437,9 +5437,7 @@ def _restamp_streaming_chunk_model(
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
-    if _is_azure_model_router_request(
-        requested_model_from_client
-    ):
+    if _is_azure_model_router_request(requested_model_from_client):
         return chunk, model_mismatch_logged
 
     downstream_model = (

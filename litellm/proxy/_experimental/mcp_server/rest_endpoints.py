@@ -119,7 +119,9 @@ if MCP_AVAILABLE:
                 prisma_client = get_prisma_client_or_throw(
                     "Database not connected. Connect a database to use OAuth2 MCP tools."
                 )
-                cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+                cred = await get_user_oauth_credential(
+                    prisma_client, user_id, server_id
+                )
             if cred and cred.get("access_token"):
                 if is_oauth_credential_expired(cred):
                     verbose_logger.debug(
@@ -192,7 +194,9 @@ if MCP_AVAILABLE:
                 if c.get("access_token") and c.get("server_id")
             }
         except Exception:
-            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
+            verbose_logger.debug(
+                "Failed to bulk-fetch OAuth credentials", exc_info=True
+            )
             return {}
 
     def _create_tool_response_objects(tools, server_mcp_info):
@@ -429,8 +433,12 @@ if MCP_AVAILABLE:
                 # IP-filter error reporting if the resolved UUID is not in allowed_server_ids.
                 _name_resolved = None
                 if server_id not in allowed_server_ids:
-                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-                    if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
+                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                        server_id
+                    )
+                    if _name_resolved is not None and _name_resolved.server_id in set(
+                        allowed_server_ids
+                    ):
                         server_id = _name_resolved.server_id
 
                 if server_id not in allowed_server_ids:
@@ -478,7 +486,9 @@ if MCP_AVAILABLE:
                     server, mcp_server_auth_headers, mcp_auth_header
                 )
                 # Single-server request: targeted lookup is more efficient than a bulk fetch.
-                user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
+                user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                    server, user_api_key_dict
+                )
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
@@ -541,7 +551,9 @@ if MCP_AVAILABLE:
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(
-                        server, user_api_key_dict, prefetched_creds=prefetched_oauth_creds
+                        server,
+                        user_api_key_dict,
+                        prefetched_creds=prefetched_oauth_creds,
                     )
 
                     try:

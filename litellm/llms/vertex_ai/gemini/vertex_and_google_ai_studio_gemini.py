@@ -1227,12 +1227,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
-    _GEMINI_FINISH_REASON_KEYS = frozenset({
-        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "FINISH_REASON_UNSPECIFIED",
-        "MALFORMED_FUNCTION_CALL", "LANGUAGE", "OTHER", "BLOCKLIST",
-        "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
-        "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE",
-    })
+    _GEMINI_FINISH_REASON_KEYS = frozenset(
+        {
+            "STOP",
+            "MAX_TOKENS",
+            "SAFETY",
+            "RECITATION",
+            "FINISH_REASON_UNSPECIFIED",
+            "MALFORMED_FUNCTION_CALL",
+            "LANGUAGE",
+            "OTHER",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+            "IMAGE_SAFETY",
+            "IMAGE_PROHIBITED_CONTENT",
+            "TOO_MANY_TOOL_CALLS",
+            "MALFORMED_RESPONSE",
+        }
+    )
 
     @staticmethod
     def get_finish_reason_mapping() -> Dict[str, OpenAIChatCompletionFinishReason]:

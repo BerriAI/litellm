@@ -203,10 +203,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             litellm_params: Optional[GenericLiteLLMParams],
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key = (
-                litellm_params.api_key
-                or get_secret_str(provider.api_key_env)
-            )
+            api_key = litellm_params.api_key or get_secret_str(provider.api_key_env)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers
@@ -223,9 +220,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
                     api_base = provider.base_url
 
             if api_base is None:
-                raise ValueError(
-                    f"api_base is required for provider {provider.slug}"
-                )
+                raise ValueError(f"api_base is required for provider {provider.slug}")
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"

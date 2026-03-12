@@ -409,7 +409,9 @@ async def update_mcp_server(
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
-    has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials = (
+        "credentials" in data_dict and data_dict["credentials"] is not None
+    )
     if data.auth_type or has_credentials:
         existing = await prisma_client.db.litellm_mcpservertable.find_unique(
             where={"server_id": data.server_id}

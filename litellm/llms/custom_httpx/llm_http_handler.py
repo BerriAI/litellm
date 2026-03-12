@@ -4835,7 +4835,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         if provider_config is not None:
-            url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
+            url = provider_config.get_complete_url(
+                api_base=api_base, model=model or "", api_version=api_version
+            )
             headers: Dict[str, Any] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
@@ -4905,7 +4907,9 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         if provider_config is not None:
-            url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
+            url = provider_config.get_realtime_calls_url(
+                api_base=api_base, model=model or "", api_version=api_version
+            )
             headers: Dict[str, Any] = provider_config.get_realtime_calls_headers(
                 ephemeral_key=openai_ephemeral_key
             )
@@ -7910,9 +7914,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.get(
-                url=url, headers=headers
-            )
+            response = await async_httpx_client.get(url=url, headers=headers)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -8023,7 +8025,7 @@ class BaseLLMHTTPHandler:
         )
 
         url = api_base
-        
+
         params = {}
         if after is not None:
             params["after"] = after
@@ -8105,7 +8107,7 @@ class BaseLLMHTTPHandler:
         )
 
         url = api_base
-        
+
         params = {}
         if after is not None:
             params["after"] = after
@@ -8167,14 +8169,15 @@ class BaseLLMHTTPHandler:
         )
 
         url = f"{api_base}/{vector_store_id}"
-        
+
         request_body = dict(vector_store_update_optional_params)
-        
+
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
             from litellm.utils import add_openai_metadata
+
             request_body["metadata"] = add_openai_metadata(request_body["metadata"])
-        
+
         if extra_body:
             request_body.update(extra_body)
 
@@ -8249,14 +8252,15 @@ class BaseLLMHTTPHandler:
         )
 
         url = f"{api_base}/{vector_store_id}"
-        
+
         request_body = dict(vector_store_update_optional_params)
-        
+
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
             from litellm.utils import add_openai_metadata
+
             request_body["metadata"] = add_openai_metadata(request_body["metadata"])
-        
+
         if extra_body:
             request_body.update(extra_body)
 

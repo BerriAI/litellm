@@ -424,11 +424,17 @@ if MCP_AVAILABLE:
             inherited_credentials["scopes"] = existing_server.scopes
         # AWS SigV4 fields
         if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
+            inherited_credentials[
+                "aws_access_key_id"
+            ] = existing_server.aws_access_key_id
         if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
+            inherited_credentials[
+                "aws_secret_access_key"
+            ] = existing_server.aws_secret_access_key
         if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
+            inherited_credentials[
+                "aws_session_token"
+            ] = existing_server.aws_session_token
         if existing_server.aws_region_name:
             inherited_credentials["aws_region_name"] = existing_server.aws_region_name
         if existing_server.aws_service_name:
@@ -734,8 +740,7 @@ if MCP_AVAILABLE:
                     check_db_only=True,
                 )
                 user_in_team = any(
-                    m.user_id is not None
-                    and m.user_id == user_api_key_dict.user_id
+                    m.user_id is not None and m.user_id == user_api_key_dict.user_id
                     for m in team_obj.members_with_roles
                 )
                 if not user_in_team:
@@ -744,20 +749,26 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
+            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(
+                sanitized_team_id
+            )
         else:
             user_mcp_management_mode = _get_user_mcp_management_mode()
 
             if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-                servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                servers = (
+                    await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+                )
                 redacted_mcp_servers = _redact_mcp_credentials_list(servers)
             else:
                 auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
                 aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
                 for auth_context in auth_contexts:
-                    servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                        user_api_key_auth=auth_context
+                    servers = (
+                        await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                            user_api_key_auth=auth_context
+                        )
                     )
                     for server in servers:
                         if server.server_id not in aggregated_servers:
@@ -1084,8 +1095,11 @@ if MCP_AVAILABLE:
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request)
             registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-            if registry_server is not None and not global_mcp_server_manager._is_server_accessible_from_ip(
-                registry_server, client_ip
+            if (
+                registry_server is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    registry_server, client_ip
+                )
             ):
                 registry_server = None
             if registry_server is None:
@@ -1120,8 +1134,10 @@ if MCP_AVAILABLE:
                 exists = does_mcp_server_exist(mcp_server_records, server_id)
             else:
                 # Registry/config server: use same access logic as list endpoint
-                allowed_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
-                    user_api_key_dict
+                allowed_server_ids = (
+                    await global_mcp_server_manager.get_allowed_mcp_servers(
+                        user_api_key_dict
+                    )
                 )
                 exists = mcp_server.server_id in allowed_server_ids
 
@@ -1319,10 +1335,9 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server = (
-                global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                or global_mcp_server_manager.get_mcp_server_by_name(server_id)
-            )
+            server = global_mcp_server_manager.get_mcp_server_by_id(
+                server_id
+            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1647,7 +1662,9 @@ if MCP_AVAILABLE:
         # Only delete if the stored credential is actually an OAuth2 token.
         # This prevents accidentally deleting a BYOK credential if one exists
         # for the same (user_id, server_id) pair.
-        cred_to_delete = await get_user_oauth_credential(prisma_client, user_id, server_id)
+        cred_to_delete = await get_user_oauth_credential(
+            prisma_client, user_id, server_id
+        )
         if cred_to_delete is not None:
             try:
                 await delete_user_credential(prisma_client, user_id, server_id)

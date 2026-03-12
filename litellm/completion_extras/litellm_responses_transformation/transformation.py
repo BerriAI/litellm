@@ -398,7 +398,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
-        from openai.types.responses.response_output_item import ResponseApplyPatchToolCall
+        from openai.types.responses.response_output_item import (
+            ResponseApplyPatchToolCall,
+        )
 
         from litellm.types.utils import Choices, Message
 
@@ -448,11 +450,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     LiteLLMCompletionResponsesConfig,
                 )
 
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-                        tool_call_item=item,
-                        index=tool_call_index,
-                    )
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=tool_call_index,
                 )
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1

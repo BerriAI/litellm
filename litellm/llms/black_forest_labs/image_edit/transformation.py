@@ -179,11 +179,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = (
-            api_base
-            or get_secret_str("BFL_API_BASE")
-            or DEFAULT_API_BASE
-        )
+        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
         base_url = base_url.rstrip("/")
 
         endpoint = self._get_model_endpoint(model)
@@ -247,9 +243,18 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         # Add optional params (only BFL-recognized parameters)
         bfl_request_params = [
-            "seed", "output_format", "safety_tolerance", "prompt_upsampling",
-            "aspect_ratio", "steps", "guidance", "grow_mask",
-            "top", "bottom", "left", "right",
+            "seed",
+            "output_format",
+            "safety_tolerance",
+            "prompt_upsampling",
+            "aspect_ratio",
+            "steps",
+            "guidance",
+            "grow_mask",
+            "top",
+            "bottom",
+            "left",
+            "right",
         ]
         for key, value in image_edit_optional_request_params.items():
             if key in bfl_request_params and value is not None:

@@ -288,8 +288,12 @@ async def vector_store_create(
         )
 
 
-@router.get("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
-@router.get("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.get(
+    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
+@router.get(
+    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
 async def vector_store_retrieve(
     request: Request,
     vector_store_id: str,
@@ -421,8 +425,12 @@ async def vector_store_list(
         )
 
 
-@router.post("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
-@router.post("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
+@router.post(
+    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
 async def vector_store_update(
     request: Request,
     vector_store_id: str,
@@ -487,8 +495,12 @@ async def vector_store_update(
         )
 
 
-@router.delete("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
-@router.delete("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.delete(
+    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
+@router.delete(
+    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
+)
 async def vector_store_delete(
     request: Request,
     vector_store_id: str,

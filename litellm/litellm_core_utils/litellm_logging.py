@@ -5354,7 +5354,10 @@ def get_standard_logging_object_payload(
         requested_model = kwargs.get("model")
         if (
             isinstance(requested_model, str)
-            and ("model_router" in requested_model.lower() or "model-router" in requested_model.lower())
+            and (
+                "model_router" in requested_model.lower()
+                or "model-router" in requested_model.lower()
+            )
             and isinstance(response_model_name, str)
             and response_model_name
         ):
