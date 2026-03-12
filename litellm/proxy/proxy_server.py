@@ -260,6 +260,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
     claude_code_marketplace_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
+from litellm.proxy.realtime_endpoints.endpoints import router as webrtc_router
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
 )
@@ -13179,6 +13180,7 @@ app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
+app.include_router(webrtc_router)
 app.include_router(mcp_management_router)
 app.include_router(mcp_byok_oauth_router)
 app.include_router(anthropic_router)

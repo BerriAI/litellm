@@ -1258,7 +1258,7 @@ from .containers.main import *
 from .ocr.main import *
 from .rag.main import *
 from .search.main import *
-from .realtime_api.main import _arealtime
+from .realtime_api.main import _arealtime, acreate_realtime_client_secret, arealtime_calls
 from .responses.main import _aresponses_websocket
 from .fine_tuning.main import *
 from .files.main import *
