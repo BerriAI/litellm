@@ -15391,7 +15391,7 @@
         "input_cost_per_audio_per_second": 0.00016,
         "input_cost_per_image": 0.00012,
         "input_cost_per_token": 2e-07,
-        "input_cost_per_video_per_second": 0.0237,
+        "input_cost_per_video_per_second": 0.00079,
         "litellm_provider": "vertex_ai-embedding-models",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
@@ -15402,14 +15402,17 @@
         "uses_embed_content": true
     },
     "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_audio_per_second": 0.00016,
+        "input_cost_per_image": 0.00012,
+        "input_cost_per_token": 2e-07,
+        "input_cost_per_video_per_second": 0.00079,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -15491,7 +15494,10 @@
         "tpm": 10000000
     },
     "gemini/gemini-embedding-2-preview": {
-        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_audio_per_second": 0.00016,
+        "input_cost_per_image": 0.00012,
+        "input_cost_per_token": 2e-07,
+        "input_cost_per_video_per_second": 0.0237,
         "litellm_provider": "gemini",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
@@ -15499,7 +15505,7 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "rpm": 10000,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supports_multimodal": true,
         "tpm": 10000000
     },
