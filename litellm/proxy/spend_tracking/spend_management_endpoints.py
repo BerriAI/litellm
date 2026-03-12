@@ -1461,11 +1461,21 @@ async def _get_spend_report_for_time_range(
     dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {
-            "cost": {
-                "description": "The calculated cost",
-                "example": 0.0,
-                "type": "float",
-            }
+            "description": "The calculated cost",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "cost": {
+                                "type": "number",
+                                "description": "The calculated cost",
+                                "example": 0.0,
+                            }
+                        },
+                    }
+                }
+            },
         }
     },
 )

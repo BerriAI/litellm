@@ -43,6 +43,29 @@ def test_transform_usage():
     )
     assert openai_usage._cache_creation_input_tokens == usage["cacheWriteInputTokens"]
     assert openai_usage._cache_read_input_tokens == usage["cacheReadInputTokens"]
+    # completion_tokens_details should always be populated
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens == 0
+    assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
+
+
+def test_transform_usage_with_reasoning_content():
+    """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 10,
+            "outputTokens": 100,
+            "totalTokens": 110,
+        }
+    )
+    config = AmazonConverseConfig()
+    reasoning_text = "Let me think about this step by step."
+    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    assert openai_usage.completion_tokens_details is not None
+    assert openai_usage.completion_tokens_details.reasoning_tokens > 0
+    assert openai_usage.completion_tokens_details.text_tokens == (
+        usage["outputTokens"] - openai_usage.completion_tokens_details.reasoning_tokens
+    )
 
 
 def test_transform_system_message():
