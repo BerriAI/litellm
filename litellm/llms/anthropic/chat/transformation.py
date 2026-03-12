@@ -1072,9 +1072,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "service_tier":
                 if value in ("auto", "standard_only"):
                     optional_params["service_tier"] = value
-                # Silently drop unrecognised values (e.g. OpenAI-specific
-                # "default", "flex") to preserve backward-compatibility
-                # when routing across providers.
+                elif not drop_params:
+                    raise litellm.UnsupportedParamsError(
+                        status_code=400,
+                        message=(
+                            f"Anthropic does not support service_tier='{value}'. "
+                            f"Supported values: 'auto', 'standard_only'. "
+                            f"Pass drop_params=True to silently ignore unsupported values."
+                        ),
+                    )
+                # else: silently drop OpenAI-specific values when drop_params=True
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
