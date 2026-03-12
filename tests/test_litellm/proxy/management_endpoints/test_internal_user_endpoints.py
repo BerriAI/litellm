@@ -1895,20 +1895,12 @@ async def test_cannot_block_proxy_admin(mocker):
 async def test_cannot_block_proxy_admin_view_only(mocker):
     """
     Test that proxy admin view only users cannot be blocked.
-    Should return 403 error.
+    The 403 is raised by a pre-check before the DB update is called.
     """
     from litellm.proxy.management_endpoints.internal_user_endpoints import block_user
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
-
-    # Mock the update to fail (atomic operation prevents blocking admin)
-    async def mock_update(*args, **kwargs):
-        raise Exception("Record to update not found")
-
-    mock_prisma_client.db.litellm_usertable.update = mocker.AsyncMock(
-        side_effect=mock_update
-    )
 
     # Mock find_unique to return a proxy admin view only user
     mock_admin_viewer = mocker.MagicMock()
@@ -2104,6 +2096,138 @@ async def test_unblock_user_basic_functionality(mocker):
         proxy_logging_obj=mock_proxy_logging_obj,
     )
 
+
+@pytest.mark.asyncio
+async def test_unblock_nonexistent_user(mocker):
+    """
+    Test that unblocking a non-existent user returns 404.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import unblock_user
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock find_unique to return None (user doesn't exist)
+    async def mock_find_unique(*args, **kwargs):
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Patch the imports
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create request
+    unblock_request = BlockUserRequest(user_id="nonexistent-user")
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call unblock_user and expect HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await unblock_user(
+            data=unblock_request,
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # Verify the exception details
+    assert exc_info.value.status_code == 404
+    assert "not found" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_cannot_unblock_proxy_admin(mocker):
+    """
+    Test that proxy admin users cannot be unblocked.
+    The 403 is raised by a pre-check before the DB update is called.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import unblock_user
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock find_unique to return a proxy admin user
+    mock_admin_user = mocker.MagicMock()
+    mock_admin_user.user_id = "admin-user-123"
+    mock_admin_user.user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    async def mock_find_unique(*args, **kwargs):
+        return mock_admin_user
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Patch the imports
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create request
+    unblock_request = BlockUserRequest(user_id="admin-user-123")
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="another-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call unblock_user and expect HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await unblock_user(
+            data=unblock_request,
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # Verify the exception details
+    assert exc_info.value.status_code == 403
+    assert "Cannot unblock users with proxy admin role" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_cannot_unblock_proxy_admin_view_only(mocker):
+    """
+    Test that proxy admin view only users cannot be unblocked.
+    The 403 is raised by a pre-check before the DB update is called.
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import unblock_user
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock find_unique to return a proxy admin view only user
+    mock_admin_viewer = mocker.MagicMock()
+    mock_admin_viewer.user_id = "admin-viewer-123"
+    mock_admin_viewer.user_role = LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+
+    async def mock_find_unique(*args, **kwargs):
+        return mock_admin_viewer
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Patch the imports
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create request
+    unblock_request = BlockUserRequest(user_id="admin-viewer-123")
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call unblock_user and expect HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await unblock_user(
+            data=unblock_request,
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # Verify the exception details
+    assert exc_info.value.status_code == 403
+    assert "Cannot unblock users with proxy admin role" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
