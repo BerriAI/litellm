@@ -3335,10 +3335,11 @@ def test_service_tier_in_supported_params():
 
 
 @pytest.mark.parametrize("service_tier", ["default", "flex", "scale"])
-def test_service_tier_openai_values_not_forwarded_to_anthropic(service_tier: str):
+def test_service_tier_any_string_forwarded_to_anthropic(service_tier: str):
     """
-    OpenAI-specific service_tier values must be silently dropped to avoid
-    hard API errors when routing across providers.
+    service_tier is forwarded as-is to the Anthropic API for all string
+    values. Anthropic validates the value and returns an error for
+    unsupported tiers.
 
     Fixes https://github.com/BerriAI/litellm/issues/23398
     """
@@ -3351,4 +3352,4 @@ def test_service_tier_openai_values_not_forwarded_to_anthropic(service_tier: str
         drop_params=False,
     )
 
-    assert "service_tier" not in result
+    assert result.get("service_tier") == service_tier
