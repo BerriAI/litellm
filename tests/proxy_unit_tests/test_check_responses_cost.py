@@ -96,11 +96,12 @@ class TestCheckResponsesCost:
 
         await check_responses_cost_instance.check_responses_cost()
 
-        # The first update_many call should be the stale-row cleanup
+        # The first update_many call should be the stale-row cleanup scoped to "response"
         calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
         stale_call = calls[0]
         assert stale_call[1]["data"] == {"status": "stale_expired"}
         where = stale_call[1]["where"]
+        assert where["file_purpose"] == "response"
         assert "stale_expired" in where["status"]["not_in"]
         assert "created_at" in where
 
@@ -114,6 +115,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_123"
         mock_job.created_by = "test-user"
         mock_job.id = "job-123"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_123"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -160,6 +162,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_456"
         mock_job.created_by = "test-user"
         mock_job.id = "job-456"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_456"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -200,6 +203,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_789"
         mock_job.created_by = "test-user"
         mock_job.id = "job-789"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_789"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -240,6 +244,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_in_progress"
         mock_job.created_by = "test-user"
         mock_job.id = "job-in-progress"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_in_progress"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -280,6 +285,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_queued"
         mock_job.created_by = "test-user"
         mock_job.id = "job-queued"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_queued"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -320,6 +326,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_test_error"
         mock_job.created_by = "test-user"
         mock_job.id = "job-error"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_error"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -353,16 +360,19 @@ class TestCheckResponsesCost:
         mock_job1.unified_object_id = "resp_test_1"
         mock_job1.created_by = "user1"
         mock_job1.id = "job-1"
+        mock_job1.file_object = {"model": "gpt-4o", "id": "resp_test_1"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_2"
         mock_job2.created_by = "user2"
         mock_job2.id = "job-2"
+        mock_job2.file_object = {"model": "gpt-4o", "id": "resp_test_2"}
 
         mock_job3 = MagicMock()
         mock_job3.unified_object_id = "resp_test_3"
         mock_job3.created_by = "user3"
         mock_job3.id = "job-3"
+        mock_job3.file_object = {"model": "gpt-4o", "id": "resp_test_3"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job1, mock_job2, mock_job3]
@@ -422,3 +432,33 @@ class TestCheckResponsesCost:
         assert "job-1" in completion_call[1]["where"]["id"]["in"]
         assert "job-3" in completion_call[1]["where"]["id"]["in"]
         assert "job-2" not in completion_call[1]["where"]["id"]["in"]
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_no_model_in_file_object(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """When file_object has no 'model' key, model_name is None and metadata skips model fields."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_no_model"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-no-model"
+        mock_job.file_object = {}  # no "model" key → model_name=None branch
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        # aget_responses should be called without model metadata
+        call_kwargs = mock_aget.call_args[1]
+        assert "model" not in call_kwargs.get("litellm_metadata", {})
+        assert "model_group" not in call_kwargs.get("litellm_metadata", {})

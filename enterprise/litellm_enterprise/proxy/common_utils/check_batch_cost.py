@@ -62,6 +62,7 @@ class CheckBatchCost:
         cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
         result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
+                "file_purpose": "batch",
                 "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
                 "created_at": {"lt": cutoff},
             },
