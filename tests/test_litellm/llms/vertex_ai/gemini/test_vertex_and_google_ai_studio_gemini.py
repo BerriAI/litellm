@@ -3789,3 +3789,101 @@ def test_sync_streaming_uses_custom_client():
     # Verify that gemini_client is in the partial's keywords
     assert "gemini_client" in partial_make_sync_call.keywords
     assert partial_make_sync_call.keywords["gemini_client"] is mock_client
+
+
+def test_vertex_make_call_passes_timeout_to_client_post():
+    """
+    make_call() in vertex_and_google_ai_studio_gemini must forward timeout
+    to client.post() so streaming requests respect the user-configured timeout.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23375
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_call,
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_lines = AsyncMock(return_value=iter([]))
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    timeout = httpx.Timeout(3.0)
+
+    async def run():
+        await make_call(
+            client=mock_client,
+            gemini_client=None,
+            api_base="https://example.com",
+            headers={},
+            data="{}",
+            model="gemini-2.0-flash",
+            messages=[],
+            logging_obj=MagicMock(),
+            timeout=timeout,
+        )
+
+    asyncio.run(run())
+
+    _, kwargs = mock_client.post.call_args
+    assert kwargs.get("timeout") == timeout, (
+        "timeout must be forwarded to client.post() for streaming to respect it"
+    )
+
+
+def test_vertex_make_call_creates_client_with_timeout_when_no_client_provided():
+    """
+    When no client is provided, make_call() must pass timeout to
+    get_async_httpx_client() so the created client has the correct timeout.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23375
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import httpx
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_call,
+    )
+
+    timeout = httpx.Timeout(3.0)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_lines = AsyncMock(return_value=iter([]))
+    mock_response.raise_for_status = MagicMock()
+
+    mock_created_client = MagicMock()
+    mock_created_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_async_httpx_client",
+        return_value=mock_created_client,
+    ) as mock_get_client:
+        async def run():
+            await make_call(
+                client=None,
+                gemini_client=None,
+                api_base="https://example.com",
+                headers={},
+                data="{}",
+                model="gemini-2.0-flash",
+                messages=[],
+                logging_obj=MagicMock(),
+                timeout=timeout,
+            )
+
+        asyncio.run(run())
+
+    _, kwargs = mock_get_client.call_args
+    assert kwargs.get("params", {}).get("timeout") == timeout, (
+        "timeout must be passed to get_async_httpx_client() params"
+    )

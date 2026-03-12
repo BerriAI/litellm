@@ -194,16 +194,20 @@ async def make_call(
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: int = 1024,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     try:
         if client is None:
+            _params: dict = {}
+            if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify"):
+                _params["ssl_verify"] = logging_obj.litellm_params.get("ssl_verify")
+            if timeout is not None:
+                if isinstance(timeout, (float, int)):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=_params if _params else None,
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -212,6 +216,7 @@ async def make_call(
             data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -1240,6 +1245,7 @@ class BedrockLLM(BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 stream_chunk_size=stream_chunk_size,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="bedrock",

@@ -200,3 +200,54 @@ def test_bedrock_converse_streaming_consistent_id():
         assert (
             response.id == expected_id
         ), "All chunk IDs must match the one captured from the messageStart event"
+
+
+def test_bedrock_invoke_async_streaming_passes_timeout_to_make_call():
+    """
+    async_streaming() in BedrockInvokeModelHandler must include timeout in the
+    partial() call to make_call() so streaming requests respect the
+    user-configured timeout.
+
+    Fixes https://github.com/BerriAI/litellm/issues/23375
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import httpx
+
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
+
+    handler = BedrockLLM()
+    timeout = httpx.Timeout(5.0)
+    captured_partial = {}
+
+    class FakeCustomStreamWrapper:
+        def __init__(self, *args, make_call=None, **kwargs):
+            captured_partial["make_call"] = make_call
+
+    with patch(
+        "litellm.llms.bedrock.chat.invoke_handler.CustomStreamWrapper",
+        FakeCustomStreamWrapper,
+    ):
+        async def run():
+            await handler.async_streaming(
+                model="anthropic.claude-3-sonnet",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://example.com",
+                model_response=MagicMock(),
+                print_verbose=MagicMock(),
+                data='{"prompt": "hi"}',
+                timeout=timeout,
+                encoding=None,
+                logging_obj=MagicMock(),
+                stream=True,
+                optional_params={},
+            )
+
+        asyncio.run(run())
+
+    make_call_partial = captured_partial.get("make_call")
+    assert make_call_partial is not None
+    assert make_call_partial.keywords.get("timeout") == timeout, (
+        "timeout must be forwarded via partial() to make_call()"
+    )

@@ -149,6 +149,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             fake_stream=fake_stream,
             json_mode=json_mode,
             stream_chunk_size=stream_chunk_size,
+            timeout=timeout,
         )
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
