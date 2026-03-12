@@ -349,9 +349,12 @@ class ComplexityRouter(CustomLogger):
         
         if messages is None or len(messages) == 0:
             verbose_router_logger.debug(
-                "ComplexityRouter: No messages provided, skipping routing"
+                "ComplexityRouter: No messages provided, routing to default model"
             )
-            return None
+            return PreRoutingHookResponse(
+                model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                messages=messages,
+            )
         
         # Extract the last user message and the last system prompt
         user_message: Optional[str] = None
