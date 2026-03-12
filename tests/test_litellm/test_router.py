@@ -1624,9 +1624,17 @@ async def test_acompletion_streaming_iterator_getattr_does_not_shadow_own_attrs(
         initial_kwargs={"model": "gpt-4", "stream": True},
     )
 
-    # .model is set by CustomStreamWrapper.__init__, not proxied from _wrapped_response
-    assert result.model == "original-model-on-wrapped"
-    assert result.custom_llm_provider == "original-provider-on-wrapped"
+    # Mutate the wrapped response after construction — if __getattr__ were
+    # wrongly shadowing, result.model would follow the mutation.
+    expected_model = result.model
+    mock_response.model = "SHOULD-NOT-APPEAR"
+    assert result.model == expected_model
+    assert result.model != "SHOULD-NOT-APPEAR"
+
+    expected_provider = result.custom_llm_provider
+    mock_response.custom_llm_provider = "SHOULD-NOT-APPEAR"
+    assert result.custom_llm_provider == expected_provider
+    assert result.custom_llm_provider != "SHOULD-NOT-APPEAR"
 
 
 def test_completion_streaming_iterator_getattr_does_not_shadow_own_attrs():
@@ -1655,9 +1663,17 @@ def test_completion_streaming_iterator_getattr_does_not_shadow_own_attrs():
         initial_kwargs={"model": "gpt-4", "stream": True},
     )
 
-    # .model is set by CustomStreamWrapper.__init__, not proxied from _wrapped_response
-    assert result.model == "original-model-on-wrapped"
-    assert result.custom_llm_provider == "original-provider-on-wrapped"
+    # Mutate the wrapped response after construction — if __getattr__ were
+    # wrongly shadowing, result.model would follow the mutation.
+    expected_model = result.model
+    mock_response.model = "SHOULD-NOT-APPEAR"
+    assert result.model == expected_model
+    assert result.model != "SHOULD-NOT-APPEAR"
+
+    expected_provider = result.custom_llm_provider
+    mock_response.custom_llm_provider = "SHOULD-NOT-APPEAR"
+    assert result.custom_llm_provider == expected_provider
+    assert result.custom_llm_provider != "SHOULD-NOT-APPEAR"
 
 
 @pytest.mark.asyncio
