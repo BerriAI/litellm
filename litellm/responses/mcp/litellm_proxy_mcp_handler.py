@@ -105,10 +105,10 @@ class LiteLLM_Proxy_MCP_Handler:
                         # by rewriting them to the internal litellm_proxy format.
                         m = _PROXY_MCP_PATH_RE.match(server_url)
                         if m:
-                            rewritten = dict(tool)
-                            rewritten["server_url"] = (
+                            rewritten = {**tool, "server_url": (
                                 f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{m.group(1)}"
-                            )
+                            )}
+                            mcp_tools_with_litellm_proxy.append(rewritten)
                             mcp_tools_with_litellm_proxy.append(rewritten)
                         else:
                             other_tools.append(tool)
