@@ -712,6 +712,78 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     return role_mappings
 
 
+def _parse_generic_sso_headers() -> dict:
+    """Parse comma-separated GENERIC_SSO_HEADERS env var into a dict."""
+    raw = os.getenv("GENERIC_SSO_HEADERS", None)
+    if raw is None:
+        return {}
+    result: Dict[str, str] = {}
+    for header in raw.split(","):
+        header = header.strip()
+        if header:
+            key, value = header.split("=")
+            result[key] = value
+    return result
+
+
+def _handle_generic_sso_error(
+    e: Exception,
+    generic_authorization_endpoint: Optional[str],
+    generic_token_endpoint: Optional[str],
+    additional_headers: dict,
+) -> None:
+    """Handle errors from generic SSO verify_and_process. Always re-raises."""
+    error_message = str(e)
+
+    # Surface a helpful PKCE misconfiguration hint only when:
+    # 1. The error mentions PKCE/code verifier, AND
+    # 2. PKCE is not currently configured (GENERIC_CLIENT_USE_PKCE != true)
+    pkce_configured = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+    if not pkce_configured and (
+        "PKCE" in error_message or "code verifier" in error_message.lower()
+    ):
+        is_okta = (
+            generic_authorization_endpoint
+            and "okta" in generic_authorization_endpoint.lower()
+        ) or (generic_token_endpoint and "okta" in generic_token_endpoint.lower())
+        provider_name = "Okta" if is_okta else "Your OAuth provider"
+
+        detailed_message = (
+            f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
+            f"but it's not enabled in your LiteLLM configuration.\n\n"
+            f"SOLUTION: Add this environment variable and restart your proxy:\n"
+            f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
+        )
+        if is_okta:
+            detailed_message += (
+                "For AWS ECS: Add the environment variable to your task definition.\n"
+                "For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
+                "For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
+            )
+        detailed_message += f"Original error: {error_message}"
+
+        raise ProxyException(
+            message=detailed_message,
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_CLIENT_USE_PKCE",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if isinstance(e, ProxyException):
+        verbose_proxy_logger.error(
+            "SSO authentication failed: %s. Passed in headers: %s",
+            e,
+            additional_headers,
+        )
+    else:
+        verbose_proxy_logger.exception(
+            "Error verifying and processing generic SSO: %s. Passed in headers: %s",
+            e,
+            additional_headers,
+        )
+    raise e
+
+
 async def get_generic_sso_response(
     request: Request,
     jwt_handler: JWTHandler,
@@ -770,17 +842,7 @@ async def get_generic_sso_response(
         scope=generic_scope,
     )
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-    additional_generic_sso_headers = os.getenv(
-        "GENERIC_SSO_HEADERS", None
-    )  # Comma-separated list of headers to add to the request - e.g. Authorization=Bearer <token>, Content-Type=application/json, etc.
-    additional_generic_sso_headers_dict = {}
-    if additional_generic_sso_headers is not None:
-        additional_generic_sso_headers_split = additional_generic_sso_headers.split(",")
-        for header in additional_generic_sso_headers_split:
-            header = header.strip()
-            if header:
-                key, value = header.split("=")
-                additional_generic_sso_headers_dict[key] = value
+    additional_generic_sso_headers_dict = _parse_generic_sso_headers()
 
     code_verifier: Optional[str] = None  # assigned inside try; initialized for type tracking
 
@@ -876,60 +938,12 @@ async def get_generic_sso_response(
             await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
 
     except Exception as e:
-        error_message = str(e)
-
-        # Surface a helpful PKCE misconfiguration hint only when:
-        # 1. The error mentions PKCE/code verifier, AND
-        # 2. PKCE is not currently configured (GENERIC_CLIENT_USE_PKCE != true)
-        # If PKCE IS configured but code_verifier was absent (cross-instance cache miss),
-        # the real fix is shared Redis/sticky sessions — not enabling PKCE (it's already on).
-        pkce_configured = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
-        if not pkce_configured and (
-            "PKCE" in error_message or "code verifier" in error_message.lower()
-        ):
-            is_okta = (
-                generic_authorization_endpoint
-                and "okta" in generic_authorization_endpoint.lower()
-            ) or (generic_token_endpoint and "okta" in generic_token_endpoint.lower())
-            provider_name = "Okta" if is_okta else "Your OAuth provider"
-
-            detailed_message = (
-                f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
-                f"but it's not enabled in your LiteLLM configuration.\n\n"
-                f"SOLUTION: Add this environment variable and restart your proxy:\n"
-                f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
-            )
-            if is_okta:
-                detailed_message += (
-                    "For AWS ECS: Add the environment variable to your task definition.\n"
-                    "For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
-                    "For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
-                )
-            detailed_message += f"Original error: {error_message}"
-
-            raise ProxyException(
-                message=detailed_message,
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_CLIENT_USE_PKCE",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        # Use .error() (not .exception()) for ProxyException — those are expected,
-        # intentional auth failures; emitting a full stack trace would produce
-        # false-positive alerts and pollute log aggregators.
-        if isinstance(e, ProxyException):
-            verbose_proxy_logger.error(
-                "SSO authentication failed: %s. Passed in headers: %s",
-                e,
-                additional_generic_sso_headers_dict,
-            )
-        else:
-            verbose_proxy_logger.exception(
-                "Error verifying and processing generic SSO: %s. Passed in headers: %s",
-                e,
-                additional_generic_sso_headers_dict,
-            )
-        raise e
+        _handle_generic_sso_error(
+            e,
+            generic_authorization_endpoint,
+            generic_token_endpoint,
+            additional_generic_sso_headers_dict,
+        )
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}, received_response
 
@@ -2607,93 +2621,100 @@ class SSOAuthenticationHandler:
                 # if the exchange fails partway through).
                 token_params["_pkce_cache_key"] = cache_key
             else:
-                # PKCE is enabled (already checked above) but verifier is missing.
-                # Most likely cause: callback landed on a different pod than the login
-                # request, and no shared Redis cache is configured.
-                active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
-                strict_cache_miss = (
-                    os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
+                await SSOAuthenticationHandler._handle_missing_pkce_verifier(
+                    state=state,
+                    cache_key=cache_key,
+                    cached_data=cached_data,
+                    empty_value_in_dict=_empty_value_in_dict,
+                    redis_usage_cache=redis_usage_cache,
+                    user_api_key_cache=user_api_key_cache,
                 )
-                if strict_cache_miss:
-                    # Distinguish empty-value dicts, corrupt-format entries, and genuine
-                    # cache misses so operators can investigate the correct root cause.
-                    if _empty_value_in_dict:
-                        # Dict format was correct but code_verifier was empty/null.
-                        # Best-effort cleanup: remove the corrupt entry before failing.
-                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
-                        raise ProxyException(
-                            message=(
-                                f"PKCE verifier for state '{state}' was found in cache but "
-                                f"has an empty or null code_verifier value — possible storage bug."
-                            ),
-                            type=ProxyErrorTypes.auth_error,
-                            param="PKCE_CACHE_MISS",
-                            code=status.HTTP_401_UNAUTHORIZED,
-                        )
-                    elif cached_data is not None:
-                        # Cache had data but in an unrecognised format (e.g. corrupt Redis value).
-                        # Best-effort cleanup: remove the corrupt entry before failing.
-                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
-                        verbose_proxy_logger.error(
-                            "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
-                            "treating as a cache miss. Investigate the cached value — it may be "
-                            "a corrupt or stale entry.",
-                            state,
-                            type(cached_data).__name__,
-                        )
-                        raise ProxyException(
-                            message=(
-                                f"PKCE verifier for state '{state}' has an unrecognized format "
-                                f"(type={type(cached_data).__name__}). The cached entry may be corrupt."
-                            ),
-                            type=ProxyErrorTypes.auth_error,
-                            param="PKCE_CACHE_MISS",
-                            code=status.HTTP_401_UNAUTHORIZED,
-                        )
-                    else:
-                        # Genuine cache miss — verifier was never stored or already expired.
-                        # Distinguish the likely cause: cross-instance routing (Redis configured
-                        # but callback landed on a pod that never stored the verifier) vs.
-                        # single-instance issues (TTL expiry, pod restart, or PKCE flow never
-                        # started) when only in-memory cache is available.
-                        if redis_usage_cache is not None:
-                            cause = (
-                                "The authorization and callback were likely handled by different "
-                                "instances — the verifier was stored on one pod but not found on another."
-                            )
-                        else:
-                            cause = (
-                                "The verifier may have expired (TTL), been lost on a pod restart, "
-                                "or the PKCE authorization step was never completed. "
-                                "Configure Redis so all proxy instances share the PKCE verifier."
-                            )
-                        verbose_proxy_logger.error(
-                            "PKCE is enabled but no verifier found in cache for state '%s'. "
-                            "%s Cache type: %s.",
-                            state,
-                            cause,
-                            type(active_cache).__name__,
-                        )
-                        raise ProxyException(
-                            message=f"PKCE verifier not found in cache for state '{state}'. {cause}",
-                            type=ProxyErrorTypes.auth_error,
-                            param="PKCE_CACHE_MISS",
-                            code=status.HTTP_401_UNAUTHORIZED,
-                        )
-                else:
-                    # Best-effort cleanup: if a stale/corrupt entry is present, delete it
-                    # now so it does not linger until TTL expiry (resource hygiene).
-                    if cached_data is not None:
-                        await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
-                    verbose_proxy_logger.warning(
-                        "PKCE is enabled but verifier not found in cache for state '%s' "
-                        "(cache type: %s, raw data present: %s). "
-                        "Continuing without code_verifier — set PKCE_STRICT_CACHE_MISS=true to fail fast instead.",
-                        state,
-                        type(active_cache).__name__,
-                        cached_data is not None,
-                    )
         return token_params
+
+    @staticmethod
+    async def _handle_missing_pkce_verifier(
+        state: Optional[str],
+        cache_key: str,
+        cached_data: object,
+        empty_value_in_dict: bool,
+        redis_usage_cache: object,
+        user_api_key_cache: object,
+    ) -> None:
+        """Handle the case where PKCE verifier could not be extracted from cache.
+
+        In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
+        Otherwise logs a warning and returns (token exchange proceeds without verifier).
+        """
+        active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        strict_cache_miss = (
+            os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
+        )
+        if strict_cache_miss:
+            if empty_value_in_dict:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                raise ProxyException(
+                    message=(
+                        f"PKCE verifier for state '{state}' was found in cache but "
+                        f"has an empty or null code_verifier value — possible storage bug."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            elif cached_data is not None:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                verbose_proxy_logger.error(
+                    "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
+                    "treating as a cache miss. Investigate the cached value — it may be "
+                    "a corrupt or stale entry.",
+                    state,
+                    type(cached_data).__name__,
+                )
+                raise ProxyException(
+                    message=(
+                        f"PKCE verifier for state '{state}' has an unrecognized format "
+                        f"(type={type(cached_data).__name__}). The cached entry may be corrupt."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            else:
+                if redis_usage_cache is not None:
+                    cause = (
+                        "The authorization and callback were likely handled by different "
+                        "instances — the verifier was stored on one pod but not found on another."
+                    )
+                else:
+                    cause = (
+                        "The verifier may have expired (TTL), been lost on a pod restart, "
+                        "or the PKCE authorization step was never completed. "
+                        "Configure Redis so all proxy instances share the PKCE verifier."
+                    )
+                verbose_proxy_logger.error(
+                    "PKCE is enabled but no verifier found in cache for state '%s'. "
+                    "%s Cache type: %s.",
+                    state,
+                    cause,
+                    type(active_cache).__name__,
+                )
+                raise ProxyException(
+                    message=f"PKCE verifier not found in cache for state '{state}'. {cause}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+        else:
+            if cached_data is not None:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+            verbose_proxy_logger.warning(
+                "PKCE is enabled but verifier not found in cache for state '%s' "
+                "(cache type: %s, raw data present: %s). "
+                "Continuing without code_verifier — set PKCE_STRICT_CACHE_MISS=true to fail fast instead.",
+                state,
+                type(active_cache).__name__,
+                cached_data is not None,
+            )
 
     @staticmethod
     async def _delete_pkce_verifier(cache_key: str) -> None:
