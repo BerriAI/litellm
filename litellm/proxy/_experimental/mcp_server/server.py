@@ -718,6 +718,7 @@ if MCP_AVAILABLE:
 
         Checks both the full tool name and unprefixed version (without server prefix).
         This allows users to configure simple tool names regardless of prefixing.
+        Comparison is case-insensitive to handle OpenAPI operationIds that may be in camelCase.
 
         Args:
             tool_name: The tool name to check (may be prefixed like "server-tool_name")
@@ -730,13 +731,15 @@ if MCP_AVAILABLE:
             split_server_prefix_from_name,
         )
 
-        # Check if the full name is in the list
-        if tool_name in filter_list:
+        # Normalize filter list to lowercase for case-insensitive comparison
+        filter_list_lower = [f.lower() for f in filter_list]
+
+        if tool_name.lower() in filter_list_lower:
             return True
 
-        # Check if the unprefixed name is in the list
+        # Check if the unprefixed name is in the list (case-insensitive)
         unprefixed_name, _ = split_server_prefix_from_name(tool_name)
-        return unprefixed_name in filter_list
+        return unprefixed_name.lower() in filter_list_lower
 
     def filter_tools_by_allowed_tools(
         tools: List[MCPTool],

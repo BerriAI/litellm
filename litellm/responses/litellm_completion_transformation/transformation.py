@@ -292,21 +292,21 @@ class LiteLLMCompletionResponsesConfig:
             )
         _messages = litellm_completion_request.get("messages") or []
         session_messages = chat_completion_session.get("messages") or []
-        
+
         # If session messages are empty (e.g., no database in test environment),
         # we still need to process the new input messages
         # Store original _messages before combining for safety check
         original_new_messages = _messages.copy() if _messages else []
-        
+
         combined_messages = session_messages + _messages
-        
+
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
             messages=combined_messages, tools=tools
         )
-        
+
         # Safety check: Ensure we don't end up with empty messages
         # This can happen when using previous_response_id without a database (e.g., in tests)
         # and session messages are empty but new input messages exist
@@ -340,7 +340,7 @@ class LiteLLMCompletionResponsesConfig:
                         "custom_llm_provider", ""
                     ),
                 )
-        
+
         litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
             "litellm_session_id"
@@ -386,10 +386,45 @@ class LiteLLMCompletionResponsesConfig:
                     if call_id_raw:
                         existing_tool_call_ids.add(str(call_id_raw))
 
+                    #########################################################
+                    # Merge consecutive function_call items into a single assistant
+                    # message. Anthropic requires that all tool_use blocks appear in
+                    # ONE assistant message immediately followed by the tool_result
+                    # blocks. Without this merging, each function_call creates its own
+                    # assistant message, producing back-to-back assistant messages that
+                    # Anthropic rejects with "tool_use ids were found without
+                    # tool_result blocks immediately after".
+                    #########################################################
+                    if messages:
+                        last_msg = messages[-1]
+                        last_role = (
+                            last_msg.get("role")
+                            if isinstance(last_msg, dict)
+                            else getattr(last_msg, "role", None)
+                        )
+                        if last_role == "assistant":
+                            for new_msg in chat_completion_messages:
+                                new_role = (
+                                    new_msg.get("role")
+                                    if isinstance(new_msg, dict)
+                                    else getattr(new_msg, "role", None)
+                                )
+                                if new_role == "assistant":
+                                    new_tcs = (
+                                        new_msg.get("tool_calls")
+                                        if isinstance(new_msg, dict)
+                                        else getattr(new_msg, "tool_calls", None)
+                                    ) or []
+                                    for tc in new_tcs:
+                                        LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                                            last_msg, tc
+                                        )
+                            continue
+
                 #########################################################
                 # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
-                # preserving the ordering of tool call outputs. Some models require the tool 
-                # result to immediately follow the assistant tool call. 
+                # preserving the ordering of tool call outputs. Some models require the tool
+                # result to immediately follow the assistant tool call.
                 #########################################################
                 if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
                     input_item=_input
@@ -774,14 +809,14 @@ class LiteLLMCompletionResponsesConfig:
     ]:
         """
         Ensure that tool_result messages have corresponding tool_calls in the previous assistant message.
-        
+
         This is critical for Anthropic API which requires that each tool_result block has a
         corresponding tool_use block in the previous assistant message.
-        
+
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
-            
+
         Returns:
             List of messages with tool_calls added to assistant messages when needed
         """
@@ -801,18 +836,18 @@ class LiteLLMCompletionResponsesConfig:
             ]
         ] = list(copy.deepcopy(messages))
         messages_to_remove = []
-        
+
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database
         non_tool_messages_count = sum(
             1 for msg in fixed_messages if msg.get("role") != "tool"
         )
-        
+
         for i, message in enumerate(fixed_messages):
             # Only process tool messages - check role first to narrow the type
             if message.get("role") != "tool":
                 continue
-                
+
             # At this point, we know it's a tool message, so it should have tool_call_id
             # Use get() with default to safely access tool_call_id
             tool_call_id_raw = (
@@ -823,11 +858,11 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_id: str = (
                 str(tool_call_id_raw) if tool_call_id_raw is not None else ""
             )
-            
+
             prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
                 fixed_messages, i
             )
-            
+
             # Try to recover empty tool_call_id from previous assistant message
             if not tool_call_id and prev_assistant_idx is not None:
                 prev_assistant = fixed_messages[prev_assistant_idx]
@@ -842,7 +877,7 @@ class LiteLLMCompletionResponsesConfig:
                         message_dict["tool_call_id"] = tool_call_id
                     elif hasattr(message, "tool_call_id"):
                         setattr(message, "tool_call_id", tool_call_id)
-            
+
             # Only remove messages with empty tool_call_id if we have other non-tool messages
             # This prevents ending up with an empty messages list when using previous_response_id
             # without a database (e.g., in tests where session messages are empty)
@@ -854,7 +889,7 @@ class LiteLLMCompletionResponsesConfig:
                 # If no non-tool messages, keep the tool message even with empty call_id
                 # The API will return a proper error message about the missing tool_use block
                 continue
-            
+
             # Check if the previous assistant message has the corresponding tool_call
             # This needs to run for ALL tool messages with a valid tool_call_id,
             # not just those that had an empty tool_call_id initially
@@ -863,12 +898,12 @@ class LiteLLMCompletionResponsesConfig:
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
                     prev_assistant
                 )
-                
+
                 if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(
                     tool_calls, tool_call_id
                 ):
                     _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
-                    
+
                     if not _tool_use_definition and tools:
                         _tool_use_definition = LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
                             tool_call_id, tools
@@ -891,11 +926,11 @@ class LiteLLMCompletionResponsesConfig:
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                             prev_assistant, tool_call_chunk
                         )
-        
+
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):
             fixed_messages.pop(idx)
-        
+
         return fixed_messages
 
     @staticmethod
@@ -1545,6 +1580,39 @@ class LiteLLMCompletionResponsesConfig:
         if provider_specific_fields:
             tool_call_dict["provider_specific_fields"] = provider_specific_fields
 
+        return tool_call_dict
+
+    @staticmethod
+    def convert_apply_patch_tool_call_to_chat_completion_tool_call(
+        tool_call_item: Any,
+        index: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Convert ResponseApplyPatchToolCall to ChatCompletionToolCallChunk format.
+
+        The operation (create_file / update_file / delete_file) is serialised
+        as JSON so it appears in function.arguments, just like any other
+        tool call.
+
+        Args:
+            tool_call_item: ResponseApplyPatchToolCall object with call_id and operation
+            index: The index of this tool call
+
+        Returns:
+            Dictionary in ChatCompletionToolCallChunk format
+        """
+        import json
+
+        operation_dict = tool_call_item.operation.model_dump()
+        tool_call_dict: Dict[str, Any] = {
+            "id": tool_call_item.call_id,
+            "function": {
+                "name": "apply_patch",
+                "arguments": json.dumps(operation_dict),
+            },
+            "type": "function",
+            "index": index,
+        }
         return tool_call_dict
 
     @staticmethod
