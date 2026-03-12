@@ -189,11 +189,14 @@ async def authenticate_user(  # noqa: PLR0915
                 },  # type: ignore
             )
         else:
-            raise ProxyException(
-                message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                type=ProxyErrorTypes.auth_error,
-                param="DATABASE_URL",
-                code=500,
+            key = secrets.token_urlsafe(32)
+
+            return LoginResult(
+                user_id=user_id,
+                key=key,
+                user_email=None,
+                user_role=user_role,
+                login_method="username_password",
             )
 
         key = response["token"]  # type: ignore
