@@ -423,3 +423,43 @@ class TestInit:
     def test_tone_checker_disabled_when_no_config(self):
         g = ContentFilterGuardrail(guardrail_name="test-no-tone")
         assert g._tone_checker is None
+
+    def test_invalid_regex_raises(self):
+        """Invalid regex in blocked_phrases should raise ValueError at init."""
+        with pytest.raises(ValueError, match="invalid regex pattern"):
+            _make_guardrail(blocked_phrases=[r"(unclosed"])
+
+    def test_pattern_too_long_raises(self):
+        """Patterns exceeding the length limit should raise ValueError."""
+        with pytest.raises(ValueError, match="exceeds maximum length"):
+            _make_guardrail(blocked_phrases=["a" * 2000])
+
+
+# ---------------------------------------------------------------------------
+# INPUT TYPE GUARD — tone detection only fires on responses
+# ---------------------------------------------------------------------------
+
+class TestInputTypeGuard:
+
+    @pytest.mark.asyncio
+    async def test_request_input_type_skips_tone_detection(self):
+        """Tone detection should NOT fire when input_type is 'request'."""
+        g = _make_guardrail()
+        # This text would be blocked on 'response' but should pass on 'request'
+        result = await g.apply_guardrail(
+            _inputs("That's not my problem."),
+            {},
+            "request",
+        )
+        assert result["texts"] == ["That's not my problem."]
+
+    @pytest.mark.asyncio
+    async def test_response_input_type_fires_tone_detection(self):
+        """Tone detection should fire when input_type is 'response'."""
+        g = _make_guardrail()
+        with pytest.raises(HTTPException):
+            await g.apply_guardrail(
+                _inputs("That's not my problem."),
+                {},
+                "response",
+            )

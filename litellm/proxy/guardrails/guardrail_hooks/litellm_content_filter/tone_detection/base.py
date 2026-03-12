@@ -11,6 +11,9 @@ from typing import Dict, List, Optional, Pattern, Tuple
 
 from litellm._logging import verbose_proxy_logger
 
+# Maximum length for user-supplied regex patterns to mitigate ReDoS
+_MAX_PATTERN_LENGTH = 1024
+
 # ---------------------------------------------------------------------------
 # Built-in tone patterns — each is (raw_regex, category_label)
 # ---------------------------------------------------------------------------
@@ -71,6 +74,21 @@ def _compile_patterns(
 _COMPILED_TONE_PATTERNS = _compile_patterns(_TONE_PATTERNS)
 
 
+def _validate_user_pattern(pattern: str) -> None:
+    """Validate a user-supplied regex pattern for safety.
+
+    Raises ValueError on invalid regex or patterns exceeding the length limit.
+    """
+    if len(pattern) > _MAX_PATTERN_LENGTH:
+        raise ValueError(
+            f"Tone detection: pattern exceeds maximum length of {_MAX_PATTERN_LENGTH} characters"
+        )
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Tone detection: invalid regex pattern: {e}") from e
+
+
 class ToneChecker:
     """
     CPU-only tone checker.
@@ -83,12 +101,14 @@ class ToneChecker:
     def __init__(self, config: Dict) -> None:
         self._extra_blocked: List[Tuple[Pattern[str], str]] = []
         for phrase in config.get("blocked_phrases") or []:
+            _validate_user_pattern(phrase)
             self._extra_blocked.append(
                 (re.compile(phrase, re.IGNORECASE), "custom_blocked")
             )
 
         self._safe_patterns: List[Pattern[str]] = []
         for phrase in config.get("safe_phrases") or []:
+            _validate_user_pattern(phrase)
             self._safe_patterns.append(re.compile(phrase, re.IGNORECASE))
 
         verbose_proxy_logger.debug(

@@ -310,16 +310,10 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
 
     def _init_tone_checker(self, tone_detection_config: Dict[str, Any]) -> None:
-        try:
-            self._tone_checker = ToneChecker(tone_detection_config)
-            verbose_proxy_logger.debug(
-                "ContentFilterGuardrail: tone checker enabled"
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "ContentFilterGuardrail: failed to init tone checker: %s",
-                e,
-            )
+        self._tone_checker = ToneChecker(tone_detection_config)
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: tone checker enabled"
+        )
 
     def _apply_tone_detection_policy(
         self,
@@ -332,20 +326,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         detection: ToneDetection = {
             "type": "tone",
             "category": category,
+            # matched_text kept in internal detection for logging/tracing only
             "matched_text": matched,
         }
         detections.append(detection)
         verbose_proxy_logger.warning(
-            "ContentFilterGuardrail: tone violation (%s): '%s'",
+            "ContentFilterGuardrail: tone violation (%s)",
             category,
-            matched,
         )
         raise HTTPException(
             status_code=400,
             detail={
                 "error": f"Tone violation detected: {category}",
                 "category": category,
-                "matched_text": matched,
             },
         )
 
@@ -1869,8 +1862,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                         self._apply_competitor_intent_policy(
                             intent_result, request_data, detections
                         )
-                # Tone detection (optional; raises on violation)
-                if self._tone_checker and text:
+                # Tone detection — only on LLM responses, not user input
+                if self._tone_checker and text and input_type == "response":
                     tone_result = self._tone_checker.run(text)
                     if tone_result is not None:
                         self._apply_tone_detection_policy(
