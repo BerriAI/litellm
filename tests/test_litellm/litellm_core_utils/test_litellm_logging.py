@@ -1833,3 +1833,322 @@ def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():
     assert metadata is not None
     assert metadata.get("user_api_key_hash") == "sk-hashed-empty-test"
     assert metadata.get("user_api_key_team_id") == "team-empty-test"
+
+
+
+def test_anthropic_messages_standard_logging_prompt_tokens():
+    """
+    Test that standard logging payload for anthropic_messages follows Anthropic convention:
+    - prompt_tokens should NOT include cached tokens
+    - Cache tokens are tracked separately in prompt_tokens_details
+    
+    This ensures the UI dashboard shows the correct token breakdown.
+    
+    Example from Anthropic API:
+    - input_tokens: 12 (non-cached tokens)
+    - cache_read_input_tokens: 3564 (cached tokens)
+    - output_tokens: 264
+    
+    Expected in standard logging:
+    - prompt_tokens: 12 (NOT 3576)
+    - completion_tokens: 264
+    - total_tokens: 3840 (12 + 3564 + 264)
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes, PromptTokensDetailsWrapper, Usage
+
+    # Simulate Anthropic response with caching
+    usage = Usage(
+        prompt_tokens=3576,  # Internal: includes cache (12 + 3564)
+        completion_tokens=264,
+        total_tokens=3840,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=3564,
+            cache_creation_tokens=0,
+        ),
+        cache_read_input_tokens=3564,
+        cache_creation_input_tokens=0,
+    )
+
+    response_obj = {
+        "id": "msg_test",
+        "usage": usage.model_dump(),
+        "choices": [{"message": {"content": "test"}, "finish_reason": "stop"}],
+    }
+
+    logging_obj = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [{"role": "user", "content": "Hey"}],
+        "call_type": CallTypes.anthropic_messages.value,
+        "litellm_params": {},
+        "optional_params": {},
+    }
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    # Verify: prompt_tokens should be 12 (not 3576) following Anthropic convention
+    assert payload is not None
+    assert payload["prompt_tokens"] == 12, (
+        f"Expected prompt_tokens=12 (input_tokens only), "
+        f"got {payload['prompt_tokens']}. "
+        f"For anthropic_messages, prompt_tokens should NOT include cached tokens."
+    )
+    assert payload["completion_tokens"] == 264
+    assert payload["total_tokens"] == 3840
+
+
+def test_anthropic_messages_standard_logging_with_cache_creation():
+    """
+    Test standard logging with cache creation tokens (not cache read).
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes, PromptTokensDetailsWrapper, Usage
+
+    # Simulate Anthropic response with cache creation
+    usage = Usage(
+        prompt_tokens=12307,  # Internal: includes cache creation (3 + 12304)
+        completion_tokens=550,
+        total_tokens=12857,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=12304,
+        ),
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=12304,
+    )
+
+    response_obj = {
+        "id": "msg_test",
+        "usage": usage.model_dump(),
+        "choices": [{"message": {"content": "test"}, "finish_reason": "stop"}],
+    }
+
+    logging_obj = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [{"role": "user", "content": "Hey"}],
+        "call_type": CallTypes.anthropic_messages.value,
+        "litellm_params": {},
+        "optional_params": {},
+    }
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    # Verify: prompt_tokens should be 3 (not 12307) following Anthropic convention
+    assert payload is not None
+    assert payload["prompt_tokens"] == 3, (
+        f"Expected prompt_tokens=3 (input_tokens only), "
+        f"got {payload['prompt_tokens']}. "
+        f"For anthropic_messages, prompt_tokens should NOT include cache creation tokens."
+    )
+    assert payload["completion_tokens"] == 550
+    assert payload["total_tokens"] == 12857
+
+
+def test_anthropic_messages_cost_calculation_with_caching():
+    """
+    Verify that cost calculation still works correctly after the prompt_tokens adjustment.
+    Cost calculation should use the internal Usage object which still includes cache tokens.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    # Simulate Anthropic response with cache read
+    usage = Usage(
+        prompt_tokens=3576,  # Internal: includes cache (12 + 3564)
+        completion_tokens=264,
+        total_tokens=3840,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=3564,
+            cache_creation_tokens=0,
+        ),
+        cache_read_input_tokens=3564,
+        cache_creation_input_tokens=0,
+    )
+
+    response = ModelResponse(
+        id="msg_test",
+        choices=[{"message": {"content": "test"}, "finish_reason": "stop"}],
+        model="claude-sonnet-4-5-20250929",
+        usage=usage,
+    )
+
+    # Calculate cost - should work correctly
+    cost = completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+    )
+
+    # Cost should be calculated correctly:
+    # - 12 input tokens at regular price
+    # - 3564 cached tokens at cache read price (much cheaper)
+    # - 264 output tokens at regular price
+    assert cost > 0, "Cost should be calculated"
+    
+    # The cost should be less than if all 3576 tokens were at regular price
+    # because cached tokens are cheaper
+    response_without_cache = ModelResponse(
+        id="msg_test",
+        choices=[{"message": {"content": "test"}, "finish_reason": "stop"}],
+        model="claude-sonnet-4-5-20250929",
+        usage=Usage(
+            prompt_tokens=3576,
+            completion_tokens=264,
+            total_tokens=3840,
+        ),
+    )
+    cost_without_cache = completion_cost(
+        completion_response=response_without_cache,
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+    )
+    assert cost < cost_without_cache, (
+        "Cost with caching should be less than without caching"
+    )
+
+
+def test_anthropic_messages_end_to_end_logging_and_cost():
+    """
+    End-to-end test verifying that:
+    1. Standard logging payload shows correct prompt_tokens (Anthropic convention)
+    2. Cost calculation still works correctly
+    3. Internal Usage object is preserved for cost calculation
+    """
+    from datetime import datetime
+
+    from litellm import completion_cost
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import (
+        CallTypes,
+        ModelResponse,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    # Simulate Anthropic response with cache read (from user's screenshot)
+    usage = Usage(
+        prompt_tokens=3576,  # Internal: includes cache (12 + 3564)
+        completion_tokens=264,
+        total_tokens=3840,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=3564,
+            cache_creation_tokens=0,
+        ),
+        cache_read_input_tokens=3564,
+        cache_creation_input_tokens=0,
+    )
+
+    response = ModelResponse(
+        id="msg_test",
+        choices=[{"message": {"content": "test"}, "finish_reason": "stop"}],
+        model="claude-sonnet-4-5-20250929",
+        usage=usage,
+    )
+
+    # 1. Verify cost calculation works (uses internal Usage object)
+    cost = completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0, "Cost should be calculated"
+
+    # 2. Verify standard logging payload shows Anthropic convention
+    logging_obj = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [{"role": "user", "content": "Hey"}],
+        "call_type": CallTypes.anthropic_messages.value,
+        "litellm_params": {},
+        "optional_params": {},
+    }
+
+    response_obj = response.model_dump()
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    # Verify standard logging follows Anthropic convention
+    assert payload is not None
+    assert payload["prompt_tokens"] == 12, (
+        f"Standard logging should show prompt_tokens=12 (Anthropic convention), "
+        f"got {payload['prompt_tokens']}"
+    )
+    assert payload["completion_tokens"] == 264
+    assert payload["total_tokens"] == 3840
+
+    # 3. Verify internal Usage object is unchanged (for cost calculation)
+    assert response.usage.prompt_tokens == 3576, (
+        "Internal Usage object should preserve prompt_tokens with cache tokens"
+    )

@@ -5248,6 +5248,30 @@ def get_standard_logging_object_payload(
             ),
         )
 
+        # For anthropic_messages call type, follow Anthropic convention:
+        # prompt_tokens should NOT include cached tokens
+        if call_type == CallTypes.anthropic_messages.value and usage_dict:
+            import copy
+
+            usage_dict = copy.deepcopy(usage_dict)
+            prompt_tokens_details = usage_dict.get("prompt_tokens_details")
+            if prompt_tokens_details is not None:
+                if isinstance(prompt_tokens_details, BaseModel):
+                    prompt_tokens_details = prompt_tokens_details.model_dump()
+                if isinstance(prompt_tokens_details, dict):
+                    cached_tokens = prompt_tokens_details.get("cached_tokens", 0) or 0
+                    cache_creation_tokens = (
+                        prompt_tokens_details.get("cache_creation_tokens", 0) or 0
+                    )
+                    if cached_tokens > 0 or cache_creation_tokens > 0:
+                        current_prompt_tokens = usage_dict.get("prompt_tokens", 0) or 0
+                        adjusted_prompt_tokens = (
+                            current_prompt_tokens
+                            - cached_tokens
+                            - cache_creation_tokens
+                        )
+                        usage_dict["prompt_tokens"] = max(0, adjusted_prompt_tokens)
+
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
         _model_id = metadata.get("model_info", {}).get("id", "")
