@@ -23,31 +23,68 @@ def _check_vector_store_access(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     """
-    Check if the user has access to the vector store based on team membership.
-    
+    Check if the user has access to the vector store.
+
     Args:
         vector_store: The vector store to check access for
         user_api_key_dict: User API key authentication info
-        
+
     Returns:
         True if user has access, False otherwise
-        
-    Access rules:
-    - If vector store has no team_id, it's accessible to all (legacy behavior)
-    - If user's team_id matches the vector store's team_id, access is granted
-    - Otherwise, access is denied
+
+    Access rules (checked in order):
+    1. Proxy admins always have access
+    2. If vector store has no team_id, it's accessible to all (legacy behavior)
+    3. If user's team_id matches the vector store's team_id, access is granted
+    4. If the key's object_permission.vector_stores includes the vector store id, access is granted
+    5. Otherwise, access is denied
     """
+    from litellm.proxy._types import LitellmUserRoles
+
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        return True
+
+    vector_store_id = vector_store.get("vector_store_id")
     vector_store_team_id = vector_store.get("team_id")
-    
+
     # If vector store has no team_id, it's accessible to all (legacy behavior)
     if vector_store_team_id is None:
         return True
-    
+
     # Check if user's team matches the vector store's team
     user_team_id = user_api_key_dict.team_id
     if user_team_id == vector_store_team_id:
         return True
-    
+
+    # Check if the key's object_permission grants access to this vector store
+    if vector_store_id and _is_vector_store_id_in_object_permissions(
+        vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    ):
+        return True
+
+    return False
+
+
+def _is_vector_store_id_in_object_permissions(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """
+    Check if vector_store_id is listed in the key's object_permission.vector_stores.
+
+    An empty vector_stores list means no restriction (access to all), so returns True.
+    """
+    object_permission = user_api_key_dict.object_permission
+    if object_permission is not None:
+        allowed = object_permission.vector_stores
+        if allowed is not None:
+            if len(allowed) == 0:
+                return True
+            return vector_store_id in allowed
     return False
 
 
