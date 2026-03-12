@@ -42,7 +42,9 @@ def make_sync_call(
         _params: dict = {}
         if timeout is not None:
             _params["timeout"] = timeout
-        client = _get_httpx_client(params=_params if _params else None)
+        client = _get_httpx_client(
+            params=_params if _params else None
+        )
 
     response = client.post(
         api_base,
@@ -78,9 +80,7 @@ def make_sync_call(
         )
     else:
         decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
-        completion_stream = decoder.iter_bytes(
-            response.iter_bytes(chunk_size=stream_chunk_size)
-        )
+        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
     # LOGGING
     logging_obj.post_call(
@@ -134,7 +134,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key,
+            api_key=api_key
         )
 
         ## LOGGING
@@ -195,7 +195,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=headers,
         )
         data = json.dumps(request_data)
-
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -203,7 +203,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
-            api_key=api_key,
+            api_key=api_key
         )
 
         ## LOGGING
@@ -289,7 +289,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             _stripped = _model_for_id
             for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
                 if _stripped.startswith(rp):
-                    _stripped = _stripped[len(rp) :]
+                    _stripped = _stripped[len(rp):]
                     break
             # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
             # and capture it so it can be used as aws_region_name below.
@@ -305,10 +305,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     break
             modelId = self.encode_model_id(model_id=_model_for_id)
             # Inject region extracted from model path so _get_aws_region_name picks it up
-            if (
-                _region_from_model is not None
-                and "aws_region_name" not in optional_params
-            ):
+            if _region_from_model is not None and "aws_region_name" not in optional_params:
                 optional_params["aws_region_name"] = _region_from_model
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
@@ -317,6 +314,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream=stream,
             custom_llm_provider="bedrock",
         )
+
 
         ### SET REGION NAME ###
         aws_region_name = self._get_aws_region_name(
@@ -375,7 +373,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-
+        
         # Filter beta headers in HTTP headers before making the request
         headers = update_headers_with_filtered_beta(
             headers=headers, provider="bedrock_converse"
@@ -421,7 +419,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
-                api_key=api_key,
+                api_key=api_key
             )  # type: ignore
 
         ## TRANSFORMATION ##
@@ -434,7 +432,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=extra_headers,
         )
         data = json.dumps(_data)
-
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -442,7 +440,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=data,
             headers=headers,
-            api_key=api_key,
+            api_key=api_key
         )
 
         ## LOGGING
