@@ -433,6 +433,10 @@ if MCP_AVAILABLE:
 
                 if server_id not in allowed_server_ids:
                     _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                    if _server is None:
+                        # server_id may be a name string — look up by name for accurate
+                        # IP-filter error reporting (get_mcp_server_by_id only matches UUIDs).
+                        _server = global_mcp_server_manager.get_mcp_server_by_name(server_id)
                     if (
                         _server is not None
                         and _rest_client_ip is not None
