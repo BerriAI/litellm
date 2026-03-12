@@ -1741,19 +1741,6 @@ async def _process_single_key_update(
             user_api_key_cache=user_api_key_cache,
         )
 
-    # Custom key update hook
-    if user_custom_key_update is not None:
-        if inspect.iscoroutinefunction(user_custom_key_update):
-            result = await user_custom_key_update(key_update_item)
-        else:
-            raise ValueError("user_custom_key_update must be a coroutine")
-        decision = result.get("decision", True)
-        message = result.get("message", "Authentication Failed - Custom Auth Rule")
-        if not decision:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=message
-            )
-
     # Create UpdateKeyRequest from BulkUpdateKeyRequestItem
     update_key_request = UpdateKeyRequest(
         key=key_update_item.key,
@@ -1762,6 +1749,19 @@ async def _process_single_key_update(
         team_id=key_update_item.team_id,
         tags=key_update_item.tags,
     )
+
+    # Custom key update hook
+    if user_custom_key_update is not None:
+        if inspect.iscoroutinefunction(user_custom_key_update):
+            result = await user_custom_key_update(update_key_request)
+        else:
+            raise ValueError("user_custom_key_update must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=message
+            )
 
     # Enforce upperbound key params on update (don't fill defaults)
     _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
