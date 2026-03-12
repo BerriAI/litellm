@@ -17,7 +17,6 @@ import {
   CrudOp,
   MCPToolEntry,
   CRUD_GROUP_META,
-  classifyToolOp,
   groupToolsByCrud,
 } from "../../utils/mcpToolCrudClassification";
 
