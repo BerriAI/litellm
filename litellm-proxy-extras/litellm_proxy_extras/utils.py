@@ -284,6 +284,137 @@ class ProxyExtrasDBManager:
                     ) from e
 
     @staticmethod
+    def _resolve_failed_migration(e: subprocess.CalledProcessError):
+        """
+        Handle a failed migration (P3009 or P3018) by resolving idempotent errors
+        or raising for non-recoverable errors.
+
+        Raises:
+            RuntimeError: If the error is non-idempotent, a permission error, or
+                          the migration name cannot be extracted.
+        """
+        stderr = e.stderr
+
+        # Determine error code and extract migration name
+        if "P3009" in stderr:
+            migration_match = re.search(r"`(\d+_.*)` migration", stderr)
+            if not migration_match:
+                raise RuntimeError(
+                    f"Migration failed (P3009) but could not extract migration name. "
+                    f"Manual intervention required. Error: {stderr}"
+                ) from e
+            migration_name = migration_match.group(1)
+        elif "P3018" in stderr:
+            if ProxyExtrasDBManager._is_permission_error(stderr):
+                migration_match = re.search(
+                    r"Migration name: (\d+_.*)", stderr
+                )
+                migration_name = (
+                    migration_match.group(1) if migration_match else "unknown"
+                )
+                logger.error(
+                    f"❌ Migration {migration_name} failed due to insufficient permissions. "
+                    f"Please check database user privileges. Error: {stderr}"
+                )
+                if migration_match:
+                    try:
+                        ProxyExtrasDBManager._roll_back_migration(migration_name)
+                        logger.info(
+                            f"Migration {migration_name} marked as rolled back"
+                        )
+                    except Exception as rollback_error:
+                        logger.warning(
+                            f"Failed to mark migration as rolled back: {rollback_error}"
+                        )
+                raise RuntimeError(
+                    f"Migration failed due to permission error. Migration {migration_name} "
+                    f"was NOT applied. Please grant necessary database permissions and retry."
+                ) from e
+
+            migration_match = re.search(r"Migration name: (\d+_.*)", stderr)
+            if not migration_match:
+                raise RuntimeError(
+                    f"Migration failed (P3018) but could not extract migration name. "
+                    f"Manual intervention required. Error: {stderr}"
+                ) from e
+            migration_name = migration_match.group(1)
+        else:
+            raise  # Not a P3009/P3018 — let outer handler deal with it
+
+        # Check if idempotent — if not, fail fast
+        if not ProxyExtrasDBManager._is_idempotent_error(stderr):
+            logger.error(
+                f"❌ Migration {migration_name} failed with a non-idempotent error. "
+                f"This requires manual intervention. Error: {stderr}"
+            )
+            try:
+                ProxyExtrasDBManager._roll_back_migration(migration_name)
+                logger.info(
+                    f"Migration {migration_name} marked as rolled back"
+                )
+            except Exception as rollback_error:
+                logger.warning(
+                    f"Failed to mark migration as rolled back: {rollback_error}"
+                )
+            raise RuntimeError(
+                f"Migration {migration_name} failed and requires manual intervention. "
+                f"Please inspect the migration and database state, fix the issue, "
+                f"and restart.\n"
+                f"Original error: {stderr}"
+            ) from e
+
+        # Idempotent error — resolve and continue
+        logger.info(
+            f"Migration {migration_name} failed due to idempotent error "
+            f"(e.g., column already exists), resolving as applied"
+        )
+        ProxyExtrasDBManager._roll_back_migration(migration_name)
+        ProxyExtrasDBManager._resolve_specific_migration(migration_name)
+        logger.info(f"✅ Migration {migration_name} resolved.")
+
+    @staticmethod
+    def _deploy_with_idempotent_resolution(max_resolutions: int = 150):
+        """
+        Run prisma migrate deploy, automatically resolving idempotent failures
+        (P3009/P3018 with 'already exists' etc.) in a loop.
+
+        Stops when deploy succeeds or a non-idempotent error is encountered.
+        The max_resolutions cap prevents infinite loops if something goes wrong.
+
+        Raises:
+            RuntimeError: On non-recoverable migration errors.
+            subprocess.CalledProcessError: On unexpected Prisma errors.
+        """
+        for i in range(max_resolutions):
+            try:
+                result = subprocess.run(
+                    [_get_prisma_command(), "migrate", "deploy"],
+                    timeout=60,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=_get_prisma_env(),
+                )
+                logger.info(f"prisma migrate deploy stdout: {result.stdout}")
+                logger.info("✅ prisma migrate deploy completed")
+                return
+            except subprocess.CalledProcessError as e:
+                logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
+                if "P3009" in e.stderr or "P3018" in e.stderr:
+                    # Raises RuntimeError for non-recoverable errors,
+                    # returns normally for resolved idempotent errors
+                    ProxyExtrasDBManager._resolve_failed_migration(e)
+                    logger.info("Re-deploying remaining migrations...")
+                    continue
+                else:
+                    raise
+
+        raise RuntimeError(
+            f"Exceeded maximum idempotent resolutions ({max_resolutions}). "
+            f"This likely indicates a deeper issue with migration state."
+        )
+
+    @staticmethod
     def setup_database(use_migrate: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
@@ -306,82 +437,11 @@ class ProxyExtrasDBManager:
                 if use_migrate:
                     logger.info("Running prisma migrate deploy")
                     try:
-                        # Set migrations directory for Prisma
-                        result = subprocess.run(
-                            [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=60,
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=_get_prisma_env(),
-                        )
-                        logger.info(f"prisma migrate deploy stdout: {result.stdout}")
-                        logger.info("✅ prisma migrate deploy completed")
+                        ProxyExtrasDBManager._deploy_with_idempotent_resolution()
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
-                        if "P3009" in e.stderr:
-                            # Extract the failed migration name from the error message
-                            migration_match = re.search(
-                                r"`(\d+_.*)` migration", e.stderr
-                            )
-                            if not migration_match:
-                                # Cannot identify which migration failed — fail fast
-                                raise RuntimeError(
-                                    f"Migration failed (P3009) but could not extract migration name. "
-                                    f"Manual intervention required. Error: {e.stderr}"
-                                ) from e
-
-                            failed_migration = migration_match.group(1)
-                            if ProxyExtrasDBManager._is_idempotent_error(e.stderr):
-                                logger.info(
-                                    f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
-                                )
-                                ProxyExtrasDBManager._roll_back_migration(
-                                    failed_migration
-                                )
-                                ProxyExtrasDBManager._resolve_specific_migration(
-                                    failed_migration
-                                )
-                                logger.info(
-                                    f"✅ Migration {failed_migration} resolved. Re-deploying remaining migrations..."
-                                )
-                                # Re-run deploy to apply any migrations after the resolved one
-                                result = subprocess.run(
-                                    [_get_prisma_command(), "migrate", "deploy"],
-                                    timeout=60,
-                                    check=True,
-                                    capture_output=True,
-                                    text=True,
-                                    env=_get_prisma_env(),
-                                )
-                                logger.info(f"prisma migrate deploy stdout: {result.stdout}")
-                                logger.info("✅ All migrations applied.")
-                                return True
-                            else:
-                                logger.error(
-                                    f"❌ Migration {failed_migration} failed with a non-idempotent error. "
-                                    f"This requires manual intervention. Error: {e.stderr}"
-                                )
-                                # Mark as rolled back so the migration can be retried after manual fix
-                                try:
-                                    ProxyExtrasDBManager._roll_back_migration(
-                                        failed_migration
-                                    )
-                                    logger.info(
-                                        f"Migration {failed_migration} marked as rolled back"
-                                    )
-                                except Exception as rollback_error:
-                                    logger.warning(
-                                        f"Failed to mark migration as rolled back: {rollback_error}"
-                                    )
-                                raise RuntimeError(
-                                    f"Migration {failed_migration} failed and requires manual intervention. "
-                                    f"Please inspect the migration and database state, fix the issue, "
-                                    f"and restart.\n"
-                                    f"Original error: {e.stderr}"
-                                ) from e
-                        elif (
+                        if (
                             "P3005" in e.stderr
                             and "database schema is not empty" in e.stderr
                         ):
@@ -395,96 +455,15 @@ class ProxyExtrasDBManager:
                             ProxyExtrasDBManager._mark_all_migrations_applied(
                                 migrations_dir
                             )
-                            # Now run prisma migrate deploy to apply any truly pending migrations
+                            # Now run deploy with resolution for any pending migrations
                             logger.info(
                                 "Running prisma migrate deploy for any pending migrations..."
                             )
-                            result = subprocess.run(
-                                [_get_prisma_command(), "migrate", "deploy"],
-                                timeout=60,
-                                check=True,
-                                capture_output=True,
-                                text=True,
-                                env=_get_prisma_env(),
-                            )
-                            logger.info(
-                                f"prisma migrate deploy stdout: {result.stdout}"
-                            )
+                            ProxyExtrasDBManager._deploy_with_idempotent_resolution()
                             logger.info("✅ All migrations applied.")
                             return True
-                        elif "P3018" in e.stderr:
-                            # Check if this is a permission error or idempotent error
-                            if ProxyExtrasDBManager._is_permission_error(e.stderr):
-                                # Permission errors should NOT be marked as applied
-                                # Extract migration name for logging
-                                migration_match = re.search(
-                                    r"Migration name: (\d+_.*)", e.stderr
-                                )
-                                migration_name = (
-                                    migration_match.group(1)
-                                    if migration_match
-                                    else "unknown"
-                                )
-
-                                logger.error(
-                                    f"❌ Migration {migration_name} failed due to insufficient permissions. "
-                                    f"Please check database user privileges. Error: {e.stderr}"
-                                )
-
-                                # Mark as rolled back and exit with error
-                                if migration_match:
-                                    try:
-                                        ProxyExtrasDBManager._roll_back_migration(
-                                            migration_name
-                                        )
-                                        logger.info(
-                                            f"Migration {migration_name} marked as rolled back"
-                                        )
-                                    except Exception as rollback_error:
-                                        logger.warning(
-                                            f"Failed to mark migration as rolled back: {rollback_error}"
-                                        )
-
-                                # Re-raise the error to prevent silent failures
-                                raise RuntimeError(
-                                    f"Migration failed due to permission error. Migration {migration_name} "
-                                    f"was NOT applied. Please grant necessary database permissions and retry."
-                                ) from e
-
-                            elif ProxyExtrasDBManager._is_idempotent_error(e.stderr):
-                                # Idempotent errors mean the migration has effectively been applied
-                                logger.info(
-                                    "Migration failed due to idempotent error (e.g., column already exists), "
-                                    "resolving as applied"
-                                )
-                                # Extract the migration name from the error message
-                                migration_match = re.search(
-                                    r"Migration name: (\d+_.*)", e.stderr
-                                )
-                                if migration_match:
-                                    migration_name = migration_match.group(1)
-                                    logger.info(
-                                        f"Rolling back migration {migration_name}"
-                                    )
-                                    ProxyExtrasDBManager._roll_back_migration(
-                                        migration_name
-                                    )
-                                    logger.info(
-                                        f"Resolving migration {migration_name} that failed "
-                                        f"due to existing schema objects"
-                                    )
-                                    ProxyExtrasDBManager._resolve_specific_migration(
-                                        migration_name
-                                    )
-                                    logger.info("✅ Migration resolved.")
-                            else:
-                                # Unknown P3018 error - log and re-raise for safety
-                                logger.warning(
-                                    f"P3018 error encountered but could not classify "
-                                    f"as permission or idempotent error. "
-                                    f"Error: {e.stderr}"
-                                )
-                                raise
+                        else:
+                            raise
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(

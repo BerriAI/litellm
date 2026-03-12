@@ -214,46 +214,65 @@ class TestMarkAllMigrationsApplied:
             ProxyExtrasDBManager._mark_all_migrations_applied("/fake/migrations/dir")
 
 
-class TestSetupDatabaseFailFast:
-    """Test that setup_database fails fast on non-recoverable migration errors"""
+class TestDeployWithIdempotentResolution:
+    """Test _deploy_with_idempotent_resolution loops through multiple idempotent failures"""
 
-    @patch("litellm_proxy_extras.utils.os.chdir")
-    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
-    @patch.object(
-        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
-    )
     @patch("litellm_proxy_extras.utils.subprocess.run")
-    def test_p3009_non_idempotent_raises_runtime_error(
-        self, mock_run, mock_dir, mock_getcwd, mock_chdir
-    ):
-        """P3009 with non-idempotent error should raise RuntimeError, not silently retry"""
+    def test_resolves_multiple_idempotent_migrations_in_one_pass(self, mock_run):
+        """Multiple P3018 idempotent errors should all be resolved without consuming outer retries"""
+        p3018_error_1 = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3018\nMigration name: 20251113000000_add_project_table\nERROR: relation \"LiteLLM_ProjectTable\" already exists",
+            output="",
+        )
+        p3018_error_2 = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3018\nMigration name: 20251113000001_add_project_fields\nERROR: column \"description\" already exists",
+            output="",
+        )
+        # deploy fails, rollback, resolve, deploy fails again, rollback, resolve, deploy succeeds
+        mock_run.side_effect = [
+            p3018_error_1,
+            MagicMock(returncode=0),  # roll_back
+            MagicMock(returncode=0),  # resolve
+            p3018_error_2,
+            MagicMock(returncode=0),  # roll_back
+            MagicMock(returncode=0),  # resolve
+            MagicMock(stdout="All migrations applied", returncode=0),  # final deploy
+        ]
+
+        ProxyExtrasDBManager._deploy_with_idempotent_resolution()
+
+        assert mock_run.call_count == 7
+        # First, fourth, and seventh calls should be deploy
+        for idx in [0, 3, 6]:
+            cmd = mock_run.call_args_list[idx][0][0]
+            assert cmd == ["prisma", "migrate", "deploy"]
+
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_p3009_non_idempotent_raises_runtime_error(self, mock_run):
+        """P3009 with non-idempotent error should raise RuntimeError"""
         deploy_error = subprocess.CalledProcessError(
             1,
             "prisma",
             stderr="P3009: migrate found failed migrations in the target database, `20250329084805_new_cron_job_table` migration. Error: syntax error at or near 'ALTR'",
             output="",
         )
-        # First call (migrate deploy) raises P3009; subsequent calls (roll_back) succeed
         mock_run.side_effect = [deploy_error, MagicMock(returncode=0)]
 
         with pytest.raises(RuntimeError, match="requires manual intervention"):
-            ProxyExtrasDBManager.setup_database(use_migrate=True)
+            ProxyExtrasDBManager._deploy_with_idempotent_resolution()
 
-        # Verify rollback was called (second subprocess call)
+        # deploy + rollback
         assert mock_run.call_count == 2
         rollback_cmd = mock_run.call_args_list[1][0][0]
         assert "--rolled-back" in rollback_cmd
 
-    @patch("litellm_proxy_extras.utils.os.chdir")
-    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
-    @patch.object(
-        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
-    )
     @patch("litellm_proxy_extras.utils.subprocess.run")
-    def test_p3009_unmatched_regex_raises_runtime_error(
-        self, mock_run, mock_dir, mock_getcwd, mock_chdir
-    ):
-        """P3009 with unparseable migration name should fail fast, not silently retry"""
+    def test_p3009_unmatched_regex_raises_runtime_error(self, mock_run):
+        """P3009 with unparseable migration name should fail fast"""
         error = subprocess.CalledProcessError(
             1,
             "prisma",
@@ -263,28 +282,19 @@ class TestSetupDatabaseFailFast:
         mock_run.side_effect = error
 
         with pytest.raises(RuntimeError, match="could not extract migration name"):
-            ProxyExtrasDBManager.setup_database(use_migrate=True)
+            ProxyExtrasDBManager._deploy_with_idempotent_resolution()
 
-        # Should fail on first attempt, not retry
         assert mock_run.call_count == 1
 
-    @patch("litellm_proxy_extras.utils.os.chdir")
-    @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
-    @patch.object(
-        ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
-    )
     @patch("litellm_proxy_extras.utils.subprocess.run")
-    def test_p3009_idempotent_redeploys_remaining_migrations(
-        self, mock_run, mock_dir, mock_getcwd, mock_chdir
-    ):
-        """P3009 with idempotent error should resolve the failed migration then re-deploy"""
+    def test_p3009_idempotent_redeploys(self, mock_run):
+        """P3009 with idempotent error should resolve then re-deploy"""
         deploy_error = subprocess.CalledProcessError(
             1,
             "prisma",
             stderr="P3009: migrate found failed migrations in the target database, `20250329084805_new_cron_job_table` migration. Error: column 'status' already exists",
             output="",
         )
-        # Call sequence: deploy (fails P3009), roll_back, resolve, re-deploy (succeeds)
         mock_run.side_effect = [
             deploy_error,
             MagicMock(returncode=0),  # roll_back
@@ -292,13 +302,29 @@ class TestSetupDatabaseFailFast:
             MagicMock(stdout="All migrations applied", returncode=0),  # re-deploy
         ]
 
-        result = ProxyExtrasDBManager.setup_database(use_migrate=True)
+        ProxyExtrasDBManager._deploy_with_idempotent_resolution()
 
-        assert result is True
         assert mock_run.call_count == 4
-        # Last call should be prisma migrate deploy (re-deploy)
         last_cmd = mock_run.call_args_list[3][0][0]
         assert last_cmd == ["prisma", "migrate", "deploy"]
+
+    @patch("litellm_proxy_extras.utils.subprocess.run")
+    def test_p3018_permission_error_raises(self, mock_run):
+        """P3018 with permission error should raise RuntimeError"""
+        deploy_error = subprocess.CalledProcessError(
+            1,
+            "prisma",
+            stderr="P3018\nMigration name: 20251113000000_add_project_table\nDatabase error code: 42501\npermission denied for table users",
+            output="",
+        )
+        mock_run.side_effect = [deploy_error, MagicMock(returncode=0)]
+
+        with pytest.raises(RuntimeError, match="permission error"):
+            ProxyExtrasDBManager._deploy_with_idempotent_resolution()
+
+
+class TestSetupDatabase:
+    """Test setup_database integration with deploy and resolution"""
 
     @patch("litellm_proxy_extras.utils.os.chdir")
     @patch("litellm_proxy_extras.utils.os.getcwd", return_value="/original")
@@ -306,16 +332,13 @@ class TestSetupDatabaseFailFast:
         ProxyExtrasDBManager, "_get_prisma_dir", return_value="/fake/prisma/dir"
     )
     @patch("litellm_proxy_extras.utils.subprocess.run")
-    def test_successful_deploy_does_not_call_resolve_all(
-        self, mock_run, mock_dir, mock_getcwd, mock_chdir
-    ):
+    def test_successful_deploy(self, mock_run, mock_dir, mock_getcwd, mock_chdir):
         """After successful prisma migrate deploy, no diff/resolve should be called"""
         mock_run.return_value = MagicMock(stdout="All migrations applied", returncode=0)
 
         result = ProxyExtrasDBManager.setup_database(use_migrate=True)
 
         assert result is True
-        # Only one subprocess call: prisma migrate deploy
         assert mock_run.call_count == 1
         cmd = mock_run.call_args[0][0]
         assert cmd == ["prisma", "migrate", "deploy"]
