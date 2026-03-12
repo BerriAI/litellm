@@ -397,9 +397,6 @@ model LiteLLM_VerificationToken {
 
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
     @@index([budget_reset_at, expires])
-
-    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (...) ORDER BY "public"."LiteLLM_VerificationToken"."key_alias" ASC
-    @@index([key_alias])
 }
 
 model LiteLLM_JWTKeyMapping {
@@ -565,9 +562,6 @@ model LiteLLM_SpendLogs {
   @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
-
-  // SELECT ... FROM "LiteLLM_SpendLogs" WHERE ("startTime" >= $1 AND "startTime" <= $2 AND "user" = $3) GROUP BY ...
-  @@index([user, startTime])
 }
 
 // View spend, model, api_key per request
