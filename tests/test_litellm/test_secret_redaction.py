@@ -96,6 +96,42 @@ def test_filter_redacts_non_string_args():
     assert "REDACTED" in output
 
 
+def test_filter_redacts_exception_tracebacks():
+    """Secrets embedded in exception messages must be redacted in tracebacks."""
+
+    def log_messages():
+        try:
+            raise ValueError(f"Auth failed with key {SECRET}")
+        except ValueError:
+            verbose_logger.exception("Something went wrong")
+
+    output = _capture_logger_output(log_messages)
+    assert SECRET not in output
+    assert "REDACTED" in output
+    assert "Something went wrong" in output
+
+
+def test_filter_redacts_extra_fields():
+    """Secrets passed via extra={...} must be redacted on the record."""
+    record = logging.LogRecord(
+        name="test",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="request completed",
+        args=(),
+        exc_info=None,
+    )
+    record.api_key = SECRET
+    record.region = "us-east-1"
+
+    _secret_filter.filter(record)
+
+    assert SECRET not in record.api_key
+    assert "REDACTED" in record.api_key
+    assert record.region == "us-east-1"
+
+
 def test_disable_redaction_passes_secrets_through():
     """When _ENABLE_SECRET_REDACTION is False, secrets pass through."""
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):

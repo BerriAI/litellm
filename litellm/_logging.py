@@ -5,7 +5,7 @@ import re
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -17,7 +17,7 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_REDACT_SECRETS") == "TRUE"
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_REDACT_SECRETS", "").lower() == "true"
 
 _REDACTED = "REDACTED"
 
@@ -64,6 +64,8 @@ def _redact_string(value: str) -> str:
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
+    _formatter = logging.Formatter()
+
     def filter(self, record: logging.LogRecord) -> bool:
         if not _ENABLE_SECRET_REDACTION:
             return True
@@ -74,6 +76,20 @@ class SecretRedactionFilter(logging.Filter):
         except Exception:
             if isinstance(record.msg, str):
                 record.msg = _redact_string(record.msg)
+
+        # Redact exception tracebacks
+        if record.exc_info and record.exc_info[1] is not None:
+            try:
+                record.exc_text = _redact_string(
+                    self._formatter.formatException(record.exc_info)
+                )
+            except Exception:
+                pass
+
+        # Redact extra fields passed via logger.debug("msg", extra={...})
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
+                setattr(record, key, _redact_string(value))
 
         return True
 
