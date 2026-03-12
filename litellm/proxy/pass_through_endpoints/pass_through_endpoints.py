@@ -2058,14 +2058,21 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        # Strip server root path prefix so mapped routes match when SERVER_ROOT_PATH is set
+        # When SERVER_ROOT_PATH is set, all valid routes carry that prefix.
+        # Strip it before comparing against mapped routes; if the route does not
+        # carry the prefix, it cannot be a mapped pass-through route.
         root_path = get_server_root_path()
-        normalized_route = route
-        if root_path and root_path != "/" and route.startswith(root_path):
-            normalized_route = route[len(root_path):]
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if normalized_route.startswith(mapped_route):
-                return True
+        if root_path and root_path != "/":
+            if route.startswith(root_path):
+                normalized_route = route[len(root_path):]
+                for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+                    if normalized_route.startswith(mapped_route):
+                        return True
+            # Route lacks expected prefix — not a mapped pass-through route
+        else:
+            for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+                if route.startswith(mapped_route):
+                    return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
