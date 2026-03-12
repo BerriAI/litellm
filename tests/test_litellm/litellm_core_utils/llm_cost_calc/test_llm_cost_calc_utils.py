@@ -301,7 +301,6 @@ def test_fully_accounted_tokens_no_change():
  
 def test_double_counting_still_handled():
     """
-    Scenario: xAI-style double counting where text_tokens includes cached_tokens.
     Provider reports:
         - prompt_tokens = 500
         - text_tokens = 500 (includes cached)
