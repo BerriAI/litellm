@@ -906,9 +906,11 @@ if MCP_AVAILABLE:
             client_id, client_secret, scopes = _extract_credentials(request)
 
             _oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = (
-                "client_credentials"
-                if client_id and client_secret and request.token_url
-                else None
+                request.oauth2_flow or (
+                    "client_credentials"
+                    if client_id and client_secret and request.token_url
+                    else None
+                )
             )
 
             server_model = MCPServer(
