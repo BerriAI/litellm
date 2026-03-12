@@ -106,5 +106,10 @@
     "base_url": "https://aihubmix.com/v1",
     "api_key_env": "AIHUBMIX_API_KEY",
     "api_base_env": "AIHUBMIX_API_BASE"
+  },
+  "crusoe": {
+    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1/",
+    "api_key_env": "CRUSOE_API_KEY",
+    "api_base_env": "CRUSOE_API_BASE"
   }
 }
