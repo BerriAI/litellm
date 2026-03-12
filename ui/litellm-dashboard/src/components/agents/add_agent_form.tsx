@@ -15,11 +15,14 @@ import {
 } from "../networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
+import TeamDropdown from "../common_components/team_dropdown";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import GuardrailSelector from "../guardrails/GuardrailSelector";
 
 const { Step } = Steps;
 
@@ -30,6 +33,7 @@ interface AddAgentFormProps {
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  teams?: Team[] | null;
 }
 
 const AddAgentForm: React.FC<AddAgentFormProps> = ({
@@ -37,6 +41,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   onClose,
   accessToken,
   onSuccess,
+  teams,
 }) => {
   const { userId, userRole } = useAuthorized();
   const [form] = Form.useForm();
@@ -268,6 +273,17 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         }
       }
 
+      const selectedGuardrails = values.guardrails || [];
+      if (selectedGuardrails.length > 0) {
+        if (!agentData.litellm_params) agentData.litellm_params = {};
+        agentData.litellm_params.guardrails = selectedGuardrails;
+      }
+
+      const selectedTeamId = values.team_id || null;
+      if (selectedTeamId) {
+        agentData.team_id = selectedTeamId;
+      }
+
       const agentResponse = await createAgentCall(accessToken, agentData);
       const agentId: string = agentResponse.agent_id;
       const agentName: string = agentResponse.agent_name || values.agent_name || agentId;
@@ -279,6 +295,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           agentId,
           newKeyName,
           newKeyModels,
+          undefined,
+          selectedTeamId,
         );
         setCreatedKeyValue(keyResponse.key || null);
       } else if (keyAssignOption === "existing_key") {
@@ -527,6 +545,22 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           </div>
         </div>
       </div>
+
+      <Divider className="my-0" />
+
+      <div>
+        <h4 className="text-sm font-medium text-gray-700 mb-3">Guardrails</h4>
+        <p className="text-xs text-gray-500 mb-3">
+          Apply guardrails to this agent. Selected guardrails will run on all calls made by this agent.
+        </p>
+        <Form.Item name="guardrails" initialValue={[]}>
+          <GuardrailSelector
+            accessToken={accessToken ?? ""}
+            value={form.getFieldValue("guardrails") ?? []}
+            onChange={(selected: string[]) => form.setFieldsValue({ guardrails: selected })}
+          />
+        </Form.Item>
+      </div>
     </div>
   );
 
@@ -682,6 +716,19 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             {agentName}
           </Tag>
         </div>
+
+        <Form.Item
+          label={<span className="text-sm font-medium text-gray-700">Assign to Team</span>}
+          name="team_id"
+          tooltip="Optionally assign this agent to a team. The agent and its key will belong to the selected team."
+        >
+          <TeamDropdown
+            teams={teams}
+            loading={!teams}
+          />
+        </Form.Item>
+
+        <Divider className="my-4" />
 
         <div className="space-y-3">
           {/* Option: Create new key */}
@@ -848,8 +895,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           layout="vertical"
           initialValues={
             agentType === "a2a"
-              ? { ...getDefaultFormValues(), allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [] }
-              : { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [] }
+              ? { ...getDefaultFormValues(), allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [], guardrails: [] }
+              : { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [], guardrails: [] }
           }
           className="space-y-4"
         >
