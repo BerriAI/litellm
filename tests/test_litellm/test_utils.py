@@ -619,6 +619,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
@@ -700,6 +701,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
@@ -738,6 +740,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
+                "supports_multimodal": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
@@ -745,6 +748,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
+                "uses_embed_content": {"type": "boolean"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
