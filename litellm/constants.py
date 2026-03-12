@@ -1358,9 +1358,8 @@ MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = int(
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
 # installations with large numbers of stale managed objects).
-PROXY_BATCH_POLLING_ENABLED = (
-    os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower() != "false"
-)
+_batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
+PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
