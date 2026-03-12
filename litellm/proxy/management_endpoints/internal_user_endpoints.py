@@ -2383,59 +2383,59 @@ async def block_user(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    # Atomically update only if user exists AND is not a proxy admin
-    # This prevents TOCTOU race condition where user role could change between check and update
-    try:
-        record = await prisma_client.db.litellm_usertable.update(
-            where={
-                "user_id": data.user_id,
-                "NOT": {
-                    "user_role": {
-                        "in": [LitellmUserRoles.PROXY_ADMIN.value, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value]
-                    }
-                }
-            },
-            data={"blocked": True},  # type: ignore
-        )
-    except Exception as e:
-        # Update failed - either user not found OR user is a proxy admin
-        # Query to determine which case
-        target_user = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": data.user_id}
-        )
-        
-        if target_user is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User {data.user_id} not found"},
-            )
-        
-        if target_user.user_role in [
-            LitellmUserRoles.PROXY_ADMIN.value,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        ]:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Cannot block users with proxy admin role"},
-            )
-        
-        # Some other error occurred
-        raise e
-
-    # Invalidate user cache entry
-    user_api_key_cache.delete_cache(key=data.user_id)
-
-    # Invalidate cache for all keys associated with this user (both local and Redis)
-    user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+    # First check if user exists and get their role
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
         where={"user_id": data.user_id}
     )
     
-    for key in user_keys:
-        await _delete_cache_key_object(
-            hashed_token=key.token,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
         )
+    
+    # Check if user is a proxy admin (handles NULL user_role correctly)
+    if target_user.user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot block users with proxy admin role"},
+        )
+    
+    # Update user to blocked status
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id},
+        data={"blocked": True},  # type: ignore
+    )
+
+    # Invalidate user cache entry (local and Redis)
+    user_api_key_cache.delete_cache(key=data.user_id)
+
+    # Invalidate cache for all keys associated with this user
+    # Use pagination to avoid unbounded query for users with many keys
+    skip = 0
+    batch_size = 100
+    
+    while True:
+        user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            skip=skip,
+            take=batch_size,
+        )
+        
+        if not user_keys:
+            break
+        
+        for key in user_keys:
+            await _delete_cache_key_object(
+                hashed_token=key.token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        
+        skip += batch_size
 
     return record
 
@@ -2479,58 +2479,58 @@ async def unblock_user(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    # Atomically update only if user exists AND is not a proxy admin
-    # This prevents TOCTOU race condition where user role could change between check and update
-    try:
-        record = await prisma_client.db.litellm_usertable.update(
-            where={
-                "user_id": data.user_id,
-                "NOT": {
-                    "user_role": {
-                        "in": [LitellmUserRoles.PROXY_ADMIN.value, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value]
-                    }
-                }
-            },
-            data={"blocked": False},  # type: ignore
-        )
-    except Exception as e:
-        # Update failed - either user not found OR user is a proxy admin
-        # Query to determine which case
-        target_user = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": data.user_id}
-        )
-        
-        if target_user is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User {data.user_id} not found"},
-            )
-        
-        if target_user.user_role in [
-            LitellmUserRoles.PROXY_ADMIN.value,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        ]:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Cannot unblock users with proxy admin role"},
-            )
-        
-        # Some other error occurred
-        raise e
-
-    # Invalidate user cache entry
-    user_api_key_cache.delete_cache(key=data.user_id)
-
-    # Invalidate cache for all keys associated with this user (both local and Redis)
-    user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+    # First check if user exists and get their role
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
         where={"user_id": data.user_id}
     )
     
-    for key in user_keys:
-        await _delete_cache_key_object(
-            hashed_token=key.token,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
         )
+    
+    # Check if user is a proxy admin (handles NULL user_role correctly)
+    if target_user.user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot unblock users with proxy admin role"},
+        )
+    
+    # Update user to unblocked status
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id},
+        data={"blocked": False},  # type: ignore
+    )
+
+    # Invalidate user cache entry (local and Redis)
+    user_api_key_cache.delete_cache(key=data.user_id)
+
+    # Invalidate cache for all keys associated with this user
+    # Use pagination to avoid unbounded query for users with many keys
+    skip = 0
+    batch_size = 100
+    
+    while True:
+        user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            skip=skip,
+            take=batch_size,
+        )
+        
+        if not user_keys:
+            break
+        
+        for key in user_keys:
+            await _delete_cache_key_object(
+                hashed_token=key.token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        
+        skip += batch_size
 
     return record
