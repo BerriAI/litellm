@@ -360,6 +360,103 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
 
+    async def _list_tools_for_single_server(
+        server_id: str,
+        allowed_server_ids: List[str],
+        rest_client_ip: Optional[str],
+        mcp_server_auth_headers: dict,
+        mcp_auth_header: Optional[str],
+        raw_headers_from_request: dict,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> dict:
+        """
+        Resolve and fetch tools for a single specified MCP server.
+
+        Returns the full REST response dict (tools / error / message).
+        Raises HTTPException on access / IP-filter errors.
+        """
+        # Resolve a server name to its UUID if needed
+        _name_resolved = None
+        if server_id not in allowed_server_ids:
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id
+            )
+            if _name_resolved is not None and _name_resolved.server_id in set(
+                allowed_server_ids
+            ):
+                server_id = _name_resolved.server_id
+
+        if server_id not in allowed_server_ids:
+            _server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                or _name_resolved
+            )
+            if (
+                _server is not None
+                and rest_client_ip is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    _server, rest_client_ip
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "ip_filtering",
+                        "message": (
+                            f"MCP server '{server_id}' is not accessible from your IP address "
+                            f"({rest_client_ip}). This server is restricted to internal "
+                            "networks only. To make it externally accessible, set "
+                            "'available_on_public_internet: true' in the server configuration."
+                        ),
+                    },
+                )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_id}",
+                },
+            )
+
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None:
+            return {
+                "tools": [],
+                "error": "server_not_found",
+                "message": f"Server with id {server_id} not found",
+            }
+
+        server_auth_header = _get_server_auth_header(
+            server, mcp_server_auth_headers, mcp_auth_header
+        )
+        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+            server, user_api_key_dict
+        )
+
+        try:
+            tools = await _get_tools_for_single_server(
+                server,
+                server_auth_header,
+                raw_headers_from_request,
+                user_api_key_dict,
+                extra_headers=user_oauth_extra_headers,
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error getting tools from {server.name}: {e}"
+            )
+            return {
+                "tools": [],
+                "error": "server_error",
+                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+            }
+
+        return {
+            "tools": tools,
+            "error": None,
+            "message": "Successfully retrieved tools",
+        }
+
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
@@ -427,86 +524,15 @@ if MCP_AVAILABLE:
 
             # If server_id is specified, only query that specific server
             if server_id:
-                # Resolve a server name to its UUID if needed (MCPConnectPicker passes
-                # server_name strings, but allowed_server_ids_set contains UUIDs).
-                # _name_resolved is kept so the second check can reuse it for accurate
-                # IP-filter error reporting if the resolved UUID is not in allowed_server_ids.
-                _name_resolved = None
-                if server_id not in allowed_server_ids:
-                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
-                        server_id
-                    )
-                    if _name_resolved is not None and _name_resolved.server_id in set(
-                        allowed_server_ids
-                    ):
-                        server_id = _name_resolved.server_id
-
-                if server_id not in allowed_server_ids:
-                    # Try UUID lookup first; fall back to the name-resolved server so that
-                    # IP-filter reporting works correctly even when server_id is a name string.
-                    _server = (
-                        global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                        or _name_resolved
-                    )
-                    if (
-                        _server is not None
-                        and _rest_client_ip is not None
-                        and not global_mcp_server_manager._is_server_accessible_from_ip(
-                            _server, _rest_client_ip
-                        )
-                    ):
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "error": "ip_filtering",
-                                "message": (
-                                    f"MCP server '{server_id}' is not accessible from your IP address "
-                                    f"({_rest_client_ip}). This server is restricted to internal "
-                                    "networks only. To make it externally accessible, set "
-                                    "'available_on_public_internet: true' in the server configuration."
-                                ),
-                            },
-                        )
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "access_denied",
-                            "message": f"The key is not allowed to access server {server_id}",
-                        },
-                    )
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server is None:
-                    return {
-                        "tools": [],
-                        "error": "server_not_found",
-                        "message": f"Server with id {server_id} not found",
-                    }
-
-                server_auth_header = _get_server_auth_header(
-                    server, mcp_server_auth_headers, mcp_auth_header
+                return await _list_tools_for_single_server(
+                    server_id=server_id,
+                    allowed_server_ids=allowed_server_ids,
+                    rest_client_ip=_rest_client_ip,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    raw_headers_from_request=raw_headers_from_request,
+                    user_api_key_dict=user_api_key_dict,
                 )
-                # Single-server request: targeted lookup is more efficient than a bulk fetch.
-                user_oauth_extra_headers = await _get_user_oauth_extra_headers(
-                    server, user_api_key_dict
-                )
-
-                try:
-                    list_tools_result = await _get_tools_for_single_server(
-                        server,
-                        server_auth_header,
-                        raw_headers_from_request,
-                        user_api_key_dict,
-                        extra_headers=user_oauth_extra_headers,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(
-                        f"Error getting tools from {server.name}: {e}"
-                    )
-                    return {
-                        "tools": [],
-                        "error": "server_error",
-                        "message": f"Failed to get tools from server {server.name}: {str(e)}",
-                    }
             else:
                 if not allowed_server_ids:
                     if _ip_blocked_count > 0:
