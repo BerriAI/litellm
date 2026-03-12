@@ -105,7 +105,58 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
         self._accumulated_reasoning_content_parts: List[str] = []
+        # Buffer for the first chunk, used to resolve the chat completion ID
+        # before emitting the response.created event.
+        self._first_chunk: Optional[ModelResponseStream] = None
+        self._first_chunk_resolved: bool = False
 
+
+    def _build_encoded_response_id(self, inner_id: str) -> str:
+        """Build an encoded resp_ ID from an inner ID (e.g. chatcmpl-xxx).
+
+        This ensures the client-facing ID can be decoded back to the inner ID
+        which matches the request_id stored in SpendLogs.
+        """
+        return ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=self.custom_llm_provider,
+            model_id=(self.litellm_metadata or {}).get("model_info", {}).get("id") if self.litellm_metadata else None,
+            response_id=inner_id,
+        )
+
+    async def _prefetch_first_chunk_async(self) -> None:
+        """Read the first streaming chunk to resolve the chat completion ID.
+
+        The chatcmpl-{uuid} ID is only known once the first chunk arrives from
+        the provider. We need it to build a consistent encoded resp_ ID that
+        the client can later use for GET/DELETE/multi-turn operations.
+        """
+        if self._first_chunk_resolved:
+            return
+        self._first_chunk_resolved = True
+        try:
+            chunk = await self.litellm_custom_stream_wrapper.__anext__()
+            if chunk is not None:
+                self._first_chunk = cast(ModelResponseStream, chunk)
+                chat_completion_id = getattr(self._first_chunk, "id", None)
+                if chat_completion_id:
+                    self._cached_response_id = self._build_encoded_response_id(chat_completion_id)
+        except StopAsyncIteration:
+            pass
+
+    def _prefetch_first_chunk_sync(self) -> None:
+        """Sync version of _prefetch_first_chunk_async."""
+        if self._first_chunk_resolved:
+            return
+        self._first_chunk_resolved = True
+        try:
+            chunk = self.litellm_custom_stream_wrapper.__next__()
+            if chunk is not None:
+                self._first_chunk = cast(ModelResponseStream, chunk)
+                chat_completion_id = getattr(self._first_chunk, "id", None)
+                if chat_completion_id:
+                    self._cached_response_id = self._build_encoded_response_id(chat_completion_id)
+        except StopIteration:
+            pass
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -344,9 +395,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_tool_events.append(item_done_event)
 
     def _default_response_created_event_data(self) -> dict:
-        # Use cached response ID if available, otherwise generate a new one
+        # Use cached response ID if available (set by _prefetch_first_chunk).
+        # Fall back to an encoded ID using a fresh UUID so the format is always
+        # decodable — but this path should rarely be hit.
         if self._cached_response_id is None:
-            self._cached_response_id = f"resp_{str(uuid.uuid4())}"
+            self._cached_response_id = self._build_encoded_response_id(
+                f"chatcmpl-{str(uuid.uuid4())}"
+            )
         
         response_created_event_data = {
             "id": self._cached_response_id,
@@ -817,6 +872,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self.finished is True:
                     raise StopAsyncIteration
 
+                # Prefetch the first chunk so the response ID aligns with
+                # the chat completion ID stored in SpendLogs.
+                if not self._first_chunk_resolved:
+                    await self._prefetch_first_chunk_async()
+
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -828,7 +888,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
 
                 try:
-                    chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                    # Use the buffered first chunk if available
+                    if self._first_chunk is not None:
+                        chunk = self._first_chunk
+                        self._first_chunk = None
+                    else:
+                        chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
@@ -911,6 +976,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             while True:
                 if self.finished is True:
                     raise StopIteration
+
+                # Prefetch the first chunk so the response ID aligns with
+                # the chat completion ID stored in SpendLogs.
+                if not self._first_chunk_resolved:
+                    self._prefetch_first_chunk_sync()
+
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -921,7 +992,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self._pending_tool_events:
                     return self._pending_tool_events.pop(0)
                 try:
-                    chunk = self.litellm_custom_stream_wrapper.__next__()
+                    # Use the buffered first chunk if available
+                    if self._first_chunk is not None:
+                        chunk = self._first_chunk
+                        self._first_chunk = None
+                    else:
+                        chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
@@ -1078,20 +1154,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 responses_api_request=self.responses_api_request,
             )
 
-            # Use the cached response ID to ensure consistency across all events
+            # Use the cached response ID (already encoded by _prefetch_first_chunk
+            # or _default_response_created_event_data) to ensure consistency
+            # across all streaming events. No double-encoding needed.
             if self._cached_response_id:
                 responses_api_response.id = self._cached_response_id
-
-            # Encode the response ID to match non-streaming behavior
-            encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                responses_api_response=responses_api_response,
-                custom_llm_provider=self.custom_llm_provider,
-                litellm_metadata=self.litellm_metadata,
-            )
+            else:
+                # Fallback: encode if no cached ID (shouldn't happen normally)
+                encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                    responses_api_response=responses_api_response,
+                    custom_llm_provider=self.custom_llm_provider,
+                    litellm_metadata=self.litellm_metadata,
+                )
+                responses_api_response = encoded_response
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                response=encoded_response,
+                response=responses_api_response,
             )
         else:
             return None
