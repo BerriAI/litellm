@@ -200,6 +200,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index", label: "Getting Started" },
+    { type: "link", label: "Release Notes", href: "/release_notes" },
 
     // ════════════════════════════════════════════════════════════
     // PYTHON SDK
@@ -1055,90 +1056,95 @@ const sidebars = {
 };
 
 // =========================================
-// Guides sidebar — accessible from top navbar
+// Learn sidebar — landing page, then Guides + Tutorials categories
 // =========================================
-const guidesSidebar = {
-  guidesSidebar: [
-    { type: "doc", id: "guides/index", label: "Overview" },
+const learnSidebar = {
+  learnSidebar: [
+    // ── Landing page ──────────────────────────────────────────────────
+    { type: "doc", id: "learn/index", label: "Learn" },
+
+    // ── Guides ────────────────────────────────────────────────────────
     {
       type: "category",
-      label: "Completion & Messaging",
+      label: "Guides",
       collapsible: true,
       collapsed: false,
+      link: { type: "doc", id: "guides/index" },
       items: [
-        "completion/stream",
-        "completion/function_call",
-        "completion/json_mode",
-        "completion/vision",
-        "completion/audio",
-        "completion/document_understanding",
-        "completion/image_generation_chat",
-        "completion/batching",
-        "completion/prefix",
-        "completion/predict_outputs",
-        "completion/provider_specific_params",
+        {
+          type: "category",
+          label: "Completion & Messaging",
+          collapsible: true,
+          collapsed: false,
+          items: [
+            "completion/stream",
+            "completion/function_call",
+            "completion/json_mode",
+            "completion/vision",
+            "completion/audio",
+            "completion/document_understanding",
+            "completion/image_generation_chat",
+            "completion/batching",
+            "completion/prefix",
+            "completion/predict_outputs",
+            "completion/provider_specific_params",
+          ],
+        },
+        {
+          type: "category",
+          label: "Prompt Engineering",
+          collapsible: true,
+          collapsed: true,
+          items: [
+            "completion/prompt_caching",
+            "completion/prompt_formatting",
+            "completion/message_trimming",
+            "completion/message_sanitization",
+            "completion/model_alias",
+            "completion/mock_requests",
+            "completion/drop_params",
+            "completion/reliable_completions",
+            "reasoning_content",
+          ],
+        },
+        {
+          type: "category",
+          label: "AI Capabilities",
+          collapsible: true,
+          collapsed: true,
+          items: [
+            "completion/web_search",
+            "completion/web_fetch",
+            "completion/computer_use",
+            "completion/knowledgebase",
+            "providers/anthropic_tool_search",
+            "guides/code_interpreter",
+            "proxy/veo_video_generation",
+          ],
+        },
+        {
+          type: "category",
+          label: "Models & Customization",
+          collapsible: true,
+          collapsed: true,
+          items: [
+            "guides/finetuned_models",
+            "guides/security_settings",
+            "budget_manager",
+            "extras/creating_adapters",
+          ],
+        },
       ],
     },
-    {
-      type: "category",
-      label: "Prompt Engineering",
-      collapsible: true,
-      collapsed: true,
-      items: [
-        "completion/prompt_caching",
-        "completion/prompt_formatting",
-        "completion/message_trimming",
-        "completion/message_sanitization",
-        "completion/model_alias",
-        "completion/mock_requests",
-        "completion/drop_params",
-        "completion/reliable_completions",
-        "reasoning_content",
-      ],
-    },
-    {
-      type: "category",
-      label: "AI Capabilities",
-      collapsible: true,
-      collapsed: true,
-      items: [
-        "completion/web_search",
-        "completion/web_fetch",
-        "completion/computer_use",
-        "completion/knowledgebase",
-        "providers/anthropic_tool_search",
-        "guides/code_interpreter",
-        "proxy/veo_video_generation",
-      ],
-    },
-    {
-      type: "category",
-      label: "Models & Customization",
-      collapsible: true,
-      collapsed: true,
-      items: [
-        "guides/finetuned_models",
-        "guides/security_settings",
-        "budget_manager",
-        "extras/creating_adapters",
-      ],
-    },
-  ],
-};
 
-// =========================================
-// Tutorials sidebar — accessible from top navbar
-// =========================================
-const tutorialsSidebar = {
-  tutorialsSidebar: [
-    { type: "doc", id: "tutorials/index", label: "Overview" },
+    // ── Tutorials ─────────────────────────────────────────────────────
     {
       type: "category",
       label: "Tutorials",
-      collapsible: false,
+      collapsible: true,
+      collapsed: false,
+      link: { type: "doc", id: "tutorials/index" },
       items: [
-
-        // ── Getting Started ────────────────────────────────────────────
         {
           type: "category",
           label: "Getting Started",
@@ -1150,8 +1156,6 @@ const tutorialsSidebar = {
             "tutorials/mock_completion",
           ],
         },
-
-        // ── Agent SDKs & Frameworks ────────────────────────────────────
         {
           type: "category",
           label: "Agent SDKs & Frameworks",
@@ -1165,8 +1169,6 @@ const tutorialsSidebar = {
             "tutorials/instructor",
           ],
         },
-
-        // ── AI Coding Tools ────────────────────────────────────────────
         {
           type: "category",
           label: "AI Coding Tools",
@@ -1200,8 +1202,6 @@ const tutorialsSidebar = {
             "tutorials/google_genai_sdk",
           ],
         },
-
-        // ── Provider Tutorials ─────────────────────────────────────────
         {
           type: "category",
           label: "Provider Tutorials",
@@ -1218,8 +1218,6 @@ const tutorialsSidebar = {
             "tutorials/oobabooga",
           ],
         },
-
-        // ── Proxy & Gateway ────────────────────────────────────────────
         {
           type: "category",
           label: "Proxy & Gateway",
@@ -1234,8 +1232,6 @@ const tutorialsSidebar = {
             "tutorials/anthropic_file_usage",
           ],
         },
-
-        // ── Observability & Safety ─────────────────────────────────────
         {
           type: "category",
           label: "Observability & Safety",
@@ -1248,8 +1244,6 @@ const tutorialsSidebar = {
             "tutorials/lm_evaluation_harness",
           ],
         },
-
-        // ── Advanced Features ──────────────────────────────────────────
         {
           type: "category",
           label: "Advanced Features",
@@ -1261,10 +1255,9 @@ const tutorialsSidebar = {
             "tutorials/gemini_realtime_with_audio",
           ],
         },
-
       ],
     },
   ],
 };
 
-module.exports = { ...sidebars, ...guidesSidebar, ...tutorialsSidebar };
+module.exports = { ...sidebars, ...learnSidebar };

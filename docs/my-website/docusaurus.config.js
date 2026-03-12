@@ -205,21 +205,15 @@ const config = {
         items: [
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialsSidebar',
-            position: 'left',
-            label: 'Tutorials',
-          },
-          {
-            type: 'docSidebar',
-            sidebarId: 'guidesSidebar',
-            position: 'left',
-            label: 'Guides',
-          },
-          {
-            type: 'docSidebar',
             sidebarId: 'tutorialSidebar',
             position: 'left',
             label: 'Docs',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'learnSidebar',
+            position: 'left',
+            label: 'Learn',
           },
           {
             type: 'docSidebar',
@@ -228,14 +222,12 @@ const config = {
             label: 'Integrations',
           },
           {
-            sidebarId: 'tutorialSidebar',
             position: 'left',
             label: 'Enterprise',
             to: "docs/enterprise"
           },
-          { to: '/api-reference', label: 'API Reference', position: 'left' },
-          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
+          { to: '/api-reference', label: 'API Reference', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 Cost Map',
