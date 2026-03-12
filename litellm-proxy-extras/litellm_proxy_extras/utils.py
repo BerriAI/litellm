@@ -339,7 +339,7 @@ class ProxyExtrasDBManager:
                 ) from e
             migration_name = migration_match.group(1)
         else:
-            raise  # Not a P3009/P3018 — let outer handler deal with it
+            raise e  # Not a P3009/P3018 — let outer handler deal with it
 
         # Check if idempotent — if not, fail fast
         if not ProxyExtrasDBManager._is_idempotent_error(stderr):
@@ -450,14 +450,8 @@ class ProxyExtrasDBManager:
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(
-                                "Baseline migration created, marking all existing migrations as applied"
-                            )
-                            ProxyExtrasDBManager._mark_all_migrations_applied(
-                                migrations_dir
-                            )
-                            # Now run deploy with resolution for any pending migrations
-                            logger.info(
-                                "Running prisma migrate deploy for any pending migrations..."
+                                "Baseline migration created, running deploy with idempotent resolution "
+                                "to apply remaining migrations..."
                             )
                             ProxyExtrasDBManager._deploy_with_idempotent_resolution()
                             logger.info("✅ All migrations applied.")
