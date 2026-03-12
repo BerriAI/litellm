@@ -586,7 +586,9 @@ class PixverseVideoConfig(BaseVideoConfig):
         video_url = self._extract_video_url_from_response(response_data)
 
         # Download the video from the URL synchronously
-        httpx_client: HTTPHandler = _get_httpx_client()
+        httpx_client: HTTPHandler = _get_httpx_client(
+            llm_provider=litellm.LlmProviders.PIXVERSE
+        )
         video_response = httpx_client.get(video_url)
         video_response.raise_for_status()
 
@@ -792,9 +794,6 @@ class PixverseVideoConfig(BaseVideoConfig):
         }
 
         # Add optional fields if present
-        if "url" in resp_data and resp_data["url"]:
-            video_data["output_url"] = resp_data["url"]
-
         if "modify_time" in resp_data:
             video_data["completed_at"] = self._parse_pixverse_timestamp(
                 resp_data.get("modify_time")
@@ -822,8 +821,6 @@ class PixverseVideoConfig(BaseVideoConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        from ...base_llm.chat.transformation import BaseLLMException
-
         raise BaseLLMException(
             status_code=status_code,
             message=error_message,
