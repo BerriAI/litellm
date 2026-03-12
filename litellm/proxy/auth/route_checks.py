@@ -183,6 +183,9 @@ class RouteChecks:
                             user_id, valid_token.user_id
                         ),
                     )
+            elif route == "/v2/user/info":
+                # handled by the endpoint itself (full RBAC in handler)
+                pass
             elif route == "/model/info":
                 # /model/info just shows models user has access to
                 pass
