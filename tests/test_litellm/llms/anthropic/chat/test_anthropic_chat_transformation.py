@@ -1824,16 +1824,19 @@ def test_get_max_tokens_for_model_claude_3():
 
 def test_get_max_tokens_for_model_claude_35():
     """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
-    Claude 3.5 models have max_output_tokens of 8192.
+    Test that get_max_tokens_for_model returns the value from get_max_tokens for
+    Claude 3.5 models.
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
     config = AnthropicConfig()
 
-    # Claude 3.5 Sonnet should return 8192
-    max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
-    assert max_tokens == 8192
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        return_value=8192,
+    ):
+        max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
+        assert max_tokens == 8192
 
 
 def test_get_max_tokens_for_model_claude_37():
@@ -1911,16 +1914,19 @@ def test_transform_request_uses_dynamic_max_tokens():
 
     messages = [{"role": "user", "content": "Hello"}]
 
-    # Claude 3.5 model should get 8192 as default max_tokens
-    result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
-        messages=messages,
-        optional_params={},  # No max_tokens provided
-        litellm_params={},
-        headers={}
-    )
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        return_value=8192,
+    ):
+        result = config.transform_request(
+            model="claude-3-5-sonnet-20241022",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={}
+        )
 
-    assert result["max_tokens"] == 8192
+        assert result["max_tokens"] == 8192
 
 
 def test_transform_request_respects_user_max_tokens():

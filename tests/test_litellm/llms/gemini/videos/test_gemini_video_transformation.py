@@ -593,63 +593,69 @@ class TestGeminiVideoIntegration:
 
 class TestGeminiVideoCostTracking:
     """Test cost tracking for Gemini video generation."""
-    
+
     def test_cost_calculation_with_duration(self):
         """Test that cost is calculated correctly using duration from usage."""
-        # Test VEO 2.0 ($0.35/second)
+        from litellm.types.utils import ModelInfo
+
+        # Test with explicit model_info to avoid dependency on the cost map JSON
+        veo2_info = ModelInfo(output_cost_per_second=0.35)
         cost_veo2 = video_generation_cost(
             model="gemini/veo-2.0-generate-001",
             duration_seconds=5.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info=veo2_info,
         )
         expected_veo2 = 0.35 * 5.0  # $1.75
         assert abs(cost_veo2 - expected_veo2) < 0.001, f"Expected ${expected_veo2}, got ${cost_veo2}"
-        
-        # Test VEO 3.0 ($0.75/second)
+
+        veo3_info = ModelInfo(output_cost_per_second=0.75)
         cost_veo3 = video_generation_cost(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=8.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info=veo3_info,
         )
         expected_veo3 = 0.75 * 8.0  # $6.00
         assert abs(cost_veo3 - expected_veo3) < 0.001, f"Expected ${expected_veo3}, got ${cost_veo3}"
-        
-        # Test VEO 3.1 Standard ($0.40/second)
+
+        veo31_info = ModelInfo(output_cost_per_second=0.40)
         cost_veo31 = video_generation_cost(
             model="gemini/veo-3.1-generate-preview",
             duration_seconds=10.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info=veo31_info,
         )
         expected_veo31 = 0.40 * 10.0  # $4.00
         assert abs(cost_veo31 - expected_veo31) < 0.001, f"Expected ${expected_veo31}, got ${cost_veo31}"
-        
-        # Test VEO 3.1 Fast ($0.15/second)
+
+        veo31_fast_info = ModelInfo(output_cost_per_second=0.15)
         cost_veo31_fast = video_generation_cost(
             model="gemini/veo-3.1-fast-generate-preview",
             duration_seconds=6.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info=veo31_fast_info,
         )
         expected_veo31_fast = 0.15 * 6.0  # $0.90
         assert abs(cost_veo31_fast - expected_veo31_fast) < 0.001, f"Expected ${expected_veo31_fast}, got ${cost_veo31_fast}"
-    
+
     def test_cost_calculation_end_to_end(self):
         """Test complete cost tracking flow: request -> response -> cost calculation."""
+        from litellm.types.utils import ModelInfo
+
         config = GeminiVideoConfig()
         mock_logging_obj = Mock()
-        
-        # Create request with duration
+
         request_data = {
             "instances": [{"prompt": "A beautiful sunset"}],
             "parameters": {"durationSeconds": 5}
         }
-        
-        # Mock response
+
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {
             "name": "operations/generate_test123",
         }
-        
-        # Transform response
+
         video_obj = config.transform_video_create_response(
             model="gemini/veo-3.0-generate-preview",
             raw_response=mock_response,
@@ -657,20 +663,19 @@ class TestGeminiVideoCostTracking:
             custom_llm_provider="gemini",
             request_data=request_data
         )
-        
-        # Verify usage has duration
+
         assert video_obj.usage is not None
         assert "duration_seconds" in video_obj.usage
         duration = video_obj.usage["duration_seconds"]
-        
-        # Calculate cost using the duration from usage
+
+        veo3_info = ModelInfo(output_cost_per_second=0.75)
         cost = video_generation_cost(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=duration,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info=veo3_info,
         )
-        
-        # Verify cost calculation (VEO 3.0 is $0.75/second)
+
         expected_cost = 0.75 * 5.0  # $3.75
         assert abs(cost - expected_cost) < 0.001, f"Expected ${expected_cost}, got ${cost}"
 
