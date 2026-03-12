@@ -2732,18 +2732,23 @@ class Logging(LiteLLMLoggingBaseClass):
         if not hasattr(self, "model_call_details"):
             return
 
-        # Keys that hold large per-request data no longer needed after callbacks
+        # Keys that hold large per-request data no longer needed after callbacks.
+        # We set values to None (rather than popping keys) to preserve dict
+        # structure for any code that checks key existence, while releasing
+        # references to the large objects for garbage collection.
+        # NOTE: Do NOT clean up "async_complete_streaming_response" or
+        # "complete_streaming_response" — these are used as guards to prevent
+        # double-processing in success_handler / async_success_handler.
         _keys_to_clear = [
             "httpx_response",  # full httpx.Response with connection state
             "original_response",  # full response text
             "input",  # full input messages (duplicate of 'messages')
             "additional_args",  # contains complete_input_dict
-            "standard_logging_object",  # large StandardLoggingPayload
-            "async_complete_streaming_response",  # assembled streaming response
             "raw_request_typed_dict",  # raw request data for logging
         ]
         for key in _keys_to_clear:
-            self.model_call_details.pop(key, None)
+            if key in self.model_call_details:
+                self.model_call_details[key] = None
 
     def _handle_callback_failure(self, callback: Any):
         """
