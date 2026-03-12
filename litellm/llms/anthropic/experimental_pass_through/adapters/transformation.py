@@ -772,6 +772,8 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
         for tool in tools:
+            if "name" not in tool:
+                continue
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 
@@ -948,13 +950,14 @@ class LiteLLMAnthropicMessagesAdapter:
 
                 # Only translate regular tools (non-web-search)
                 if regular_tools:
-                    (
-                        new_kwargs["tools"],
-                        tool_name_mapping,
-                    ) = self.translate_anthropic_tools_to_openai(
+                    translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
                         tools=cast(List[AllAnthropicToolsValues], regular_tools),
                         model=new_kwargs.get("model"),
                     )
+                    if translated_tools:
+                        new_kwargs["tools"] = translated_tools
+                    elif "tool_choice" in new_kwargs:
+                        del new_kwargs["tool_choice"]
 
         ## CONVERT THINKING
         if "thinking" in anthropic_message_request:

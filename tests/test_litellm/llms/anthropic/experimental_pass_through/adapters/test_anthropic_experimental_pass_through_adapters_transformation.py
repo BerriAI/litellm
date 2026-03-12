@@ -1984,3 +1984,151 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_tools_to_openai_skips_builtin_tools():
+    """
+    Anthropic built-in tools (bash, text_editor, computer) only have a 'type'
+    field and no 'name'. They should be skipped during translation to OpenAI
+    format instead of raising KeyError.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23461
+    """
+    tools = [
+        {"type": "bash_20250124"},
+        {"type": "text_editor_20250124"},
+        {
+            "type": "computer_20250124",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+        },
+        {
+            "name": "get_weather",
+            "description": "Get weather info",
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
+        },
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    assert len(result) == 1
+    assert result[0]["function"]["name"] == "get_weather"
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_to_openai_with_builtin_and_regular_tools():
+    """
+    End-to-end: a request with both built-in tools and regular tools should
+    translate without crashing. Built-in tools are passed through to the
+    Anthropic backend natively; only regular tools get translated.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23461
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4.5",
+        max_tokens=4096,
+        messages=[
+            {"role": "user", "content": "List files in the current directory"}
+        ],
+        tools=[
+            {"type": "bash_20250124"},
+            {"type": "text_editor_20250124"},
+            {
+                "name": "get_weather",
+                "description": "Get weather",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tools" in openai_request
+    assert len(openai_request["tools"]) == 1
+    assert openai_request["tools"][0]["function"]["name"] == "get_weather"
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_to_openai_only_builtin_tools_omits_tools_key():
+    """
+    When ALL tools are built-in (no 'name' field), the 'tools' key should be
+    omitted from the translated request rather than set to an empty list.
+
+    Sending tools: [] to OpenAI-compatible backends differs from omitting the
+    key and may cause rejections on some providers.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23461
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4.5",
+        max_tokens=4096,
+        messages=[
+            {"role": "user", "content": "List files in the current directory"}
+        ],
+        tools=[
+            {"type": "bash_20250124"},
+            {"type": "text_editor_20250124"},
+            {"type": "computer_20250124", "display_width_px": 1024, "display_height_px": 768},
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tools" not in openai_request, (
+        "tools key should be omitted when all tools are built-in, not set to []"
+    )
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_to_openai_builtin_tools_with_tool_choice_cleaned():
+    """
+    When all tools are built-in and tool_choice is specified, both 'tools' and
+    'tool_choice' should be omitted from the translated request. Sending
+    tool_choice without tools causes 400 errors on OpenAI-compatible backends.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23461
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4.5",
+        max_tokens=4096,
+        messages=[
+            {"role": "user", "content": "List files in the current directory"}
+        ],
+        tools=[
+            {"type": "bash_20250124"},
+            {"type": "text_editor_20250124"},
+        ],
+        tool_choice={"type": "auto"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tools" not in openai_request, (
+        "tools key should be omitted when all tools are built-in"
+    )
+    assert "tool_choice" not in openai_request, (
+        "tool_choice should be removed when no translated tools remain"
+    )
+    assert tool_name_mapping == {}
