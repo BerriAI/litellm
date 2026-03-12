@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
@@ -99,6 +99,16 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   // OAuth2 connect state — tracks which server_ids have a stored user credential
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
 
+  // Refs keep the latest values for the auto-enable effect so it always reads
+  // the current servers/selectedServers/onChange without needing them as
+  // dependencies (which would cause the effect to fire on every render).
+  const serversRef = useRef<MCPServer[]>([]);
+  useEffect(() => { serversRef.current = servers; }, [servers]);
+  const selectedServersRef = useRef<string[]>(selectedServers);
+  useEffect(() => { selectedServersRef.current = selectedServers; }, [selectedServers]);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
   useEffect(() => {
@@ -155,9 +165,31 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     return () => { cancelled = true; };
   }, [accessToken]);
 
+  // Auto-enable oauth2 servers for the current chat session when a valid
+  // credential is detected (either on mount or after a fresh OAuth sign-in).
+  // Uses refs for servers/selectedServers/onChange to avoid stale closures
+  // without adding them as dependencies (which would re-fire on every render).
+  useEffect(() => {
+    if (oauthConnected.size === 0) return;
+    const namesToAdd = serversRef.current
+      .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
+      .map(nameOf);
+    if (namesToAdd.length > 0) {
+      onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
+    }
+  }, [oauthConnected]);
+
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
+      // Also clear from oauthConnected so the auto-enable effect doesn't re-add it.
+      if (serverId) {
+        setOauthConnected((prev) => {
+          const next = new Set(prev);
+          next.delete(serverId);
+          return next;
+        });
+      }
       return;
     }
     setTogglingOn((prev) => new Set(prev).add(serverName));
@@ -169,7 +201,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         message.warning(`Could not load tools for ${serverName}`);
         return;
       }
-      onChange([...selectedServers, serverName]);
+      // Use the ref so we read the most up-to-date list; guard against duplicates
+      // that the oauthConnected effect may have already added while we awaited.
+      if (!selectedServersRef.current.includes(serverName)) {
+        onChange([...selectedServersRef.current, serverName]);
+      }
     } catch {
       message.warning(`Could not load tools for ${serverName}`);
     } finally {
@@ -283,6 +319,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     // Ignore — credential may already be gone; update UI regardless.
                   }
                   setOauthConnected((prev) => { const n = new Set(prev); n.delete(detailServer.server_id); return n; });
+                  onChange(selectedServers.filter((s) => s !== name));
                 }}
                 style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
               >
@@ -292,7 +329,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               <OAuth2ConnectButton
                 server={detailServer}
                 accessToken={accessToken}
-                onConnect={(id) => setOauthConnected((prev) => new Set(prev).add(id))}
+                onConnect={(id) => {
+                  setOauthConnected((prev) => new Set(prev).add(id));
+                  handleToggle(name, true, detailServer.server_id);
+                }}
                 variant="button"
               />
             )
@@ -517,7 +557,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     <OAuth2ConnectButton
                       server={server}
                       accessToken={accessToken}
-                      onConnect={(id) => setOauthConnected((prev) => new Set(prev).add(id))}
+                      onConnect={(id) => {
+                        setOauthConnected((prev) => new Set(prev).add(id));
+                        handleToggle(nameOf(server), true, server.server_id);
+                      }}
                       variant="badge"
                     />
                   )

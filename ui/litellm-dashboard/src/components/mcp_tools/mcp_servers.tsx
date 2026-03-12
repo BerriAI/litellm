@@ -128,7 +128,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
       );
     }
-    setFilteredServers(filtered);
+    const sorted = [...filtered].sort((a, b) => {
+      if (!a.created_at && !b.created_at) return 0;
+      if (!a.created_at) return 1;
+      if (!b.created_at) return -1;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+    setFilteredServers(sorted);
   }, [serversWithHealth]);
 
   // Handle team filter change
