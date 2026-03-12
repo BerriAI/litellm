@@ -153,9 +153,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     ]
                     existing_content = message.get("content")
                     if isinstance(existing_content, str):
-                        new_content.append(
-                            {"type": "text", "text": existing_content}
-                        )
+                        new_content.append({"type": "text", "text": existing_content})
                     elif isinstance(existing_content, list):
                         new_content.extend(existing_content)
                     message["content"] = new_content  # type: ignore

@@ -12,8 +12,7 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import (TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional,
-                    cast)
+from typing import TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -21,34 +20,40 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import (COMPETITOR_LLM_TEMPERATURE,
-                               DEFAULT_COMPETITOR_DISCOVERY_MODEL,
-                               MAX_COMPETITOR_NAMES)
+from litellm.constants import (
+    COMPETITOR_LLM_TEMPERATURE,
+    DEFAULT_COMPETITOR_DISCOVERY_MODEL,
+    MAX_COMPETITOR_NAMES,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.openai.chat.guardrail_translation.handler import \
-    OpenAIChatCompletionsHandler
+from litellm.llms.openai.chat.guardrail_translation.handler import (
+    OpenAIChatCompletionsHandler,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
-    RESPONSE_REJECTION_GUARDRAIL_CODE, CustomCodeGuardrail)
+    RESPONSE_REJECTION_GUARDRAIL_CODE,
+    CustomCodeGuardrail,
+)
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
-                                               PolicyInfoResponse,
-                                               PolicyListResponse,
-                                               PolicyMatchContext,
-                                               PolicyScopeResponse,
-                                               PolicySummaryItem,
-                                               PolicyTestResponse,
-                                               PolicyValidateRequest,
-                                               PolicyValidationResponse)
+from litellm.types.proxy.policy_engine import (
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListResponse,
+    PolicyMatchContext,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
+    PolicyValidateRequest,
+    PolicyValidationResponse,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 router = APIRouter()
 
@@ -295,8 +300,7 @@ async def test_policies_and_guardrails(
 
     Use inputs for a single call (legacy).
     """
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.proxy_server import chat_completion, proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
 
@@ -658,8 +662,7 @@ async def get_policy_templates(
         return _load_policy_templates_from_local_backup()
 
     try:
-        from litellm.llms.custom_httpx.http_handler import \
-            get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         async_client = get_async_httpx_client(
@@ -1151,8 +1154,9 @@ async def suggest_policy_templates(
 
     Calls an LLM with tool calling to match user requirements to available templates.
     """
-    from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import \
-        AiPolicySuggester
+    from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
+        AiPolicySuggester,
+    )
 
     templates = _load_policy_templates_from_local_backup()
     suggester = AiPolicySuggester()
@@ -1222,8 +1226,9 @@ async def _test_guardrail_definitions(
     text: str,
 ) -> List[GuardrailTestResultEntry]:
     """Instantiate and run each guardrail definition against the text."""
-    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-        ContentFilterGuardrail
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
 
     results: List[GuardrailTestResultEntry] = []
 

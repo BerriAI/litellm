@@ -51,9 +51,7 @@ class GetBlogPosts:
     def load_local_blog_posts() -> List[Dict[str, str]]:
         """Load the bundled local backup blog posts."""
         content = json.loads(
-            files("litellm")
-            .joinpath("blog_posts.json")
-            .read_text(encoding="utf-8")
+            files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8")
         )
         return content.get("posts", [])
 

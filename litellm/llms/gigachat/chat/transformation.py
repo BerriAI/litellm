@@ -254,7 +254,7 @@ class GigaChatConfig(BaseConfig):
                 func_name = tool_choice.get("function", {}).get("name")
                 if func_name:
                     return {"name": func_name}
-        
+
         # Default to None (don't set function_call)
         return None
 

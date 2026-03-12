@@ -14,7 +14,9 @@ class UsersManagementClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def list_users(self, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def list_users(
+        self, params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """List users (GET /user/list)"""
         url = f"{self.base_url}/user/list"
         response = requests.get(url, headers=self._get_headers(), params=params)
@@ -47,7 +49,9 @@ class UsersManagementClient:
     def delete_user(self, user_ids: List[str]) -> Dict[str, Any]:
         """Delete users (POST /user/delete)"""
         url = f"{self.base_url}/user/delete"
-        response = requests.post(url, headers=self._get_headers(), json={"user_ids": user_ids})
+        response = requests.post(
+            url, headers=self._get_headers(), json={"user_ids": user_ids}
+        )
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()

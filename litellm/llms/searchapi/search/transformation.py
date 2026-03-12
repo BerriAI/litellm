@@ -19,6 +19,7 @@ from litellm.secret_managers.main import get_secret_str
 
 class _SearchAPIRequestRequired(TypedDict):
     """Required fields for SearchAPI.io request."""
+
     engine: str  # Required - search engine (e.g., 'google')
     q: str  # Required - search query
 
@@ -28,6 +29,7 @@ class SearchAPIRequest(_SearchAPIRequestRequired, total=False):
     SearchAPI.io request format for Google Search.
     Based on: https://www.searchapi.io/docs/google
     """
+
     kgmid: str  # Optional - Knowledge Graph identifier
     device: str  # Optional - device type ('desktop', 'mobile', 'tablet')
     location: str  # Optional - geographic location
@@ -50,17 +52,17 @@ class SearchAPIRequest(_SearchAPIRequestRequired, total=False):
 
 class SearchAPIConfig(BaseSearchConfig):
     SEARCHAPI_API_BASE = "https://www.searchapi.io/api/v1/search"
-    
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "SearchAPI.io (Google Search)"
-    
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         SearchAPI.io uses GET requests for search.
         """
         return "GET"
-    
+
     def validate_environment(
         self,
         headers: Dict,
@@ -72,14 +74,14 @@ class SearchAPIConfig(BaseSearchConfig):
         Validate environment and return headers.
         """
         api_key = api_key or get_secret_str("SEARCHAPI_API_KEY")
-        
+
         if not api_key:
             raise ValueError(
                 "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."
             )
-        
+
         headers["Content-Type"] = "application/json"
-        
+
         return headers
 
     def get_complete_url(
@@ -94,7 +96,9 @@ class SearchAPIConfig(BaseSearchConfig):
 
         SearchAPI.io uses GET requests and includes api_key in query params.
         """
-        api_base = api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
+        api_base = (
+            api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
+        )
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searchapi_params" in data:
@@ -197,7 +201,7 @@ class SearchAPIConfig(BaseSearchConfig):
     ) -> SearchResponse:
         """
         Transform SearchAPI.io response to LiteLLM unified SearchResponse format.
-        
+
         SearchAPI.io → LiteLLM mappings:
         - organic_results[].title → SearchResult.title
         - organic_results[].link → SearchResult.url
@@ -215,7 +219,7 @@ class SearchAPIConfig(BaseSearchConfig):
             url = result.get("link", "")
             snippet = result.get("snippet", "")
             date = result.get("date")  # SearchAPI.io provides date in some results
-            
+
             search_result = SearchResult(
                 title=title,
                 url=url,

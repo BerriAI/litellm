@@ -4,7 +4,10 @@ from typing import List
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
+    _get_effort_level,
+)
 from litellm.types.llms.openai import AllMessageValues
 
 from .gpt_transformation import AzureOpenAIConfig
@@ -38,7 +41,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         used for manual routing.
         """
         # gpt-5-chat* is a chat model and shouldn't go through GPT-5 reasoning restrictions.
-        return ("gpt-5" in model and "gpt-5-chat" not in model) or "gpt5_series" in model
+        return (
+            "gpt-5" in model and "gpt-5-chat" not in model
+        ) or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
@@ -61,7 +66,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
+        if self._supports_reasoning_effort_level(
+            model, "none"
+        ) and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
             azure_supported_params = ["logprobs", "top_logprobs"]
@@ -77,24 +84,27 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
-        reasoning_effort_value = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-        )
+        reasoning_effort_value = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
+        effective_effort = _get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
         supports_none = self._supports_reasoning_effort_level(model, "none")
 
-        if reasoning_effort_value == "none" and not supports_none:
+        if effective_effort == "none" and not supports_none:
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
                 non_default_params = non_default_params.copy()
                 optional_params = optional_params.copy()
-                if non_default_params.get("reasoning_effort") == "none":
+                if (
+                    _get_effort_level(non_default_params.get("reasoning_effort"))
+                    == "none"
+                ):
                     non_default_params.pop("reasoning_effort")
-                if optional_params.get("reasoning_effort") == "none":
+                if _get_effort_level(optional_params.get("reasoning_effort")) == "none":
                     optional_params.pop("reasoning_effort")
             else:
                 raise UnsupportedParamsError(
@@ -117,8 +127,18 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         )
 
         # Only drop reasoning_effort='none' for models that don't support it
-        if result.get("reasoning_effort") == "none" and not supports_none:
+        result_effort = _get_effort_level(result.get("reasoning_effort"))
+        if result_effort == "none" and not supports_none:
             result.pop("reasoning_effort")
+
+        # Azure Chat Completions: gpt-5.4+ does not support tools + reasoning together.
+        # Drop reasoning_effort when both are present (OpenAI routes to Responses API; Azure does not).
+        if self.is_model_gpt_5_4_plus_model(model):
+            has_tools = bool(
+                non_default_params.get("tools") or optional_params.get("tools")
+            )
+            if has_tools and result_effort not in (None, "none"):
+                result.pop("reasoning_effort", None)
 
         return result
 

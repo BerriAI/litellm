@@ -214,11 +214,16 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_image_editing = (
             OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
-        is_responses = (
-            OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+        is_responses = OpenAIPassthroughLoggingHandler.is_openai_responses_route(
+            url_route
         )
 
-        if not (is_chat_completions or is_image_generation or is_image_editing or is_responses):
+        if not (
+            is_chat_completions
+            or is_image_generation
+            or is_image_editing
+            or is_responses
+        ):
             # For unsupported endpoints, return None to let the system fall back to generic behavior
             return {
                 "result": None,
@@ -247,11 +252,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         try:
             response_cost = 0.0
-            litellm_model_response: Optional[Union[ModelResponse, TextCompletionResponse, ImageResponse]] = None
+            litellm_model_response: Optional[
+                Union[ModelResponse, TextCompletionResponse, ImageResponse]
+            ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
             custom_llm_provider = kwargs.get("custom_llm_provider", "openai")
-            
+
             if is_chat_completions:
                 # Handle chat completions with existing logic
                 provider_config = handler_instance.get_provider_config(model=model)
@@ -368,7 +375,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = user
+                    kwargs["litellm_params"].setdefault(
+                        "proxy_server_request", {}
+                    ).setdefault("body", {})["user"] = user
 
             # Create standard logging object
             if litellm_model_response is not None:
@@ -527,7 +536,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             custom_llm_provider = litellm_logging_obj.model_call_details.get(
                 "custom_llm_provider", "openai"
-            )            
+            )
             # Calculate cost using LiteLLM's cost calculator
             response_cost = litellm.completion_cost(
                 completion_response=complete_response,
@@ -536,10 +545,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             # Preserve existing litellm_params to maintain metadata tags
-            existing_litellm_params = litellm_logging_obj.model_call_details.get(
-                "litellm_params", {}
-            ) or {}
-            
+            existing_litellm_params = (
+                litellm_logging_obj.model_call_details.get("litellm_params", {}) or {}
+            )
+
             # Prepare kwargs for logging
             kwargs = {
                 "response_cost": response_cost,
@@ -559,7 +568,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = user
+                    kwargs["litellm_params"].setdefault(
+                        "proxy_server_request", {}
+                    ).setdefault("body", {})["user"] = user
 
             # Create standard logging object
             get_standard_logging_object_payload(
@@ -573,7 +584,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Update logging object with cost information
             litellm_logging_obj.model_call_details["model"] = model
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+            litellm_logging_obj.model_call_details[
+                "custom_llm_provider"
+            ] = custom_llm_provider
             litellm_logging_obj.model_call_details["response_cost"] = response_cost
 
             verbose_proxy_logger.debug(

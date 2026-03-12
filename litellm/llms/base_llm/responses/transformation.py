@@ -221,11 +221,11 @@ class BaseResponsesAPIConfig(ABC):
     def supports_native_websocket(self) -> bool:
         """
         Returns True if the provider has a native WebSocket endpoint for Responses API.
-        
+
         Providers with native websocket support can connect directly to wss:// endpoints.
         Providers without native support will use the ManagedResponsesWebSocketHandler
         which makes HTTP streaming calls and forwards events over the websocket.
-        
+
         Default: False (use managed websocket handler)
         """
         return False

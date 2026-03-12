@@ -1172,9 +1172,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error masking streaming PII output: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
             for chunk in all_chunks:
                 yield chunk
 

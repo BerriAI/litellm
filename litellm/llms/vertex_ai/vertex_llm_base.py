@@ -21,7 +21,6 @@ from .common_utils import (
     all_gemini_url_modes,
     get_vertex_base_model_name,
     get_vertex_base_url,
-    is_global_only_vertex_model,
 )
 
 GOOGLE_IMPORT_ERROR_MESSAGE = (
@@ -49,8 +48,32 @@ class VertexBase:
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
-        if is_global_only_vertex_model(model):
-            return "global"
+        import litellm
+
+        # Try to get supported_regions directly from model_cost
+        # Check both with and without vertex_ai/ prefix
+        model_key = (
+            f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        )
+        model_info = litellm.model_cost.get(model_key, {})
+        supported_regions = model_info.get("supported_regions")
+
+        if supported_regions and len(supported_regions) > 0:
+            # If user didn't specify region, use the first supported region
+            if vertex_region is None:
+                return supported_regions[0]
+            # If user specified a region not supported by this model, override it
+            if vertex_region not in supported_regions:
+                verbose_logger.warning(
+                    "Vertex AI model '%s' does not support region '%s' "
+                    "(supported: %s). Routing to '%s'.",
+                    model,
+                    vertex_region,
+                    supported_regions,
+                    supported_regions[0],
+                )
+                return supported_regions[0]
+            return vertex_region
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -214,7 +237,9 @@ class VertexBase:
     ) -> str:
         if api_base:
             return api_base
-        return get_vertex_base_url(vertex_location or self.get_default_vertex_location())
+        return get_vertex_base_url(
+            vertex_location or self.get_default_vertex_location()
+        )
 
     @staticmethod
     def create_vertex_url(

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class LiteLLMSkillsTransformationHandler:
     """
     Transformation handler for skills API requests to LiteLLM database operations.
-    
+
     This is used when custom_llm_provider="litellm_proxy" to store/retrieve skills
     from the LiteLLM proxy database instead of calling an external API.
     """
@@ -51,7 +51,7 @@ class LiteLLMSkillsTransformationHandler:
     ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
         """
         Create a skill in LiteLLM database.
-        
+
         Args:
             display_title: Display title for the skill
             description: Description of the skill
@@ -63,7 +63,7 @@ class LiteLLMSkillsTransformationHandler:
             metadata: Additional metadata
             user_id: User ID for tracking
             _is_async: Whether to return a coroutine
-            
+
         Returns:
             Skill object or coroutine that returns Skill
         """
@@ -84,7 +84,9 @@ class LiteLLMSkillsTransformationHandler:
                 if isinstance(first_file, tuple) and len(first_file) >= 2:
                     file_name = first_file[0]
                     file_content = first_file[1]
-                    file_type = first_file[2] if len(first_file) > 2 else "application/zip"
+                    file_type = (
+                        first_file[2] if len(first_file) > 2 else "application/zip"
+                    )
 
         if _is_async:
             return self._async_create_skill(
@@ -97,8 +99,9 @@ class LiteLLMSkillsTransformationHandler:
                 metadata=metadata,
                 user_id=user_id,
             )
-        
+
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(
             self._async_create_skill(
                 display_title=display_title,
@@ -156,14 +159,14 @@ class LiteLLMSkillsTransformationHandler:
     ) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
         """
         List skills from LiteLLM database.
-        
+
         Args:
             limit: Maximum number of skills to return
             offset: Number of skills to skip
             _is_async: Whether to return a coroutine
             logging_obj: LiteLLM logging object
             litellm_call_id: Call ID for logging
-            
+
         Returns:
             ListSkillsResponse or coroutine that returns ListSkillsResponse
         """
@@ -178,8 +181,9 @@ class LiteLLMSkillsTransformationHandler:
 
         if _is_async:
             return self._async_list_skills(limit=limit, offset=offset)
-        
+
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(
             self._async_list_skills(limit=limit, offset=offset)
         )
@@ -215,13 +219,13 @@ class LiteLLMSkillsTransformationHandler:
     ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
         """
         Get a skill from LiteLLM database.
-        
+
         Args:
             skill_id: The skill ID to retrieve
             _is_async: Whether to return a coroutine
             logging_obj: LiteLLM logging object
             litellm_call_id: Call ID for logging
-            
+
         Returns:
             Skill or coroutine that returns Skill
         """
@@ -236,8 +240,9 @@ class LiteLLMSkillsTransformationHandler:
 
         if _is_async:
             return self._async_get_skill(skill_id=skill_id)
-        
+
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(
             self._async_get_skill(skill_id=skill_id)
         )
@@ -260,13 +265,13 @@ class LiteLLMSkillsTransformationHandler:
     ) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
         """
         Delete a skill from LiteLLM database.
-        
+
         Args:
             skill_id: The skill ID to delete
             _is_async: Whether to return a coroutine
             logging_obj: LiteLLM logging object
             litellm_call_id: Call ID for logging
-            
+
         Returns:
             DeleteSkillResponse or coroutine that returns DeleteSkillResponse
         """
@@ -281,8 +286,9 @@ class LiteLLMSkillsTransformationHandler:
 
         if _is_async:
             return self._async_delete_skill(skill_id=skill_id)
-        
+
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(
             self._async_delete_skill(skill_id=skill_id)
         )
@@ -301,16 +307,16 @@ class LiteLLMSkillsTransformationHandler:
     def _db_skill_to_response(self, db_skill: Any) -> Skill:
         """
         Convert a database skill record to Anthropic-compatible Skill response.
-        
+
         Args:
             db_skill: LiteLLM_SkillsTable record
-            
+
         Returns:
             Skill object
         """
         created_at = ""
         updated_at = ""
-        
+
         if hasattr(db_skill, "created_at") and db_skill.created_at:
             created_at = (
                 db_skill.created_at.isoformat()
@@ -333,4 +339,3 @@ class LiteLLMSkillsTransformationHandler:
             source=db_skill.source or "custom",
             type="skill",
         )
-

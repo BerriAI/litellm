@@ -185,10 +185,13 @@ async def aresponses_api_with_mcp(
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
     secret_fields = kwargs.get("secret_fields")
     if secret_fields and isinstance(secret_fields, dict):
-        mcp_auth_header, mcp_server_auth_headers, _, _ = (
-            ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-                secret_fields=secret_fields, tools=tools
-            )
+        (
+            mcp_auth_header,
+            mcp_server_auth_headers,
+            _,
+            _,
+        ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+            secret_fields=secret_fields, tools=tools
         )
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
@@ -1714,12 +1717,15 @@ async def _aresponses_websocket(
     litellm_params = GenericLiteLLMParams(**kwargs)
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        litellm.get_llm_provider(
-            model=model,
-            api_base=api_base,
-            api_key=api_key,
-        )
+    (
+        model,
+        _custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = litellm.get_llm_provider(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
     )
 
     litellm_logging_obj.update_environment_variables(
@@ -1740,10 +1746,7 @@ async def _aresponses_websocket(
         )
 
     resolved_api_base = (
-        dynamic_api_base
-        or litellm_params.api_base
-        or litellm.api_base
-        or None
+        dynamic_api_base or litellm_params.api_base or litellm.api_base or None
     )
     resolved_api_key = (
         dynamic_api_key
@@ -1754,7 +1757,11 @@ async def _aresponses_websocket(
     )
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
-    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in {"user_api_key_dict", "litellm_metadata"}}
+    remaining_kwargs = {
+        k: v
+        for k, v in kwargs.items()
+        if k not in {"user_api_key_dict", "litellm_metadata"}
+    }
 
     await base_llm_http_handler.async_responses_websocket(
         model=model,

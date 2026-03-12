@@ -80,7 +80,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_team_prefix=s3_use_team_prefix,
                 s3_strip_base64_files=s3_strip_base64_files,
                 s3_use_key_prefix=s3_use_key_prefix,
-                s3_use_virtual_hosted_style=s3_use_virtual_hosted_style
+                s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -91,7 +91,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
             self.async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback,
-                params={"ssl_verify": self.s3_verify}
+                params={"ssl_verify": self.s3_verify},
             )
 
             asyncio.create_task(self.periodic_flush())
@@ -158,10 +158,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             litellm.s3_callback_params.get("s3_api_version") or s3_api_version
         )
         self.s3_use_ssl = (
-            litellm.s3_callback_params.get("s3_use_ssl", True) if litellm.s3_callback_params.get("s3_use_ssl") is not None else s3_use_ssl
+            litellm.s3_callback_params.get("s3_use_ssl", True)
+            if litellm.s3_callback_params.get("s3_use_ssl") is not None
+            else s3_use_ssl
         )
         self.s3_verify = (
-            litellm.s3_callback_params.get("s3_verify") if litellm.s3_callback_params.get("s3_verify") is not None else s3_verify
+            litellm.s3_callback_params.get("s3_verify")
+            if litellm.s3_callback_params.get("s3_verify") is not None
+            else s3_verify
         )
         self.s3_endpoint_url = (
             litellm.s3_callback_params.get("s3_endpoint_url") or s3_endpoint_url
@@ -211,8 +215,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
 
         self.s3_use_key_prefix = (
-                bool(litellm.s3_callback_params.get("s3_use_key_prefix", False))
-                or s3_use_key_prefix
+            bool(litellm.s3_callback_params.get("s3_use_key_prefix", False))
+            or s3_use_key_prefix
         )
 
         self.s3_strip_base64_files = (
@@ -308,9 +312,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug(
                 f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}"
             )
-            verbose_logger.debug(
-                f"s3_v2 logger - s3_verify setting: {self.s3_verify}"
-            )
+            verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
@@ -318,8 +320,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
                     # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
+                    endpoint_host = self.s3_endpoint_url.replace(
+                        "https://", ""
+                    ).replace("http://", "")
+                    protocol = (
+                        "https://"
+                        if self.s3_endpoint_url.startswith("https://")
+                        else "http://"
+                    )
                     url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
                 else:
                     # Path-style: endpoint/bucket/key
@@ -413,19 +421,24 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return None
 
         if self.s3_strip_base64_files:
-            standard_logging_payload = self._strip_base64_from_messages_sync(standard_logging_payload)
+            standard_logging_payload = self._strip_base64_from_messages_sync(
+                standard_logging_payload
+            )
 
         # Base prefix (default empty)
         prefix_components = []
         if self.s3_use_team_prefix:
-            team_alias = standard_logging_payload.get("metadata", {}).get("user_api_key_team_alias", None)
+            team_alias = standard_logging_payload.get("metadata", {}).get(
+                "user_api_key_team_alias", None
+            )
             if team_alias:
                 prefix_components.append(team_alias)
         if self.s3_use_key_prefix:
-            user_api_key_alias = standard_logging_payload.get("metadata", {}).get("user_api_key_alias", None)
+            user_api_key_alias = standard_logging_payload.get("metadata", {}).get(
+                "user_api_key_alias", None
+            )
             if user_api_key_alias:
                 prefix_components.append(user_api_key_alias)
-
 
         # Construct full prefix path
         prefix_path = "/".join(prefix_components)
@@ -435,7 +448,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_file_name = (
             litellm.utils.get_logging_id(start_time, standard_logging_payload) or ""
         )
-        verbose_logger.debug(f"Creating s3 file with prefix_components={prefix_components},prefix_path={prefix_path} and {s3_file_name}")
+        verbose_logger.debug(
+            f"Creating s3 file with prefix_components={prefix_components},prefix_path={prefix_path} and {s3_file_name}"
+        )
         s3_object_key = get_s3_object_key(
             s3_path=cast(Optional[str], self.s3_path) or "",
             prefix=prefix_path,
@@ -479,8 +494,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
                     # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
+                    endpoint_host = self.s3_endpoint_url.replace(
+                        "https://", ""
+                    ).replace("http://", "")
+                    protocol = (
+                        "https://"
+                        if self.s3_endpoint_url.startswith("https://")
+                        else "http://"
+                    )
                     url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
                 else:
                     # Path-style: endpoint/bucket/key
@@ -525,7 +546,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             signed_headers = dict(aws_request.headers.items())
 
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify} if self.s3_verify is not None else None
+                params={"ssl_verify": self.s3_verify}
+                if self.s3_verify is not None
+                else None
             )
             # Make the request
             response = httpx_client.put(url, data=json_string, headers=signed_headers)
@@ -580,8 +603,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
                     # Virtual-hosted-style: bucket.endpoint/key
-                    endpoint_host = self.s3_endpoint_url.replace("https://", "").replace("http://", "")
-                    protocol = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
+                    endpoint_host = self.s3_endpoint_url.replace(
+                        "https://", ""
+                    ).replace("http://", "")
+                    protocol = (
+                        "https://"
+                        if self.s3_endpoint_url.startswith("https://")
+                        else "http://"
+                    )
                     url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{s3_object_key}"
                 else:
                     # Path-style: endpoint/bucket/key

@@ -152,16 +152,14 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
-            raise ValueError(
-                f"CREATE eval is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"CREATE eval is not supported for {custom_llm_provider}")
 
         # Build create request
         create_request: CreateEvalRequest = {
@@ -344,10 +342,10 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -513,10 +511,10 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -681,16 +679,14 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore    
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
-            raise ValueError(
-                f"UPDATE eval is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"UPDATE eval is not supported for {custom_llm_provider}")
 
         # Build update request
         update_request: UpdateEvalRequest = {}
@@ -701,20 +697,41 @@ def update_eval(
         if metadata is not None:
             # List of internal LiteLLM metadata keys that should NOT be sent to OpenAI
             internal_keys = {
-                "headers", "requester_metadata", "user_api_key_hash", "user_api_key_alias",
-                "user_api_key_spend", "user_api_key_max_budget", "user_api_key_team_id",
-                "user_api_key_user_id", "user_api_key_org_id", "user_api_key_team_alias",
-                "user_api_key_end_user_id", "user_api_key_user_email", "user_api_key_request_route",
-                "user_api_key_budget_reset_at", "user_api_key_auth_metadata", "user_api_key",
-                "user_api_end_user_max_budget", "user_api_key_auth", "litellm_api_version",
-                "global_max_parallel_requests", "user_api_key_team_max_budget",
-                "user_api_key_team_spend", "user_api_key_model_max_budget",
-                "user_api_key_user_spend", "user_api_key_user_max_budget",
-                "user_api_key_metadata", "endpoint", "litellm_parent_otel_span",
-                "requester_ip_address", "user_agent",
+                "headers",
+                "requester_metadata",
+                "user_api_key_hash",
+                "user_api_key_alias",
+                "user_api_key_spend",
+                "user_api_key_max_budget",
+                "user_api_key_team_id",
+                "user_api_key_user_id",
+                "user_api_key_org_id",
+                "user_api_key_team_alias",
+                "user_api_key_end_user_id",
+                "user_api_key_user_email",
+                "user_api_key_request_route",
+                "user_api_key_budget_reset_at",
+                "user_api_key_auth_metadata",
+                "user_api_key",
+                "user_api_end_user_max_budget",
+                "user_api_key_auth",
+                "litellm_api_version",
+                "global_max_parallel_requests",
+                "user_api_key_team_max_budget",
+                "user_api_key_team_spend",
+                "user_api_key_model_max_budget",
+                "user_api_key_user_spend",
+                "user_api_key_user_max_budget",
+                "user_api_key_metadata",
+                "endpoint",
+                "litellm_parent_otel_span",
+                "requester_ip_address",
+                "user_agent",
             }
             # Only include user-provided metadata keys
-            filtered_metadata = {k: v for k, v in metadata.items() if k not in internal_keys}
+            filtered_metadata = {
+                k: v for k, v in metadata.items() if k not in internal_keys
+            }
             if filtered_metadata:  # Only add if there's user metadata
                 update_request["metadata"] = filtered_metadata
 
@@ -730,7 +747,11 @@ def update_eval(
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url, headers, request_body = evals_api_provider_config.transform_update_eval_request(
+        (
+            url,
+            headers,
+            request_body,
+        ) = evals_api_provider_config.transform_update_eval_request(
             eval_id=eval_id,
             update_request=update_request,
             api_base=api_base,
@@ -868,10 +889,10 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1021,10 +1042,10 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1038,7 +1059,11 @@ def cancel_eval(
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url, headers, request_body = evals_api_provider_config.transform_cancel_eval_request(
+        (
+            url,
+            headers,
+            request_body,
+        ) = evals_api_provider_config.transform_cancel_eval_request(
             eval_id=eval_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -1199,16 +1224,14 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
-            raise ValueError(
-                f"CREATE run is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"CREATE run is not supported for {custom_llm_provider}")
 
         # Build create request
         create_request: CreateRunRequest = {
@@ -1388,10 +1411,10 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1561,10 +1584,10 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1720,10 +1743,10 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1737,7 +1760,11 @@ def cancel_run(
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url, headers, request_body = evals_api_provider_config.transform_cancel_run_request(
+        (
+            url,
+            headers,
+            request_body,
+        ) = evals_api_provider_config.transform_cancel_run_request(
             eval_id=eval_id,
             run_id=run_id,
             api_base=api_base,
@@ -1884,10 +1911,10 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
-            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        evals_api_provider_config: Optional[
+            BaseEvalsAPIConfig
+        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if evals_api_provider_config is None:
@@ -1901,7 +1928,11 @@ def delete_run(
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url, headers, request_body = evals_api_provider_config.transform_delete_run_request(
+        (
+            url,
+            headers,
+            request_body,
+        ) = evals_api_provider_config.transform_delete_run_request(
             eval_id=eval_id,
             run_id=run_id,
             api_base=api_base,

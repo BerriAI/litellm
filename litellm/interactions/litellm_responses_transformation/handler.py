@@ -56,7 +56,7 @@ class LiteLLMResponsesInteractionsHandler:
     ]:
         """
         Handle Interactions API request by calling litellm.responses().
-        
+
         Args:
             model: The model to use
             input: The input content
@@ -65,22 +65,20 @@ class LiteLLMResponsesInteractionsHandler:
             _is_async: Whether this is an async call
             stream: Whether to stream the response
             **kwargs: Additional parameters
-            
+
         Returns:
             InteractionsAPIResponse or streaming iterator
         """
         # Transform interactions request to responses request
-        responses_request = (
-            LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
-                model=model,
-                input=input,
-                optional_params=optional_params,
-                custom_llm_provider=custom_llm_provider,
-                stream=stream,
-                **kwargs,
-            )
+        responses_request = LiteLLMResponsesInteractionsConfig.transform_interactions_request_to_responses_request(
+            model=model,
+            input=input,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            stream=stream,
+            **kwargs,
         )
-        
+
         if _is_async:
             return self.async_interactions_api_handler(
                 responses_request=responses_request,
@@ -89,14 +87,14 @@ class LiteLLMResponsesInteractionsHandler:
                 optional_params=optional_params,
                 **kwargs,
             )
-        
+
         # Call litellm.responses()
         # Note: litellm.responses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         # but the type checker may see it as a coroutine in some contexts
         responses_response = litellm.responses(
             **responses_request,
         )
-        
+
         # Handle streaming response
         if isinstance(responses_response, BaseResponsesAPIStreamingIterator):
             return LiteLLMResponsesInteractionsStreamingIterator(
@@ -107,11 +105,11 @@ class LiteLLMResponsesInteractionsHandler:
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        
+
         # At this point, responses_response must be ResponsesAPIResponse (not streaming)
         # Cast to satisfy type checker since we've already checked it's not a streaming iterator
         responses_api_response = cast(ResponsesAPIResponse, responses_response)
-        
+
         # Transform responses response to interactions response
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
@@ -125,14 +123,16 @@ class LiteLLMResponsesInteractionsHandler:
         input: Optional[InteractionInput],
         optional_params: InteractionsAPIOptionalRequestParams,
         **kwargs,
-    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
+    ) -> Union[
+        InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]
+    ]:
         """Async handler for interactions API requests."""
         # Call litellm.aresponses()
         # Note: litellm.aresponses() returns Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]
         responses_response = await litellm.aresponses(
             **responses_request,
         )
-        
+
         # Handle streaming response
         if isinstance(responses_response, BaseResponsesAPIStreamingIterator):
             return LiteLLMResponsesInteractionsStreamingIterator(
@@ -143,14 +143,13 @@ class LiteLLMResponsesInteractionsHandler:
                 custom_llm_provider=responses_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
-        
+
         # At this point, responses_response must be ResponsesAPIResponse (not streaming)
         # Cast to satisfy type checker since we've already checked it's not a streaming iterator
         responses_api_response = cast(ResponsesAPIResponse, responses_response)
-        
+
         # Transform responses response to interactions response
         return LiteLLMResponsesInteractionsConfig.transform_responses_response_to_interactions_response(
             responses_response=responses_api_response,
             model=model,
         )
-

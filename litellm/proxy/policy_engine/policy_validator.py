@@ -70,7 +70,11 @@ class PolicyValidator:
             )
 
             guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
-            return {g.get("guardrail_name", "") for g in guardrails if g.get("guardrail_name")}
+            return {
+                g.get("guardrail_name", "")
+                for g in guardrails
+                if g.get("guardrail_name")
+            }
         except Exception as e:
             verbose_proxy_logger.warning(
                 f"Could not get guardrails from registry: {str(e)}"
@@ -145,17 +149,17 @@ class PolicyValidator:
 
             # Check if model matches any pattern via pattern router
             if hasattr(self.llm_router, "pattern_router"):
-                pattern_deployments = self.llm_router.pattern_router.get_deployments_by_pattern(
-                    model=model
+                pattern_deployments = (
+                    self.llm_router.pattern_router.get_deployments_by_pattern(
+                        model=model
+                    )
                 )
                 if pattern_deployments:
                     return True
 
             return False
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Could not check model '{model}': {str(e)}"
-            )
+            verbose_proxy_logger.warning(f"Could not check model '{model}': {str(e)}")
             return True  # Assume valid on error
 
     def _validate_inheritance_chain(

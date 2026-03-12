@@ -92,10 +92,7 @@ def _team_member_has_permission(
     if permission not in team_obj.team_member_permissions:
         return False
     for member in team_obj.members_with_roles:
-        if (
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
-        ):
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
             return True
     return False
 

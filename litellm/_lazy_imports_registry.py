@@ -677,7 +677,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "FireworksAIRerankConfig",
     ),
     "VoyageRerankConfig": (".llms.voyage.rerank.transformation", "VoyageRerankConfig"),
-    "IBMWatsonXRerankConfig": (".llms.watsonx.rerank.transformation", "IBMWatsonXRerankConfig"),
+    "IBMWatsonXRerankConfig": (
+        ".llms.watsonx.rerank.transformation",
+        "IBMWatsonXRerankConfig",
+    ),
     "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
     "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
     "LlamaAPIConfig": (".llms.meta_llama.chat.transformation", "LlamaAPIConfig"),
@@ -859,7 +862,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
-    "BedrockMantleChatConfig": (".llms.bedrock_mantle.chat.transformation", "BedrockMantleChatConfig"),
+    "BedrockMantleChatConfig": (
+        ".llms.bedrock_mantle.chat.transformation",
+        "BedrockMantleChatConfig",
+    ),
     "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",
