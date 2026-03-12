@@ -99,6 +99,8 @@ const config = {
         showReadingTime: false,
         sortPosts: 'descending',
         include: ['**/*.{md,mdx}'],
+        onInlineAuthors: 'ignore',
+        onUntruncatedBlogPosts: 'ignore',
       },
     ],
     [
@@ -117,6 +119,19 @@ const config = {
       },
     ],
 
+    [
+      '@scalar/docusaurus',
+      {
+        label: 'API Reference',
+        route: '/api-reference',
+        showNavLink: false,
+        configuration: {
+          url: '/openapi.json',
+          title: 'LiteLLM API Reference',
+          theme: 'default',
+        },
+      },
+    ],
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -218,6 +233,7 @@ const config = {
             label: 'Enterprise',
             to: "docs/enterprise"
           },
+          { to: '/api-reference', label: 'API Reference', position: 'left' },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
           {

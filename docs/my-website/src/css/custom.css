@@ -111,6 +111,46 @@
   }
 }
 
+/* Three-column navbar: logo | center nav | right icons */
+@media (min-width: 997px) {
+  .navbar__inner {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .navbar__brand-col {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    margin-left: 1rem;
+  }
+
+  .navbar__brand-col .navbar__brand {
+    font-size: 1.25rem;
+  }
+
+  .navbar__brand-col .navbar__logo {
+    height: 2rem;
+    width: auto;
+  }
+
+  .navbar__center-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+  }
+
+  .navbar__right-col {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.25rem;
+    margin-right: 2rem;
+  }
+}
+
 /* =========================================
    ALERTS / ADMONITIONS
    ========================================= */

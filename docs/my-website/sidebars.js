@@ -202,49 +202,6 @@ const sidebars = {
     { type: "doc", id: "index", label: "Getting Started" },
 
     // ════════════════════════════════════════════════════════════
-    // AGENT & MCP GATEWAY
-    // ════════════════════════════════════════════════════════════
-    {
-      type: "category",
-      label: "Agent & MCP Gateway",
-      collapsed: false,
-      link: { type: "doc", id: "agent_mcp_gateway" },
-      items: [
-        {
-          type: "category",
-          label: "A2A Agent Gateway",
-          collapsed: true,
-          link: { type: "doc", id: "a2a" },
-          items: [
-            "a2a_invoking_agents",
-            "a2a_agent_headers",
-            "a2a_cost_tracking",
-            "a2a_agent_permissions",
-            "a2a_iteration_budgets",
-          ],
-        },
-        {
-          type: "category",
-          label: "MCP Gateway",
-          collapsed: true,
-          link: { type: "doc", id: "mcp" },
-          items: [
-            "mcp_usage",
-            "mcp_openapi",
-            "mcp_oauth",
-            "mcp_aws_sigv4",
-            "mcp_public_internet",
-            "mcp_semantic_filter",
-            "mcp_control",
-            "mcp_cost",
-            "mcp_guardrail",
-            "mcp_troubleshoot",
-          ],
-        },
-      ],
-    },
-
-    // ════════════════════════════════════════════════════════════
     // PYTHON SDK
     // ════════════════════════════════════════════════════════════
     {
@@ -319,6 +276,47 @@ const sidebars = {
       items: [
         // Entry point
         "proxy/docker_quick_start",
+
+        // ── Agent & MCP Gateway ────────────────────────────────────────
+        {
+          type: "category",
+          label: "Agent & MCP Gateway",
+          collapsed: true,
+          link: { type: "doc", id: "agent_mcp_gateway" },
+          items: [
+            {
+              type: "category",
+              label: "A2A Agent Gateway",
+              collapsed: true,
+              link: { type: "doc", id: "a2a" },
+              items: [
+                "a2a_invoking_agents",
+                "a2a_agent_headers",
+                "a2a_cost_tracking",
+                "a2a_agent_permissions",
+                "a2a_iteration_budgets",
+              ],
+            },
+            {
+              type: "category",
+              label: "MCP Gateway",
+              collapsed: true,
+              link: { type: "doc", id: "mcp" },
+              items: [
+                "mcp_usage",
+                "mcp_openapi",
+                "mcp_oauth",
+                "mcp_aws_sigv4",
+                "mcp_public_internet",
+                "mcp_semantic_filter",
+                "mcp_control",
+                "mcp_cost",
+                "mcp_guardrail",
+                "mcp_troubleshoot",
+              ],
+            },
+          ],
+        },
 
         // ── 1. Setup & Configuration ───────────────────────────────────
         {
@@ -586,288 +584,10 @@ const sidebars = {
               collapsed: true,
               items: ["proxy/call_hooks", "proxy/rules"],
             },
-            { type: "link", label: "All Endpoints (Swagger) →", href: "https://litellm-api.up.railway.app/" },
+            { type: "link", label: "All Endpoints (API Reference) →", href: "/api-reference" },
             { type: "link", label: "Demo LiteLLM Cloud →", href: "https://www.litellm.ai/cloud" },
           ],
         },
-      ],
-    },
-    {
-      type: "category",
-      label: "API Reference",
-      collapsed: true,
-      link: {
-        type: "generated-index",
-        title: "API Reference",
-        description: "Complete reference for all LiteLLM API endpoints",
-        slug: "/supported_endpoints",
-      },
-      items: [
-
-        // ── Chat & Text ────────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Chat & Text",
-          collapsed: true,
-          items: [
-            {
-              type: "category",
-              label: "/chat/completions",
-              collapsed: true,
-              link: {
-                type: "generated-index",
-                title: "Chat Completions",
-                description: "Details on the completion() function",
-                slug: "/completion",
-              },
-              items: [
-                "completion/input",
-                "completion/output",
-                "completion/usage",
-                "completion/http_handler_config",
-              ],
-            },
-            "text_completion",
-            "response_api",
-            "response_api_compact",
-            "bedrock_converse",
-            "generateContent",
-          ],
-        },
-
-        // ── Audio & Speech ─────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Audio & Speech",
-          collapsed: true,
-          items: [
-            "audio_transcription",
-            "text_to_speech",
-            "realtime",
-          ],
-        },
-
-        // ── Images & Video ─────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Images & Video",
-          collapsed: true,
-          items: [
-            "image_generation",
-            "image_edits",
-            "image_variations",
-            "videos",
-          ],
-        },
-
-        // ── Embeddings & Retrieval ─────────────────────────────────────
-        {
-          type: "category",
-          label: "Embeddings & Retrieval",
-          collapsed: true,
-          items: [
-            "embedding/supported_embedding",
-            "rerank",
-            {
-              type: "category",
-              label: "/search",
-              collapsed: true,
-              items: [
-                "search/index",
-                "search/perplexity",
-                "search/tavily",
-                "search/exa_ai",
-                "search/brave",
-                "search/parallel_ai",
-                "search/google_pse",
-                "search/dataforseo",
-                "search/firecrawl",
-                "search/searxng",
-                "search/linkup",
-                "search/serper",
-              ],
-            },
-          ],
-        },
-
-        // ── Vector Stores & RAG ────────────────────────────────────────
-        {
-          type: "category",
-          label: "Vector Stores & RAG",
-          collapsed: true,
-          items: [
-            "vector_store_files",
-            "vector_stores/create",
-            "vector_stores/search",
-            "rag_ingest",
-            "rag_query",
-          ],
-        },
-
-        // ── Files & Storage ────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Files & Storage",
-          collapsed: true,
-          items: [
-            {
-              type: "category",
-              label: "/files",
-              collapsed: true,
-              items: [
-                "files_endpoints",
-                "proxy/litellm_managed_files",
-              ],
-            },
-            "containers",
-            "container_files",
-          ],
-        },
-
-        // ── Assistants & Threads ───────────────────────────────────────
-        {
-          type: "category",
-          label: "Assistants & Threads",
-          collapsed: true,
-          items: [
-            "assistants",
-            "interactions",
-            "skills",
-          ],
-        },
-
-        // ── Batches, Fine-tuning & Evals ───────────────────────────────
-        {
-          type: "category",
-          label: "Batches, Fine-tuning & Evals",
-          collapsed: true,
-          items: [
-            {
-              type: "category",
-              label: "/batches",
-              collapsed: true,
-              items: [
-                "batches",
-                "proxy/managed_batches",
-              ],
-            },
-            {
-              type: "category",
-              label: "/fine_tuning",
-              collapsed: true,
-              items: [
-                "fine_tuning",
-                "proxy/managed_finetuning",
-              ],
-            },
-            "evals_api",
-          ],
-        },
-
-        // ── Agents & MCP ───────────────────────────────────────────────
-        {
-          type: "category",
-          label: "Agents & MCP",
-          collapsed: true,
-          items: [
-            {
-              type: "category",
-              label: "/a2a - A2A Agent Gateway",
-              collapsed: true,
-              items: [
-                "a2a",
-                "a2a_invoking_agents",
-                "a2a_agent_headers",
-                "a2a_cost_tracking",
-                "a2a_agent_permissions",
-                "a2a_iteration_budgets",
-              ],
-            },
-            {
-              type: "category",
-              label: "/mcp - Model Context Protocol",
-              collapsed: true,
-              items: [
-                "mcp",
-                "mcp_usage",
-                "mcp_openapi",
-                "mcp_oauth",
-                "mcp_aws_sigv4",
-                "mcp_public_internet",
-                "mcp_semantic_filter",
-                "mcp_control",
-                "mcp_cost",
-                "mcp_guardrail",
-                "mcp_troubleshoot",
-              ],
-            },
-          ],
-        },
-
-        // ── Safety & Moderation ────────────────────────────────────────
-        {
-          type: "category",
-          label: "Safety & Moderation",
-          collapsed: true,
-          items: [
-            "apply_guardrail",
-            "moderation",
-            "ocr",
-          ],
-        },
-
-        // ── Provider-native & Pass-through ─────────────────────────────
-        {
-          type: "category",
-          label: "Provider-native & Pass-through",
-          collapsed: true,
-          items: [
-            "bedrock_invoke",
-            {
-              type: "category",
-              label: "/v1/messages (Anthropic native)",
-              collapsed: true,
-              items: [
-                "anthropic_unified/index",
-                "anthropic_unified/structured_output",
-                "anthropic_unified/messages_to_responses_mapping",
-              ],
-            },
-            "anthropic_count_tokens",
-            {
-              type: "category",
-              label: "Pass-through Endpoints",
-              collapsed: true,
-              items: [
-                "pass_through/intro",
-                "pass_through/anthropic_completion",
-                "pass_through/assembly_ai",
-                "pass_through/bedrock",
-                "pass_through/azure_passthrough",
-                "pass_through/cohere",
-                "pass_through/cursor",
-                "pass_through/google_ai_studio",
-                "pass_through/langfuse",
-                "pass_through/mistral",
-                "pass_through/openai_passthrough",
-                {
-                  type: "category",
-                  label: "Vertex AI",
-                  collapsed: true,
-                  items: [
-                    "pass_through/vertex_ai",
-                    "pass_through/vertex_ai_live_websocket",
-                    "pass_through/vertex_ai_search_datastores",
-                  ],
-                },
-                "pass_through/vllm",
-                "proxy/pass_through",
-                "proxy/pass_through_guardrails",
-              ],
-            },
-          ],
-        },
-
       ],
     },
     {
