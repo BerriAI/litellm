@@ -202,11 +202,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        reasoning_effort = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-            or raw_reasoning_effort
-        )
         if effective_effort is not None and effective_effort == "xhigh":
             if not self._supports_reasoning_effort_level(model, "xhigh"):
                 if litellm.drop_params or drop_params:
