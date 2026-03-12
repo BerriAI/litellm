@@ -146,7 +146,7 @@ class PixverseVideoConfig(BaseVideoConfig):
     ) -> dict:
         """
         Validate environment and set up authentication headers.
-        Pixverse uses Bearer token authentication via PIXVERSE_API_KEY.
+        PixVerse uses API-KEY header authentication via PIXVERSE_API_KEY.
         """
         # Use api_key from litellm_params if available, otherwise fall back to other sources
         if litellm_params and litellm_params.api_key:
@@ -224,8 +224,9 @@ class PixverseVideoConfig(BaseVideoConfig):
                     # Portrait
                     aspect_ratio = "9:16"
 
-                # Determine quality based on height
-                if height >= 1080:
+                # Determine quality based on shortest edge
+                short_edge = min(width, height)
+                if short_edge >= 1080:
                     quality = "1080p"
                 else:
                     quality = "720p"
@@ -567,15 +568,18 @@ class PixverseVideoConfig(BaseVideoConfig):
         """
         Transform the Pixverse video content download response (synchronous).
 
-        Pixverse's task endpoint returns JSON with a video URL in the video_url field.
-        We need to extract the URL and download the video.
+        Pixverse's result endpoint returns JSON in the standard envelope format.
+        We extract the video URL from the response and download the video bytes.
 
         Example response:
         {
-            "task_id":"task_123...",
-            "created_at":"2025-01-01T00:00:00Z",
-            "status":"completed",
-            "video_url":"https://cdn.pixverse.ai/.../video.mp4"
+            "ErrCode": 0,
+            "ErrMsg": "Success",
+            "Resp": {
+                "id": 391504857968062,
+                "status": 1,
+                "url": "https://media.pixverse.ai/videos/example.mp4"
+            }
         }
         """
         response_data = raw_response.json()
@@ -596,15 +600,18 @@ class PixverseVideoConfig(BaseVideoConfig):
         """
         Transform the Pixverse video content download response (asynchronous).
 
-        Pixverse's task endpoint returns JSON with a video URL in the video_url field.
-        We need to extract the URL and download the video asynchronously.
+        Pixverse's result endpoint returns JSON in the standard envelope format.
+        We extract the video URL from the response and download the video bytes asynchronously.
 
         Example response:
         {
-            "task_id":"task_123...",
-            "created_at":"2025-01-01T00:00:00Z",
-            "status":"completed",
-            "video_url":"https://cdn.pixverse.ai/.../video.mp4"
+            "ErrCode": 0,
+            "ErrMsg": "Success",
+            "Resp": {
+                "id": 391504857968062,
+                "status": 1,
+                "url": "https://media.pixverse.ai/videos/example.mp4"
+            }
         }
         """
         response_data = raw_response.json()

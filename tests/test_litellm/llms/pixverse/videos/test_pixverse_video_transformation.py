@@ -403,10 +403,15 @@ class TestPixverseVideoTransformation:
         assert aspect_ratio == "16:9"
         assert quality == "1080p"
 
-        # Verify portrait still works
+        # Verify portrait 1080p works
         aspect_ratio, quality = self.config._parse_size_to_pixverse_format("1080x1920")
         assert aspect_ratio == "9:16"
         assert quality == "1080p"
+
+        # Verify portrait 720p works (critical - height is long edge, quality must follow short edge)
+        aspect_ratio, quality = self.config._parse_size_to_pixverse_format("720x1280")
+        assert aspect_ratio == "9:16"
+        assert quality == "720p"  # NOT "1080p"
 
     def test_pixverse_format_to_size_roundtrip(self):
         """Test that _pixverse_format_to_size correctly converts aspect_ratio + quality back to size."""
