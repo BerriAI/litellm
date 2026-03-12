@@ -197,13 +197,14 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     try:
+        if timeout is not None and isinstance(timeout, (float, int)):
+            timeout = httpx.Timeout(timeout)
+
         if client is None:
             _params: dict = {}
             if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify"):
                 _params["ssl_verify"] = logging_obj.litellm_params.get("ssl_verify")
             if timeout is not None:
-                if isinstance(timeout, (float, int)):
-                    timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,

@@ -2382,13 +2382,14 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
+    if timeout is not None and isinstance(timeout, (float, int)):
+        timeout = httpx.Timeout(timeout)
+
     if gemini_client is not None:
         client = gemini_client
     if client is None:
         _params: dict = {}
         if timeout is not None:
-            if isinstance(timeout, (float, int)):
-                timeout = httpx.Timeout(timeout)
             _params["timeout"] = timeout
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
