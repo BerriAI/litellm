@@ -871,19 +871,6 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
-    def _is_oauth_cred_expired(cred: Dict[str, Any]) -> bool:
-        """Return True if the OAuth2 credential's access_token has expired."""
-        expires_at = cred.get("expires_at")
-        if not expires_at:
-            return False
-        try:
-            exp_dt = datetime.fromisoformat(expires_at)
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-            return datetime.now(timezone.utc) > exp_dt
-        except (ValueError, TypeError):
-            return False
-
     async def _get_user_oauth_extra_headers_from_db(
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -904,12 +891,14 @@ if MCP_AVAILABLE:
         if not user_id or not server_id:
             return None
         try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
-                from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
-                    get_user_oauth_credential,
-                )
                 from litellm.proxy.utils import (  # noqa: PLC0415
                     get_prisma_client_or_throw,
                 )
@@ -919,7 +908,7 @@ if MCP_AVAILABLE:
                 )
                 cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
             if cred and cred.get("access_token"):
-                if _is_oauth_cred_expired(cred):
+                if is_oauth_credential_expired(cred):
                     verbose_logger.debug(
                         f"_get_user_oauth_extra_headers_from_db: token expired for "
                         f"user={user_id} server={server_id}"
@@ -1104,9 +1093,17 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Pre-fetch all OAuth credentials for this user once to avoid N+1 DB queries
-            # inside the asyncio.gather loop below.
-            _prefetched_oauth_creds = await _prefetch_oauth_creds_for_user(user_api_key_auth)
+            # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
+            # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
+            _has_oauth2_server = any(
+                getattr(s, "auth_type", None) == MCPAuth.oauth2
+                for s in allowed_mcp_servers
+            )
+            _prefetched_oauth_creds = (
+                await _prefetch_oauth_creds_for_user(user_api_key_auth)
+                if _has_oauth2_server
+                else {}
+            )
 
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,

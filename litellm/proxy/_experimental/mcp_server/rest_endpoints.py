@@ -69,29 +69,6 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
-    def _check_credential_expiry(
-        cred: Dict[str, Any],
-        user_id: str,
-        server_id: str,
-    ) -> bool:
-        """Return True if the credential is expired, False otherwise."""
-        expires_at = cred.get("expires_at")
-        if not expires_at:
-            return False
-        try:
-            exp_dt = datetime.fromisoformat(expires_at)
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > exp_dt:
-                verbose_logger.debug(
-                    f"_get_user_oauth_extra_headers: token expired for "
-                    f"user={user_id} server={server_id}"
-                )
-                return True
-        except (ValueError, TypeError):
-            pass
-        return False
-
     async def _get_user_oauth_extra_headers(
         server,
         user_api_key_dict: UserAPIKeyAuth,
@@ -114,12 +91,14 @@ if MCP_AVAILABLE:
         if not user_id or not server_id:
             return None
         try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
-                from litellm.proxy._experimental.mcp_server.db import (
-                    get_user_oauth_credential,
-                )
                 from litellm.proxy.utils import get_prisma_client_or_throw
 
                 prisma_client = get_prisma_client_or_throw(
@@ -127,7 +106,11 @@ if MCP_AVAILABLE:
                 )
                 cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
             if cred and cred.get("access_token"):
-                if _check_credential_expiry(cred, user_id, server_id):
+                if is_oauth_credential_expired(cred):
+                    verbose_logger.debug(
+                        f"_get_user_oauth_extra_headers: token expired for "
+                        f"user={user_id} server={server_id}"
+                    )
                     return None
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception as e:
@@ -517,8 +500,19 @@ if MCP_AVAILABLE:
                         },
                     )
 
-                # Pre-fetch all OAuth credentials for this user once to avoid N+1 DB queries.
-                prefetched_oauth_creds = await _prefetch_user_oauth_creds(user_api_key_dict)
+                # Pre-fetch OAuth credentials only when at least one allowed server uses OAuth2,
+                # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
+                _oauth2_server_ids = {
+                    sid for sid in allowed_server_ids
+                    if getattr(
+                        global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None
+                    ) == MCPAuth.oauth2
+                }
+                prefetched_oauth_creds = (
+                    await _prefetch_user_oauth_creds(user_api_key_dict)
+                    if _oauth2_server_ids
+                    else {}
+                )
 
                 # Query all servers the user has access to
                 errors = []
