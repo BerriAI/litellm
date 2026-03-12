@@ -975,7 +975,7 @@ def test_cost_discount_vertex_ai():
         id="test-id",
         choices=[],
         created=1234567890,
-        model="gemini-pro",
+        model="gemini-3-pro-preview",
         object="chat.completion",
         usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
@@ -984,7 +984,7 @@ def test_cost_discount_vertex_ai():
     litellm.cost_discount_config = {}
     cost_without_discount = completion_cost(
         completion_response=response,
-        model="vertex_ai/gemini-pro",
+        model="vertex_ai/gemini-3-pro-preview",
         custom_llm_provider="vertex_ai",
     )
 
@@ -994,7 +994,7 @@ def test_cost_discount_vertex_ai():
     # Calculate cost with discount
     cost_with_discount = completion_cost(
         completion_response=response,
-        model="vertex_ai/gemini-pro",
+        model="vertex_ai/gemini-3-pro-preview",
         custom_llm_provider="vertex_ai",
     )
 
