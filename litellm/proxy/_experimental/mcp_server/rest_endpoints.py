@@ -1,6 +1,6 @@
 import importlib
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -68,6 +68,136 @@ if MCP_AVAILABLE:
             if server_auth is not None:
                 return server_auth
         return mcp_auth_header
+
+    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
+        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no
+        OAuth2 servers are involved in the current request.
+        """
+        return {
+            sid
+            for sid in allowed_server_ids
+            if getattr(
+                global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None
+            )
+            == MCPAuth.oauth2
+        }
+
+    async def _get_user_oauth_extra_headers(
+        server,
+        user_api_key_dict: UserAPIKeyAuth,
+        prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        For OAuth2 servers, look up the user's stored access token and return it
+        as extra_headers {"Authorization": "Bearer <token>"} so that it reaches
+        the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
+        Returns None for non-OAuth2 servers or when no credential is stored.
+
+        Args:
+            prefetched_creds: Optional dict keyed by server_id with credential payloads.
+                              When provided, avoids a per-server DB round-trip.
+        """
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+            return None
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return None
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+
+            if prefetched_creds is not None:
+                cred = prefetched_creds.get(server_id)
+            else:
+                from litellm.proxy.utils import get_prisma_client_or_throw
+
+                prisma_client = get_prisma_client_or_throw(
+                    "Database not connected. Connect a database to use OAuth2 MCP tools."
+                )
+                cred = await get_user_oauth_credential(
+                    prisma_client, user_id, server_id
+                )
+            if cred and cred.get("access_token"):
+                if is_oauth_credential_expired(cred):
+                    verbose_logger.debug(
+                        f"_get_user_oauth_extra_headers: token expired for "
+                        f"user={user_id} server={server_id}"
+                    )
+                    return None
+                return {"Authorization": f"Bearer {cred['access_token']}"}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_get_user_oauth_extra_headers: failed to retrieve credential for "
+                f"user={user_id} server={server_id}: {e}"
+            )
+        return None
+
+    async def _prefetch_user_oauth_creds(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch all OAuth2 credentials for the user in a single DB query.
+
+        Returns a dict keyed by server_id. Used to avoid N+1 DB queries when
+        iterating over multiple OAuth2 MCP servers.
+        """
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        if not user_id:
+            return {}
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                list_user_oauth_credentials,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            creds = await list_user_oauth_credentials(prisma_client, user_id)
+            return {c["server_id"]: c for c in creds if "server_id" in c}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}"
+            )
+            return {}
+
+    async def _get_bulk_user_oauth_headers(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Fetch ALL OAuth2 credentials for the current user in a single DB query and
+        return a mapping of server_id → {"Authorization": "Bearer <token>"}.
+
+        This is the batch alternative to calling _get_user_oauth_extra_headers
+        per-server inside a loop (N+1 DB queries).
+        """
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        if not user_id:
+            return {}
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                list_user_oauth_credentials,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            creds = await list_user_oauth_credentials(prisma_client, user_id)
+            return {
+                c["server_id"]: {"Authorization": f"Bearer {c['access_token']}"}
+                for c in creds
+                if c.get("access_token") and c.get("server_id")
+            }
+        except Exception:
+            verbose_logger.debug(
+                "Failed to bulk-fetch OAuth credentials", exc_info=True
+            )
+            return {}
 
     def _create_tool_response_objects(tools, server_mcp_info):
         """Helper function to create tool response objects."""
@@ -162,11 +292,13 @@ if MCP_AVAILABLE:
         server_auth_header,
         raw_headers: Optional[Dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
             add_prefix=False,
             raw_headers=raw_headers,
         )
@@ -228,6 +360,103 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
 
+    async def _list_tools_for_single_server(
+        server_id: str,
+        allowed_server_ids: List[str],
+        rest_client_ip: Optional[str],
+        mcp_server_auth_headers: dict,
+        mcp_auth_header: Optional[str],
+        raw_headers_from_request: dict,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> dict:
+        """
+        Resolve and fetch tools for a single specified MCP server.
+
+        Returns the full REST response dict (tools / error / message).
+        Raises HTTPException on access / IP-filter errors.
+        """
+        # Resolve a server name to its UUID if needed
+        _name_resolved = None
+        if server_id not in allowed_server_ids:
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id
+            )
+            if _name_resolved is not None and _name_resolved.server_id in set(
+                allowed_server_ids
+            ):
+                server_id = _name_resolved.server_id
+
+        if server_id not in allowed_server_ids:
+            _server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                or _name_resolved
+            )
+            if (
+                _server is not None
+                and rest_client_ip is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    _server, rest_client_ip
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "ip_filtering",
+                        "message": (
+                            f"MCP server '{server_id}' is not accessible from your IP address "
+                            f"({rest_client_ip}). This server is restricted to internal "
+                            "networks only. To make it externally accessible, set "
+                            "'available_on_public_internet: true' in the server configuration."
+                        ),
+                    },
+                )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_id}",
+                },
+            )
+
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None:
+            return {
+                "tools": [],
+                "error": "server_not_found",
+                "message": f"Server with id {server_id} not found",
+            }
+
+        server_auth_header = _get_server_auth_header(
+            server, mcp_server_auth_headers, mcp_auth_header
+        )
+        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+            server, user_api_key_dict
+        )
+
+        try:
+            tools = await _get_tools_for_single_server(
+                server,
+                server_auth_header,
+                raw_headers_from_request,
+                user_api_key_dict,
+                extra_headers=user_oauth_extra_headers,
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error getting tools from {server.name}: {e}"
+            )
+            return {
+                "tools": [],
+                "error": "server_error",
+                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+            }
+
+        return {
+            "tools": tools,
+            "error": None,
+            "message": "Successfully retrieved tools",
+        }
+
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
@@ -283,10 +512,11 @@ if MCP_AVAILABLE:
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids, _ip_blocked_count = (
-                global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-                    list(allowed_server_ids_set), _rest_client_ip
-                )
+            (
+                allowed_server_ids,
+                _ip_blocked_count,
+            ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                list(allowed_server_ids_set), _rest_client_ip
             )
 
             list_tools_result = []
@@ -294,62 +524,15 @@ if MCP_AVAILABLE:
 
             # If server_id is specified, only query that specific server
             if server_id:
-                if server_id not in allowed_server_ids:
-                    _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                    if (
-                        _server is not None
-                        and _rest_client_ip is not None
-                        and not global_mcp_server_manager._is_server_accessible_from_ip(
-                            _server, _rest_client_ip
-                        )
-                    ):
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "error": "ip_filtering",
-                                "message": (
-                                    f"MCP server '{server_id}' is not accessible from your IP address "
-                                    f"({_rest_client_ip}). This server is restricted to internal "
-                                    "networks only. To make it externally accessible, set "
-                                    "'available_on_public_internet: true' in the server configuration."
-                                ),
-                            },
-                        )
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "access_denied",
-                            "message": f"The key is not allowed to access server {server_id}",
-                        },
-                    )
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server is None:
-                    return {
-                        "tools": [],
-                        "error": "server_not_found",
-                        "message": f"Server with id {server_id} not found",
-                    }
-
-                server_auth_header = _get_server_auth_header(
-                    server, mcp_server_auth_headers, mcp_auth_header
+                return await _list_tools_for_single_server(
+                    server_id=server_id,
+                    allowed_server_ids=allowed_server_ids,
+                    rest_client_ip=_rest_client_ip,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    raw_headers_from_request=raw_headers_from_request,
+                    user_api_key_dict=user_api_key_dict,
                 )
-
-                try:
-                    list_tools_result = await _get_tools_for_single_server(
-                        server,
-                        server_auth_header,
-                        raw_headers_from_request,
-                        user_api_key_dict,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(
-                        f"Error getting tools from {server.name}: {e}"
-                    )
-                    return {
-                        "tools": [],
-                        "error": "server_error",
-                        "message": f"Failed to get tools from server {server.name}: {str(e)}",
-                    }
             else:
                 if not allowed_server_ids:
                     if _ip_blocked_count > 0:
@@ -373,6 +556,14 @@ if MCP_AVAILABLE:
                         },
                     )
 
+                # Pre-fetch OAuth credentials only when at least one allowed server uses OAuth2,
+                # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
+                prefetched_oauth_creds = (
+                    await _prefetch_user_oauth_creds(user_api_key_dict)
+                    if _get_oauth2_server_ids(allowed_server_ids)
+                    else {}
+                )
+
                 # Query all servers the user has access to
                 errors = []
                 for allowed_server_id in allowed_server_ids:
@@ -385,6 +576,11 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
+                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                        server,
+                        user_api_key_dict,
+                        prefetched_creds=prefetched_oauth_creds,
+                    )
 
                     try:
                         tools_result = await _get_tools_for_single_server(
@@ -392,6 +588,7 @@ if MCP_AVAILABLE:
                             server_auth_header,
                             raw_headers_from_request,
                             user_api_key_dict,
+                            extra_headers=user_oauth_extra_headers,
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
@@ -474,21 +671,24 @@ if MCP_AVAILABLE:
             tool_arguments = data.get("arguments")
 
             proxy_base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-            data, logging_obj = (
-                await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                    request=request,
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_config=proxy_config,
-                    route_type=CallTypes.call_mcp_tool.value,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                )
+            (
+                data,
+                logging_obj,
+            ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+                route_type=CallTypes.call_mcp_tool.value,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
             )
 
             # Extract MCP auth headers from request and add to data dict
-            mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request = (
-                _extract_mcp_headers_from_request(request, MCPRequestHandler)
-            )
+            (
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                raw_headers_from_request,
+            ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
@@ -505,6 +705,16 @@ if MCP_AVAILABLE:
                 request, user_api_key_dict, server_id
             )
 
+            # Look up per-user OAuth headers for this server (mirrors list_tool_rest_api).
+            user_oauth_extra_headers: Optional[Dict[str, str]] = None
+            target_server = next(
+                (s for s in allowed_mcp_servers if s.server_id == server_id), None
+            )
+            if target_server is not None:
+                user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                    target_server, user_api_key_dict
+                )
+
             # Call execute_mcp_tool directly (permission checks already done)
             result = await execute_mcp_tool(
                 name=tool_name,
@@ -514,7 +724,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                oauth2_headers=data.get("oauth2_headers"),
+                oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
                 raw_headers=data.get("raw_headers"),
                 litellm_logging_obj=data.get("litellm_logging_obj"),
             )
@@ -577,7 +787,9 @@ if MCP_AVAILABLE:
         client_id: Optional[str] = creds.get("client_id")
         client_secret: Optional[str] = creds.get("client_secret")
         scopes_raw = creds.get("scopes")
-        scopes: Optional[List[str]] = scopes_raw if isinstance(scopes_raw, list) else None
+        scopes: Optional[List[str]] = (
+            scopes_raw if isinstance(scopes_raw, list) else None
+        )
         return client_id, client_secret, scopes
 
     async def _execute_with_mcp_client(
@@ -680,7 +892,9 @@ if MCP_AVAILABLE:
                     if operation is None:
                         continue
 
-                    resolved_op = resolve_operation_params(operation, path_item, components)
+                    resolved_op = resolve_operation_params(
+                        operation, path_item, components
+                    )
 
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")
@@ -689,7 +903,9 @@ if MCP_AVAILABLE:
                     tools.append(
                         {
                             "name": op_id,
-                            "description": description or summary or f"{method.upper()} {path}",
+                            "description": description
+                            or summary
+                            or f"{method.upper()} {path}",
                             "inputSchema": input_schema,
                         }
                     )
