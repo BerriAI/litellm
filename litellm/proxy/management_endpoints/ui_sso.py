@@ -14,6 +14,8 @@ import hashlib
 import inspect
 import os
 import secrets
+import time
+from urllib.parse import urlparse
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
@@ -175,6 +177,181 @@ def determine_role_from_groups(
         f"User groups {user_groups} did not match any role mappings, using default_role: {role_mappings.default_role}"
     )
     return role_mappings.default_role
+
+
+def _normalize_groups_claim(groups_raw: Any) -> List[str]:
+    """
+    Normalize group claim values into a list of strings.
+    """
+    if isinstance(groups_raw, list):
+        return [str(g) for g in groups_raw]
+    if isinstance(groups_raw, str):
+        return [g.strip() for g in groups_raw.split(",") if g.strip()]
+    if groups_raw is not None:
+        return [str(groups_raw)]
+    return []
+
+
+def _decode_jwt_unverified(token: Optional[str], token_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Decode JWT payload without signature verification.
+
+    This is only called after fastapi_sso.verify_and_process succeeds. We still
+    apply additional claim sanity checks before trusting token-derived auth claims.
+    """
+    if not token:
+        return None
+    import jwt
+
+    try:
+        decoded = jwt.decode(token, options={"verify_signature": False})
+    except jwt.exceptions.DecodeError:
+        verbose_proxy_logger.debug(
+            f"{token_name} is not a valid JWT (possibly opaque); skipping {token_name} claim parsing"
+        )
+        return None
+
+    if not isinstance(decoded, dict):
+        return None
+    return cast(Dict[str, Any], decoded)
+
+
+def _is_valid_generic_id_token_claims(
+    id_token_payload: Dict[str, Any],
+    generic_client_id: str,
+    generic_authorization_endpoint: str,
+    leeway_seconds: int = 60,
+) -> bool:
+    """
+    Minimal claim checks before using id_token-derived auth claims.
+    """
+    exp = id_token_payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        verbose_proxy_logger.warning(
+            "Ignoring id_token claims for Generic SSO: missing/invalid exp claim"
+        )
+        return False
+    now_ts = int(time.time())
+    if int(exp) < (now_ts - leeway_seconds):
+        verbose_proxy_logger.warning(
+            "Ignoring id_token claims for Generic SSO: id_token expired"
+        )
+        return False
+
+    aud = id_token_payload.get("aud")
+    aud_values: List[str] = []
+    if isinstance(aud, str):
+        aud_values = [aud]
+    elif isinstance(aud, list):
+        aud_values = [str(a) for a in aud]
+    if generic_client_id not in aud_values:
+        verbose_proxy_logger.warning(
+            "Ignoring id_token claims for Generic SSO: audience does not include configured client_id"
+        )
+        return False
+
+    iss = id_token_payload.get("iss")
+    if isinstance(iss, str):
+        issuer_host = urlparse(iss).netloc
+        auth_host = urlparse(generic_authorization_endpoint).netloc
+        if issuer_host and auth_host and issuer_host != auth_host:
+            verbose_proxy_logger.warning(
+                "Ignoring id_token claims for Generic SSO: issuer host does not match authorization endpoint host"
+            )
+            return False
+    return True
+
+
+def _apply_id_token_claim_fallback(
+    *,
+    id_token_payload: Dict[str, Any],
+    result: Union[OpenID, dict, None],
+    received_response: Optional[dict],
+    jwt_handler: JWTHandler,
+    sso_jwt_handler: Optional[JWTHandler],
+    role_mappings: Optional["RoleMappings"],
+    team_mappings: Optional["TeamMappings"],
+) -> None:
+    """
+    Apply Generic SSO id_token claim fallback with precedence:
+    userinfo > id_token > access_token.
+
+    - Team IDs: fill only when result.team_ids is empty.
+    - Role mappings: only re-evaluate from id_token when userinfo group claim is missing/empty.
+    """
+    if not result:
+        return
+
+    userinfo_response = (
+        received_response
+        if isinstance(received_response, dict)
+        else (
+            result
+            if isinstance(result, dict)
+            else None
+        )
+    )
+
+    existing_team_ids: List[str]
+    if isinstance(result, dict):
+        existing_team_ids = cast(List[str], result.get("team_ids", []) or [])
+    else:
+        existing_team_ids = cast(List[str], getattr(result, "team_ids", []) or [])
+
+    if not existing_team_ids:
+        team_ids: List[str] = []
+        if team_mappings is not None and team_mappings.team_ids_jwt_field:
+            team_ids = _normalize_groups_claim(
+                get_nested_value(id_token_payload, team_mappings.team_ids_jwt_field)
+            )
+        if not team_ids and sso_jwt_handler is not None:
+            team_ids = sso_jwt_handler.get_team_ids_from_jwt(id_token_payload)
+        if not team_ids:
+            team_ids = jwt_handler.get_team_ids_from_jwt(id_token_payload)
+
+        if team_ids:
+            if isinstance(result, dict):
+                result["team_ids"] = team_ids
+            else:
+                setattr(result, "team_ids", team_ids)
+            verbose_proxy_logger.debug(
+                f"Populated team_ids from Generic SSO id_token claims: {team_ids}"
+            )
+
+    if role_mappings is None or role_mappings.provider.lower() not in ["generic", "okta"]:
+        return
+
+    group_claim = role_mappings.group_claim
+    userinfo_groups = _normalize_groups_claim(
+        get_nested_value(userinfo_response or {}, group_claim)
+    )
+    if userinfo_groups:
+        return
+
+    existing_role = (
+        result.get("user_role")
+        if isinstance(result, dict)
+        else getattr(result, "user_role", None)
+    )
+    if (
+        existing_role is not None
+        and role_mappings.default_role is not None
+        and existing_role != role_mappings.default_role
+    ):
+        # Preserve explicit non-default role values already derived from userinfo.
+        return
+
+    id_token_groups = _normalize_groups_claim(get_nested_value(id_token_payload, group_claim))
+    if id_token_groups:
+        mapped_role = determine_role_from_groups(id_token_groups, role_mappings)
+        if mapped_role is not None:
+            if isinstance(result, dict):
+                result["user_role"] = mapped_role
+            else:
+                setattr(result, "user_role", mapped_role)
+            verbose_proxy_logger.debug(
+                f"Updated user_role from Generic SSO id_token groups '{id_token_groups}' to '{mapped_role}'"
+            )
 
 
 def process_sso_jwt_access_token(
@@ -783,6 +960,35 @@ async def get_generic_sso_response(
             ),
             headers=additional_generic_sso_headers_dict,
         )
+
+        id_token_payload = _decode_jwt_unverified(
+            token=getattr(generic_sso, "id_token", None),
+            token_name="id_token",
+        )
+        if id_token_payload and _is_valid_generic_id_token_claims(
+            id_token_payload=id_token_payload,
+            generic_client_id=generic_client_id,
+            generic_authorization_endpoint=generic_authorization_endpoint,
+        ):
+            _apply_id_token_claim_fallback(
+                id_token_payload=id_token_payload,
+                result=result,
+                received_response=received_response,
+                jwt_handler=jwt_handler,
+                sso_jwt_handler=sso_jwt_handler,
+                role_mappings=role_mappings,
+                team_mappings=team_mappings,
+            )
+            if isinstance(received_response, dict):
+                received_response = {
+                    **received_response,
+                    "__id_token_claim_source__": {
+                        "iss": id_token_payload.get("iss"),
+                        "aud": id_token_payload.get("aud"),
+                        "exp": id_token_payload.get("exp"),
+                        "groups": _normalize_groups_claim(id_token_payload.get("groups")),
+                    },
+                }
 
         access_token_str: Optional[str] = generic_sso.access_token
         process_sso_jwt_access_token(
@@ -1999,8 +2205,16 @@ class SSOAuthenticationHandler:
         if ui_access_mode.get("type") == "restricted_sso_group":
             restricted_sso_group = ui_access_mode.get("restricted_sso_group")
             if restricted_sso_group not in team_ids:
+                claim_source_hint = ""
+                if (
+                    isinstance(received_response, dict)
+                    and received_response.get("__id_token_claim_source__") is not None
+                ):
+                    claim_source_hint = (
+                        " Claim sources inspected: userinfo + validated id_token fallback."
+                    )
                 raise ProxyException(
-                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}. Received SSO response: {received_response}",
+                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}. Received SSO response: {received_response}.{claim_source_hint}",
                     type=ProxyErrorTypes.auth_error,
                     param="restricted_sso_group",
                     code=status.HTTP_403_FORBIDDEN,

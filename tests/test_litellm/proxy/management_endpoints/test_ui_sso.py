@@ -1399,6 +1399,250 @@ async def test_get_generic_sso_response_with_empty_headers():
                 assert result == mock_sso_response
 
 
+@pytest.mark.asyncio
+async def test_get_generic_sso_response_uses_id_token_groups_when_userinfo_missing_groups():
+    """
+    Generic SSO fallback test:
+    - userinfo has no groups
+    - id_token has groups
+    Expect id_token fallback to populate team_ids and role mapping.
+    """
+    import time
+
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    mock_request = MagicMock(spec=Request)
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.side_effect = (
+        lambda payload: payload.get("groups", []) if isinstance(payload, dict) else []
+    )
+
+    generic_client_id = "test_client_id"
+    redirect_url = "http://test.com/callback"
+    userinfo_payload = {
+        "sub": "test_user_123",
+        "email": "test@example.com",
+        "preferred_username": "testuser",
+    }
+
+    id_token_str = pyjwt.encode(
+        {
+            "sub": "test_user_123",
+            "aud": generic_client_id,
+            "iss": "https://auth.example.com",
+            "exp": int(time.time()) + 3600,
+            "groups": ["rita-admins", "open-webui-dev"],
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    test_env_vars = {
+        "GENERIC_CLIENT_SECRET": "test_secret",
+        "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/auth",
+        "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+        "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+        "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM": "groups",
+        "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE": "internal_user",
+        "GENERIC_ROLE_MAPPINGS_ROLES": "{'proxy_admin': ['rita-admins'], 'internal_user': ['open-webui-dev']}",
+    }
+
+    def fake_create_provider(name, discovery_document, response_convertor):
+        class FakeGenericSSO:
+            def __init__(self, *args, **kwargs):
+                self.id_token = id_token_str
+                self.access_token = None
+
+            async def verify_and_process(self, request, params=None, headers=None):
+                return response_convertor(userinfo_payload, client=None)
+
+        return FakeGenericSSO
+
+    with patch.dict(os.environ, test_env_vars):
+        with patch("fastapi_sso.sso.base.DiscoveryDocument"):
+            with patch(
+                "fastapi_sso.sso.generic.create_provider", side_effect=fake_create_provider
+            ):
+                result, received_response = await get_generic_sso_response(
+                    request=mock_request,
+                    jwt_handler=mock_jwt_handler,
+                    generic_client_id=generic_client_id,
+                    redirect_url=redirect_url,
+                    sso_jwt_handler=None,
+                )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.team_ids == ["rita-admins", "open-webui-dev"]
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert isinstance(received_response, dict)
+    assert received_response.get("__id_token_claim_source__") is not None
+
+
+@pytest.mark.asyncio
+async def test_get_generic_sso_response_userinfo_groups_take_precedence_over_id_token():
+    """
+    Precedence test:
+    - userinfo has groups
+    - id_token has higher-privilege groups
+    Expect userinfo-derived role/team_ids to remain unchanged.
+    """
+    import time
+
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    mock_request = MagicMock(spec=Request)
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.side_effect = (
+        lambda payload: payload.get("groups", []) if isinstance(payload, dict) else []
+    )
+
+    generic_client_id = "test_client_id"
+    redirect_url = "http://test.com/callback"
+    userinfo_payload = {
+        "sub": "test_user_123",
+        "email": "test@example.com",
+        "preferred_username": "testuser",
+        "groups": ["open-webui-dev"],
+    }
+
+    id_token_str = pyjwt.encode(
+        {
+            "sub": "test_user_123",
+            "aud": generic_client_id,
+            "iss": "https://auth.example.com",
+            "exp": int(time.time()) + 3600,
+            "groups": ["rita-admins"],
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    test_env_vars = {
+        "GENERIC_CLIENT_SECRET": "test_secret",
+        "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/auth",
+        "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+        "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+        "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM": "groups",
+        "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE": "internal_user",
+        "GENERIC_ROLE_MAPPINGS_ROLES": "{'proxy_admin': ['rita-admins'], 'internal_user': ['open-webui-dev']}",
+    }
+
+    def fake_create_provider(name, discovery_document, response_convertor):
+        class FakeGenericSSO:
+            def __init__(self, *args, **kwargs):
+                self.id_token = id_token_str
+                self.access_token = None
+
+            async def verify_and_process(self, request, params=None, headers=None):
+                return response_convertor(userinfo_payload, client=None)
+
+        return FakeGenericSSO
+
+    with patch.dict(os.environ, test_env_vars):
+        with patch("fastapi_sso.sso.base.DiscoveryDocument"):
+            with patch(
+                "fastapi_sso.sso.generic.create_provider", side_effect=fake_create_provider
+            ):
+                result, _ = await get_generic_sso_response(
+                    request=mock_request,
+                    jwt_handler=mock_jwt_handler,
+                    generic_client_id=generic_client_id,
+                    redirect_url=redirect_url,
+                    sso_jwt_handler=None,
+                )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.team_ids == ["open-webui-dev"]
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.mark.asyncio
+async def test_get_generic_sso_response_ignores_invalid_id_token_claims():
+    """
+    Security test:
+    - userinfo has no groups
+    - id_token has groups but invalid audience
+    Expect id_token claims to be ignored.
+    """
+    import time
+
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
+
+    mock_request = MagicMock(spec=Request)
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    generic_client_id = "test_client_id"
+    redirect_url = "http://test.com/callback"
+    userinfo_payload = {
+        "sub": "test_user_123",
+        "email": "test@example.com",
+        "preferred_username": "testuser",
+    }
+
+    # Invalid because aud does not include generic_client_id
+    id_token_str = pyjwt.encode(
+        {
+            "sub": "test_user_123",
+            "aud": "different_client_id",
+            "iss": "https://auth.example.com",
+            "exp": int(time.time()) + 3600,
+            "groups": ["rita-admins"],
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    test_env_vars = {
+        "GENERIC_CLIENT_SECRET": "test_secret",
+        "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/auth",
+        "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+        "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+        "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM": "groups",
+        "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE": "internal_user",
+        "GENERIC_ROLE_MAPPINGS_ROLES": "{'proxy_admin': ['rita-admins'], 'internal_user': ['open-webui-dev']}",
+    }
+
+    def fake_create_provider(name, discovery_document, response_convertor):
+        class FakeGenericSSO:
+            def __init__(self, *args, **kwargs):
+                self.id_token = id_token_str
+                self.access_token = None
+
+            async def verify_and_process(self, request, params=None, headers=None):
+                return response_convertor(userinfo_payload, client=None)
+
+        return FakeGenericSSO
+
+    with patch.dict(os.environ, test_env_vars):
+        with patch("fastapi_sso.sso.base.DiscoveryDocument"):
+            with patch(
+                "fastapi_sso.sso.generic.create_provider", side_effect=fake_create_provider
+            ):
+                result, received_response = await get_generic_sso_response(
+                    request=mock_request,
+                    jwt_handler=mock_jwt_handler,
+                    generic_client_id=generic_client_id,
+                    redirect_url=redirect_url,
+                    sso_jwt_handler=None,
+                )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.team_ids == []
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+    assert isinstance(received_response, dict)
+    assert "__id_token_claim_source__" not in received_response
+
+
 class TestCLISSOCallbackFunction:
     """Test the cli_sso_callback function specifically"""
 

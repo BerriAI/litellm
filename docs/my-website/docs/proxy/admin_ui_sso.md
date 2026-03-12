@@ -55,6 +55,16 @@ GENERIC_USERINFO_ENDPOINT="https://<your-okta-domain>/oauth2/v1/userinfo"
 PROXY_BASE_URL="https://<your-proxy-base-url>"
 ```
 
+:::note
+Some Okta org-level deployments return group claims in the `id_token` but not in `userinfo`.  
+LiteLLM Generic SSO now uses a secure fallback order for group/role resolution:
+1. `userinfo` claims (preferred)
+2. validated `id_token` claims (fallback)
+3. JWT `access_token` claims (last resort)
+
+If you use `role_mappings.group_claim` or `team_ids_jwt_field` (for example `groups`), this fallback helps avoid default-role behavior when `userinfo` omits groups.
+:::
+
 **Custom Authorization Server** (requires the Okta API Access Management SKU):
 ```bash
 GENERIC_CLIENT_ID="<your-client-id>"
@@ -118,6 +128,7 @@ LiteLLM will automatically handle PKCE parameter generation and verification dur
 | `redirect_uri` error | Redirect URI not configured | Add `<proxy_base_url>/sso/callback` to Sign-in redirect URIs in Okta |
 | `access_denied` | User not assigned to app | Assign the user in the Assignments tab |
 | `no_matching_policy` | Missing Access Policy (Custom Authorization Server only) | Create an Access Policy in the Authorization Server (see Step 3a) |
+| User is assigned default role unexpectedly | `userinfo` does not include the configured groups claim | Verify `groups` claim in Okta token preview and use LiteLLM debug endpoints (`/sso/debug/login`, `/sso/debug/callback`) to inspect claim sources |
 
 </TabItem>
 <TabItem value="google" label="Google SSO">
