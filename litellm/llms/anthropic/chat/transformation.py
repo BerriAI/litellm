@@ -1069,14 +1069,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
-            elif param == "service_tier":
-                if value in ("auto", "standard_only"):
+            elif param == "service_tier" and isinstance(value, str):
+                # Block known OpenAI-only values to avoid hard Anthropic API
+                # errors when routing across providers. Any other value
+                # (including future Anthropic tiers) is forwarded as-is.
+                _openai_only_tiers = {"default", "flex", "scale"}
+                if value not in _openai_only_tiers:
                     optional_params["service_tier"] = value
                 else:
                     litellm.verbose_logger.warning(
-                        "litellm.AnthropicConfig: dropping unrecognised "
-                        "service_tier='%s'. Anthropic supports 'auto' and "
-                        "'standard_only'.",
+                        "litellm.AnthropicConfig: dropping OpenAI-specific "
+                        "service_tier='%s' — not supported by Anthropic.",
                         value,
                     )
 

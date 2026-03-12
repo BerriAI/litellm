@@ -364,7 +364,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     speed: Optional[str]  # Fast mode support for Opus models
     output_config: Optional[AnthropicOutputConfig]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
-    service_tier: Optional[Literal["auto", "standard_only"]]  # Service tier for priority capacity
+    service_tier: Optional[str]  # Service tier for priority capacity (e.g. "auto", "standard_only")
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
