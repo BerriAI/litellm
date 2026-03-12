@@ -68,7 +68,7 @@ class TestGeminiPassthroughLoggingHandler:
     def _create_passthrough_logging_payload(self) -> PassthroughStandardLoggingPayload:
         """Create a mock passthrough logging payload for testing"""
         return PassthroughStandardLoggingPayload(
-            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
             request_body={"contents": [{"parts": [{"text": "Hello"}]}]},
             request_method="POST",
         )
@@ -263,7 +263,7 @@ class TestGeminiPassthroughLoggingHandler:
             httpx_response=mock_response,
             response_body=self.mock_gemini_response,
             logging_obj=mock_logging_obj,
-            url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
             result="",
             start_time=self.start_time,
             end_time=self.end_time,
@@ -278,14 +278,14 @@ class TestGeminiPassthroughLoggingHandler:
 
         # Verify that the logging object has the cost set (from Gemini handler)
         assert mock_logging_obj.model_call_details["response_cost"] is not None
-        assert mock_logging_obj.model_call_details["model"] == "gemini-1.5-flash"
+        assert mock_logging_obj.model_call_details["model"] == "gemini-2.0-flash"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"
 
         # Verify that _handle_logging was called with the correct kwargs
         handler._handle_logging.assert_called_once()
         call_kwargs = handler._handle_logging.call_args[1]
         assert call_kwargs["response_cost"] is not None
-        assert call_kwargs["model"] == "gemini-1.5-flash"
+        assert call_kwargs["model"] == "gemini-2.0-flash"
         assert call_kwargs["custom_llm_provider"] == "gemini"
 
     @patch("litellm.completion_cost")
