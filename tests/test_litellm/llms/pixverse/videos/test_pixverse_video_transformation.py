@@ -64,8 +64,9 @@ class TestPixverseVideoTransformation:
             prompt=prompt,
             api_base=api_base,
             video_create_optional_request_params={
-                "resolution": "1280x720",
-                "duration": 5.0,
+                "aspect_ratio": "16:9",
+                "quality": "720p",
+                "duration": 5,
             },
             litellm_params=GenericLiteLLMParams(),
             headers={},
@@ -73,8 +74,9 @@ class TestPixverseVideoTransformation:
 
         # Validate payload structure
         assert data["prompt"] == prompt
-        assert data["resolution"] == "1280x720"
-        assert data["duration"] == 5.0
+        assert data["aspect_ratio"] == "16:9"
+        assert data["quality"] == "720p"
+        assert data["duration"] == 5
         assert "image" not in data
         assert "video" not in data
         assert files == []
@@ -94,8 +96,9 @@ class TestPixverseVideoTransformation:
             api_base=api_base,
             video_create_optional_request_params={
                 "input_reference": image_url,
-                "resolution": "1280x720",
-                "duration": 5.0,
+                "aspect_ratio": "16:9",
+                "quality": "720p",
+                "duration": 5,
             },
             litellm_params=GenericLiteLLMParams(),
             headers={},
@@ -105,8 +108,9 @@ class TestPixverseVideoTransformation:
         assert data["prompt"] == prompt
         assert data["image"] == image_url
         assert "video" not in data
-        assert data["resolution"] == "1280x720"
-        assert data["duration"] == 5.0
+        assert data["aspect_ratio"] == "16:9"
+        assert data["quality"] == "720p"
+        assert data["duration"] == 5
         assert files == []
 
         # Validate URL has correct endpoint
@@ -124,8 +128,9 @@ class TestPixverseVideoTransformation:
             api_base=api_base,
             video_create_optional_request_params={
                 "input_reference": video_url,
-                "resolution": "1920x1080",
-                "duration": 10.0,
+                "aspect_ratio": "16:9",
+                "quality": "1080p",
+                "duration": 10,
             },
             litellm_params=GenericLiteLLMParams(),
             headers={},
@@ -135,8 +140,9 @@ class TestPixverseVideoTransformation:
         assert data["prompt"] == prompt
         assert data["video"] == video_url
         assert "image" not in data
-        assert data["resolution"] == "1920x1080"
-        assert data["duration"] == 10.0
+        assert data["aspect_ratio"] == "16:9"
+        assert data["quality"] == "1080p"
+        assert data["duration"] == 10
         assert files == []
 
         # Validate URL has correct endpoint
@@ -452,6 +458,41 @@ class TestPixverseVideoTransformation:
             drop_params=False,
         )
         assert "model" not in mapped_routing  # Should be filtered out
+
+    def test_transform_video_delete_response(self):
+        """Test transform_video_delete_response handles success and error cases."""
+        # Test successful deletion
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "ErrCode": 0,
+            "ErrMsg": "Success",
+            "Resp": {"id": 391504480090022, "created_at": "2025-01-15T10:30:00Z"},
+        }
+
+        result = self.config.transform_video_delete_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+        )
+
+        assert isinstance(result, VideoObject)
+        assert result.status == "failed"  # cancelled maps to failed per OpenAI standard
+        assert result.id == "391504480090022"
+        assert isinstance(result.created_at, int)
+        assert result.created_at > 0
+
+        # Test error response
+        mock_error_response = Mock(spec=httpx.Response)
+        mock_error_response.json.return_value = {
+            "ErrCode": 1001,
+            "ErrMsg": "Task not found",
+            "Resp": {},
+        }
+
+        with pytest.raises(ValueError, match="Pixverse API error"):
+            self.config.transform_video_delete_response(
+                raw_response=mock_error_response,
+                logging_obj=self.mock_logging_obj,
+            )
 
     def test_unsupported_operations(self):
         """Test that unsupported operations raise NotImplementedError."""

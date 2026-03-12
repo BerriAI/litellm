@@ -325,8 +325,9 @@ class PixverseVideoConfig(BaseVideoConfig):
             "prompt": "description",
             "image": "https://... or data:image/...",  (for image-to-video)
             "video": "https://... or data:video/...",  (for video-to-video)
-            "resolution": "1280x720",
-            "duration": 5.0
+            "aspect_ratio": "16:9",  (mapped from OpenAI size param, e.g. "1280x720")
+            "quality": "720p",       (mapped from OpenAI size param)
+            "duration": 5            (mapped from OpenAI seconds param, converted to int)
         }
         """
         # Build the request data
@@ -721,7 +722,7 @@ class PixverseVideoConfig(BaseVideoConfig):
         video_obj = VideoObject(
             id=str(resp_data.get("id", resp_data.get("task_id", ""))),
             object="video",
-            status="cancelled",
+            status="failed",  # Map cancelled to failed per OpenAI standard
             created_at=self._parse_pixverse_timestamp(resp_data.get("created_at")),
         )  # type: ignore[arg-type]
 
