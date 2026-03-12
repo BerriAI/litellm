@@ -4,6 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import time
 from typing import Any, Awaitable, Callable, Dict, Generator, List, Optional, Tuple, TypeVar, Union
 
 import httpx
@@ -149,6 +150,8 @@ class MCPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
         aws_auth: Optional[httpx.Auth] = None,
+        use_session_cache: bool = False,
+        session_cache_ttl: float = 300.0,  # 5 minutes default
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -159,6 +162,25 @@ class MCPClient:
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
+
+        # Session caching configuration — stdio transport spawns child processes
+        # that can become orphans if not explicitly cleaned up, so disallow caching.
+        if use_session_cache and transport_type == MCPTransport.stdio:
+            raise ValueError(
+                "Session caching is not supported for stdio transport. "
+                "stdio spawns child processes that cannot be safely cached."
+            )
+        self.use_session_cache: bool = use_session_cache
+        self.session_cache_ttl: float = session_cache_ttl
+
+        # Cached session state
+        self._cached_session: Optional[ClientSession] = None
+        self._cached_transport_ctx: Optional[Any] = None
+        self._cached_http_client: Optional[httpx.AsyncClient] = None
+        self._session_last_used_at: Optional[float] = None
+        self._session_lock: asyncio.Lock = asyncio.Lock()
+        self._closed: bool = False
+
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -349,6 +371,158 @@ class MCPClient:
 
         return factory
 
+    def _is_session_valid(self) -> bool:
+        """Check if the cached session is still valid (not idle too long)."""
+        if self._cached_session is None:
+            return False
+
+        if self._session_last_used_at is None:
+            return False
+
+        # Check idle timeout
+        idle_time = time.time() - self._session_last_used_at
+        if idle_time > self.session_cache_ttl:
+            verbose_logger.debug(
+                f"MCP client cached session idle timeout (TTL={self.session_cache_ttl}s, idle={idle_time:.1f}s)"
+            )
+            return False
+
+        return True
+
+    async def _create_and_cache_session(self) -> ClientSession:
+        """Create a new session and cache it."""
+        await self._cleanup_cached_session()
+
+        transport_ctx, http_client = self._create_transport_context()
+        session = None
+        try:
+            transport = await transport_ctx.__aenter__()
+            read_stream, write_stream = transport[0], transport[1]
+            session = ClientSession(read_stream, write_stream)
+            await session.__aenter__()
+            await session.initialize()
+        except Exception:
+            # Clean up on failure to prevent resource leak
+            if session is not None:
+                try:
+                    await session.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            try:
+                await transport_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            if http_client is not None:
+                try:
+                    await http_client.aclose()
+                except Exception:
+                    pass
+            raise
+
+        self._cached_transport_ctx = transport_ctx
+        self._cached_session = session
+        self._cached_http_client = http_client
+        self._session_last_used_at = time.time()
+
+        verbose_logger.debug(
+            f"MCP client created and cached new session for {self.server_url or 'stdio'}"
+        )
+        return session
+
+    async def _cleanup_cached_session(self) -> None:
+        """Close and clean up any cached session resources."""
+        if self._cached_session is not None:
+            try:
+                await self._cached_session.__aexit__(None, None, None)
+            except Exception as e:
+                verbose_logger.debug(f"Error closing cached session: {e}")
+            self._cached_session = None
+
+        if self._cached_transport_ctx is not None:
+            try:
+                await self._cached_transport_ctx.__aexit__(None, None, None)
+            except Exception as e:
+                verbose_logger.debug(f"Error closing cached transport: {e}")
+            self._cached_transport_ctx = None
+
+        if self._cached_http_client is not None:
+            try:
+                await self._cached_http_client.aclose()
+            except Exception as e:
+                verbose_logger.debug(f"Error closing cached http client: {e}")
+            self._cached_http_client = None
+
+        self._session_last_used_at = None
+
+    async def _get_or_create_session(self) -> ClientSession:
+        """Get a cached session or create a new one."""
+        async with self._session_lock:
+            if self._closed:
+                raise RuntimeError("MCPClient is closed")
+            if self._is_session_valid():
+                verbose_logger.debug(
+                    f"MCP client reusing cached session for {self.server_url or 'stdio'}"
+                )
+                return self._cached_session  # type: ignore
+
+            return await self._create_and_cache_session()
+
+    def _is_connection_error(self, e: Exception) -> bool:
+        """Check if exception indicates a broken/closed connection."""
+        # anyio / MCP-specific exceptions (not subclasses of ConnectionError)
+        type_name = type(e).__name__
+        if type_name in ("BrokenResourceError", "ClosedResourceError", "EndOfStream"):
+            return True
+        if isinstance(e, ConnectionError):
+            return True
+        return False
+
+    async def run_with_cached_session(
+        self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
+    ) -> TSessionResult:
+        """Run an operation using a cached session (connection pooling enabled)."""
+        try:
+            session = await self._get_or_create_session()
+            result = await operation(session)
+            self._session_last_used_at = time.time()
+            return result
+        except Exception as e:
+            if self._is_connection_error(e):
+                verbose_logger.warning(
+                    f"MCP client cached session appears broken, retrying: {e}"
+                )
+                async with self._session_lock:
+                    if self._cached_session is session:
+                        # First caller to detect failure — replace session
+                        session = await self._create_and_cache_session()
+                    elif self._cached_session is not None:
+                        # Another caller already replaced it — reuse
+                        session = self._cached_session
+                    else:
+                        # Session was closed, create new
+                        session = await self._create_and_cache_session()
+                result = await operation(session)
+                self._session_last_used_at = time.time()
+                return result
+            raise
+
+    async def close(self) -> None:
+        """Close the client and clean up any cached sessions."""
+        async with self._session_lock:
+            self._closed = True
+            await self._cleanup_cached_session()
+        verbose_logger.info(
+            f"MCP client closed for {self.server_url or 'stdio'}"
+        )
+
+    async def _run_operation(
+        self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
+    ) -> TSessionResult:
+        """Run an operation, using cached session if enabled."""
+        if self.use_session_cache:
+            return await self.run_with_cached_session(operation)
+        return await self.run_with_session(operation)
+
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
         verbose_logger.debug(
@@ -359,7 +533,7 @@ class MCPClient:
             return await session.list_tools()
 
         try:
-            result = await self.run_with_session(_list_tools_operation)
+            result = await self._run_operation(_list_tools_operation)
             tool_count = len(result.tools)
             tool_names = [tool.name for tool in result.tools]
             verbose_logger.info(
@@ -424,7 +598,7 @@ class MCPClient:
 
             )
         try:
-            tool_result = await self.run_with_session(_call_tool_operation)
+            tool_result = await self._run_operation(_call_tool_operation)
             verbose_logger.info(
                 f"MCP client tool call '{call_tool_request_params.name}' completed successfully"
             )
@@ -474,7 +648,7 @@ class MCPClient:
             return await session.list_prompts()
 
         try:
-            result = await self.run_with_session(_list_prompts_operation)
+            result = await self._run_operation(_list_prompts_operation)
             prompt_count = len(result.prompts)
             prompt_names = [prompt.name for prompt in result.prompts]
             verbose_logger.info(
@@ -520,7 +694,7 @@ class MCPClient:
             )
 
         try:
-            get_prompt_result = await self.run_with_session(_get_prompt_operation)
+            get_prompt_result = await self._run_operation(_get_prompt_operation)
             verbose_logger.info(
                 f"MCP client get_prompt '{get_prompt_request_params.name}' completed successfully"
             )
@@ -564,7 +738,7 @@ class MCPClient:
             return await session.list_resources()
 
         try:
-            result = await self.run_with_session(_list_resources_operation)
+            result = await self._run_operation(_list_resources_operation)
             resource_count = len(result.resources)
             resource_names = [resource.name for resource in result.resources]
             verbose_logger.info(
@@ -604,7 +778,7 @@ class MCPClient:
             return await session.list_resource_templates()
 
         try:
-            result = await self.run_with_session(_list_resource_templates_operation)
+            result = await self._run_operation(_list_resource_templates_operation)
             resource_template_count = len(result.resourceTemplates)
             resource_template_names = [
                 resourceTemplate.name for resourceTemplate in result.resourceTemplates
@@ -645,7 +819,7 @@ class MCPClient:
             return await session.read_resource(url)
 
         try:
-            read_resource_result = await self.run_with_session(_read_resource_operation)
+            read_resource_result = await self._run_operation(_read_resource_operation)
             verbose_logger.info(
                 f"MCP client read_resource '{url}' completed successfully"
             )

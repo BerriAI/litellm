@@ -1,5 +1,5 @@
+import asyncio
 import os
-import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -310,6 +310,401 @@ class TestMCPClient:
         """Test that MCPAuth.token enum exists and has correct value"""
         assert hasattr(MCPAuth, "token")
         assert MCPAuth.token.value == "token"
+
+
+class TestMCPClientSessionCachingE2E:
+    """E2E tests for session caching — exercise full flows through _run_operation."""
+
+    @staticmethod
+    def _mock_transport():
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return ctx
+
+    @staticmethod
+    def _mock_http_client():
+        c = MagicMock()
+        c.aclose = AsyncMock()
+        return c
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_caching_reuses_session_across_calls(self, mock_session_cls):
+        """With caching ON, multiple operations share one transport/session."""
+        sessions = []
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            sessions.append(s)
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        transports = []
+
+        def tracked():
+            t = self._mock_transport()
+            h = self._mock_http_client()
+            transports.append(t)
+            return t, h
+
+        client._create_transport_context = tracked
+
+        seen = []
+
+        async def op(session):
+            seen.append(id(session))
+            return "ok"
+
+        await client._run_operation(op)
+        await client._run_operation(op)
+        await client._run_operation(op)
+
+        assert len(transports) == 1, "should create transport only once"
+        assert len(sessions) == 1, "should create session only once"
+        assert len(set(seen)) == 1, "all ops should see the same session"
+        await client.close()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_caching_disabled_creates_fresh_session_each_call(self, mock_session_cls):
+        """With caching OFF, each operation gets a new transport/session."""
+        sessions = []
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            sessions.append(s)
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=False,
+        )
+        transports = []
+
+        def tracked():
+            t = self._mock_transport()
+            h = self._mock_http_client()
+            transports.append(t)
+            return t, h
+
+        client._create_transport_context = tracked
+
+        async def op(session):
+            return "ok"
+
+        await client._run_operation(op)
+        await client._run_operation(op)
+
+        assert len(transports) == 2, "should create a new transport each time"
+        assert len(sessions) == 2, "should create a new session each time"
+        assert client._cached_session is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_ttl_expiry_creates_new_session_and_closes_old(self, mock_session_cls):
+        """After TTL expires, next operation creates a new session and closes old resources."""
+        import time as time_mod
+
+        sessions = []
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            sessions.append(s)
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=1.0,
+        )
+        transports = []
+        http_clients = []
+
+        def tracked():
+            t = self._mock_transport()
+            h = self._mock_http_client()
+            transports.append(t)
+            http_clients.append(h)
+            return t, h
+
+        client._create_transport_context = tracked
+
+        async def op(session):
+            return "ok"
+
+        await client._run_operation(op)
+        assert len(transports) == 1
+
+        # Expire TTL
+        client._session_last_used_at = time_mod.time() - 2.0
+
+        await client._run_operation(op)
+        assert len(transports) == 2, "should create a second session after TTL expiry"
+
+        # Old resources should have been closed
+        sessions[0].__aexit__.assert_called()
+        transports[0].__aexit__.assert_called()
+        http_clients[0].aclose.assert_called()
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_connection_error_retries_with_new_session(self, mock_session_cls):
+        """On connection error, old session is closed and retry uses a new session."""
+        sessions = []
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            sessions.append(s)
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        transports = []
+        http_clients = []
+
+        def tracked():
+            t = self._mock_transport()
+            h = self._mock_http_client()
+            transports.append(t)
+            http_clients.append(h)
+            return t, h
+
+        client._create_transport_context = tracked
+
+        # Setup initial session
+        async def setup(s):
+            return "ok"
+
+        await client._run_operation(setup)
+        broken = sessions[0]
+
+        # Operation that fails on the broken session, succeeds on the new one
+        async def retry_op(session):
+            if session is broken:
+                raise ConnectionError("pipe broken")
+            return "recovered"
+
+        result = await client._run_operation(retry_op)
+        assert result == "recovered"
+        assert len(transports) == 2
+
+        # Old resources closed
+        broken.__aexit__.assert_called()
+        transports[0].__aexit__.assert_called()
+        http_clients[0].aclose.assert_called()
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_concurrent_errors_create_single_recovery_session(self, mock_session_cls):
+        """Multiple concurrent callers hitting a broken session share one recovery."""
+        sessions = []
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            sessions.append(s)
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        transport_count = [0]
+
+        def tracked():
+            transport_count[0] += 1
+            return self._mock_transport(), self._mock_http_client()
+
+        client._create_transport_context = tracked
+
+        # Create initial session
+        async def setup(s):
+            return "ok"
+
+        await client._run_operation(setup)
+        assert transport_count[0] == 1
+        broken = sessions[0]
+
+        async def failing_op(session):
+            await asyncio.sleep(0)  # yield so all coroutines start concurrently
+            if session is broken:
+                raise ConnectionError("connection lost")
+            return "recovered"
+
+        results = await asyncio.gather(
+            client.run_with_cached_session(failing_op),
+            client.run_with_cached_session(failing_op),
+            client.run_with_cached_session(failing_op),
+        )
+
+        assert all(r == "recovered" for r in results)
+        # Only 1 recovery session created (2 total: original + recovery)
+        assert transport_count[0] == 2
+        assert len(sessions) == 2
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_close_cleans_up_and_prevents_reuse(self, mock_session_cls):
+        """close() cleans up resources; further operations raise RuntimeError."""
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        transports = []
+        http_clients = []
+
+        def tracked():
+            t = self._mock_transport()
+            h = self._mock_http_client()
+            transports.append(t)
+            http_clients.append(h)
+            return t, h
+
+        client._create_transport_context = tracked
+
+        async def op(s):
+            return "ok"
+
+        await client._run_operation(op)
+        await client.close()
+
+        # Resources cleaned up
+        transports[0].__aexit__.assert_called()
+        http_clients[0].aclose.assert_called()
+
+        # Further operations should fail
+        with pytest.raises(RuntimeError, match="MCPClient is closed"):
+            await client._run_operation(op)
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_non_connection_error_propagates_without_retry(self, mock_session_cls):
+        """Non-connection errors propagate immediately; no retry, no session churn."""
+
+        def make_session(*a, **kw):
+            s = MagicMock()
+            s.__aenter__ = AsyncMock(return_value=s)
+            s.__aexit__ = AsyncMock()
+            s.initialize = AsyncMock()
+            return s
+
+        mock_session_cls.side_effect = make_session
+
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        transport_count = [0]
+
+        def tracked():
+            transport_count[0] += 1
+            return self._mock_transport(), self._mock_http_client()
+
+        client._create_transport_context = tracked
+
+        async def bad_op(session):
+            raise ValueError("application error")
+
+        with pytest.raises(ValueError, match="application error"):
+            await client.run_with_cached_session(bad_op)
+
+        # No second session created (no retry)
+        assert transport_count[0] == 1
+        await client.close()
+
+    @pytest.mark.parametrize(
+        "exc,expected",
+        [
+            (type("BrokenResourceError", (Exception,), {})("broken"), True),
+            (type("ClosedResourceError", (Exception,), {})("closed"), True),
+            (type("EndOfStream", (Exception,), {})("eof"), True),
+            (ConnectionError("conn reset"), True),
+            (ConnectionResetError("reset"), True),  # subclass of ConnectionError
+            (ValueError("bad input"), False),
+            (RuntimeError("something failed"), False),
+            (TimeoutError("timed out"), False),  # not treated as connection error
+        ],
+    )
+    def test_is_connection_error_classification(self, exc, expected):
+        """Connection error classification is precise — no false positives."""
+        client = MCPClient(
+            server_url="http://test/sse",
+            transport_type=MCPTransport.sse,
+        )
+        assert client._is_connection_error(exc) is expected
+
+
+class TestMCPClientStdioCachingGuard:
+    """Session caching must be rejected for stdio transport."""
+
+    def test_stdio_with_session_cache_raises(self):
+        with pytest.raises(ValueError, match="not supported for stdio transport"):
+            MCPClient(
+                transport_type=MCPTransport.stdio,
+                stdio_config={"command": "echo", "args": [], "env": {}},
+                use_session_cache=True,
+            )
+
+    def test_stdio_without_session_cache_ok(self):
+        client = MCPClient(
+            transport_type=MCPTransport.stdio,
+            stdio_config={"command": "echo", "args": [], "env": {}},
+            use_session_cache=False,
+        )
+        assert client.use_session_cache is False
 
 
 if __name__ == "__main__":
