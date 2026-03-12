@@ -294,10 +294,8 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
             headers={},
         )
 
-        # Verify that output_format was removed (fixes the "Extra inputs are not permitted" error)
-        assert (
-            "output_format" not in final_data
-        ), "output_format should be removed for VertexAI"
+        # output_format may be present if passed directly via the native Anthropic API;
+        # the OpenAI-compat path still uses tool-based structured output via map_openai_params.
         assert "model" not in final_data, "model should be removed for VertexAI"
         assert "tools" in final_data, "tools should still be present"
         assert "tool_choice" in final_data, "tool_choice should still be present"
@@ -491,57 +489,56 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     ), "Header should be removed if no supported values remain"
 
 
-def test_vertex_ai_anthropic_output_config_dropped():
+def test_vertex_ai_anthropic_output_config_preserved():
     """
-    Test that output_config parameter is dropped from Vertex AI Anthropic requests.
-    
-    Vertex AI does not support the output_config parameter (used for effort settings
-    in Anthropic API). This test ensures it's properly removed to prevent
-    "Extra inputs are not permitted" errors.
+    Test that output_config parameter is passed through to Vertex AI Anthropic requests.
+
+    Vertex AI now supports output_config (effort, structured outputs) for Claude models.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23380
     """
     config = VertexAIAnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "What is 2+2?"}]
     headers = {}
-    
-    # Simulate optional_params with output_config that would be passed in
+
     optional_params = {
         "max_tokens": 1024,
         "output_config": {
-            "effort": "high"  # This is Anthropic-specific and not supported by Vertex AI
+            "effort": "high"
         },
     }
-    
-    # Call transform_request which should drop output_config
+
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4.5",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers=headers,
     )
-    
-    # Verify output_config was removed
-    assert "output_config" not in result, \
-        "output_config should be dropped from Vertex AI Anthropic requests"
-    
-    # Verify other parameters are preserved
-    assert result["max_tokens"] == 1024, "max_tokens should be preserved"
-    assert "messages" in result, "messages should be present"
+
+    assert "output_config" in result, \
+        "output_config should be preserved for Vertex AI Anthropic requests"
+    assert result["output_config"]["effort"] == "high"
+    assert result["max_tokens"] == 1024
+    assert "model" not in result
 
 
-def test_vertex_ai_anthropic_output_format_and_output_config_both_dropped():
+def test_vertex_ai_anthropic_output_format_and_output_config_both_preserved():
     """
-    Test that both output_format and output_config are dropped from Vertex AI requests.
-    
-    This ensures that even if both parameters somehow make it to the transform_request,
-    they are properly cleaned up before sending to Vertex AI.
+    Test that both output_format and output_config are passed through to Vertex AI.
+
+    Vertex AI Claude now supports structured outputs (output_config.format) and
+    effort control (output_config.effort). The deprecated output_format is also
+    preserved for backwards compatibility during the migration period.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23380
     """
     config = VertexAIAnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Extract structured data"}]
     headers = {}
-    
+
     optional_params = {
         "max_tokens": 2048,
         "output_format": {
@@ -555,46 +552,37 @@ def test_vertex_ai_anthropic_output_format_and_output_config_both_dropped():
             "effort": "high"
         },
     }
-    
-    # Simulate parent class creating test_data with both parameters
-    # (as if the parent transform_request added them)
+
     test_data = {
-        "model": "claude-3-5-sonnet-20241022",
         "messages": messages,
         "max_tokens": 2048,
         "output_format": optional_params["output_format"],
         "output_config": optional_params["output_config"],
     }
-    
-    # Mock the parent transform_request to return data with both parameters
+
     original_transform = config.__class__.__bases__[0].transform_request
-    
+
     def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
         return test_data.copy()
-    
+
     config.__class__.__bases__[0].transform_request = mock_transform_request
-    
+
     try:
         result = config.transform_request(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4.5",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
             headers=headers,
         )
-        
-        # Verify both were removed
-        assert "output_format" not in result, \
-            "output_format should be dropped from Vertex AI requests"
-        assert "output_config" not in result, \
-            "output_config should be dropped from Vertex AI requests"
-        
-        # Verify essential params are preserved
-        assert result["max_tokens"] == 2048, "max_tokens should be preserved"
-        assert "messages" in result, "messages should be present"
-        assert "model" not in result, "model should also be dropped for Vertex AI"
-        
+
+        assert "output_format" in result, \
+            "output_format should be preserved for Vertex AI requests"
+        assert "output_config" in result, \
+            "output_config should be preserved for Vertex AI requests"
+        assert result["max_tokens"] == 2048
+        assert "model" not in result
+
     finally:
-        # Restore original method
         config.__class__.__bases__[0].transform_request = original_transform
 

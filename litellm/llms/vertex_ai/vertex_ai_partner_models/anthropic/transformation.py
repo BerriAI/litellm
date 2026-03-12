@@ -105,12 +105,6 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        # VertexAI doesn't support output_format parameter, remove it if present
-        data.pop("output_format", None)
-
-        # VertexAI doesn't support output_config parameter, remove it if present
-        data.pop("output_config", None)
-
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
         auto_betas = self.get_anthropic_beta_list(
@@ -159,9 +153,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         drop_params: bool,
     ) -> dict:
         """
-        Override parent method to ensure VertexAI always uses tool-based structured outputs.
-        VertexAI doesn't support the output_format parameter, so we force all models
-        to use the tool-based approach for structured outputs.
+        Override parent method to use tool-based structured outputs for the
+        OpenAI-compatible path. The native Anthropic API path (pass-through)
+        now passes output_config/output_format directly to VertexAI, but the
+        OpenAI response_format translation still uses the tool-based approach.
         """
         # Temporarily override model name to force tool-based approach
         # This ensures Claude Sonnet 4.5 uses tools instead of output_format
