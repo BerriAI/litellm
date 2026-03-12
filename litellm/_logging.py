@@ -87,7 +87,7 @@ class SecretRedactionFilter(logging.Filter):
                 pass
 
         # Redact extra fields passed via logger.debug("msg", extra={...})
-        for key, value in record.__dict__.items():
+        for key, value in list(record.__dict__.items()):
             if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
                 setattr(record, key, _redact_string(value))
 
@@ -199,7 +199,7 @@ class JsonFormatter(Formatter):
                 json_record[key] = value
 
         if record.exc_info:
-            json_record["stacktrace"] = self.formatException(record.exc_info)
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
