@@ -1774,3 +1774,120 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+
+class TestBedrockFunctionCallDeduplication:
+    """
+    Regression tests for Bedrock duplicate toolUse ID errors.
+
+    When using the Responses API with a Bedrock model, item.to_dict() on a
+    function_call output item sets BOTH `id` and `call_id` to the same
+    toolUseId value (e.g. "tooluse_Eu2kRRWMGyxQj7RvzEDczH").  Passing this
+    dict back as input to a subsequent call must NOT produce two assistant
+    messages that each carry a toolUse block with the same ID, which would
+    cause Bedrock to reject the request with:
+      "The toolUse blocks at messages.N.content contain duplicate Ids: tooluse_..."
+    """
+
+    def test_function_call_with_id_equals_call_id_no_duplicate(self):
+        """
+        Bedrock sets id == call_id on function_call items.  A single
+        function_call + function_call_output pair must produce exactly ONE
+        assistant message with ONE tool_call entry.
+        """
+        call_id = "tooluse_Eu2kRRWMGyxQj7RvzEDczH"
+        input_items = [
+            {"role": "user", "content": "fetch data", "type": "message"},
+            # Simulates item.to_dict() from a Bedrock Responses API response –
+            # both 'id' and 'call_id' are the toolUseId.
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "id": call_id,
+                "name": "datasets-fetch",
+                "arguments": '{"verbose": false}',
+                "status": "completed",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": '[{"id": 1, "name": "test"}]',
+            },
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        # There must be exactly ONE assistant message with exactly ONE tool_call
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant_messages) == 1, (
+            f"Expected 1 assistant message, got {len(assistant_messages)}: {assistant_messages}"
+        )
+
+        tool_calls = assistant_messages[0].get("tool_calls") or []
+        assert len(tool_calls) == 1, (
+            f"Expected 1 tool_call, got {len(tool_calls)}: {tool_calls}"
+        )
+        assert tool_calls[0].get("id") == call_id
+
+        # There must be exactly ONE tool result message
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+
+    def test_function_call_with_id_equals_call_id_no_duplicate_with_cache(self):
+        """
+        Same as above but with a pre-populated TOOL_CALLS_CACHE entry,
+        which triggers the assistant-wrapper path in
+        _transform_responses_api_tool_call_output_to_chat_completion_message.
+        The wrapper must be deduplicated so we still end up with one
+        assistant message.
+        """
+        call_id = "tooluse_Eu2kRRWMGyxQj7RvzEDczH_cached"
+        TOOL_CALLS_CACHE.set_cache(
+            key=call_id,
+            value=ChatCompletionMessageToolCall(
+                id=call_id,
+                type="function",
+                function=Function(
+                    name="datasets-fetch",
+                    arguments='{"verbose": false}',
+                ),
+            ),
+        )
+
+        input_items = [
+            {"role": "user", "content": "fetch data", "type": "message"},
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "id": call_id,
+                "name": "datasets-fetch",
+                "arguments": '{"verbose": false}',
+                "status": "completed",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": '[{"id": 1}]',
+            },
+        ]
+
+        try:
+            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_items,
+                responses_api_request={},
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=call_id)
+
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant_messages) == 1, (
+            f"Cache hit must not duplicate assistant tool_call wrapper. "
+            f"Got {len(assistant_messages)} assistant messages: {assistant_messages}"
+        )
+
+        tool_calls = assistant_messages[0].get("tool_calls") or []
+        assert len(tool_calls) == 1
+        assert tool_calls[0].get("id") == call_id
