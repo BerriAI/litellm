@@ -1026,6 +1026,14 @@ class CustomStreamWrapper:
 
                 self.sent_last_chunk = True
 
+                # Preserve custom attributes from original chunk to final chunk
+                _original_chunk = response_obj.get("original_chunk")
+                if _original_chunk:
+                    preserve_upstream_non_openai_attributes(
+                        model_response=model_response,
+                        original_chunk=_original_chunk,
+                    )
+
             return model_response
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
