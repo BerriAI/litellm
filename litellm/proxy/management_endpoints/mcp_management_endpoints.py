@@ -1307,9 +1307,17 @@ if MCP_AVAILABLE:
     def _get_cached_temporary_mcp_server_or_404(server_id: str) -> MCPServer:
         server = get_cached_temporary_mcp_server(server_id)
         if server is None:
+            # Fall back to real DB/config server (e.g. for the user-side OAuth flow
+            # which calls these endpoints with a real server_id, not a temp session id).
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            server = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+        if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"Temporary MCP server {server_id} not found"},
+                detail={"error": f"MCP server {server_id} not found"},
             )
         return server
 
@@ -1320,8 +1328,8 @@ if MCP_AVAILABLE:
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        client_id: str,
-        redirect_uri: str,
+        client_id: Optional[str] = None,
+        redirect_uri: str = Query(...),
         state: str = "",
         code_challenge: Optional[str] = None,
         code_challenge_method: Optional[str] = None,
@@ -1329,10 +1337,12 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        # Use the server's stored client_id when the caller doesn't supply one
+        resolved_client_id = mcp_server.client_id or client_id or ""
         return await authorize_with_server(
             request=request,
             mcp_server=mcp_server,
-            client_id=client_id,
+            client_id=resolved_client_id,
             redirect_uri=redirect_uri,
             state=state,
             code_challenge=code_challenge,
