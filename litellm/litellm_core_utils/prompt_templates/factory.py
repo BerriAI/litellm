@@ -2283,7 +2283,7 @@ def sanitize_messages_for_tool_calling(
     for idx, msg in enumerate(sanitized_messages):
         role = msg.get("role")
         tcid = msg.get("tool_call_id") if role in ["tool", "function"] else None
-        if tcid:
+        if tcid and isinstance(tcid, str):
             if tcid in seen_in_block:
                 # Mark the earlier occurrence for removal (keep latest)
                 duplicates_to_remove.add(seen_in_block[tcid])
@@ -2581,13 +2581,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                 # Build the text block if content is a non-empty string
                 text_element = None
-                if (
-                    isinstance(assistant_content_block.get("content"), str)
-                    and assistant_content_block["content"]
-                ):
+                _acb_content = assistant_content_block.get("content")
+                if isinstance(_acb_content, str) and _acb_content:
                     _anthropic_text_content_element = AnthropicMessagesTextParam(
                         type="text",
-                        text=assistant_content_block["content"],
+                        text=_acb_content,
                     )
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_text_content_element,
@@ -2682,9 +2680,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
+                _content_list = assistant_content_block.get("content") if _content_is_list else None
                 _list_has_thinking = False
-                if _content_is_list:
-                    for _item in assistant_content_block["content"]:
+                if _content_is_list and _content_list is not None:
+                    for _item in _content_list:
                         if isinstance(_item, dict) and _item.get("type") in (
                             "thinking",
                             "redacted_thinking",
@@ -2696,8 +2695,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     thinking_blocks is not None and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
-                if _content_is_list:
-                    for m in assistant_content_block["content"]:
+                if _content_is_list and _content_list is not None:
+                    for m in _content_list:
+                        if not isinstance(m, dict):
+                            continue
                         # handle thinking blocks
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
