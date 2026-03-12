@@ -628,6 +628,24 @@ async def store_user_oauth_credential(
     )
 
 
+def is_oauth_credential_expired(cred: Dict[str, Any]) -> bool:
+    """Return True if the OAuth2 credential's access_token has expired.
+
+    Checks the ``expires_at`` ISO-format string stored in the credential payload.
+    Returns False when ``expires_at`` is absent or unparseable (treat as non-expired).
+    """
+    expires_at = cred.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        exp_dt = datetime.fromisoformat(expires_at)
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > exp_dt
+    except (ValueError, TypeError):
+        return False
+
+
 async def get_user_oauth_credential(
     prisma_client: PrismaClient,
     user_id: str,
