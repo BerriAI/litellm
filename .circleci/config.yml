@@ -1076,6 +1076,7 @@ jobs:
           command: |
             pwd
             ls
+            prisma generate
             # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
             python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 120m
@@ -1183,6 +1184,7 @@ jobs:
           command: |
             pwd
             ls
+            prisma generate
             python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 4 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 120m
       - run:
