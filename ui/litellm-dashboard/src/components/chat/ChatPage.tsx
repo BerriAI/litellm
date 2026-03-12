@@ -145,9 +145,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const _oauthReturn = searchParams?.get("mcpOauthReturn");
-  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">(
-    _oauthReturn === "apps" ? "apps" : "chats"
-  );
+  // Always initialize to "chats" to match static-export server HTML (searchParams are
+  // empty during pre-render, so initializing from _oauthReturn here would cause a
+  // hydration mismatch and the state would stay "chats" even when the URL has
+  // ?mcpOauthReturn=apps).  The useEffect below corrects this after hydration.
+  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">("chats");
+  const sidebarViewSetFromOAuthReturn = useRef(false);
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
   // Comparison mode state (active when selectedModels.length > 1)
@@ -176,13 +179,24 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   } = useChatHistory(activeConversationId);
 
   // Clean up the OAuth return param after it's been consumed
+  // In static export, useSearchParams() returns empty searchParams on the first
+  // render (the pre-rendered HTML has searchParams:{}).  This effect fires once
+  // the hook populates with the real URL params, switching the sidebar to "apps"
+  // so MCPAppsPanel mounts and resumeOAuthFlow can process the OAuth result.
+  useEffect(() => {
+    if (!sidebarViewSetFromOAuthReturn.current && _oauthReturn === "apps") {
+      sidebarViewSetFromOAuthReturn.current = true;
+      setSidebarView("apps");
+    }
+  }, [_oauthReturn]);
+
   useEffect(() => {
     if (_oauthReturn && typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.delete("mcpOauthReturn");
       window.history.replaceState({}, "", url.toString());
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [_oauthReturn]); // re-run when params become available in static export
 
   // Load models
   useEffect(() => {
