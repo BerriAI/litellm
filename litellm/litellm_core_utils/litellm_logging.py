@@ -2367,9 +2367,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
-        finally:
-            # Clean up large data from model_call_details to reduce memory pressure.
-            self._cleanup_model_call_details()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2713,43 +2710,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._handle_callback_failure(callback=callback)
                 pass
 
-        # Clean up large data from model_call_details to reduce memory pressure.
-        # All callbacks have already consumed the data they need at this point.
-        self._cleanup_model_call_details()
-
-    def _cleanup_model_call_details(self):
-        """
-        Clean up large data from model_call_details after all callbacks have completed.
-
-        This reduces per-request memory pressure by releasing references to large objects
-        (httpx responses, full message payloads, standard logging payloads) that are no
-        longer needed after logging callbacks have consumed them.
-
-        Without this cleanup, these objects stay alive as long as the Logging instance
-        is referenced (e.g., by streaming iterators or async tasks), contributing to
-        monotonic RSS growth under sustained traffic.
-        """
-        if not hasattr(self, "model_call_details"):
-            return
-
-        # Keys that hold large per-request data no longer needed after callbacks.
-        # We set values to None (rather than popping keys) to preserve dict
-        # structure for any code that checks key existence, while releasing
-        # references to the large objects for garbage collection.
-        # NOTE: Do NOT clean up "async_complete_streaming_response" or
-        # "complete_streaming_response" — these are used as guards to prevent
-        # double-processing in success_handler / async_success_handler.
-        _keys_to_clear = [
-            "httpx_response",  # full httpx.Response with connection state
-            "original_response",  # full response text
-            "input",  # full input messages (duplicate of 'messages')
-            "additional_args",  # contains complete_input_dict
-            "raw_request_typed_dict",  # raw request data for logging
-        ]
-        for key in _keys_to_clear:
-            if key in self.model_call_details:
-                self.model_call_details[key] = None
-
     def _handle_callback_failure(self, callback: Any):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
@@ -3045,9 +3005,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
-        finally:
-            # Clean up large data from model_call_details to reduce memory pressure.
-            self._cleanup_model_call_details()
 
     async def async_failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -3113,8 +3070,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
 
-        # Clean up large data from model_call_details to reduce memory pressure.
-        self._cleanup_model_call_details()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """

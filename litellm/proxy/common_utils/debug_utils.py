@@ -24,7 +24,7 @@ router = APIRouter()
 
 # Default interval in seconds between malloc_trim calls.
 # Override with LITELLM_MALLOC_TRIM_INTERVAL_SECONDS env var. Set to 0 to disable.
-_DEFAULT_MALLOC_TRIM_INTERVAL = 10
+_DEFAULT_MALLOC_TRIM_INTERVAL = 60
 
 # Reference to the background task so it doesn't get GC'd
 _malloc_trim_task: Optional[asyncio.Task] = None
