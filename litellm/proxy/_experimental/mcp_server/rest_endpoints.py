@@ -409,17 +409,21 @@ if MCP_AVAILABLE:
             if server_id:
                 # Resolve a server name to its UUID if needed (MCPConnectPicker passes
                 # server_name strings, but allowed_server_ids_set contains UUIDs).
+                # _name_resolved is kept so the second check can reuse it for accurate
+                # IP-filter error reporting if the resolved UUID is not in allowed_server_ids.
+                _name_resolved = None
                 if server_id not in allowed_server_ids:
-                    _resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-                    if _resolved is not None and _resolved.server_id in set(allowed_server_ids):
-                        server_id = _resolved.server_id
+                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                    if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
+                        server_id = _name_resolved.server_id
 
                 if server_id not in allowed_server_ids:
-                    _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                    if _server is None:
-                        # server_id may be a name string — look up by name for accurate
-                        # IP-filter error reporting (get_mcp_server_by_id only matches UUIDs).
-                        _server = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                    # Try UUID lookup first; fall back to the name-resolved server so that
+                    # IP-filter reporting works correctly even when server_id is a name string.
+                    _server = (
+                        global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                        or _name_resolved
+                    )
                     if (
                         _server is not None
                         and _rest_client_ip is not None
