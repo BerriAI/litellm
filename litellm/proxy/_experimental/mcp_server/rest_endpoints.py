@@ -69,6 +69,40 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
+    async def _get_user_oauth_extra_headers(
+        server,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[Dict[str, str]]:
+        """
+        For OAuth2 servers, look up the user's stored access token and return it
+        as extra_headers {"Authorization": "Bearer <token>"} so that it reaches
+        the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
+        Returns None for non-OAuth2 servers or when no credential is stored.
+        """
+        from litellm.types.mcp import MCPAuth
+
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+            return None
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return None
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (
+                get_user_oauth_credential,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+            if cred and cred.get("access_token"):
+                return {"Authorization": f"Bearer {cred['access_token']}"}
+        except Exception:
+            pass
+        return None
+
     def _create_tool_response_objects(tools, server_mcp_info):
         """Helper function to create tool response objects."""
         return [
@@ -162,11 +196,13 @@ if MCP_AVAILABLE:
         server_auth_header,
         raw_headers: Optional[Dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
             add_prefix=False,
             raw_headers=raw_headers,
         )
@@ -294,6 +330,13 @@ if MCP_AVAILABLE:
 
             # If server_id is specified, only query that specific server
             if server_id:
+                # Resolve a server name to its UUID if needed (MCPConnectPicker passes
+                # server_name strings, but allowed_server_ids_set contains UUIDs).
+                if server_id not in allowed_server_ids:
+                    _resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                    if _resolved is not None and _resolved.server_id in set(allowed_server_ids):
+                        server_id = _resolved.server_id
+
                 if server_id not in allowed_server_ids:
                     _server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
                     if (
@@ -333,6 +376,7 @@ if MCP_AVAILABLE:
                 server_auth_header = _get_server_auth_header(
                     server, mcp_server_auth_headers, mcp_auth_header
                 )
+                user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
@@ -340,6 +384,7 @@ if MCP_AVAILABLE:
                         server_auth_header,
                         raw_headers_from_request,
                         user_api_key_dict,
+                        extra_headers=user_oauth_extra_headers,
                     )
                 except Exception as e:
                     verbose_logger.exception(
@@ -385,6 +430,7 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
+                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
 
                     try:
                         tools_result = await _get_tools_for_single_server(
@@ -392,6 +438,7 @@ if MCP_AVAILABLE:
                             server_auth_header,
                             raw_headers_from_request,
                             user_api_key_dict,
+                            extra_headers=user_oauth_extra_headers,
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
