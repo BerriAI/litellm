@@ -5,6 +5,8 @@ Handles OAuth 2.0 token management for GigaChat API.
 Based on official GigaChat SDK authentication flow.
 """
 
+import base64
+import binascii
 import time
 import uuid
 from typing import Optional, Tuple
@@ -40,6 +42,27 @@ class GigaChatAuthError(BaseLLMException):
 
     pass
 
+
+def _normalize_basic_credentials(credentials: str) -> str:
+    """
+    Ensure credentials are in the correct Basic auth format.
+
+    The GigaChat OAuth endpoint expects:
+        Authorization: Basic <base64(client_id:client_secret)>
+
+    Historically, some configurations use already-base64-encoded credentials,
+    while others provide raw "client_id:client_secret".
+
+    - If 'credentials' is valid base64, it is returned as-is.
+    - Otherwise, it is treated as raw "client_id:client_secret" and base64-encoded.
+    """
+    try:
+        # validate=True ensures only proper base64 passes
+        base64.b64decode(credentials.encode("utf-8"), validate=True)
+        return credentials
+    except binascii.Error:
+        encoded = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
+        return encoded
 
 def _get_credentials() -> Optional[str]:
     """Get GigaChat credentials from environment."""
@@ -87,6 +110,9 @@ def get_access_token(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
+    # Normalize to the correct Basic auth format for the Authorization header
+    credentials = _normalize_basic_credentials(credentials)
+
     scope = scope or _get_scope()
     auth_url = auth_url or _get_auth_url()
 
@@ -123,6 +149,9 @@ async def get_access_token_async(
             status_code=401,
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
+
+    # Normalize to the correct Basic auth format for the Authorization header
+    credentials = _normalize_basic_credentials(credentials)
 
     scope = scope or _get_scope()
     auth_url = auth_url or _get_auth_url()

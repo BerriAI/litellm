@@ -110,14 +110,28 @@ class GigaChatConfig(BaseConfig):
         """
         Set up headers with OAuth token.
         """
-        # Get access token
+        # Resolve credentials
         credentials = (
             api_key
             or get_secret_str("GIGACHAT_CREDENTIALS")
             or get_secret_str("GIGACHAT_API_KEY")
         )
-        access_token = get_access_token(credentials=credentials)
 
+        # Optional per-model auth URL:
+        # - Can be passed via litellm_params["auth_url"] (e.g. from config.yaml)
+        # - Falls back to global GIGACHAT_AUTH_URL env var or default inside authenticator
+        auth_url: Optional[str] = None
+        
+        # Handle both dict and LiteLLM_Params objects (which have .get() method)
+        if hasattr(litellm_params, "get"):
+            _auth_url = litellm_params.get("auth_url")
+            if isinstance(_auth_url, str) and _auth_url:
+                auth_url = _auth_url
+        elif isinstance(litellm_params, dict):
+            _auth_url = litellm_params.get("auth_url")
+
+        access_token = get_access_token(credentials=credentials, auth_url=auth_url)
+        
         # Store credentials for image uploads
         self._current_credentials = credentials
         self._current_api_base = api_base
