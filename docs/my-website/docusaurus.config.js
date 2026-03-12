@@ -95,8 +95,21 @@ const config = {
         sidebarPath: require.resolve('./sidebars-release-notes.js'),
         async sidebarItemsGenerator({defaultSidebarItemsGenerator, ...args}) {
           const items = await defaultSidebarItemsGenerator(args);
+          function parseVersion(label) {
+            // Extract numeric parts from version string like "v1.82.0" or "v1.81.3-stable"
+            const match = label.match(/v?(\d+)\.(\d+)\.(\d+)/);
+            if (!match) return [0, 0, 0];
+            return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+          }
+          function compareVersionsDesc(a, b) {
+            const [aMaj, aMin, aPatch] = parseVersion(a.label || a.id || '');
+            const [bMaj, bMin, bPatch] = parseVersion(b.label || b.id || '');
+            if (bMaj !== aMaj) return bMaj - aMaj;
+            if (bMin !== aMin) return bMin - aMin;
+            return bPatch - aPatch;
+          }
           function transformItems(list) {
-            return list
+            const transformed = list
               .filter(item => !(item.type === 'doc' && item.id === 'index'))
               .map(item => {
                 if (item.type === 'doc') {
@@ -109,6 +122,12 @@ const config = {
                 }
                 return item;
               });
+            // Sort docs by version descending (latest first)
+            transformed.sort((a, b) => {
+              if (a.type === 'doc' && b.type === 'doc') return compareVersionsDesc(a, b);
+              return 0;
+            });
+            return transformed;
           }
           return transformItems(items);
         },
@@ -222,20 +241,10 @@ const config = {
             label: 'Docs',
           },
           {
-            type: 'dropdown',
-            label: 'Learn',
+            type: 'docSidebar',
+            sidebarId: 'learnSidebar',
             position: 'left',
-            items: [
-              {
-                type: 'docSidebar',
-                sidebarId: 'learnSidebar',
-                label: 'Guides & Tutorials',
-              },
-              {
-                to: '/docs/integrations/websearch_interception',
-                label: 'Web Search Integration',
-              },
-            ],
+            label: 'Learn',
           },
           {
             type: 'docSidebar',
@@ -244,33 +253,12 @@ const config = {
             label: 'Integrations',
           },
           {
-            type: 'docSidebar',
-            sidebarId: 'releaseNotesSidebar',
-            docsPluginId: 'release-notes',
-            position: 'left',
-            label: 'Release Notes',
-          },
-          {
             position: 'left',
             label: 'Enterprise',
             to: "docs/enterprise"
           },
           { to: '/blog', label: 'Blog', position: 'left' },
-          {
-            type: 'dropdown',
-            label: 'API Reference',
-            position: 'left',
-            items: [
-              {
-                to: '/api-reference',
-                label: 'API Reference',
-              },
-              {
-                to: '/docs/integrations/websearch_interception',
-                label: 'Web Search Integration',
-              },
-            ],
-          },
+          { to: '/api-reference', label: 'API Reference', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 Cost Map',

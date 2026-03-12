@@ -406,6 +406,109 @@ The handler automatically detects response format:
 - **Caching**: Search results can be cached (depends on search provider)
 - **Parallel Searches**: Multiple search queries executed in parallel
 
+## API Reference
+
+Web search interception runs through the standard chat completions endpoint — no extra routes needed.
+
+### `POST /v1/chat/completions`
+
+Creates a model response. When `litellm_web_search` is included in `tools` and the model triggers it, LiteLLM automatically executes the search and returns the final answer.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | `string` | Yes | Model ID, e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash` |
+| `messages` | `array` | Yes | Conversation history (`role` + `content`) |
+| `tools` | `array` | No | Include the `litellm_web_search` function definition to enable search |
+| `tool_choice` | `string \| object` | No | Controls which tool the model calls. Defaults to `"auto"` |
+| `stream` | `boolean` | No | Stream SSE delta events. Defaults to `false` |
+| `temperature` | `number` | No | Sampling temperature |
+| `max_tokens` | `integer` | No | Maximum tokens to generate |
+
+**`litellm_web_search` tool definition**
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "litellm_web_search",
+    "description": "Search the web for current information",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query"
+        }
+      },
+      "required": ["query"]
+    }
+  }
+}
+```
+
+**Example request**
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "What is the latest news on LLM releases?"}
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "litellm_web_search",
+          "description": "Search the web for current information",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {"type": "string"}
+            },
+            "required": ["query"]
+          }
+        }
+      }
+    ]
+  }'
+```
+
+**Example response**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "model": "gpt-4o",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Here are the latest LLM releases as of today: ..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 85,
+    "total_tokens": 205
+  }
+}
+```
+
+:::info
+The intermediate tool call / tool result turns are handled internally by LiteLLM. Your application always receives a single, final `chat.completion` object as if no tool was called.
+:::
+
+Full OpenAI-compatible schema: [API Reference →](/api-reference)
+
 ## Contributing
 
 Found a bug or want to add support for a new provider? See our [Contributing Guide](https://github.com/BerriAI/litellm/blob/main/CONTRIBUTING.md).

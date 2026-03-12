@@ -3,7 +3,7 @@
   "info": {
     "title": "LiteLLM API",
     "version": "1.0.0",
-    "description": "Complete reference for all LiteLLM API endpoints. LiteLLM is a unified interface for 100+ LLM providers — OpenAI, Anthropic, Gemini, AWS Bedrock, Azure, Cohere, and more.",
+    "description": "Complete reference for all LiteLLM API endpoints. LiteLLM is a unified interface for 100+ LLM providers \u2014 OpenAI, Anthropic, Gemini, AWS Bedrock, Azure, Cohere, and more.",
     "contact": {
       "name": "LiteLLM",
       "url": "https://docs.litellm.ai"
@@ -20,26 +20,66 @@
     }
   ],
   "security": [
-    { "BearerAuth": [] }
+    {
+      "BearerAuth": []
+    }
   ],
   "tags": [
-    { "name": "Chat & Text", "description": "Chat completions, text completions, and response APIs" },
-    { "name": "Audio & Speech", "description": "Speech-to-text and text-to-speech endpoints" },
-    { "name": "Images & Video", "description": "Image generation, editing, and variation endpoints" },
-    { "name": "Embeddings & Retrieval", "description": "Embeddings and reranking endpoints" },
-    { "name": "Vector Stores & RAG", "description": "Vector store management and semantic search" },
-    { "name": "Files & Storage", "description": "File upload and management" },
-    { "name": "Assistants & Threads", "description": "Assistants, threads, messages, and runs" },
-    { "name": "Batches", "description": "Async batch processing" },
-    { "name": "Fine-tuning", "description": "Model fine-tuning jobs" },
-    { "name": "Evaluations", "description": "LLM evaluation and testing" },
-    { "name": "Safety & Moderation", "description": "Content moderation, guardrails, and OCR" },
-    { "name": "Models", "description": "List available models" }
+    {
+      "name": "Chat & Text",
+      "description": "Chat completions, text completions, and response APIs"
+    },
+    {
+      "name": "Audio & Speech",
+      "description": "Speech-to-text and text-to-speech endpoints"
+    },
+    {
+      "name": "Images & Video",
+      "description": "Image generation, editing, and variation endpoints"
+    },
+    {
+      "name": "Embeddings & Retrieval",
+      "description": "Embeddings and reranking endpoints"
+    },
+    {
+      "name": "Vector Stores & RAG",
+      "description": "Vector store management and semantic search"
+    },
+    {
+      "name": "Files & Storage",
+      "description": "File upload and management"
+    },
+    {
+      "name": "Assistants & Threads",
+      "description": "Assistants, threads, messages, and runs"
+    },
+    {
+      "name": "Batches",
+      "description": "Async batch processing"
+    },
+    {
+      "name": "Fine-tuning",
+      "description": "Model fine-tuning jobs"
+    },
+    {
+      "name": "Evaluations",
+      "description": "LLM evaluation and testing"
+    },
+    {
+      "name": "Safety & Moderation",
+      "description": "Content moderation, guardrails, and OCR"
+    },
+    {
+      "name": "Models",
+      "description": "List available models"
+    }
   ],
   "paths": {
     "/chat/completions": {
       "post": {
-        "tags": ["Chat & Text"],
+        "tags": [
+          "Chat & Text"
+        ],
         "summary": "Create chat completion",
         "description": "Creates a model response for the given chat conversation. Supports 100+ LLM providers via a unified OpenAI-compatible interface.",
         "operationId": "createChatCompletion",
@@ -47,20 +87,32 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ChatCompletionRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              },
               "examples": {
                 "basic": {
                   "summary": "Basic chat completion",
                   "value": {
                     "model": "gpt-4o",
-                    "messages": [{ "role": "user", "content": "Hello!" }]
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "Hello!"
+                      }
+                    ]
                   }
                 },
                 "streaming": {
                   "summary": "Streaming response",
                   "value": {
                     "model": "claude-opus-4-6",
-                    "messages": [{ "role": "user", "content": "Tell me a story" }],
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "Tell me a story"
+                      }
+                    ],
                     "stream": true
                   }
                 },
@@ -68,7 +120,12 @@
                   "summary": "Function / tool calling",
                   "value": {
                     "model": "gpt-4o",
-                    "messages": [{ "role": "user", "content": "What is the weather in Paris?" }],
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "What is the weather in Paris?"
+                      }
+                    ],
                     "tools": [
                       {
                         "type": "function",
@@ -78,14 +135,52 @@
                           "parameters": {
                             "type": "object",
                             "properties": {
-                              "city": { "type": "string" }
+                              "city": {
+                                "type": "string"
+                              }
                             },
-                            "required": ["city"]
+                            "required": [
+                              "city"
+                            ]
                           }
                         }
                       }
                     ],
                     "tool_choice": "auto"
+                  }
+                },
+                "web_search": {
+                  "summary": "Web search interception",
+                  "description": "Include the `litellm_web_search` tool \u2014 LiteLLM intercepts the tool call, executes the search against your configured provider, and returns a single final answer.",
+                  "value": {
+                    "model": "gpt-4o",
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "What are the latest AI model releases this week?"
+                      }
+                    ],
+                    "tools": [
+                      {
+                        "type": "function",
+                        "function": {
+                          "name": "litellm_web_search",
+                          "description": "Search the web for current information",
+                          "parameters": {
+                            "type": "object",
+                            "properties": {
+                              "query": {
+                                "type": "string",
+                                "description": "The search query"
+                              }
+                            },
+                            "required": [
+                              "query"
+                            ]
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -97,20 +192,32 @@
             "description": "Successful chat completion",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ChatCompletionResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
         }
       }
     },
     "/completions": {
       "post": {
-        "tags": ["Chat & Text"],
+        "tags": [
+          "Chat & Text"
+        ],
         "summary": "Create text completion",
         "description": "Creates a completion for the provided prompt. Legacy text completion endpoint, compatible with OpenAI's /completions API.",
         "operationId": "createTextCompletion",
@@ -118,7 +225,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/TextCompletionRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/TextCompletionRequest"
+              }
             }
           }
         },
@@ -127,18 +236,26 @@
             "description": "Successful text completion",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/TextCompletionResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/TextCompletionResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
         }
       }
     },
     "/responses": {
       "post": {
-        "tags": ["Chat & Text"],
+        "tags": [
+          "Chat & Text"
+        ],
         "summary": "Create a response (Responses API)",
         "description": "Creates a model response using the OpenAI /responses API format. Supports multi-turn conversations, extended thinking, and tool use.",
         "operationId": "createResponse",
@@ -146,7 +263,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ResponseRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ResponseRequest"
+              }
             }
           }
         },
@@ -155,48 +274,68 @@
             "description": "Successful response",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ResponseObject" }
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseObject"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
         }
       }
     },
     "/responses/{response_id}": {
       "get": {
-        "tags": ["Chat & Text"],
+        "tags": [
+          "Chat & Text"
+        ],
         "summary": "Retrieve a response",
         "operationId": "getResponse",
         "parameters": [
-          { "$ref": "#/components/parameters/ResponseId" }
+          {
+            "$ref": "#/components/parameters/ResponseId"
+          }
         ],
         "responses": {
           "200": {
             "description": "Response object",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ResponseObject" }
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseObject"
+                }
               }
             }
           },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       },
       "delete": {
-        "tags": ["Chat & Text"],
+        "tags": [
+          "Chat & Text"
+        ],
         "summary": "Delete a response",
         "operationId": "deleteResponse",
         "parameters": [
-          { "$ref": "#/components/parameters/ResponseId" }
+          {
+            "$ref": "#/components/parameters/ResponseId"
+          }
         ],
         "responses": {
           "200": {
             "description": "Response deleted",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/DeletedObject" }
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
               }
             }
           }
@@ -205,7 +344,9 @@
     },
     "/audio/transcriptions": {
       "post": {
-        "tags": ["Audio & Speech"],
+        "tags": [
+          "Audio & Speech"
+        ],
         "summary": "Create audio transcription",
         "description": "Transcribes audio into text. Compatible with OpenAI Whisper and other speech-to-text providers.",
         "operationId": "createTranscription",
@@ -213,7 +354,9 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": { "$ref": "#/components/schemas/AudioTranscriptionRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/AudioTranscriptionRequest"
+              }
             }
           }
         },
@@ -222,17 +365,23 @@
             "description": "Transcription result",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/AudioTranscriptionResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/AudioTranscriptionResponse"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
         }
       }
     },
     "/audio/speech": {
       "post": {
-        "tags": ["Audio & Speech"],
+        "tags": [
+          "Audio & Speech"
+        ],
         "summary": "Create speech from text",
         "description": "Generates audio from the input text. Supports OpenAI TTS, ElevenLabs, and other text-to-speech providers.",
         "operationId": "createSpeech",
@@ -240,7 +389,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/TextToSpeechRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/TextToSpeechRequest"
+              }
             }
           }
         },
@@ -248,9 +399,24 @@
           "200": {
             "description": "Audio binary stream",
             "content": {
-              "audio/mpeg": { "schema": { "type": "string", "format": "binary" } },
-              "audio/wav": { "schema": { "type": "string", "format": "binary" } },
-              "audio/flac": { "schema": { "type": "string", "format": "binary" } }
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           }
         }
@@ -258,7 +424,9 @@
     },
     "/images/generations": {
       "post": {
-        "tags": ["Images & Video"],
+        "tags": [
+          "Images & Video"
+        ],
         "summary": "Create image generation",
         "description": "Creates an image given a prompt. Supports DALL-E 3, Stable Diffusion, and other image generation providers.",
         "operationId": "createImage",
@@ -266,7 +434,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ImageGenerationRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ImageGenerationRequest"
+              }
             }
           }
         },
@@ -275,7 +445,9 @@
             "description": "Generated images",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ImageGenerationResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ImageGenerationResponse"
+                }
               }
             }
           }
@@ -284,7 +456,9 @@
     },
     "/images/edits": {
       "post": {
-        "tags": ["Images & Video"],
+        "tags": [
+          "Images & Video"
+        ],
         "summary": "Create image edit",
         "description": "Creates an edited or extended image given an original image and a text prompt.",
         "operationId": "createImageEdit",
@@ -292,7 +466,9 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": { "$ref": "#/components/schemas/ImageEditRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ImageEditRequest"
+              }
             }
           }
         },
@@ -301,7 +477,9 @@
             "description": "Edited images",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ImageGenerationResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ImageGenerationResponse"
+                }
               }
             }
           }
@@ -310,7 +488,9 @@
     },
     "/images/variations": {
       "post": {
-        "tags": ["Images & Video"],
+        "tags": [
+          "Images & Video"
+        ],
         "summary": "Create image variation",
         "description": "Creates a variation of a given image.",
         "operationId": "createImageVariation",
@@ -318,7 +498,9 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": { "$ref": "#/components/schemas/ImageVariationRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ImageVariationRequest"
+              }
             }
           }
         },
@@ -327,7 +509,9 @@
             "description": "Image variations",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ImageGenerationResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ImageGenerationResponse"
+                }
               }
             }
           }
@@ -336,7 +520,9 @@
     },
     "/embeddings": {
       "post": {
-        "tags": ["Embeddings & Retrieval"],
+        "tags": [
+          "Embeddings & Retrieval"
+        ],
         "summary": "Create embeddings",
         "description": "Creates an embedding vector representing the input text. Supports 50+ embedding providers including OpenAI, Cohere, Voyage AI, and more.",
         "operationId": "createEmbedding",
@@ -344,7 +530,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/EmbeddingRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingRequest"
+              },
               "examples": {
                 "single": {
                   "summary": "Single text",
@@ -357,7 +545,10 @@
                   "summary": "Batch of texts",
                   "value": {
                     "model": "text-embedding-3-large",
-                    "input": ["First document", "Second document"],
+                    "input": [
+                      "First document",
+                      "Second document"
+                    ],
                     "dimensions": 512
                   }
                 }
@@ -370,7 +561,9 @@
             "description": "Embedding vectors",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/EmbeddingResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingResponse"
+                }
               }
             }
           }
@@ -379,7 +572,9 @@
     },
     "/rerank": {
       "post": {
-        "tags": ["Embeddings & Retrieval"],
+        "tags": [
+          "Embeddings & Retrieval"
+        ],
         "summary": "Rerank documents",
         "description": "Reranks a list of documents by relevance to a query. Supports Cohere, Voyage AI, Jina AI, and other reranking providers.",
         "operationId": "rerank",
@@ -387,7 +582,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/RerankRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              },
               "examples": {
                 "basic": {
                   "value": {
@@ -410,7 +607,9 @@
             "description": "Reranked documents",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/RerankResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
               }
             }
           }
@@ -419,14 +618,18 @@
     },
     "/v1/vector_stores": {
       "post": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Create vector store",
         "description": "Creates a vector store for storing and searching embeddings from files.",
         "operationId": "createVectorStore",
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/VectorStoreCreateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/VectorStoreCreateRequest"
+              }
             }
           }
         },
@@ -434,18 +637,28 @@
           "200": {
             "description": "Created vector store",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/VectorStore" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStore"
+                }
+              }
             }
           }
         }
       },
       "get": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "List vector stores",
         "operationId": "listVectorStores",
         "parameters": [
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/After" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
         ],
         "responses": {
           "200": {
@@ -455,9 +668,19 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "object": { "type": "string", "example": "list" },
-                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/VectorStore" } },
-                    "has_more": { "type": "boolean" }
+                    "object": {
+                      "type": "string",
+                      "example": "list"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VectorStore"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
                   }
                 }
               }
@@ -468,100 +691,213 @@
     },
     "/v1/vector_stores/{vector_store_id}": {
       "get": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Retrieve vector store",
         "operationId": "getVectorStore",
-        "parameters": [{ "$ref": "#/components/parameters/VectorStoreId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Vector store object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VectorStore" } } } }
+          "200": {
+            "description": "Vector store object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStore"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Delete vector store",
         "operationId": "deleteVectorStore",
-        "parameters": [{ "$ref": "#/components/parameters/VectorStoreId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/v1/vector_stores/{vector_store_id}/files": {
       "post": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Add file to vector store",
         "operationId": "createVectorStoreFile",
-        "parameters": [{ "$ref": "#/components/parameters/VectorStoreId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["file_id"],
+                "required": [
+                  "file_id"
+                ],
                 "properties": {
-                  "file_id": { "type": "string", "description": "ID of the file to attach" },
-                  "chunking_strategy": { "$ref": "#/components/schemas/ChunkingStrategy" }
+                  "file_id": {
+                    "type": "string",
+                    "description": "ID of the file to attach"
+                  },
+                  "chunking_strategy": {
+                    "$ref": "#/components/schemas/ChunkingStrategy"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Vector store file", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VectorStoreFile" } } } }
+          "200": {
+            "description": "Vector store file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStoreFile"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "List vector store files",
         "operationId": "listVectorStoreFiles",
         "parameters": [
-          { "$ref": "#/components/parameters/VectorStoreId" },
-          { "$ref": "#/components/parameters/Limit" }
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
         ],
         "responses": {
-          "200": { "description": "List of files", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/VectorStoreFile" } } } } } } }
+          "200": {
+            "description": "List of files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VectorStoreFile"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/v1/vector_stores/{vector_store_id}/files/{file_id}": {
       "get": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Retrieve vector store file",
         "operationId": "getVectorStoreFile",
         "parameters": [
-          { "$ref": "#/components/parameters/VectorStoreId" },
-          { "$ref": "#/components/parameters/FileId" }
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          },
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
         ],
         "responses": {
-          "200": { "description": "File object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VectorStoreFile" } } } }
+          "200": {
+            "description": "File object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VectorStoreFile"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Delete vector store file",
         "operationId": "deleteVectorStoreFile",
         "parameters": [
-          { "$ref": "#/components/parameters/VectorStoreId" },
-          { "$ref": "#/components/parameters/FileId" }
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          },
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
         ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/v1/vector_stores/{vector_store_id}/search": {
       "post": {
-        "tags": ["Vector Stores & RAG"],
+        "tags": [
+          "Vector Stores & RAG"
+        ],
         "summary": "Search vector store",
         "description": "Performs semantic search over files in a vector store.",
         "operationId": "searchVectorStore",
-        "parameters": [{ "$ref": "#/components/parameters/VectorStoreId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VectorStoreId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/VectorStoreSearchRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/VectorStoreSearchRequest"
+              }
             }
           }
         },
@@ -573,8 +909,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "object": { "type": "string", "example": "list" },
-                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/VectorStoreSearchResult" } }
+                    "object": {
+                      "type": "string",
+                      "example": "list"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/VectorStoreSearchResult"
+                      }
+                    }
                   }
                 }
               }
@@ -585,7 +929,9 @@
     },
     "/files": {
       "post": {
-        "tags": ["Files & Storage"],
+        "tags": [
+          "Files & Storage"
+        ],
         "summary": "Upload file",
         "description": "Upload a file for use with fine-tuning, batch operations, or assistants.",
         "operationId": "uploadFile",
@@ -593,16 +939,29 @@
           "required": true,
           "content": {
             "multipart/form-data": {
-              "schema": { "$ref": "#/components/schemas/FileUploadRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/FileUploadRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "description": "Uploaded file object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FileObject" } } } }
+          "200": {
+            "description": "Uploaded file object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileObject"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Files & Storage"],
+        "tags": [
+          "Files & Storage"
+        ],
         "summary": "List files",
         "description": "Returns a list of files that have been uploaded.",
         "operationId": "listFiles",
@@ -610,7 +969,15 @@
           {
             "name": "purpose",
             "in": "query",
-            "schema": { "type": "string", "enum": ["fine-tune", "batch", "assistants", "vision"] },
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fine-tune",
+                "batch",
+                "assistants",
+                "vision"
+              ]
+            },
             "description": "Filter by purpose"
           }
         ],
@@ -622,8 +989,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "object": { "type": "string", "example": "list" },
-                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/FileObject" } }
+                    "object": {
+                      "type": "string",
+                      "example": "list"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FileObject"
+                      }
+                    }
                   }
                 }
               }
@@ -634,35 +1009,76 @@
     },
     "/files/{file_id}": {
       "get": {
-        "tags": ["Files & Storage"],
+        "tags": [
+          "Files & Storage"
+        ],
         "summary": "Retrieve file metadata",
         "operationId": "getFile",
-        "parameters": [{ "$ref": "#/components/parameters/FileId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
+        ],
         "responses": {
-          "200": { "description": "File object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FileObject" } } } }
+          "200": {
+            "description": "File object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileObject"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Files & Storage"],
+        "tags": [
+          "Files & Storage"
+        ],
         "summary": "Delete file",
         "operationId": "deleteFile",
-        "parameters": [{ "$ref": "#/components/parameters/FileId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/files/{file_id}/content": {
       "get": {
-        "tags": ["Files & Storage"],
+        "tags": [
+          "Files & Storage"
+        ],
         "summary": "Retrieve file content",
         "operationId": "getFileContent",
-        "parameters": [{ "$ref": "#/components/parameters/FileId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileId"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Raw file bytes",
             "content": {
-              "application/octet-stream": { "schema": { "type": "string", "format": "binary" } }
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           }
         }
@@ -670,59 +1086,126 @@
     },
     "/assistants": {
       "post": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Create assistant",
         "description": "Creates an assistant with a model, instructions, and optional tools.",
         "operationId": "createAssistant",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/AssistantCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantCreateRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "Created assistant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Assistant" } } } }
+          "200": {
+            "description": "Created assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assistant"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "List assistants",
         "operationId": "listAssistants",
         "parameters": [
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/After" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
         ],
         "responses": {
           "200": {
             "description": "List of assistants",
-            "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Assistant" } } } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Assistant"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/assistants/{assistant_id}": {
       "get": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Retrieve assistant",
         "operationId": "getAssistant",
-        "parameters": [{ "$ref": "#/components/parameters/AssistantId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AssistantId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Assistant object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Assistant" } } } }
+          "200": {
+            "description": "Assistant object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assistant"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Delete assistant",
         "operationId": "deleteAssistant",
-        "parameters": [{ "$ref": "#/components/parameters/AssistantId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AssistantId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/threads": {
       "post": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Create thread",
         "description": "Creates a new conversation thread.",
         "operationId": "createThread",
@@ -734,117 +1217,242 @@
                 "properties": {
                   "messages": {
                     "type": "array",
-                    "items": { "$ref": "#/components/schemas/MessageCreateRequest" },
+                    "items": {
+                      "$ref": "#/components/schemas/MessageCreateRequest"
+                    },
                     "description": "Optional initial messages to seed the thread"
                   },
-                  "metadata": { "type": "object" }
+                  "metadata": {
+                    "type": "object"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Created thread", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Thread" } } } }
+          "200": {
+            "description": "Created thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thread"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/threads/{thread_id}": {
       "get": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Retrieve thread",
         "operationId": "getThread",
-        "parameters": [{ "$ref": "#/components/parameters/ThreadId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Thread object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Thread" } } } }
+          "200": {
+            "description": "Thread object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thread"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/threads/{thread_id}/messages": {
       "post": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Add message to thread",
         "operationId": "createMessage",
-        "parameters": [{ "$ref": "#/components/parameters/ThreadId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/MessageCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageCreateRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "Created message", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ThreadMessage" } } } }
+          "200": {
+            "description": "Created message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadMessage"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "List thread messages",
         "operationId": "listMessages",
         "parameters": [
-          { "$ref": "#/components/parameters/ThreadId" },
-          { "$ref": "#/components/parameters/Limit" }
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
         ],
         "responses": {
-          "200": { "description": "List of messages", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/ThreadMessage" } } } } } } }
+          "200": {
+            "description": "List of messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ThreadMessage"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/threads/{thread_id}/runs": {
       "post": {
-        "tags": ["Assistants & Threads"],
+        "tags": [
+          "Assistants & Threads"
+        ],
         "summary": "Create run",
         "description": "Executes an assistant against a thread and produces a response.",
         "operationId": "createRun",
-        "parameters": [{ "$ref": "#/components/parameters/ThreadId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ThreadId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["assistant_id"],
+                "required": [
+                  "assistant_id"
+                ],
                 "properties": {
-                  "assistant_id": { "type": "string" },
-                  "model": { "type": "string", "description": "Override the assistant's model for this run" },
-                  "instructions": { "type": "string", "description": "Override the assistant's instructions for this run" },
-                  "tools": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" } },
-                  "stream": { "type": "boolean" },
-                  "temperature": { "type": "number" },
-                  "max_completion_tokens": { "type": "integer" }
+                  "assistant_id": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Override the assistant's model for this run"
+                  },
+                  "instructions": {
+                    "type": "string",
+                    "description": "Override the assistant's instructions for this run"
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Tool"
+                    }
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  },
+                  "max_completion_tokens": {
+                    "type": "integer"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Run object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Run" } } } }
+          "200": {
+            "description": "Run object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/batches": {
       "post": {
-        "tags": ["Batches"],
+        "tags": [
+          "Batches"
+        ],
         "summary": "Create batch",
-        "description": "Creates and executes a batch from an uploaded JSONL file of requests. Async processing — up to 50% cheaper than real-time requests.",
+        "description": "Creates and executes a batch from an uploaded JSONL file of requests. Async processing \u2014 up to 50% cheaper than real-time requests.",
         "operationId": "createBatch",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/BatchCreateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/BatchCreateRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "description": "Batch object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Batch" } } } }
+          "200": {
+            "description": "Batch object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Batches"],
+        "tags": [
+          "Batches"
+        ],
         "summary": "List batches",
         "operationId": "listBatches",
         "parameters": [
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/After" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
         ],
         "responses": {
           "200": {
@@ -854,8 +1462,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/Batch" } },
-                    "has_more": { "type": "boolean" }
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Batch"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
                   }
                 }
               }
@@ -866,49 +1481,100 @@
     },
     "/batches/{batch_id}": {
       "get": {
-        "tags": ["Batches"],
+        "tags": [
+          "Batches"
+        ],
         "summary": "Retrieve batch",
         "operationId": "getBatch",
-        "parameters": [{ "$ref": "#/components/parameters/BatchId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BatchId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Batch object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Batch" } } } }
+          "200": {
+            "description": "Batch object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/batches/{batch_id}/cancel": {
       "post": {
-        "tags": ["Batches"],
+        "tags": [
+          "Batches"
+        ],
         "summary": "Cancel batch",
         "operationId": "cancelBatch",
-        "parameters": [{ "$ref": "#/components/parameters/BatchId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BatchId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Cancelled batch", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Batch" } } } }
+          "200": {
+            "description": "Cancelled batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/fine_tuning/jobs": {
       "post": {
-        "tags": ["Fine-tuning"],
+        "tags": [
+          "Fine-tuning"
+        ],
         "summary": "Create fine-tuning job",
         "description": "Creates a fine-tuning job that trains a model on your data.",
         "operationId": "createFineTuningJob",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/FineTuningJobCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FineTuningJobCreateRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "Fine-tuning job", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FineTuningJob" } } } }
+          "200": {
+            "description": "Fine-tuning job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FineTuningJob"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Fine-tuning"],
+        "tags": [
+          "Fine-tuning"
+        ],
         "summary": "List fine-tuning jobs",
         "operationId": "listFineTuningJobs",
         "parameters": [
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/After" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
         ],
         "responses": {
           "200": {
@@ -918,8 +1584,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/FineTuningJob" } },
-                    "has_more": { "type": "boolean" }
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FineTuningJob"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
                   }
                 }
               }
@@ -930,187 +1603,404 @@
     },
     "/fine_tuning/jobs/{fine_tuning_job_id}": {
       "get": {
-        "tags": ["Fine-tuning"],
+        "tags": [
+          "Fine-tuning"
+        ],
         "summary": "Retrieve fine-tuning job",
         "operationId": "getFineTuningJob",
-        "parameters": [{ "$ref": "#/components/parameters/FineTuningJobId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FineTuningJobId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Fine-tuning job", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FineTuningJob" } } } }
+          "200": {
+            "description": "Fine-tuning job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FineTuningJob"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/fine_tuning/jobs/{fine_tuning_job_id}/cancel": {
       "post": {
-        "tags": ["Fine-tuning"],
+        "tags": [
+          "Fine-tuning"
+        ],
         "summary": "Cancel fine-tuning job",
         "operationId": "cancelFineTuningJob",
-        "parameters": [{ "$ref": "#/components/parameters/FineTuningJobId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FineTuningJobId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Cancelled job", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FineTuningJob" } } } }
+          "200": {
+            "description": "Cancelled job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FineTuningJob"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/evals": {
       "post": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Create evaluation",
         "description": "Creates an evaluation configuration to test model performance against a dataset and grading criteria.",
         "operationId": "createEval",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/EvalCreateRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalCreateRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "Eval object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Eval" } } } }
+          "200": {
+            "description": "Eval object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "List evaluations",
         "operationId": "listEvals",
         "parameters": [
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/After" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
         ],
         "responses": {
-          "200": { "description": "List of evals", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Eval" } } } } } } }
+          "200": {
+            "description": "List of evals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Eval"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/evals/{eval_id}": {
       "get": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Retrieve evaluation",
         "operationId": "getEval",
-        "parameters": [{ "$ref": "#/components/parameters/EvalId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Eval object", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Eval" } } } }
+          "200": {
+            "description": "Eval object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          }
         }
       },
       "patch": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Update evaluation",
         "operationId": "updateEval",
-        "parameters": [{ "$ref": "#/components/parameters/EvalId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "name": { "type": "string" },
-                  "metadata": { "type": "object" }
+                  "name": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Updated eval", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Eval" } } } }
+          "200": {
+            "description": "Updated eval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Delete evaluation",
         "operationId": "deleteEval",
-        "parameters": [{ "$ref": "#/components/parameters/EvalId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/evals/{eval_id}/runs": {
       "post": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Create eval run",
         "description": "Executes an evaluation against a model and data source.",
         "operationId": "createEvalRun",
-        "parameters": [{ "$ref": "#/components/parameters/EvalId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name", "data_source"],
+                "required": [
+                  "name",
+                  "data_source"
+                ],
                 "properties": {
-                  "name": { "type": "string" },
-                  "data_source": { "type": "object", "description": "Data source configuration for this run" },
-                  "model": { "type": "string", "description": "Model to evaluate (overrides eval default)" }
+                  "name": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "object",
+                    "description": "Data source configuration for this run"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Model to evaluate (overrides eval default)"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Eval run", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EvalRun" } } } }
+          "200": {
+            "description": "Eval run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalRun"
+                }
+              }
+            }
+          }
         }
       },
       "get": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "List eval runs",
         "operationId": "listEvalRuns",
-        "parameters": [{ "$ref": "#/components/parameters/EvalId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
         "responses": {
-          "200": { "description": "List of runs", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/EvalRun" } } } } } } }
+          "200": {
+            "description": "List of runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EvalRun"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
     "/evals/{eval_id}/runs/{run_id}": {
       "get": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Retrieve eval run",
         "operationId": "getEvalRun",
         "parameters": [
-          { "$ref": "#/components/parameters/EvalId" },
-          { "$ref": "#/components/parameters/RunId" }
+          {
+            "$ref": "#/components/parameters/EvalId"
+          },
+          {
+            "$ref": "#/components/parameters/RunId"
+          }
         ],
         "responses": {
-          "200": { "description": "Eval run", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EvalRun" } } } }
+          "200": {
+            "description": "Eval run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalRun"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
-        "tags": ["Evaluations"],
+        "tags": [
+          "Evaluations"
+        ],
         "summary": "Delete eval run",
         "operationId": "deleteEvalRun",
         "parameters": [
-          { "$ref": "#/components/parameters/EvalId" },
-          { "$ref": "#/components/parameters/RunId" }
+          {
+            "$ref": "#/components/parameters/EvalId"
+          },
+          {
+            "$ref": "#/components/parameters/RunId"
+          }
         ],
         "responses": {
-          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletedObject" } } } }
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/moderations": {
       "post": {
-        "tags": ["Safety & Moderation"],
+        "tags": [
+          "Safety & Moderation"
+        ],
         "summary": "Create moderation",
         "description": "Classifies if text and/or images are potentially harmful. OpenAI-compatible moderation endpoint.",
         "operationId": "createModeration",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ModerationRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModerationRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "Moderation result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ModerationResponse" } } } }
+          "200": {
+            "description": "Moderation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationResponse"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/guardrails/apply_guardrail": {
       "post": {
-        "tags": ["Safety & Moderation"],
+        "tags": [
+          "Safety & Moderation"
+        ],
         "summary": "Apply guardrail",
         "description": "Applies a named guardrail to text for safety filtering, PII detection, or content policy enforcement.",
         "operationId": "applyGuardrail",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/GuardrailRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuardrailRequest"
+              }
+            }
           }
         },
         "responses": {
@@ -1121,7 +2011,10 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "response_text": { "type": "string", "description": "Processed text after applying the guardrail" }
+                    "response_text": {
+                      "type": "string",
+                      "description": "Processed text after applying the guardrail"
+                    }
                   }
                 }
               }
@@ -1132,24 +2025,41 @@
     },
     "/v1/ocr": {
       "post": {
-        "tags": ["Safety & Moderation"],
+        "tags": [
+          "Safety & Moderation"
+        ],
         "summary": "Extract text from document (OCR)",
         "description": "Extracts and structures text from documents and images using OCR. Returns structured Markdown output per page.",
         "operationId": "createOCR",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/OCRRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OCRRequest"
+              }
+            }
           }
         },
         "responses": {
-          "200": { "description": "OCR result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OCRResponse" } } } }
+          "200": {
+            "description": "OCR result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OCRResponse"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/models": {
       "get": {
-        "tags": ["Models"],
+        "tags": [
+          "Models"
+        ],
         "summary": "List models",
         "description": "Lists all models available on this LiteLLM proxy, including models from all configured providers.",
         "operationId": "listModels",
@@ -1163,22 +2073,51 @@
                   "example": {
                     "object": "list",
                     "data": [
-                      { "id": "gpt-4o", "object": "model", "created": 1700000000, "owned_by": "openai" },
-                      { "id": "claude-opus-4-6", "object": "model", "created": 1700000000, "owned_by": "anthropic" },
-                      { "id": "gemini/gemini-2.0-flash", "object": "model", "created": 1700000000, "owned_by": "google" }
+                      {
+                        "id": "gpt-4o",
+                        "object": "model",
+                        "created": 1700000000,
+                        "owned_by": "openai"
+                      },
+                      {
+                        "id": "claude-opus-4-6",
+                        "object": "model",
+                        "created": 1700000000,
+                        "owned_by": "anthropic"
+                      },
+                      {
+                        "id": "gemini/gemini-2.0-flash",
+                        "object": "model",
+                        "created": 1700000000,
+                        "owned_by": "google"
+                      }
                     ]
                   },
                   "properties": {
-                    "object": { "type": "string", "example": "list" },
+                    "object": {
+                      "type": "string",
+                      "example": "list"
+                    },
                     "data": {
                       "type": "array",
                       "items": {
                         "type": "object",
                         "properties": {
-                          "id": { "type": "string", "example": "gpt-4o" },
-                          "object": { "type": "string", "example": "model" },
-                          "created": { "type": "integer" },
-                          "owned_by": { "type": "string", "example": "openai" }
+                          "id": {
+                            "type": "string",
+                            "example": "gpt-4o"
+                          },
+                          "object": {
+                            "type": "string",
+                            "example": "model"
+                          },
+                          "created": {
+                            "type": "integer"
+                          },
+                          "owned_by": {
+                            "type": "string",
+                            "example": "openai"
+                          }
                         }
                       }
                     }
@@ -1200,48 +2139,156 @@
       }
     },
     "parameters": {
-      "ResponseId": { "name": "response_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Response ID" },
-      "VectorStoreId": { "name": "vector_store_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Vector store ID" },
-      "FileId": { "name": "file_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "File ID" },
-      "AssistantId": { "name": "assistant_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Assistant ID" },
-      "ThreadId": { "name": "thread_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Thread ID" },
-      "BatchId": { "name": "batch_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Batch ID" },
-      "FineTuningJobId": { "name": "fine_tuning_job_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Fine-tuning job ID" },
-      "EvalId": { "name": "eval_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Eval ID" },
-      "RunId": { "name": "run_id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Run ID" },
+      "ResponseId": {
+        "name": "response_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Response ID"
+      },
+      "VectorStoreId": {
+        "name": "vector_store_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Vector store ID"
+      },
+      "FileId": {
+        "name": "file_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "File ID"
+      },
+      "AssistantId": {
+        "name": "assistant_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Assistant ID"
+      },
+      "ThreadId": {
+        "name": "thread_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Thread ID"
+      },
+      "BatchId": {
+        "name": "batch_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Batch ID"
+      },
+      "FineTuningJobId": {
+        "name": "fine_tuning_job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Fine-tuning job ID"
+      },
+      "EvalId": {
+        "name": "eval_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Eval ID"
+      },
+      "RunId": {
+        "name": "run_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Run ID"
+      },
       "Limit": {
         "name": "limit",
         "in": "query",
-        "schema": { "type": "integer", "default": 20, "maximum": 100 },
+        "schema": {
+          "type": "integer",
+          "default": 20,
+          "maximum": 100
+        },
         "description": "Maximum number of results to return"
       },
       "After": {
         "name": "after",
         "in": "query",
-        "schema": { "type": "string" },
-        "description": "Cursor for pagination — ID of the last item from the previous page"
+        "schema": {
+          "type": "string"
+        },
+        "description": "Cursor for pagination \u2014 ID of the last item from the previous page"
       }
     },
     "responses": {
       "BadRequest": {
-        "description": "Bad request — invalid or missing parameters",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+        "description": "Bad request \u2014 invalid or missing parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "Unauthorized": {
-        "description": "Unauthorized — invalid or missing API key",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+        "description": "Unauthorized \u2014 invalid or missing API key",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "NotFound": {
         "description": "Not found",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "RateLimited": {
         "description": "Rate limit exceeded",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "InternalError": {
         "description": "Internal server error",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -1251,9 +2298,15 @@
           "error": {
             "type": "object",
             "properties": {
-              "message": { "type": "string" },
-              "type": { "type": "string" },
-              "code": { "type": "string" }
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
             }
           }
         }
@@ -1261,102 +2314,255 @@
       "DeletedObject": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string" },
-          "deleted": { "type": "boolean", "example": true }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean",
+            "example": true
+          }
         }
       },
       "UsageInfo": {
         "type": "object",
         "properties": {
-          "prompt_tokens": { "type": "integer", "example": 100 },
-          "completion_tokens": { "type": "integer", "example": 50 },
-          "total_tokens": { "type": "integer", "example": 150 }
+          "prompt_tokens": {
+            "type": "integer",
+            "example": 100
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "example": 50
+          },
+          "total_tokens": {
+            "type": "integer",
+            "example": 150
+          }
         }
       },
       "ChatMessage": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": [
+          "role",
+          "content"
+        ],
         "properties": {
-          "role": { "type": "string", "enum": ["system", "user", "assistant", "tool"] },
-          "content": {
-            "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "object", "description": "Content part (text, image_url, etc.)" } }
+          "role": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
             ]
           },
-          "name": { "type": "string" },
-          "tool_calls": { "type": "array", "items": { "type": "object" } },
-          "tool_call_id": { "type": "string" }
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "description": "Content part (text, image_url, etc.)"
+                }
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "tool_call_id": {
+            "type": "string"
+          }
         }
       },
       "Tool": {
         "type": "object",
-        "required": ["type", "function"],
+        "required": [
+          "type",
+          "function"
+        ],
         "properties": {
-          "type": { "type": "string", "enum": ["function"] },
+          "type": {
+            "type": "string",
+            "enum": [
+              "function"
+            ]
+          },
           "function": {
             "type": "object",
-            "required": ["name"],
+            "required": [
+              "name"
+            ],
             "properties": {
-              "name": { "type": "string" },
-              "description": { "type": "string" },
-              "parameters": { "type": "object", "description": "JSON Schema object describing the function parameters" },
-              "strict": { "type": "boolean", "description": "Enforce strict schema validation" }
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "description": "JSON Schema object describing the function parameters"
+              },
+              "strict": {
+                "type": "boolean",
+                "description": "Enforce strict schema validation"
+              }
             }
           }
         }
       },
       "ChatCompletionRequest": {
         "type": "object",
-        "required": ["model", "messages"],
+        "required": [
+          "model",
+          "messages"
+        ],
         "properties": {
           "model": {
             "type": "string",
-            "description": "Model ID. Supports any provider prefix — e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash`, `bedrock/anthropic.claude-3-5-sonnet`, `azure/gpt-4o`.",
+            "description": "Model ID. Supports any provider prefix \u2014 e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash`, `bedrock/anthropic.claude-3-5-sonnet`, `azure/gpt-4o`.",
             "example": "gpt-4o"
           },
           "messages": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ChatMessage" },
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
             "description": "List of messages comprising the conversation"
           },
-          "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "Sampling temperature. Higher = more random." },
-          "top_p": { "type": "number", "minimum": 0, "maximum": 1, "description": "Nucleus sampling probability mass" },
-          "max_tokens": { "type": "integer", "description": "Maximum number of tokens to generate" },
-          "max_completion_tokens": { "type": "integer", "description": "Alias for max_tokens (newer field)" },
-          "stream": { "type": "boolean", "default": false, "description": "If true, returns a stream of SSE delta events" },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "Sampling temperature. Higher = more random."
+          },
+          "top_p": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nucleus sampling probability mass"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "description": "Maximum number of tokens to generate"
+          },
+          "max_completion_tokens": {
+            "type": "integer",
+            "description": "Alias for max_tokens (newer field)"
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, returns a stream of SSE delta events"
+          },
           "stop": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "string" }, "maxItems": 4 }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 4
+              }
             ],
             "description": "Sequences where generation should stop"
           },
-          "n": { "type": "integer", "default": 1, "description": "Number of chat completion choices to generate" },
-          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" }, "description": "List of tools the model may call" },
+          "n": {
+            "type": "integer",
+            "default": 1,
+            "description": "Number of chat completion choices to generate"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tool"
+            },
+            "description": "List of tools the model may call"
+          },
           "tool_choice": {
             "oneOf": [
-              { "type": "string", "enum": ["none", "auto", "required"] },
-              { "type": "object", "description": "Force a specific tool call" }
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "auto",
+                  "required"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "Force a specific tool call"
+              }
             ]
           },
           "response_format": {
             "type": "object",
             "description": "Format of the model's output",
             "properties": {
-              "type": { "type": "string", "enum": ["text", "json_object", "json_schema"] },
-              "json_schema": { "type": "object", "description": "JSON Schema definition (when type=json_schema)" }
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "json_object",
+                  "json_schema"
+                ]
+              },
+              "json_schema": {
+                "type": "object",
+                "description": "JSON Schema definition (when type=json_schema)"
+              }
             }
           },
-          "seed": { "type": "integer", "description": "Seed for deterministic sampling" },
-          "presence_penalty": { "type": "number", "minimum": -2, "maximum": 2 },
-          "frequency_penalty": { "type": "number", "minimum": -2, "maximum": 2 },
-          "logit_bias": { "type": "object", "description": "Token ID to bias score mapping" },
-          "logprobs": { "type": "boolean" },
-          "top_logprobs": { "type": "integer", "minimum": 0, "maximum": 20 },
-          "user": { "type": "string", "description": "Unique end-user identifier for rate limiting and logging" },
-          "metadata": { "type": "object", "description": "LiteLLM-specific metadata for logging, routing, and tagging" }
+          "seed": {
+            "type": "integer",
+            "description": "Seed for deterministic sampling"
+          },
+          "presence_penalty": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2
+          },
+          "frequency_penalty": {
+            "type": "number",
+            "minimum": -2,
+            "maximum": 2
+          },
+          "logit_bias": {
+            "type": "object",
+            "description": "Token ID to bias score mapping"
+          },
+          "logprobs": {
+            "type": "boolean"
+          },
+          "top_logprobs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "user": {
+            "type": "string",
+            "description": "Unique end-user identifier for rate limiting and logging"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "LiteLLM-specific metadata for logging, routing, and tagging"
+          }
         }
       },
       "ChatCompletionResponse": {
@@ -1369,59 +2575,152 @@
           "choices": [
             {
               "index": 0,
-              "message": { "role": "assistant", "content": "Hello! How can I help you today?" },
+              "message": {
+                "role": "assistant",
+                "content": "Hello! How can I help you today?"
+              },
               "finish_reason": "stop",
               "logprobs": null
             }
           ],
-          "usage": { "prompt_tokens": 13, "completion_tokens": 9, "total_tokens": 22 },
+          "usage": {
+            "prompt_tokens": 13,
+            "completion_tokens": 9,
+            "total_tokens": 22
+          },
           "system_fingerprint": "fp_abc123"
         },
         "properties": {
-          "id": { "type": "string", "example": "chatcmpl-abc123" },
-          "object": { "type": "string", "example": "chat.completion" },
-          "created": { "type": "integer", "example": 1700000000 },
-          "model": { "type": "string", "example": "gpt-4o-2024-11-20" },
+          "id": {
+            "type": "string",
+            "example": "chatcmpl-abc123"
+          },
+          "object": {
+            "type": "string",
+            "example": "chat.completion"
+          },
+          "created": {
+            "type": "integer",
+            "example": 1700000000
+          },
+          "model": {
+            "type": "string",
+            "example": "gpt-4o-2024-11-20"
+          },
           "choices": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "index": { "type": "integer" },
-                "message": { "$ref": "#/components/schemas/ChatMessage" },
-                "finish_reason": { "type": "string", "enum": ["stop", "length", "tool_calls", "content_filter"] },
-                "logprobs": { "type": "object", "nullable": true }
+                "index": {
+                  "type": "integer"
+                },
+                "message": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                },
+                "finish_reason": {
+                  "type": "string",
+                  "enum": [
+                    "stop",
+                    "length",
+                    "tool_calls",
+                    "content_filter"
+                  ]
+                },
+                "logprobs": {
+                  "type": "object",
+                  "nullable": true
+                }
               }
             }
           },
-          "usage": { "$ref": "#/components/schemas/UsageInfo" },
-          "system_fingerprint": { "type": "string" }
+          "usage": {
+            "$ref": "#/components/schemas/UsageInfo"
+          },
+          "system_fingerprint": {
+            "type": "string"
+          }
         }
       },
       "TextCompletionRequest": {
         "type": "object",
-        "required": ["model", "prompt"],
+        "required": [
+          "model",
+          "prompt"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "gpt-3.5-turbo-instruct" },
+          "model": {
+            "type": "string",
+            "example": "gpt-3.5-turbo-instruct"
+          },
           "prompt": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "string" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ]
           },
-          "max_tokens": { "type": "integer", "default": 16 },
-          "temperature": { "type": "number" },
-          "top_p": { "type": "number" },
-          "n": { "type": "integer", "default": 1 },
-          "stream": { "type": "boolean", "default": false },
-          "stop": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
-          "logprobs": { "type": "integer", "nullable": true },
-          "echo": { "type": "boolean", "default": false },
-          "suffix": { "type": "string" },
-          "best_of": { "type": "integer", "default": 1 },
-          "frequency_penalty": { "type": "number" },
-          "presence_penalty": { "type": "number" },
-          "user": { "type": "string" }
+          "max_tokens": {
+            "type": "integer",
+            "default": 16
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "top_p": {
+            "type": "number"
+          },
+          "n": {
+            "type": "integer",
+            "default": 1
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "logprobs": {
+            "type": "integer",
+            "nullable": true
+          },
+          "echo": {
+            "type": "boolean",
+            "default": false
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "best_of": {
+            "type": "integer",
+            "default": 1
+          },
+          "frequency_penalty": {
+            "type": "number"
+          },
+          "presence_penalty": {
+            "type": "number"
+          },
+          "user": {
+            "type": "string"
+          }
         }
       },
       "TextCompletionResponse": {
@@ -1431,173 +2730,490 @@
           "object": "text_completion",
           "created": 1700000000,
           "model": "gpt-3.5-turbo-instruct",
-          "choices": [{ "text": "\n\nThis is a sample completion.", "index": 0, "logprobs": null, "finish_reason": "stop" }],
-          "usage": { "prompt_tokens": 5, "completion_tokens": 8, "total_tokens": 13 }
+          "choices": [
+            {
+              "text": "\n\nThis is a sample completion.",
+              "index": 0,
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          }
         },
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "text_completion" },
-          "created": { "type": "integer" },
-          "model": { "type": "string" },
-          "system_fingerprint": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "text_completion"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "system_fingerprint": {
+            "type": "string"
+          },
           "choices": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "text": { "type": "string" },
-                "index": { "type": "integer" },
-                "logprobs": { "type": "object", "nullable": true },
-                "finish_reason": { "type": "string" }
+                "text": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "logprobs": {
+                  "type": "object",
+                  "nullable": true
+                },
+                "finish_reason": {
+                  "type": "string"
+                }
               }
             }
           },
-          "usage": { "$ref": "#/components/schemas/UsageInfo" }
+          "usage": {
+            "$ref": "#/components/schemas/UsageInfo"
+          }
         }
       },
       "ResponseRequest": {
         "type": "object",
-        "required": ["model", "input"],
+        "required": [
+          "model",
+          "input"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "gpt-4o" },
+          "model": {
+            "type": "string",
+            "example": "gpt-4o"
+          },
           "input": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "object" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
             ],
             "description": "Text prompt or array of input items"
           },
-          "max_output_tokens": { "type": "integer" },
-          "temperature": { "type": "number" },
-          "top_p": { "type": "number" },
-          "stream": { "type": "boolean" },
-          "thinking": { "type": "object", "description": "Enable extended thinking (Anthropic Claude models)" },
-          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" } }
+          "max_output_tokens": {
+            "type": "integer"
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "top_p": {
+            "type": "number"
+          },
+          "stream": {
+            "type": "boolean"
+          },
+          "thinking": {
+            "type": "object",
+            "description": "Enable extended thinking (Anthropic Claude models)"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tool"
+            }
+          }
         }
       },
       "ResponseObject": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "response" },
-          "created": { "type": "integer" },
-          "model": { "type": "string" },
-          "status": { "type": "string", "enum": ["completed", "in_progress", "failed", "cancelled"] },
-          "content": { "type": "array", "items": { "type": "object" } },
-          "stop_reason": { "type": "string" },
-          "thinking": { "type": "string", "description": "Extended thinking content (when enabled)" },
-          "usage": { "$ref": "#/components/schemas/UsageInfo" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "response"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "in_progress",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "stop_reason": {
+            "type": "string"
+          },
+          "thinking": {
+            "type": "string",
+            "description": "Extended thinking content (when enabled)"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageInfo"
+          }
         }
       },
       "AudioTranscriptionRequest": {
         "type": "object",
-        "required": ["file", "model"],
+        "required": [
+          "file",
+          "model"
+        ],
         "properties": {
-          "file": { "type": "string", "format": "binary", "description": "Audio file to transcribe (mp3, mp4, mpeg, mpga, m4a, wav, webm — max 25MB)" },
-          "model": { "type": "string", "example": "whisper-1" },
-          "language": { "type": "string", "description": "ISO-639-1 language code (e.g. 'en', 'fr'). Auto-detected if omitted." },
-          "prompt": { "type": "string", "description": "Optional context or spelling hint" },
-          "response_format": { "type": "string", "enum": ["json", "text", "srt", "verbose_json", "vtt"], "default": "json" },
-          "temperature": { "type": "number", "minimum": 0, "maximum": 1 }
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "Audio file to transcribe (mp3, mp4, mpeg, mpga, m4a, wav, webm \u2014 max 25MB)"
+          },
+          "model": {
+            "type": "string",
+            "example": "whisper-1"
+          },
+          "language": {
+            "type": "string",
+            "description": "ISO-639-1 language code (e.g. 'en', 'fr'). Auto-detected if omitted."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Optional context or spelling hint"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "text",
+              "srt",
+              "verbose_json",
+              "vtt"
+            ],
+            "default": "json"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
         }
       },
       "AudioTranscriptionResponse": {
         "type": "object",
         "properties": {
-          "text": { "type": "string", "description": "Transcribed text" },
-          "language": { "type": "string" },
-          "duration": { "type": "number", "description": "Duration of audio in seconds" },
-          "object": { "type": "string", "example": "transcription" }
+          "text": {
+            "type": "string",
+            "description": "Transcribed text"
+          },
+          "language": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number",
+            "description": "Duration of audio in seconds"
+          },
+          "object": {
+            "type": "string",
+            "example": "transcription"
+          }
         }
       },
       "TextToSpeechRequest": {
         "type": "object",
-        "required": ["model", "input", "voice"],
+        "required": [
+          "model",
+          "input",
+          "voice"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "tts-1", "description": "TTS model. Use `tts-1` (fast) or `tts-1-hd` (high quality) for OpenAI." },
-          "input": { "type": "string", "description": "Text to synthesize. Max 4096 characters." },
+          "model": {
+            "type": "string",
+            "example": "tts-1",
+            "description": "TTS model. Use `tts-1` (fast) or `tts-1-hd` (high quality) for OpenAI."
+          },
+          "input": {
+            "type": "string",
+            "description": "Text to synthesize. Max 4096 characters."
+          },
           "voice": {
             "type": "string",
-            "enum": ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
+            "enum": [
+              "alloy",
+              "ash",
+              "coral",
+              "echo",
+              "fable",
+              "onyx",
+              "nova",
+              "sage",
+              "shimmer"
+            ],
             "description": "Voice preset"
           },
-          "response_format": { "type": "string", "enum": ["mp3", "opus", "aac", "flac", "wav", "pcm"], "default": "mp3" },
-          "speed": { "type": "number", "minimum": 0.25, "maximum": 4.0, "default": 1.0, "description": "Speech speed multiplier" }
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "opus",
+              "aac",
+              "flac",
+              "wav",
+              "pcm"
+            ],
+            "default": "mp3"
+          },
+          "speed": {
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 4.0,
+            "default": 1.0,
+            "description": "Speech speed multiplier"
+          }
         }
       },
       "ImageGenerationRequest": {
         "type": "object",
-        "required": ["prompt"],
+        "required": [
+          "prompt"
+        ],
         "properties": {
-          "prompt": { "type": "string", "description": "Text description of the desired image (max 4000 chars for DALL-E 3)" },
-          "model": { "type": "string", "example": "dall-e-3" },
-          "n": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1, "description": "Number of images to generate" },
-          "size": { "type": "string", "enum": ["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"], "default": "1024x1024" },
-          "quality": { "type": "string", "enum": ["standard", "hd"], "default": "standard" },
-          "response_format": { "type": "string", "enum": ["url", "b64_json"], "default": "url" },
-          "style": { "type": "string", "enum": ["vivid", "natural"], "description": "Image style (DALL-E 3 only)" },
-          "user": { "type": "string" }
+          "prompt": {
+            "type": "string",
+            "description": "Text description of the desired image (max 4000 chars for DALL-E 3)"
+          },
+          "model": {
+            "type": "string",
+            "example": "dall-e-3"
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to generate"
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "256x256",
+              "512x512",
+              "1024x1024",
+              "1792x1024",
+              "1024x1792"
+            ],
+            "default": "1024x1024"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "hd"
+            ],
+            "default": "standard"
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "url",
+              "b64_json"
+            ],
+            "default": "url"
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "vivid",
+              "natural"
+            ],
+            "description": "Image style (DALL-E 3 only)"
+          },
+          "user": {
+            "type": "string"
+          }
         }
       },
       "ImageEditRequest": {
         "type": "object",
-        "required": ["image", "prompt"],
+        "required": [
+          "image",
+          "prompt"
+        ],
         "properties": {
-          "image": { "type": "string", "format": "binary", "description": "PNG image to edit (max 4MB, must have alpha channel for DALL-E 2)" },
-          "prompt": { "type": "string", "description": "Description of the desired edit" },
-          "mask": { "type": "string", "format": "binary", "description": "Optional mask PNG — white areas indicate where to edit" },
-          "model": { "type": "string", "example": "dall-e-2" },
-          "n": { "type": "integer", "default": 1 },
-          "size": { "type": "string", "enum": ["256x256", "512x512", "1024x1024"] },
-          "response_format": { "type": "string", "enum": ["url", "b64_json"] },
-          "user": { "type": "string" }
+          "image": {
+            "type": "string",
+            "format": "binary",
+            "description": "PNG image to edit (max 4MB, must have alpha channel for DALL-E 2)"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Description of the desired edit"
+          },
+          "mask": {
+            "type": "string",
+            "format": "binary",
+            "description": "Optional mask PNG \u2014 white areas indicate where to edit"
+          },
+          "model": {
+            "type": "string",
+            "example": "dall-e-2"
+          },
+          "n": {
+            "type": "integer",
+            "default": 1
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "256x256",
+              "512x512",
+              "1024x1024"
+            ]
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "url",
+              "b64_json"
+            ]
+          },
+          "user": {
+            "type": "string"
+          }
         }
       },
       "ImageVariationRequest": {
         "type": "object",
-        "required": ["image"],
+        "required": [
+          "image"
+        ],
         "properties": {
-          "image": { "type": "string", "format": "binary", "description": "Source PNG image (max 4MB)" },
-          "model": { "type": "string", "example": "dall-e-2" },
-          "n": { "type": "integer", "default": 1 },
-          "size": { "type": "string", "enum": ["256x256", "512x512", "1024x1024"] },
-          "response_format": { "type": "string", "enum": ["url", "b64_json"] },
-          "user": { "type": "string" }
+          "image": {
+            "type": "string",
+            "format": "binary",
+            "description": "Source PNG image (max 4MB)"
+          },
+          "model": {
+            "type": "string",
+            "example": "dall-e-2"
+          },
+          "n": {
+            "type": "integer",
+            "default": 1
+          },
+          "size": {
+            "type": "string",
+            "enum": [
+              "256x256",
+              "512x512",
+              "1024x1024"
+            ]
+          },
+          "response_format": {
+            "type": "string",
+            "enum": [
+              "url",
+              "b64_json"
+            ]
+          },
+          "user": {
+            "type": "string"
+          }
         }
       },
       "ImageGenerationResponse": {
         "type": "object",
         "properties": {
-          "created": { "type": "integer" },
+          "created": {
+            "type": "integer"
+          },
           "data": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "url": { "type": "string", "description": "URL of the generated image (expires after 1 hour)" },
-                "b64_json": { "type": "string", "description": "Base64-encoded PNG (when response_format=b64_json)" },
-                "revised_prompt": { "type": "string", "description": "Prompt rewritten by DALL-E 3 for safety/quality" }
+                "url": {
+                  "type": "string",
+                  "description": "URL of the generated image (expires after 1 hour)"
+                },
+                "b64_json": {
+                  "type": "string",
+                  "description": "Base64-encoded PNG (when response_format=b64_json)"
+                },
+                "revised_prompt": {
+                  "type": "string",
+                  "description": "Prompt rewritten by DALL-E 3 for safety/quality"
+                }
               }
             }
           },
-          "usage": { "$ref": "#/components/schemas/UsageInfo" }
+          "usage": {
+            "$ref": "#/components/schemas/UsageInfo"
+          }
         }
       },
       "EmbeddingRequest": {
         "type": "object",
-        "required": ["model", "input"],
+        "required": [
+          "model",
+          "input"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "text-embedding-3-small" },
+          "model": {
+            "type": "string",
+            "example": "text-embedding-3-small"
+          },
           "input": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "string" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ],
             "description": "Text or array of texts to embed"
           },
-          "encoding_format": { "type": "string", "enum": ["float", "base64"], "default": "float" },
-          "dimensions": { "type": "integer", "description": "Output embedding dimensions (supported by select models)" },
-          "user": { "type": "string" }
+          "encoding_format": {
+            "type": "string",
+            "enum": [
+              "float",
+              "base64"
+            ],
+            "default": "float"
+          },
+          "dimensions": {
+            "type": "integer",
+            "description": "Output embedding dimensions (supported by select models)"
+          },
+          "user": {
+            "type": "string"
+          }
         }
       },
       "EmbeddingResponse": {
@@ -1605,63 +3221,145 @@
         "example": {
           "object": "list",
           "data": [
-            { "object": "embedding", "index": 0, "embedding": [0.0023064255, -0.009327292, 0.015797347, -0.0077780334, 0.0023064255] }
+            {
+              "object": "embedding",
+              "index": 0,
+              "embedding": [
+                0.0023064255,
+                -0.009327292,
+                0.015797347,
+                -0.0077780334,
+                0.0023064255
+              ]
+            }
           ],
           "model": "text-embedding-ada-002",
-          "usage": { "prompt_tokens": 8, "total_tokens": 8 }
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
         },
         "properties": {
-          "object": { "type": "string", "example": "list" },
+          "object": {
+            "type": "string",
+            "example": "list"
+          },
           "data": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "object": { "type": "string", "example": "embedding" },
-                "index": { "type": "integer" },
-                "embedding": { "type": "array", "items": { "type": "number" }, "description": "Embedding vector" }
+                "object": {
+                  "type": "string",
+                  "example": "embedding"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "embedding": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "description": "Embedding vector"
+                }
               }
             }
           },
-          "model": { "type": "string" },
+          "model": {
+            "type": "string"
+          },
           "usage": {
             "type": "object",
             "properties": {
-              "prompt_tokens": { "type": "integer" },
-              "total_tokens": { "type": "integer" }
+              "prompt_tokens": {
+                "type": "integer"
+              },
+              "total_tokens": {
+                "type": "integer"
+              }
             }
           }
         }
       },
       "RerankRequest": {
         "type": "object",
-        "required": ["model", "query", "documents"],
+        "required": [
+          "model",
+          "query",
+          "documents"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "rerank-english-v3.0", "description": "Reranking model ID" },
-          "query": { "type": "string", "description": "Search query to rank documents against" },
+          "model": {
+            "type": "string",
+            "example": "rerank-english-v3.0",
+            "description": "Reranking model ID"
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query to rank documents against"
+          },
           "documents": {
             "type": "array",
-            "items": { "oneOf": [{ "type": "string" }, { "type": "object" }] },
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
             "description": "Documents (strings or objects with 'text' field) to rerank"
           },
-          "top_n": { "type": "integer", "description": "Number of top results to return. Defaults to all." },
-          "return_documents": { "type": "boolean", "default": true, "description": "Include document text in response" }
+          "top_n": {
+            "type": "integer",
+            "description": "Number of top results to return. Defaults to all."
+          },
+          "return_documents": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include document text in response"
+          }
         }
       },
       "RerankResponse": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "list" },
-          "model": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "list"
+          },
+          "model": {
+            "type": "string"
+          },
           "results": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "index": { "type": "integer", "description": "Original index in the input documents array" },
-                "relevance_score": { "type": "number", "description": "Relevance score between 0 and 1" },
-                "document": { "oneOf": [{ "type": "string" }, { "type": "object" }] }
+                "index": {
+                  "type": "integer",
+                  "description": "Original index in the input documents array"
+                },
+                "relevance_score": {
+                  "type": "number",
+                  "description": "Relevance score between 0 and 1"
+                },
+                "document": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object"
+                    }
+                  ]
+                }
               }
             }
           }
@@ -1670,12 +3368,23 @@
       "ChunkingStrategy": {
         "type": "object",
         "properties": {
-          "type": { "type": "string", "enum": ["auto", "static"], "default": "auto" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "static"
+            ],
+            "default": "auto"
+          },
           "static": {
             "type": "object",
             "properties": {
-              "max_chunk_size_tokens": { "type": "integer" },
-              "chunk_overlap_tokens": { "type": "integer" }
+              "max_chunk_size_tokens": {
+                "type": "integer"
+              },
+              "chunk_overlap_tokens": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -1683,344 +3392,874 @@
       "VectorStoreCreateRequest": {
         "type": "object",
         "properties": {
-          "name": { "type": "string" },
-          "file_ids": { "type": "array", "items": { "type": "string" }, "description": "Files to add immediately" },
+          "name": {
+            "type": "string"
+          },
+          "file_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files to add immediately"
+          },
           "expires_after": {
             "type": "object",
             "properties": {
-              "anchor": { "type": "string", "enum": ["last_active_at"] },
-              "days": { "type": "integer" }
+              "anchor": {
+                "type": "string",
+                "enum": [
+                  "last_active_at"
+                ]
+              },
+              "days": {
+                "type": "integer"
+              }
             }
           },
-          "chunking_strategy": { "$ref": "#/components/schemas/ChunkingStrategy" },
-          "metadata": { "type": "object" }
+          "chunking_strategy": {
+            "$ref": "#/components/schemas/ChunkingStrategy"
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "VectorStore": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "vector_store" },
-          "created_at": { "type": "integer" },
-          "name": { "type": "string" },
-          "bytes": { "type": "integer" },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "vector_store"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
           "file_counts": {
             "type": "object",
             "properties": {
-              "in_progress": { "type": "integer" },
-              "completed": { "type": "integer" },
-              "failed": { "type": "integer" },
-              "cancelled": { "type": "integer" },
-              "total": { "type": "integer" }
+              "in_progress": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "cancelled": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
             }
           },
-          "status": { "type": "string", "enum": ["expired", "in_progress", "completed"] },
-          "expires_at": { "type": "integer", "nullable": true },
-          "last_active_at": { "type": "integer" },
-          "metadata": { "type": "object" }
+          "status": {
+            "type": "string",
+            "enum": [
+              "expired",
+              "in_progress",
+              "completed"
+            ]
+          },
+          "expires_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "last_active_at": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "VectorStoreFile": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "vector_store.file" },
-          "vector_store_id": { "type": "string" },
-          "created_at": { "type": "integer" },
-          "size": { "type": "integer" },
-          "status": { "type": "string", "enum": ["in_progress", "completed", "failed", "cancelled"] },
-          "chunking_strategy": { "$ref": "#/components/schemas/ChunkingStrategy" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "vector_store.file"
+          },
+          "vector_store_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "chunking_strategy": {
+            "$ref": "#/components/schemas/ChunkingStrategy"
+          }
         }
       },
       "VectorStoreSearchRequest": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
-          "query": { "type": "string", "description": "Natural language search query" },
-          "max_num_results": { "type": "integer", "default": 10, "description": "Maximum number of chunks to return" },
-          "filters": { "type": "object", "description": "Metadata filters" },
-          "ranking_options": { "type": "object", "description": "Ranker and score threshold configuration" },
-          "rewrite_query": { "type": "boolean", "default": false, "description": "Use LLM to rewrite query for better retrieval" }
+          "query": {
+            "type": "string",
+            "description": "Natural language search query"
+          },
+          "max_num_results": {
+            "type": "integer",
+            "default": 10,
+            "description": "Maximum number of chunks to return"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Metadata filters"
+          },
+          "ranking_options": {
+            "type": "object",
+            "description": "Ranker and score threshold configuration"
+          },
+          "rewrite_query": {
+            "type": "boolean",
+            "default": false,
+            "description": "Use LLM to rewrite query for better retrieval"
+          }
         }
       },
       "VectorStoreSearchResult": {
         "type": "object",
         "properties": {
-          "file_id": { "type": "string" },
-          "score": { "type": "number", "description": "Relevance score" },
-          "content": { "type": "array", "items": { "type": "object" }, "description": "Matching text chunks" }
+          "file_id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "description": "Relevance score"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Matching text chunks"
+          }
         }
       },
       "FileUploadRequest": {
         "type": "object",
-        "required": ["file", "purpose"],
+        "required": [
+          "file",
+          "purpose"
+        ],
         "properties": {
-          "file": { "type": "string", "format": "binary" },
-          "purpose": { "type": "string", "enum": ["fine-tune", "batch", "assistants", "vision"], "description": "Intended use for the file" }
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "fine-tune",
+              "batch",
+              "assistants",
+              "vision"
+            ],
+            "description": "Intended use for the file"
+          }
         }
       },
       "FileObject": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "file" },
-          "bytes": { "type": "integer" },
-          "created_at": { "type": "integer" },
-          "filename": { "type": "string" },
-          "purpose": { "type": "string" },
-          "status": { "type": "string", "enum": ["uploaded", "processed", "error"] }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "file"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "uploaded",
+              "processed",
+              "error"
+            ]
+          }
         }
       },
       "AssistantCreateRequest": {
         "type": "object",
-        "required": ["model"],
+        "required": [
+          "model"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "gpt-4o" },
-          "name": { "type": "string", "maxLength": 256 },
-          "description": { "type": "string", "maxLength": 512 },
-          "instructions": { "type": "string", "maxLength": 256000, "description": "System instructions for the assistant" },
-          "tools": { "type": "array", "items": { "type": "object" }, "description": "Tools the assistant can use (code_interpreter, file_search, function)" },
-          "tool_resources": { "type": "object" },
-          "metadata": { "type": "object" },
-          "temperature": { "type": "number" },
-          "top_p": { "type": "number" },
-          "response_format": { "type": "object" }
+          "model": {
+            "type": "string",
+            "example": "gpt-4o"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 256000,
+            "description": "System instructions for the assistant"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Tools the assistant can use (code_interpreter, file_search, function)"
+          },
+          "tool_resources": {
+            "type": "object"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "top_p": {
+            "type": "number"
+          },
+          "response_format": {
+            "type": "object"
+          }
         }
       },
       "Assistant": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "assistant" },
-          "created_at": { "type": "integer" },
-          "name": { "type": "string" },
-          "description": { "type": "string" },
-          "model": { "type": "string" },
-          "instructions": { "type": "string" },
-          "tools": { "type": "array", "items": { "type": "object" } },
-          "metadata": { "type": "object" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "assistant"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "Thread": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "thread" },
-          "created_at": { "type": "integer" },
-          "metadata": { "type": "object" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "thread"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "MessageCreateRequest": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": [
+          "role",
+          "content"
+        ],
         "properties": {
-          "role": { "type": "string", "enum": ["user", "assistant"] },
-          "content": {
-            "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "object" } }
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
             ]
           },
-          "attachments": { "type": "array", "items": { "type": "object" } },
-          "metadata": { "type": "object" }
+          "content": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "ThreadMessage": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "thread.message" },
-          "created_at": { "type": "integer" },
-          "thread_id": { "type": "string" },
-          "role": { "type": "string", "enum": ["user", "assistant"] },
-          "content": { "type": "array", "items": { "type": "object" } },
-          "metadata": { "type": "object" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "thread.message"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "Run": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "thread.run" },
-          "created_at": { "type": "integer" },
-          "thread_id": { "type": "string" },
-          "assistant_id": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "thread.run"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "assistant_id": {
+            "type": "string"
+          },
           "status": {
             "type": "string",
-            "enum": ["queued", "in_progress", "requires_action", "cancelling", "cancelled", "failed", "completed", "incomplete", "expired"]
+            "enum": [
+              "queued",
+              "in_progress",
+              "requires_action",
+              "cancelling",
+              "cancelled",
+              "failed",
+              "completed",
+              "incomplete",
+              "expired"
+            ]
           },
-          "model": { "type": "string" },
-          "instructions": { "type": "string" },
-          "usage": { "$ref": "#/components/schemas/UsageInfo" }
+          "model": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageInfo"
+          }
         }
       },
       "BatchCreateRequest": {
         "type": "object",
-        "required": ["input_file_id", "endpoint", "completion_window"],
+        "required": [
+          "input_file_id",
+          "endpoint",
+          "completion_window"
+        ],
         "properties": {
-          "input_file_id": { "type": "string", "description": "ID of an uploaded JSONL file. Each line is a request object with `custom_id`, `method`, `url`, and `body`." },
+          "input_file_id": {
+            "type": "string",
+            "description": "ID of an uploaded JSONL file. Each line is a request object with `custom_id`, `method`, `url`, and `body`."
+          },
           "endpoint": {
             "type": "string",
-            "enum": ["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+            "enum": [
+              "/v1/chat/completions",
+              "/v1/embeddings",
+              "/v1/completions"
+            ],
             "description": "API endpoint to call for each request in the batch"
           },
-          "completion_window": { "type": "string", "enum": ["24h"], "description": "Time window for batch to complete" },
-          "metadata": { "type": "object" }
+          "completion_window": {
+            "type": "string",
+            "enum": [
+              "24h"
+            ],
+            "description": "Time window for batch to complete"
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "Batch": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "batch" },
-          "status": { "type": "string", "enum": ["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"] },
-          "endpoint": { "type": "string" },
-          "input_file_id": { "type": "string" },
-          "output_file_id": { "type": "string", "nullable": true, "description": "File ID for successful responses (JSONL)" },
-          "error_file_id": { "type": "string", "nullable": true, "description": "File ID for failed requests (JSONL)" },
-          "created_at": { "type": "integer" },
-          "completed_at": { "type": "integer", "nullable": true },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "batch"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "validating",
+              "failed",
+              "in_progress",
+              "finalizing",
+              "completed",
+              "expired",
+              "cancelling",
+              "cancelled"
+            ]
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "input_file_id": {
+            "type": "string"
+          },
+          "output_file_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "File ID for successful responses (JSONL)"
+          },
+          "error_file_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "File ID for failed requests (JSONL)"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "completed_at": {
+            "type": "integer",
+            "nullable": true
+          },
           "request_counts": {
             "type": "object",
             "properties": {
-              "total": { "type": "integer" },
-              "completed": { "type": "integer" },
-              "failed": { "type": "integer" }
+              "total": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              }
             }
           },
-          "metadata": { "type": "object" }
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "FineTuningJobCreateRequest": {
         "type": "object",
-        "required": ["model", "training_file"],
+        "required": [
+          "model",
+          "training_file"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "gpt-4o-mini", "description": "Base model to fine-tune" },
-          "training_file": { "type": "string", "description": "File ID of training data in JSONL chat format" },
-          "validation_file": { "type": "string", "description": "Optional File ID for validation data" },
+          "model": {
+            "type": "string",
+            "example": "gpt-4o-mini",
+            "description": "Base model to fine-tune"
+          },
+          "training_file": {
+            "type": "string",
+            "description": "File ID of training data in JSONL chat format"
+          },
+          "validation_file": {
+            "type": "string",
+            "description": "Optional File ID for validation data"
+          },
           "hyperparameters": {
             "type": "object",
             "properties": {
-              "batch_size": { "oneOf": [{ "type": "string", "enum": ["auto"] }, { "type": "integer" }] },
-              "learning_rate_multiplier": { "oneOf": [{ "type": "string", "enum": ["auto"] }, { "type": "number" }] },
-              "n_epochs": { "oneOf": [{ "type": "string", "enum": ["auto"] }, { "type": "integer" }] }
+              "batch_size": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "auto"
+                    ]
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "learning_rate_multiplier": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "auto"
+                    ]
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "n_epochs": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "auto"
+                    ]
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              }
             }
           },
-          "suffix": { "type": "string", "maxLength": 40, "description": "Suffix appended to the fine-tuned model name" },
-          "seed": { "type": "integer" }
+          "suffix": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Suffix appended to the fine-tuned model name"
+          },
+          "seed": {
+            "type": "integer"
+          }
         }
       },
       "FineTuningJob": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "fine_tuning.job" },
-          "model": { "type": "string" },
-          "status": { "type": "string", "enum": ["validating_files", "queued", "running", "succeeded", "failed", "cancelled"] },
-          "training_file": { "type": "string" },
-          "validation_file": { "type": "string", "nullable": true },
-          "created_at": { "type": "integer" },
-          "fine_tuned_model": { "type": "string", "nullable": true, "description": "Name of the resulting fine-tuned model (when status=succeeded)" },
-          "hyperparameters": { "type": "object" },
-          "result_files": { "type": "array", "items": { "type": "string" } },
-          "seed": { "type": "integer" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "fine_tuning.job"
+          },
+          "model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "validating_files",
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "training_file": {
+            "type": "string"
+          },
+          "validation_file": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "fine_tuned_model": {
+            "type": "string",
+            "nullable": true,
+            "description": "Name of the resulting fine-tuned model (when status=succeeded)"
+          },
+          "hyperparameters": {
+            "type": "object"
+          },
+          "result_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "seed": {
+            "type": "integer"
+          }
         }
       },
       "EvalCreateRequest": {
         "type": "object",
-        "required": ["name", "data_source_config", "testing_criteria"],
+        "required": [
+          "name",
+          "data_source_config",
+          "testing_criteria"
+        ],
         "properties": {
-          "name": { "type": "string" },
+          "name": {
+            "type": "string"
+          },
           "data_source_config": {
             "type": "object",
             "description": "Configuration for data source (stored_completions, custom, jsonl, etc.)"
           },
           "testing_criteria": {
             "type": "array",
-            "items": { "type": "object" },
+            "items": {
+              "type": "object"
+            },
             "description": "Grader definitions (LLM-judge, accuracy, etc.)"
           },
-          "metadata": { "type": "object" }
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "Eval": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "eval" },
-          "name": { "type": "string" },
-          "created_at": { "type": "integer" },
-          "data_source_config": { "type": "object" },
-          "testing_criteria": { "type": "array", "items": { "type": "object" } },
-          "metadata": { "type": "object" }
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "eval"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "data_source_config": {
+            "type": "object"
+          },
+          "testing_criteria": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
         }
       },
       "EvalRun": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "object": { "type": "string", "example": "eval_run" },
-          "eval_id": { "type": "string" },
-          "name": { "type": "string" },
-          "status": { "type": "string", "enum": ["queued", "in_progress", "completed", "failed", "cancelled"] },
-          "created_at": { "type": "integer" },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "eval_run"
+          },
+          "eval_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "in_progress",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "created_at": {
+            "type": "integer"
+          },
           "result_counts": {
             "type": "object",
             "properties": {
-              "total": { "type": "integer" },
-              "passed": { "type": "integer" },
-              "failed": { "type": "integer" },
-              "errored": { "type": "integer" }
+              "total": {
+                "type": "integer"
+              },
+              "passed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "errored": {
+                "type": "integer"
+              }
             }
           }
         }
       },
       "ModerationRequest": {
         "type": "object",
-        "required": ["input"],
+        "required": [
+          "input"
+        ],
         "properties": {
           "input": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "type": "string" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             ],
             "description": "Text to classify"
           },
-          "model": { "type": "string", "default": "omni-moderation-latest", "description": "Moderation model to use" }
+          "model": {
+            "type": "string",
+            "default": "omni-moderation-latest",
+            "description": "Moderation model to use"
+          }
         }
       },
       "ModerationResponse": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "model": { "type": "string" },
-          "object": { "type": "string", "example": "list" },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "example": "list"
+          },
           "results": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "flagged": { "type": "boolean", "description": "Whether any category was flagged" },
+                "flagged": {
+                  "type": "boolean",
+                  "description": "Whether any category was flagged"
+                },
                 "categories": {
                   "type": "object",
                   "properties": {
-                    "hate": { "type": "boolean" },
-                    "hate/threatening": { "type": "boolean" },
-                    "harassment": { "type": "boolean" },
-                    "harassment/threatening": { "type": "boolean" },
-                    "self-harm": { "type": "boolean" },
-                    "self-harm/intent": { "type": "boolean" },
-                    "self-harm/instructions": { "type": "boolean" },
-                    "sexual": { "type": "boolean" },
-                    "sexual/minors": { "type": "boolean" },
-                    "violence": { "type": "boolean" },
-                    "violence/graphic": { "type": "boolean" }
+                    "hate": {
+                      "type": "boolean"
+                    },
+                    "hate/threatening": {
+                      "type": "boolean"
+                    },
+                    "harassment": {
+                      "type": "boolean"
+                    },
+                    "harassment/threatening": {
+                      "type": "boolean"
+                    },
+                    "self-harm": {
+                      "type": "boolean"
+                    },
+                    "self-harm/intent": {
+                      "type": "boolean"
+                    },
+                    "self-harm/instructions": {
+                      "type": "boolean"
+                    },
+                    "sexual": {
+                      "type": "boolean"
+                    },
+                    "sexual/minors": {
+                      "type": "boolean"
+                    },
+                    "violence": {
+                      "type": "boolean"
+                    },
+                    "violence/graphic": {
+                      "type": "boolean"
+                    }
                   }
                 },
                 "category_scores": {
                   "type": "object",
-                  "additionalProperties": { "type": "number" },
-                  "description": "Confidence scores for each category (0–1)"
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "description": "Confidence scores for each category (0\u20131)"
                 }
               }
             }
@@ -2029,64 +4268,148 @@
       },
       "GuardrailRequest": {
         "type": "object",
-        "required": ["guardrail_name", "text"],
+        "required": [
+          "guardrail_name",
+          "text"
+        ],
         "properties": {
-          "guardrail_name": { "type": "string", "description": "Name of the guardrail (as configured in litellm_settings.guardrails)" },
-          "text": { "type": "string", "description": "Text to run through the guardrail" },
-          "language": { "type": "string", "description": "ISO language code for language-specific guardrails" },
-          "entities": { "type": "array", "items": { "type": "string" }, "description": "Entity types to detect (e.g. PERSON, EMAIL, PHONE_NUMBER)" }
+          "guardrail_name": {
+            "type": "string",
+            "description": "Name of the guardrail (as configured in litellm_settings.guardrails)"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text to run through the guardrail"
+          },
+          "language": {
+            "type": "string",
+            "description": "ISO language code for language-specific guardrails"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Entity types to detect (e.g. PERSON, EMAIL, PHONE_NUMBER)"
+          }
         }
       },
       "OCRRequest": {
         "type": "object",
-        "required": ["model", "document"],
+        "required": [
+          "model",
+          "document"
+        ],
         "properties": {
-          "model": { "type": "string", "example": "mistral/mistral-ocr-latest", "description": "OCR model to use" },
+          "model": {
+            "type": "string",
+            "example": "mistral/mistral-ocr-latest",
+            "description": "OCR model to use"
+          },
           "document": {
             "type": "object",
             "description": "Document to extract text from",
             "properties": {
-              "type": { "type": "string", "enum": ["document_url", "image_url", "base64"] },
-              "url": { "type": "string", "description": "URL of the document or image" },
-              "data": { "type": "string", "description": "Base64-encoded document data" },
-              "media_type": { "type": "string", "description": "MIME type (e.g. application/pdf, image/png)" }
+              "type": {
+                "type": "string",
+                "enum": [
+                  "document_url",
+                  "image_url",
+                  "base64"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "description": "URL of the document or image"
+              },
+              "data": {
+                "type": "string",
+                "description": "Base64-encoded document data"
+              },
+              "media_type": {
+                "type": "string",
+                "description": "MIME type (e.g. application/pdf, image/png)"
+              }
             }
           },
-          "pages": { "type": "array", "items": { "type": "integer" }, "description": "Specific page numbers to process (1-indexed)" },
-          "include_image_base64": { "type": "boolean", "default": false, "description": "Include extracted image data in response" },
-          "image_limit": { "type": "integer", "description": "Maximum number of images to extract per page" },
-          "image_min_size": { "type": "integer", "description": "Minimum image size in pixels to extract" }
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Specific page numbers to process (1-indexed)"
+          },
+          "include_image_base64": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include extracted image data in response"
+          },
+          "image_limit": {
+            "type": "integer",
+            "description": "Maximum number of images to extract per page"
+          },
+          "image_min_size": {
+            "type": "integer",
+            "description": "Minimum image size in pixels to extract"
+          }
         }
       },
       "OCRResponse": {
         "type": "object",
         "properties": {
-          "object": { "type": "string", "example": "ocr" },
-          "model": { "type": "string" },
+          "object": {
+            "type": "string",
+            "example": "ocr"
+          },
+          "model": {
+            "type": "string"
+          },
           "pages": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "index": { "type": "integer", "description": "Page number (1-indexed)" },
-                "markdown": { "type": "string", "description": "Extracted text as Markdown" },
+                "index": {
+                  "type": "integer",
+                  "description": "Page number (1-indexed)"
+                },
+                "markdown": {
+                  "type": "string",
+                  "description": "Extracted text as Markdown"
+                },
                 "dimensions": {
                   "type": "object",
                   "properties": {
-                    "width": { "type": "number" },
-                    "height": { "type": "number" },
-                    "dpi": { "type": "integer" }
+                    "width": {
+                      "type": "number"
+                    },
+                    "height": {
+                      "type": "number"
+                    },
+                    "dpi": {
+                      "type": "integer"
+                    }
                   }
                 },
-                "images": { "type": "array", "items": { "type": "object" }, "description": "Extracted images (if include_image_base64=true)" }
+                "images": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "Extracted images (if include_image_base64=true)"
+                }
               }
             }
           },
           "usage_info": {
             "type": "object",
             "properties": {
-              "pages_processed": { "type": "integer" },
-              "doc_size_bytes": { "type": "integer" }
+              "pages_processed": {
+                "type": "integer"
+              },
+              "doc_size_bytes": {
+                "type": "integer"
+              }
             }
           }
         }

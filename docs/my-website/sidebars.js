@@ -18,11 +18,6 @@ const sidebars = {
     { type: "doc", id: "integrations/index" },
     { type: "doc", id: "integrations/community" },
     {
-      type: "doc",
-      id: "integrations/websearch_interception",
-      label: "Web Search Integration"
-    },
-    {
       type: "category",
       label: "Observability",
       items: [
@@ -1130,6 +1125,7 @@ const learnSidebar = {
             "providers/anthropic_tool_search",
             "guides/code_interpreter",
             "proxy/veo_video_generation",
+            "integrations/websearch_interception",
           ],
         },
         {
