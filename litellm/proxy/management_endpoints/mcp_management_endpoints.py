@@ -1361,18 +1361,19 @@ if MCP_AVAILABLE:
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
-        client_id: str = Form(...),
+        client_id: Optional[str] = Form(None),
         client_secret: Optional[str] = Form(None),
         code_verifier: Optional[str] = Form(None),
     ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        resolved_client_id = mcp_server.client_id or client_id or ""
         return await exchange_token_with_server(
             request=request,
             mcp_server=mcp_server,
             grant_type=grant_type,
             code=code,
             redirect_uri=redirect_uri,
-            client_id=client_id,
+            client_id=resolved_client_id,
             client_secret=client_secret,
             code_verifier=code_verifier,
         )
