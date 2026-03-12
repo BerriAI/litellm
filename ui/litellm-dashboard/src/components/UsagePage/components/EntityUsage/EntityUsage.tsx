@@ -465,7 +465,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
           <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-          {entityType === "team" && <Tab>Agent Activity</Tab>}
+          {entityType === "team" ? <Tab>Agent Activity</Tab> : null}
           <Tab>Key Activity</Tab>
           <Tab>Endpoint Activity</Tab>
         </TabList>
