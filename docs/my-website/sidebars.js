@@ -669,6 +669,7 @@ const sidebars = {
         "rag_ingest",
         "rag_query",
         "realtime",
+        "proxy/realtime_webrtc",
         "rerank",
         "response_api",
         "response_api_compact",
