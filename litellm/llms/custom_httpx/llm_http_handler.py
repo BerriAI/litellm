@@ -7932,10 +7932,7 @@ class BaseLLMHTTPHandler:
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
             from litellm.utils import add_openai_metadata
-
-            request_body["metadata"] = add_openai_metadata(
-                cast(Optional[Dict[str, Any]], request_body["metadata"])
-            )
+            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
         
         if extra_body:
             request_body.update(extra_body)
@@ -8017,10 +8014,7 @@ class BaseLLMHTTPHandler:
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
             from litellm.utils import add_openai_metadata
-
-            request_body["metadata"] = add_openai_metadata(
-                cast(Optional[Dict[str, Any]], request_body["metadata"])
-            )
+            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
         
         if extra_body:
             request_body.update(extra_body)
