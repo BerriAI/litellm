@@ -403,12 +403,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             data=create_file_data,
         )
 
-        # If s3_region_name is set and aws_region_name is not, propagate it so
-        # SigV4 signing uses the correct region (e.g. GovCloud us-gov-west-1).
+        # s3_region_name always wins for S3 operations (same priority as in
+        # get_complete_file_url above). Overwrite aws_region_name unconditionally
+        # so the SigV4 region matches the URL region, avoiding SignatureDoesNotMatch.
         s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
             "s3_region_name"
         )
-        if s3_region_name and not optional_params.get("aws_region_name"):
+        if s3_region_name:
             optional_params = {**optional_params, "aws_region_name": s3_region_name}
 
         # Sign the request and return a pre-signed request object
