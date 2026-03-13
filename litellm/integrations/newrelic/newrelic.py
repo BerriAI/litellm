@@ -585,6 +585,13 @@ class NewRelicLogger(CustomLogger):
                 if message.get("is_response"):
                     event_data["is_response"] = True
 
+                # Forward actual request/response timestamp (ms) so NR uses the
+                # real LLM call window rather than the async-logger fire time.
+                # Requires newrelic>=11.2.0 which reads params["timestamp"] as
+                # the intrinsic event timestamp.
+                if "timestamp" in message:
+                    event_data["timestamp"] = message["timestamp"]
+
                 if app and app.enabled:
                     app.record_custom_event("LlmChatCompletionMessage", event_data)
 
