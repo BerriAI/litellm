@@ -324,18 +324,15 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
-def test_gpt5_normalizes_reasoning_effort_dict_to_string(config: OpenAIConfig):
-    """Chat completion API expects reasoning_effort as a string, not a dict.
-
-    Config/deployments may pass Responses API format: {'effort': 'high', 'summary': 'detailed'}.
-    """
+def test_gpt5_normalizes_reasoning_effort_dict_with_summary(config: OpenAIConfig):
+    """Dict with summary/generate_summary is normalized for chat completions."""
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
         optional_params={},
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == {"effort": "high", "summary": "detailed"}
+    assert params["reasoning_effort"] == "high"
 
 
 def test_gpt5_xhigh_dict_triggers_validation(config: OpenAIConfig):
@@ -361,7 +358,7 @@ def test_gpt5_xhigh_dict_accepted_for_supported_model(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == {"effort": "xhigh", "summary": "detailed"}
+    assert params["reasoning_effort"] == "xhigh"
 
 
 def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
@@ -377,7 +374,7 @@ def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert params["reasoning_effort"] == "none"
     assert params["tools"] == tools
 
 
@@ -397,13 +394,13 @@ def test_gpt5_none_dict_with_sampling_params_allowed(config: OpenAIConfig):
         model="gpt-5.1",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert params["reasoning_effort"] == "none"
     assert params["logprobs"] is True
     assert params["top_p"] == 0.9
 
 
-def test_gpt5_preserves_reasoning_effort_dict_with_summary_from_optional_params(config: OpenAIConfig):
-    """reasoning_effort dict with summary in optional_params is preserved."""
+def test_gpt5_normalizes_reasoning_effort_dict_with_summary_from_optional_params(config: OpenAIConfig):
+    """reasoning_effort dict with summary in optional_params is normalized."""
     params = config.map_openai_params(
         non_default_params={},
         optional_params={"reasoning_effort": {"effort": "medium", "summary": "detailed"}},

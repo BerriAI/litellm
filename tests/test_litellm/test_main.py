@@ -678,6 +678,43 @@ def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat()
     assert model_info.get("mode") != "responses"
 
 
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
+    mock_responses_completion,
+):
+    """When routed to Responses, preserve reasoning_effort summary dict."""
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    litellm.completion(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_capital",
+                    "description": "Get the capital of a country",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"country": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        reasoning_effort={"effort": "xhigh", "summary": "detailed"},
+        api_key="fake-key",
+    )
+
+    assert mock_responses_completion.called is True
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params["reasoning_effort"] == {
+        "effort": "xhigh",
+        "summary": "detailed",
+    }
+
+
 def test_responses_api_bridge_check_handles_exception():
     """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
     from litellm.main import responses_api_bridge_check
