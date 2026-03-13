@@ -2813,6 +2813,43 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         ):
             saved_token["expires"] = saved_token["expires"].isoformat()
         if prisma_client is not None:
+            # When user_email is explicitly provided during key generation,
+            # look up or create the user record so the key can link to it.
+            # Note: a narrow race window exists where concurrent requests with
+            # the same user_email could create duplicate user records, since
+            # user_email has no unique constraint in LiteLLM_UserTable.
+            # insert_data uses upsert on user_id, which prevents duplicate
+            # keys but not duplicate emails. A schema-level @@unique
+            # constraint on user_email would fully close this gap.
+            if user_email is not None and table_name == "key":
+                existing_users = await prisma_client.get_data(
+                    table_name="user",
+                    query_type="find_all",
+                    key_val={"user_email": {"equals": user_email, "mode": "insensitive"}},
+                )
+                existing_user = existing_users[0] if existing_users else None
+                if existing_user is not None:
+                    if user_data.get("user_id") and user_data["user_id"] != existing_user.user_id:
+                        verbose_proxy_logger.warning(
+                            "user_email=%s matched existing user_id=%s, "
+                            "overriding caller-supplied user_id=%s",
+                            user_email,
+                            existing_user.user_id,
+                            user_data["user_id"],
+                        )
+                    # Reuse existing user's ID — don't update their record
+                    user_data["user_id"] = existing_user.user_id
+                    key_data["user_id"] = existing_user.user_id
+                else:
+                    # Create a new user record
+                    if not user_data.get("user_id"):
+                        generated_user_id = str(uuid.uuid4())
+                        user_data["user_id"] = generated_user_id
+                        key_data["user_id"] = generated_user_id
+                    await prisma_client.insert_data(
+                        data=user_data, table_name="user"
+                    )
+
             if (
                 table_name is None or table_name == "user"
             ):  # do not auto-create users for `/key/generate`
