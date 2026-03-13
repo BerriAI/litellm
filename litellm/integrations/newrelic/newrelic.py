@@ -304,8 +304,8 @@ class NewRelicLogger(CustomLogger):
         Returns:
             Tuple of (request_model, response_model)
         """
-        request_model: str = str(kwargs.get("model", "unknown"))
-        response_model: str = str(response_obj.get("model", request_model))
+        request_model: str = str(kwargs.get("model") or "unknown")
+        response_model: str = str(response_obj.get("model") or request_model)
         return request_model, response_model
 
     def _extract_usage(self, response_obj: ModelResponse) -> Dict[str, int]:

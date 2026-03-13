@@ -312,7 +312,74 @@ class TestExtractAllMessagesTimestamps:
 
 
 # ---------------------------------------------------------------------------
-# 6. Helper edge cases
+# 6. Explicit-None defensive tests
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitNoneValues:
+    """Verify that explicitly None values in kwargs/response don't raise or silently drop events."""
+
+    def setup_method(self):
+        self.logger = make_logger()
+
+    # _get_trace_context — chained dict lookups
+    def test_trace_context_litellm_params_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = None
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None  # falls back to UUID
+
+    def test_trace_context_metadata_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = {"metadata": None}
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+
+    def test_trace_context_headers_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = {"metadata": {"headers": None}}
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+
+    # _get_request_params
+    def test_request_params_optional_params_none(self):
+        assert self.logger._get_request_params({"optional_params": None}) == {}
+
+    # _get_model_names
+    def test_model_names_model_none_in_kwargs(self):
+        request_model, _ = self.logger._get_model_names({"model": None}, make_response())
+        assert request_model == "unknown"
+
+    def test_model_names_model_none_in_response(self):
+        response = make_response()
+        response["model"] = None
+        _, response_model = self.logger._get_model_names(make_kwargs(), response)
+        assert response_model == "gpt-4"  # falls back to request_model from kwargs
+
+    # _extract_all_messages
+    def test_extract_messages_messages_none(self):
+        kwargs = make_kwargs()
+        kwargs["messages"] = None
+        response = make_response()
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+        # No request messages, but response message should still be extracted
+        assert any(m.get("is_response") for m in messages)
+
+    def test_extract_messages_choices_none(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_response()
+        response["choices"] = None
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+        # No response messages, but request message should still be extracted
+        assert any(not m.get("is_response") for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# 7. Helper edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -389,7 +456,7 @@ class TestGetRequestParams:
 
 
 # ---------------------------------------------------------------------------
-# 7. _process_success — comprehensive happy-path
+# 8. _process_success — comprehensive happy-path
 # ---------------------------------------------------------------------------
 
 
@@ -457,7 +524,7 @@ class TestProcessSuccess:
 
 
 # ---------------------------------------------------------------------------
-# 8. _record_error_metric
+# 9. _record_error_metric
 # ---------------------------------------------------------------------------
 
 
@@ -496,7 +563,7 @@ class TestRecordErrorMetric:
 
 
 # ---------------------------------------------------------------------------
-# 9. _emit_supportability_metric
+# 10. _emit_supportability_metric
 # ---------------------------------------------------------------------------
 
 
@@ -539,7 +606,7 @@ class TestEmitSupportabilityMetric:
 
 
 # ---------------------------------------------------------------------------
-# 10. _check_and_emit_periodic_metric
+# 11. _check_and_emit_periodic_metric
 # ---------------------------------------------------------------------------
 
 
