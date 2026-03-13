@@ -125,3 +125,34 @@ class TestHuggingFaceEmbedding:
         assert "sentences" in request_data["inputs"]
         assert request_data["inputs"]["source_sentence"] == input_text[0]
         assert request_data["inputs"]["sentences"] == input_text[1:]
+
+    def test_extra_headers_forwarded_to_handler(self):
+        """extra_headers passed to litellm.embedding() should reach the HTTP post call."""
+        input_text = ["hello world"]
+
+        litellm.embedding(
+            model=self.model,
+            input=input_text,
+            input_type="embed",
+            extra_headers={"X-HF-Bill-To": "my-org"},
+        )
+
+        self.mock_http.assert_called_once()
+        call_kwargs = self.mock_http.call_args
+        sent_headers = call_kwargs[1].get("headers", {})
+        assert sent_headers.get("X-HF-Bill-To") == "my-org"
+
+    def test_no_extra_headers_uses_defaults(self):
+        """When no extra_headers are provided, default headers should not include custom ones."""
+        input_text = ["hello world"]
+
+        litellm.embedding(
+            model=self.model,
+            input=input_text,
+            input_type="embed",
+        )
+
+        self.mock_http.assert_called_once()
+        call_kwargs = self.mock_http.call_args
+        sent_headers = call_kwargs[1].get("headers", {})
+        assert "X-HF-Bill-To" not in sent_headers
