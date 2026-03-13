@@ -905,9 +905,11 @@ async def _check_team_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"team_id": team_table.team_id},
     )
-    # Exclude the key being updated to avoid double-counting its limits
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
     if isinstance(data, UpdateKeyRequest):
-        keys = [key for key in keys if key.token != data.key]
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
         keys=keys,
         team_table=team_table,
@@ -1062,9 +1064,11 @@ async def _check_org_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"organization_id": org_table.organization_id},
     )
-    # Exclude the key being updated to avoid double-counting its limits
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
     if isinstance(data, UpdateKeyRequest):
-        keys = [key for key in keys if key.token != data.key]
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
         keys=keys,
         org_table=org_table,
@@ -1932,11 +1936,14 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        # Only check team limits if key has a team_id
+        # Check team limits if key has a team_id (from request or existing key)
         team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
-        if data.team_id is not None:
+        _team_id_to_check = data.team_id or getattr(
+            existing_key_row, "team_id", None
+        )
+        if _team_id_to_check is not None:
             team_obj = await get_team_object(
-                team_id=data.team_id,
+                team_id=_team_id_to_check,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 check_db_only=True,
@@ -1971,6 +1978,8 @@ async def update_key_fn(
             data.organization_id is not None
             or data.tpm_limit is not None
             or data.rpm_limit is not None
+            or data.tpm_limit_type is not None
+            or data.rpm_limit_type is not None
         )
         if _org_id_to_check is not None and _throughput_fields_changed:
             org_table = await get_org_object(
