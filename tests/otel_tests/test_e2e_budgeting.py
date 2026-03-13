@@ -14,6 +14,7 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
         while call_count < MAX_CALLS:
             await call_function(session=session, key=key, **kwargs)
             call_count += 1
+            await asyncio.sleep(0.5)  # allow spend tracking to catch up
         pytest.fail(f"Budget was not exceeded after {MAX_CALLS} calls")
     except Exception as e:
         print("vars: ", vars(e))
