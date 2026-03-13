@@ -1234,7 +1234,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
         """
         Process streaming response chunks to unmask PII tokens when needed.
         """
@@ -1242,7 +1242,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async for chunk in self._stream_apply_output_masking(
                 response, request_data
             ):
-                yield cast(ModelResponseStream, chunk)
+                yield chunk
             return
 
         metadata = (request_data.get("metadata") or {}) if request_data else {}
@@ -1257,7 +1257,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         async for chunk in self._stream_pii_unmasking(response, request_data):
-            yield cast(ModelResponseStream, chunk)
+            yield chunk
 
     @staticmethod
     def _preserve_usage_from_last_chunk(
