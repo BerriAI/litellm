@@ -22,11 +22,9 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import Request, Response
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
 
@@ -1342,9 +1340,9 @@ def _make_background_streaming_kwargs(
         polling_id=polling_id,
         data={"model": "gpt-4o", "stream": False, "background": True},
         polling_handler=polling_handler,
-        request=Mock(spec=Request),
-        fastapi_response=Mock(spec=Response),
-        user_api_key_dict=Mock(spec=UserAPIKeyAuth),
+        request=Mock(),
+        fastapi_response=Mock(),
+        user_api_key_dict=Mock(),
         general_settings={},
         llm_router=None,
         proxy_config=Mock(),
