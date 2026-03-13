@@ -57,6 +57,18 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));
 
+// Mock useOrganizations hook
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      {
+        organization_id: "org-1",
+        organization_alias: "Test Organization",
+      },
+    ],
+  }),
+}));
+
 // Mock fetchTeams to prevent network calls
 vi.mock("@/app/(dashboard)/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/(dashboard)/networking")>();
@@ -125,6 +137,7 @@ const mockKey: KeyResponse = {
   user: {
     user_email: "user@example.com",
     user_id: "user-1",
+    user_alias: null,
   },
 };
 
@@ -380,7 +393,7 @@ it("should render table headers correctly", () => {
   // Check that main headers are rendered (testing the header.isPlaceholder condition path)
   expect(screen.getByText("Key ID")).toBeInTheDocument();
   expect(screen.getByText("Key Alias")).toBeInTheDocument();
-  expect(screen.getByText("Team Alias")).toBeInTheDocument();
+  expect(screen.getByText("Team")).toBeInTheDocument();
   expect(screen.getByText("Models")).toBeInTheDocument();
   expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
 });
@@ -463,6 +476,8 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
   const keyWithDefaultUserId = {
     ...mockKey,
     user_id: "default_user_id",
+    user_email: "",
+    user: { user_id: "default_user_id", user_email: "", user_alias: null },
   };
 
   mockUseFilterLogic.mockReturnValue({
@@ -539,6 +554,94 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
   });
 });
 
+
+it("should display created_by_user email in 'Created By' column when available", async () => {
+  const keyWithCreatedByUser = {
+    ...mockKey,
+    created_by: "some-uuid-1234",
+    created_by_user: {
+      user_id: "some-uuid-1234",
+      user_email: "creator@example.com",
+      user_alias: null,
+    },
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("creator@example.com")).toBeInTheDocument();
+  });
+});
+
+it("should display created_by_user alias over email when both available", async () => {
+  const keyWithCreatedByUser = {
+    ...mockKey,
+    created_by: "some-uuid-1234",
+    created_by_user: {
+      user_id: "some-uuid-1234",
+      user_email: "creator@example.com",
+      user_alias: "The Creator",
+    },
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("The Creator")).toBeInTheDocument();
+  });
+});
 
 it("should render table without crashing when models is null", async () => {
   const keyWithNullModels = {

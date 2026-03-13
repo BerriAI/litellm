@@ -1,3 +1,30 @@
+/** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
+export interface MCPEvent {
+  type: string;
+  sequence_number?: number;
+  output_index?: number;
+  item_id?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    server_label?: string;
+    tools?: Array<{
+      name: string;
+      description: string;
+      annotations?: {
+        read_only?: boolean;
+      };
+      input_schema?: unknown;
+    }>;
+    name?: string;
+    arguments?: string;
+    output?: string;
+  };
+  delta?: string;
+  arguments?: string;
+  timestamp?: number;
+}
+
 export interface Team {
   team_id: string;
   team_alias?: string;
@@ -12,6 +39,7 @@ export const AUTH_TYPE = {
   TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
+  AWS_SIGV4: "aws_sigv4",
 };
 
 export const OAUTH_FLOW = {
@@ -185,6 +213,16 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+
+  /** GitHub / source repository URL */
+  source_url?: string | null;
+
+  /** BYOM (Bring Your Own MCP) submission fields */
+  approval_status?: "active" | "pending_review" | "rejected" | null;
+  submitted_by?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
+  review_notes?: string | null;
 }
 
 export interface MCPServerProps {
@@ -211,4 +249,12 @@ export interface DiscoverableMCPServer {
 export interface DiscoverMCPServersResponse {
   servers: DiscoverableMCPServer[];
   categories: string[];
+}
+
+export interface MCPSubmissionsSummary {
+  total: number;
+  pending_review: number;
+  active: number;
+  rejected: number;
+  items: MCPServer[];
 }
