@@ -23,7 +23,6 @@ from litellm.types.utils import LlmProviders
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-
     def get_supported_openai_params(self, model: str) -> list:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
@@ -55,21 +54,28 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         return headers
 
     def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
+        api_base = (
+            api_base
+            or get_secret_str("PERPLEXITY_API_BASE")
+            or "https://api.perplexity.ai"
+        )
         return f"{api_base.rstrip('/')}/v1/responses"
 
     def _ensure_message_type(
         self, input: Union[str, ResponseInputParam]
-    ) -> Union[str, List[Dict[str, Any]]]:
+    ) -> Union[str, ResponseInputParam]:
         """Ensure list input items have type='message' (required by Perplexity)."""
         if isinstance(input, str):
             return input
         if isinstance(input, list):
-            result = []
+            result: List[Any] = []
             for item in input:
                 if isinstance(item, dict) and "type" not in item:
-                    item = {**item, "type": "message"}
-                result.append(item)
+                    new_item = dict(item)  # convert to plain dict to avoid TypedDict checking
+                    new_item["type"] = "message"
+                    result.append(new_item)
+                else:
+                    result.append(item)
             return result
         return input
 
@@ -86,7 +92,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         if model.startswith("preset/"):
             input = self._validate_input_param(input)
             data: Dict = {
-                "preset": model[len("preset/"):],
+                "preset": model[len("preset/") :],
                 "input": input,
             }
             data.update(response_api_optional_request_params)
