@@ -49,7 +49,7 @@ export function clearTokenCookies() {
     // sessionStorage may be unavailable
   }
 
-  console.log("After clearing cookies:", document.cookie);
+}
 }
 
 /**
