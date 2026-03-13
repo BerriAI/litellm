@@ -31,7 +31,12 @@ else:
 
 from ..credentials import get_token_creator
 from .models import ResponseFormatJSONSchema, ResponseFormat, OrchestrationRequest
-from .handler import GenAIHubOrchestrationError, AsyncSAPStreamIterator, SAPStreamIterator
+from .handler import (
+    GenAIHubOrchestrationError,
+    AsyncSAPStreamIterator,
+    SAPStreamIterator,
+)
+
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
@@ -227,7 +232,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             resp_type = response_format.get("type", None)
             if resp_type:
                 if resp_type == "json_schema":
-                    response_format = validate_dict(response_format, ResponseFormatJSONSchema)
+                    response_format = validate_dict(
+                        response_format, ResponseFormatJSONSchema
+                    )
                 else:
                     response_format = validate_dict(response_format, ResponseFormat)
                 response_format = {"response_format": response_format}
@@ -235,7 +242,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 response_format = {}
 
             placeholder_defaults = params.pop("placeholder_defaults", {})
-            placeholder_defaults = {"defaults": placeholder_defaults} if placeholder_defaults else {}
+            placeholder_defaults = (
+                {"defaults": placeholder_defaults} if placeholder_defaults else {}
+            )
 
             optional_modules = {}
             optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
@@ -272,7 +281,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 stream_config["delimiters"] = stream_options.get("delimiters")
 
         placeholder_values = optional_params.pop("placeholder_values", {})
-        placeholder_values = {"placeholder_values": placeholder_values} if placeholder_values else {}
+        placeholder_values = (
+            {"placeholder_values": placeholder_values} if placeholder_values else {}
+        )
 
         fallback_modules = optional_params.pop("fallback_sap_modules", [])
 
@@ -311,7 +322,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         request_body = {
             "config": {
                 "modules": modules_payload,
-                **({"stream": stream_config} if stream_config else {})
+                **({"stream": stream_config} if stream_config else {}),
             },
             **placeholder_values,
         }
