@@ -196,7 +196,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     const startTime = new Date(dateValue.from);
     const endTime = new Date(dateValue.to);
     try {
-      const data = await agentDailyActivityCall(accessToken, startTime, endTime, 1, null);
+      const data = await fetchAllPages((page) =>
+        agentDailyActivityCall(accessToken, startTime, endTime, page, null),
+      );
       setAgentSpendData(data);
     } catch (e) {
       console.error("Failed to fetch agent activity data:", e);
