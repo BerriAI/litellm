@@ -64,6 +64,10 @@ def map_finish_reason(
     # anthropic mapping
     if finish_reason == "stop_sequence":
         return "stop"
+    # Some providers/models return `content_filtered` for safety-blocked responses.
+    # Normalize to the OpenAI-compatible `content_filter`.
+    elif finish_reason == "content_filtered":
+        return "content_filter"
     # cohere mapping - https://docs.cohere.com/reference/generate
     elif finish_reason == "COMPLETE":
         return "stop"
