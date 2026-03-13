@@ -396,8 +396,9 @@ class TestProcessSuccess:
 class TestRecordErrorMetric:
     def test_calls_record_custom_metric(self):
         logger = make_logger()
+        mock_app = MagicMock()
 
-        with patch("newrelic.agent.record_custom_metric") as mock_metric:
+        with patch("newrelic.agent.application", return_value=mock_app):
             logger._record_error_metric()
 
-        mock_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
+        mock_app.record_custom_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
