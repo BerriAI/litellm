@@ -168,7 +168,7 @@ def get_llm_provider(  # noqa: PLR0915
         # Native OpenRouter models (openrouter/auto, openrouter/free, etc.)
         # have no "/" after the prefix — keep them intact.
         if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
-            stripped = model[len("openrouter/"):]
+            stripped = model[len("openrouter/") :]
             if "/" in stripped:
                 # Non-native: e.g. "anthropic/claude-..." — strip prefix
                 model = stripped
