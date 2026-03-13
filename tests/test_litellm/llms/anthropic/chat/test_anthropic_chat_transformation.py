@@ -3321,3 +3321,118 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+# ============ Service Tier Tests ============
+
+
+def test_get_supported_params_includes_service_tier():
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "service_tier" in params
+
+
+def test_map_openai_params_forwards_service_tier_auto():
+    config = AnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"service_tier": "auto"},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert optional_params["service_tier"] == "auto"
+
+
+def test_map_openai_params_forwards_service_tier_standard_only():
+    config = AnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"service_tier": "standard_only"},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    assert optional_params["service_tier"] == "standard_only"
+
+
+def test_service_tier_included_in_request_body():
+    """service_tier should appear as a top-level field in the Anthropic request body."""
+    config = AnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"service_tier": "auto"},
+        optional_params={},
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+    data = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert data["service_tier"] == "auto"
+
+
+def test_service_tier_extracted_from_response():
+    """service_tier from the Anthropic response should be set on model_response."""
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    config = AnthropicConfig()
+    mock_raw = MagicMock(spec=httpx.Response)
+    mock_raw.headers = {"request-id": "req-123"}
+    mock_raw.status_code = 200
+
+    completion_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "service_tier": "standard",
+    }
+
+    import litellm
+
+    model_response = litellm.ModelResponse()
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=mock_raw,
+        model_response=model_response,
+    )
+    assert result.service_tier == "standard"
+
+
+def test_service_tier_absent_from_response():
+    """When service_tier is not in the response, model_response.service_tier stays None."""
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    config = AnthropicConfig()
+    mock_raw = MagicMock(spec=httpx.Response)
+    mock_raw.headers = {"request-id": "req-456"}
+    mock_raw.status_code = 200
+
+    completion_response = {
+        "id": "msg_456",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hi"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 5, "output_tokens": 2},
+    }
+
+    import litellm
+
+    model_response = litellm.ModelResponse()
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=mock_raw,
+        model_response=model_response,
+    )
+    assert getattr(result, "service_tier", None) is None

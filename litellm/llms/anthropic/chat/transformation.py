@@ -194,6 +194,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "speed",
             "context_management",
             "cache_control",
+            "service_tier",
         ]
 
         if (
@@ -1065,8 +1066,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
             elif param == "cache_control" and isinstance(value, dict):
-                # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
+            elif param == "service_tier" and isinstance(value, str):
+                optional_params["service_tier"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -1789,6 +1791,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
+
+        response_service_tier = completion_response.get("service_tier")
+        if isinstance(response_service_tier, str):
+            model_response.service_tier = response_service_tier
 
         model_response._hidden_params = _hidden_params
         return model_response
