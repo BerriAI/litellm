@@ -234,7 +234,6 @@ class NewRelicLogger(CustomLogger):
 
         For the trace ID, we look in kwargs for:
         - litellm_params.metadata.headers.traceparent (W3C Trace Context)
-        - litellm_params.metadata.headers.newrelic (New Relic proprietary)
 
         If no trace_id is found in headers, generates a random UUID for event grouping.
 
