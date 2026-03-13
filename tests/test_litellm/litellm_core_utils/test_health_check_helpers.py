@@ -83,6 +83,49 @@ def test_get_litellm_internal_health_check_user_api_key_auth():
 
 
 @pytest.mark.asyncio
+async def test_get_mode_handlers_image_generation_uses_default_prompt_when_none():
+    """Health check image_generation handler should fall back to a default prompt when none is provided."""
+    with patch("litellm.aimage_generation", new_callable=AsyncMock) as mock_aimage_generation, patch(
+        "litellm.litellm_core_utils.health_check_utils._filter_model_params",
+        return_value={"model": "gpt-image-1"},
+    ):
+        handlers = HealthCheckHelpers.get_mode_handlers(
+            model="gpt-image-1",
+            custom_llm_provider="openai",
+            model_params={"model": "gpt-image-1"},
+            prompt=None,
+        )
+
+        await handlers["image_generation"]()
+
+        mock_aimage_generation.assert_awaited_once()
+        _, kwargs = mock_aimage_generation.call_args
+        assert kwargs["prompt"] == "test image generation"
+
+
+@pytest.mark.asyncio
+async def test_get_mode_handlers_image_generation_respects_custom_prompt():
+    """Health check image_generation handler should use the caller-provided prompt when set."""
+    with patch("litellm.aimage_generation", new_callable=AsyncMock) as mock_aimage_generation, patch(
+        "litellm.litellm_core_utils.health_check_utils._filter_model_params",
+        return_value={"model": "gpt-image-1"},
+    ):
+        custom_prompt = "my custom image prompt"
+        handlers = HealthCheckHelpers.get_mode_handlers(
+            model="gpt-image-1",
+            custom_llm_provider="openai",
+            model_params={"model": "gpt-image-1"},
+            prompt=custom_prompt,
+        )
+
+        await handlers["image_generation"]()
+
+        mock_aimage_generation.assert_awaited_once()
+        _, kwargs = mock_aimage_generation.call_args
+        assert kwargs["prompt"] == custom_prompt
+
+
+@pytest.mark.asyncio
 async def test_ahealth_check_failure_masks_raw_request_headers():
     """
     Security test: Verify that when ahealth_check() fails, the raw_request_headers
