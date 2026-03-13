@@ -5063,18 +5063,22 @@ class StandardLoggingPayloadSetup:
         user_agent_tags: Optional[List[str]] = None
         headers = proxy_server_request.get("headers", {})
         if headers is not None and isinstance(headers, dict):
-            if "user-agent" in headers:
-                user_agent = headers["user-agent"]
+            # Check for case-insensitive "user-agent" header key
+            user_agent = None
+            for key in headers:
+                if key.lower() == "user-agent":
+                    user_agent = headers[key]
+                    break
+            if user_agent is not None:
+                if user_agent_tags is None:
+                    user_agent_tags = []
+                user_agent_part: Optional[str] = None
+                if "/" in user_agent:
+                    user_agent_part = user_agent.split("/")[0]
+                if user_agent_part is not None:
+                    user_agent_tags.append("User-Agent: " + user_agent_part)
                 if user_agent is not None:
-                    if user_agent_tags is None:
-                        user_agent_tags = []
-                    user_agent_part: Optional[str] = None
-                    if "/" in user_agent:
-                        user_agent_part = user_agent.split("/")[0]
-                    if user_agent_part is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent_part)
-                    if user_agent is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent)
+                    user_agent_tags.append("User-Agent: " + user_agent)
         return user_agent_tags
 
     @staticmethod
