@@ -2068,11 +2068,9 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        normalized_route = normalize_route_for_root_path(route)
-        if normalized_route is not None:
-            for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-                if normalized_route.startswith(mapped_route):
-                    return True
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if route.startswith(mapped_route):
+                return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"

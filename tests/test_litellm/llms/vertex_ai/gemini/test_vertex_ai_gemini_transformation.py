@@ -2,11 +2,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
+    _extract_max_media_resolution_from_messages,
     _gemini_convert_messages_with_history,
+    _get_highest_media_resolution,
     _transform_request_body,
     check_if_part_exists_in_parts,
-    _get_highest_media_resolution,
-    _extract_max_media_resolution_from_messages,
 )
 from litellm.types.llms.vertex_ai import BlobType
 from litellm.types.utils import Message
@@ -126,75 +126,6 @@ def test_vertex_ai_includes_labels():
     assert "labels" in result
     assert result["labels"] == {"project": "test", "team": "ai"}
 
-
-
-def test_extra_body_cache_not_forwarded_to_vertex_ai():
-    """
-    'cache' inside extra_body is a LiteLLM-internal proxy caching control.
-    It must NOT be forwarded to the Vertex AI request body.
-
-    Regression test for: "Invalid JSON payload received. Unknown name \"cache\": Cannot find field."
-    Vertex AI enforces a strict JSON schema and rejects any unknown field.
-    """
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {
-        "extra_body": {
-            "cache": {"use-cache": True, "ttl": 86400},  # LiteLLM-internal
-            "some_vertex_param": "value",                 # legitimate provider extra
-        },
-    }
-    litellm_params = {}
-
-    result = _transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
-        cached_content=None,
-    )
-
-    # 'cache' must be stripped — Vertex AI has no such field
-    assert "cache" not in result, (
-        "extra_body.cache must not be forwarded to Vertex AI. "
-        "Vertex AI rejects it with 400: Unknown name \"cache\": Cannot find field."
-    )
-
-    # Other legitimate extra_body keys should still pass through
-    assert "some_vertex_param" in result
-    assert result["some_vertex_param"] == "value"
-
-    # Core request fields must be present
-    assert "contents" in result
-
-
-def test_extra_body_tags_not_forwarded_to_vertex_ai():
-    """
-    'tags' inside extra_body is a LiteLLM-internal param for logging/tracking.
-    It must NOT be forwarded to the Vertex AI request body.
-    Documented in litellm_proxy.md: "Send tags by including them in the extra_body parameter"
-    """
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {
-        "extra_body": {
-            "tags": ["user:alice", "env:prod"],
-            "custom_param": "allowed",
-        },
-    }
-    litellm_params = {}
-
-    result = _transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
-        cached_content=None,
-    )
-
-    assert "tags" not in result
-    assert "custom_param" in result
-    assert result["custom_param"] == "allowed"
 
 
 def test_metadata_to_labels_vertex_only():

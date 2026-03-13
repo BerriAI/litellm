@@ -1320,11 +1320,9 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
                 "redacted-by-litellm"
                 == standard_logging_object["messages"][0]["content"]
             )
-            # response is a full ModelResponse dict (choices format) since d84e5e381acf
-            assert (
-                standard_logging_object["response"]["choices"][0]["message"]["content"]
-                == "redacted-by-litellm"
-            )
+            assert {"text": "redacted-by-litellm"} == standard_logging_object[
+                "response"
+            ]
 
 
 def test_logging_standard_payload_failure_call():

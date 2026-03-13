@@ -8,8 +8,10 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    safe_divide_seconds,
+)
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -498,22 +500,20 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
             # get average latency or average ttft (depending on streaming/non-streaming)
             total: float = 0.0
-            use_ttft = (
+            if (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
-            )
-            if use_ttft:
+            ):
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-                item_latency = total / len(item_ttft_latency)
             else:
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-                item_latency = total / len(item_latency)
+            item_latency = total / len(item_latency)
 
             # -------------- #
             # Debugging Logic
