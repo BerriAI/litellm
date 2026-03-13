@@ -1,7 +1,7 @@
 ---
 title: Release Notes
 sidebar_label: Overview
-slug: /release_notes
+slug: /
 ---
 
 # Release Notes

@@ -1125,7 +1125,6 @@ const learnSidebar = {
             "providers/anthropic_tool_search",
             "guides/code_interpreter",
             "proxy/veo_video_generation",
-            "integrations/websearch_interception",
           ],
         },
         {
