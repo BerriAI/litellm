@@ -2380,6 +2380,7 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2390,7 +2391,7 @@ async def make_call(
 
     try:
         response = await client.post(
-            api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj
+            api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj, timeout=timeout
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -2565,6 +2566,7 @@ class VertexLLM(VertexBase):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="vertex_ai_beta",
