@@ -1657,7 +1657,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "aresponses",
                 "anthropic_messages",
             ):
-                model_info = _get_model_info_from_litellm_params(
+                model_info = get_model_info_from_litellm_params(
                     self.model_call_details.get("litellm_params", {}) or {}
                 )
                 router_model_id = model_info.get("id")
@@ -1967,7 +1967,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     "_aresponses_websocket",
                     "anthropic_messages",
                 ):
-                    model_info = _get_model_info_from_litellm_params(
+                    model_info = get_model_info_from_litellm_params(
                         self.model_call_details.get("litellm_params", {}) or {}
                     )
                     router_model_id = model_info.get("id")
@@ -2504,7 +2504,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         "anthropic_messages",
                     ):
                         # base_model defaults to None if not set on model_info
-                        model_info = _get_model_info_from_litellm_params(
+                        model_info = get_model_info_from_litellm_params(
                             self.model_call_details.get("litellm_params", {}) or {}
                         )
                         router_model_id = model_info.get("id")
@@ -4471,12 +4471,6 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
     return {}
 
 
-def _get_model_info_from_litellm_params(
-    litellm_params: Optional[dict],
-) -> Dict[str, Any]:
-    return get_model_info_from_litellm_params(litellm_params)
-
-
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     """
     Check if the model uses custom pricing
@@ -4493,7 +4487,7 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
             return True
 
     # Check model_info in all supported locations.
-    model_info = _get_model_info_from_litellm_params(litellm_params)
+    model_info = get_model_info_from_litellm_params(litellm_params)
     if model_info:
         matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
         for key in matching_keys:

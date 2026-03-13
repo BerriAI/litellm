@@ -150,8 +150,8 @@ def test_use_custom_pricing_for_model():
 
 
 def test_get_model_info_from_litellm_params_preserves_explicit_empty_metadata():
-    from litellm.litellm_core_utils.litellm_logging import (
-        _get_model_info_from_litellm_params,
+    from litellm.litellm_core_utils.core_helpers import (
+        get_model_info_from_litellm_params,
     )
 
     litellm_params = {
@@ -160,7 +160,7 @@ def test_get_model_info_from_litellm_params_preserves_explicit_empty_metadata():
         "litellm_metadata": {"model_info": {"id": "router"}},
     }
 
-    assert _get_model_info_from_litellm_params(litellm_params) == {}
+    assert get_model_info_from_litellm_params(litellm_params) == {}
 
 
 def test_merge_metadata_preserving_deployment_model_info_keeps_router_model_info():

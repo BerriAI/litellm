@@ -98,8 +98,9 @@ def _make_router_with_custom_pricing(backend_model: str, api_key: str = "fake-ke
 
 @pytest.fixture(autouse=True)
 def cleanup_model_cost():
-    """Remove test deployment entries from litellm.model_cost between tests."""
+    """Remove callback and pricing state between tests."""
     yield
+    litellm.callbacks = []
     litellm.model_cost.pop(DEPLOYMENT_MODEL_ID, None)
 
 
