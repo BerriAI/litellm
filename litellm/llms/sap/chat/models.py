@@ -24,6 +24,7 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
     raise ValueError("Content must be a string")
 
 
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
@@ -121,9 +122,6 @@ class SAPToolChatMessage(BaseModel):
     _content_validator = field_validator("content", mode="before")(
         validate_different_content
     )
-
-
-ChatMessage = Union[SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage, SAPMessage]
 
 
 class ResponseFormat(BaseModel):

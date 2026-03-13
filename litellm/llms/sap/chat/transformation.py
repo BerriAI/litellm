@@ -277,7 +277,40 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         template = messages
 
-        optional_params.pop("stream", False)
+        model_params = {
+            k: v for k, v in optional_params.items() if k not in excluded_params
+        }
+
+        model_version = optional_params.pop("model_version", "latest")
+        template = []
+        for message in messages:
+            if message["role"] == "user":
+                template.append(validate_dict(message, SAPUserMessage))
+            elif message["role"] == "assistant":
+                template.append(validate_dict(message, SAPAssistantMessage))
+            elif message["role"] == "tool":
+                template.append(validate_dict(message, SAPToolChatMessage))
+            else:
+                template.append(validate_dict(message, SAPMessage))
+
+        tools_ = optional_params.pop("tools", [])
+        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+        if tools_ != []:
+            tools = {"tools": tools_}
+        else:
+            tools = {}
+
+        response_format = model_params.pop("response_format", {})
+        resp_type = response_format.get("type", None)
+        if resp_type:
+            if resp_type == "json_schema":
+                response_format = validate_dict(
+                    response_format, ResponseFormatJSONSchema
+                )
+            else:
+                response_format = validate_dict(response_format, ResponseFormat)
+            response_format = {"response_format": response_format}
+        model_params.pop("stream", False)
         stream_config = {}
         if "stream_options" in optional_params:
             stream_options = optional_params.pop("stream_options", {})
@@ -329,10 +362,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         request_body = {
             "config": {
-                "modules": modules_payload,
-                **({"stream": stream_config} if stream_config else {}),
-            },
-            **placeholder_values,
+                "modules": {
+                    "prompt_templating": {
+                        "prompt": {"template": template, **tools, **response_format},
+                        "model": {
+                            "name": model,
+                            "params": model_params,
+                            "version": model_version,
+                        },
+                    },
+                },
+                "stream": stream_config,
+            }
         }
 
         body = validate_dict(request_body, OrchestrationRequest)

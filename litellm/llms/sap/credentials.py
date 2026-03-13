@@ -61,6 +61,7 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
 
+
 def _str_or_none(value) -> Optional[str]:
     try:
         return str(value) if value is not None else None
@@ -79,10 +80,12 @@ def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
                 return svc
     return None
 
+
 @dataclass
 class Source:
     name: str
     get: Callable[[CredentialsValue], Optional[str]]
+
 
 @dataclass(frozen=True)
 class CredentialsValue:
@@ -124,6 +127,7 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         "key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")
     ),
 ]
+
 
 def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -167,6 +171,7 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
+
 def extract_credentials(source: Source) -> Dict[str, str]:
     """Extract all credentials from a source."""
     credentials = {}
@@ -175,6 +180,7 @@ def extract_credentials(source: Source) -> Dict[str, str]:
         if value is not None:
             credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
     return credentials
+
 
 def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
     """Extract credentials from the first source that has any defined."""
@@ -185,23 +191,30 @@ def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
             return credentials
     raise ValueError("No credentials found in any source")
 
+
 def resolve_resource_group(sources: List[Source]) -> Optional[str]:
     """Find resource_group from the first source that defines it."""
     rg_cred = CredentialsValue("resource_group", default="default")
     for source in sources:
         value = source.get(rg_cred)
         if value is not None:
-            verbose_logger.debug(f"Resolved GEN AI Hub resource_group from source {source.name}")
+            verbose_logger.debug(
+                f"Resolved GEN AI Hub resource_group from source {source.name}"
+            )
             return value
     return rg_cred.default
 
+
 def _function_to_resolve_cv_from_service_key(
-        service_key: Optional[Union[str, dict]], cv: CredentialsValue):
+    service_key: Optional[Union[str, dict]], cv: CredentialsValue
+):
     if service_key is None:
         return None
     val = _str_or_none(
-        _get_nested(service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
+        _get_nested(
+            service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)
         )
+    )
     if val is None:
         return _str_or_none(
             _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
@@ -209,8 +222,11 @@ def _function_to_resolve_cv_from_service_key(
     return val
 
 
-
-def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
+def fetch_credentials(
+    service_key: Optional[Union[str, dict]] = None,
+    profile: Optional[str] = None,
+    **kwargs,
+) -> Dict[str, str]:
     """
     Resolution order (first-source-wins):
 
@@ -228,25 +244,42 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
     """
     config = init_conf(profile)
 
-    service_key = service_key or litellm.sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    service_key = (
+        service_key or litellm.sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    )
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     sources = [
-        Source("kwargs",
-               lambda cv: _str_or_none(kwargs.get(cv.name))),
-        Source("service key",
-               lambda cv: _function_to_resolve_cv_from_service_key(service_key, cv)), # type: ignore[arg-type]
-        Source("environment variables",
-               lambda cv: _str_or_none(os.environ.get(f'AICORE_{cv.name.upper()}'))),
-        Source("config file",
-               lambda cv: _str_or_none(config.get(f'AICORE_{cv.name.upper()}')
-                                       if config.get(f'AICORE_{cv.name.upper()}') is not None
-                                       else config.get(cv.name))),
-        Source("VCAP service",
-               lambda cv: (_str_or_none(
-                   _get_nested(vcap_service, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,))
-               )
-               if vcap_service else None)), # type: ignore[arg-type]
+        Source("kwargs", lambda cv: _str_or_none(kwargs.get(cv.name))),
+        Source(
+            "service key",
+            lambda cv: _function_to_resolve_cv_from_service_key(service_key, cv),
+        ),  # type: ignore[arg-type]
+        Source(
+            "environment variables",
+            lambda cv: _str_or_none(os.environ.get(f"AICORE_{cv.name.upper()}")),
+        ),
+        Source(
+            "config file",
+            lambda cv: _str_or_none(
+                config.get(f"AICORE_{cv.name.upper()}")
+                if config.get(f"AICORE_{cv.name.upper()}") is not None
+                else config.get(cv.name)
+            ),
+        ),
+        Source(
+            "VCAP service",
+            lambda cv: (
+                _str_or_none(
+                    _get_nested(
+                        vcap_service,
+                        (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,),
+                    )
+                )
+                if vcap_service
+                else None
+            ),
+        ),  # type: ignore[arg-type]
     ]
 
     credentials = resolve_credentials(sources)
@@ -254,21 +287,22 @@ def fetch_credentials(service_key: Optional[Union[str, dict]] = None, profile: O
     resource_group = resolve_resource_group(sources)
 
     if resource_group is not None:
-        credentials['resource_group'] = resource_group
+        credentials["resource_group"] = resource_group
 
-    if 'cert_url' in credentials:
-        credentials['auth_url'] = credentials.pop('cert_url')
+    if "cert_url" in credentials:
+        credentials["auth_url"] = credentials.pop("cert_url")
     return credentials
 
+
 def validate_credentials(
-        auth_url: Optional[str] = None,
-        base_url: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        cert_str: Optional[str] = None,
-        key_str: Optional[str] = None,
-        cert_file_path: Optional[str] = None,
-        key_file_path: Optional[str] = None
+    auth_url: Optional[str] = None,
+    base_url: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    cert_str: Optional[str] = None,
+    key_str: Optional[str] = None,
+    cert_file_path: Optional[str] = None,
+    key_file_path: Optional[str] = None,
 ):
     if not auth_url or not client_id or not base_url:
         raise ValueError(
@@ -289,7 +323,10 @@ def validate_credentials(
             "(cert_str & key_str), or (cert_file_path & key_file_path)."
         )
 
-def _request_token(client_id:str, auth_url: str, timeout:float, cert_pair=None, client_secret=None) -> tuple[str, datetime]:
+
+def _request_token(
+    client_id: str, auth_url: str, timeout: float, cert_pair=None, client_secret=None
+) -> tuple[str, datetime]:
     data = {"grant_type": "client_credentials", "client_id": client_id}
     if client_secret:
         data["client_secret"] = client_secret
@@ -312,6 +349,7 @@ def _request_token(client_id:str, auth_url: str, timeout:float, cert_pair=None, 
     except Exception as e:
         msg = resp.text if resp is not None else getattr(e, "text", str(e))
         raise RuntimeError(f"Token request failed: {msg}") from e
+
 
 def get_token_creator(
     service_key: Optional[Union[str, dict]] = None,
@@ -341,7 +379,9 @@ def get_token_creator(
     """
 
     # Resolve credentials using your helper
-    credentials: Dict[str, str] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
+    credentials: Dict[str, str] = fetch_credentials(
+        service_key=service_key, profile=profile, **overrides
+    )
 
     auth_url = credentials.get("auth_url")
     base_url = credentials.get("base_url")
@@ -353,7 +393,16 @@ def get_token_creator(
     key_file_path = credentials.get("key_file_path")
 
     # Sanity check
-    validate_credentials(auth_url, base_url, client_id, client_secret, cert_str, key_str, cert_file_path, key_file_path)
+    validate_credentials(
+        auth_url,
+        base_url,
+        client_id,
+        client_secret,
+        cert_str,
+        key_str,
+        cert_file_path,
+        key_file_path,
+    )
 
     lock = Lock()
     token: Optional[str] = None
@@ -362,7 +411,12 @@ def get_token_creator(
     def _fetch_token() -> tuple[str, datetime]:
         # Case 1: secret-based auth
         if client_secret:
-            return _request_token(auth_url=auth_url, client_id=client_id, timeout=timeout, client_secret=client_secret)
+            return _request_token(
+                auth_url=auth_url,
+                client_id=client_id,
+                timeout=timeout,
+                client_secret=client_secret,
+            )
         # Case 2: cert/key strings
         if cert_str and key_str:
             cert_str_fixed = cert_str.replace("\\n", "\n")
@@ -374,11 +428,19 @@ def get_token_creator(
                     f.write(cert_str_fixed)
                 with open(key_path, "w") as f:
                     f.write(key_str_fixed)
-                return _request_token(auth_url=auth_url, client_id=client_id, timeout=timeout,
-                                      cert_pair=(cert_path, key_path))
+                return _request_token(
+                    auth_url=auth_url,
+                    client_id=client_id,
+                    timeout=timeout,
+                    cert_pair=(cert_path, key_path),
+                )
         # Case 3: file-based cert/key
-        return _request_token(auth_url=auth_url, client_id=client_id, timeout=timeout,
-                              cert_pair=(cert_file_path, key_file_path))
+        return _request_token(
+            auth_url=auth_url,
+            client_id=client_id,
+            timeout=timeout,
+            cert_pair=(cert_file_path, key_file_path),
+        )
 
     def get_token() -> str:
         nonlocal token, token_expiry
