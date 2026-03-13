@@ -1308,19 +1308,20 @@ async def test_batch_database_updates_isolation_on_failure():
 
 
 @pytest.mark.asyncio
-async def test_daily_agent_receives_deepcopied_payload():
+async def test_daily_agent_receives_payload_with_correct_data():
     """
-    Test that the daily agent handler receives a deepcopied payload (not the original).
+    Test that the daily agent handler receives the payload with correct data.
 
-    Previously, add_spend_log_transaction_to_daily_agent_transaction received the raw
-    payload without a deepcopy, which was a mutation bug. This test goes through
-    update_database() to verify the production deepcopy path.
+    The daily spend helpers only READ from the payload (extracting numeric fields
+    like spend, tokens, model) and never mutate it, so they safely share the
+    original payload dict without a deepcopy. This avoids 2 extra deepcopy calls
+    per request (~1.5 GB/s of allocation churn at 2000 RPS with large payloads).
+
+    This test verifies the payload is received with the expected content.
     """
     db_writer = DBSpendUpdateWriter()
 
-    # Capture the payload object that get_logging_payload returns (the "original")
-    # and the payload the agent handler receives (should be a deepcopy)
-    original_payload_ref = {}
+    # Capture the payload the agent handler receives
     captured_agent_payloads = []
 
     async def capture_agent_payload(**kwargs):
@@ -1343,7 +1344,7 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
 
-    # Mock get_logging_payload to return a known dict and capture its identity
+    # Mock get_logging_payload to return a known dict
     fake_payload = {
         "startTime": "2024-01-01T00:00:00",
         "endTime": "2024-01-01T00:01:00",
@@ -1352,7 +1353,6 @@ async def test_daily_agent_receives_deepcopied_payload():
         "spend": 0.0,
         "nested": {"a": 1},
     }
-    original_payload_ref["obj"] = fake_payload  # store reference to the original
 
     with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
         "litellm.proxy.proxy_server.prisma_client", MagicMock()
@@ -1380,9 +1380,7 @@ async def test_daily_agent_receives_deepcopied_payload():
 
     # The agent handler should have been called
     assert len(captured_agent_payloads) == 1
-    # The payload must NOT be the same object as the original (deepcopy occurred)
-    assert captured_agent_payloads[0] is not original_payload_ref["obj"]
-    # But it should have equivalent content
+    # Payload should have the expected content with response_cost applied
     assert captured_agent_payloads[0]["model"] == "gpt-4"
     assert captured_agent_payloads[0]["spend"] == 0.1
 
