@@ -2367,6 +2367,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            # Release large per-request data to reduce memory pressure.
+            self._cleanup_after_logging()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2710,6 +2713,41 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._handle_callback_failure(callback=callback)
                 pass
 
+        # Release large per-request data to reduce memory pressure.
+        self._cleanup_after_logging()
+
+    def _cleanup_after_logging(self) -> None:
+        """Release large per-request objects after all logging callbacks have completed.
+
+        The Logging object may outlive its usefulness (e.g., held by an async task
+        reference or a streaming iterator). Clearing these fields eagerly allows GC
+        to reclaim the memory sooner, preventing monotonic RSS growth under sustained
+        traffic.
+
+        Called at the end of success_handler, async_success_handler, failure_handler,
+        and async_failure_handler.
+        """
+        # Clear streaming chunk accumulators
+        self.streaming_chunks.clear()
+        self.sync_streaming_chunks.clear()
+        # Release the message payload reference
+        self.messages = None
+        # Remove large per-request data from model_call_details
+        if hasattr(self, "model_call_details"):
+            _keys_to_clear = [
+                "httpx_response",  # full httpx.Response with connection state
+                "original_response",  # full response text
+                "input",  # full input messages (duplicate of 'messages')
+                "additional_args",  # contains complete_input_dict
+                "standard_logging_object",  # large StandardLoggingPayload
+                "complete_streaming_response",  # assembled streaming response
+                "async_complete_streaming_response",  # async assembled streaming response
+                "complete_response",  # complete response object
+                "raw_request_typed_dict",  # raw request data for logging
+            ]
+            for key in _keys_to_clear:
+                self.model_call_details.pop(key, None)
+
     def _handle_callback_failure(self, callback: Any):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
@@ -3005,6 +3043,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
+        finally:
+            # Release large per-request data to reduce memory pressure.
+            self._cleanup_after_logging()
 
     async def async_failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -3069,6 +3110,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+
+        # Release large per-request data to reduce memory pressure.
+        self._cleanup_after_logging()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
