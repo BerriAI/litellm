@@ -792,18 +792,22 @@ Unit tests for router set_cooldowns
 
 
 def test_router_fallbacks_with_cooldowns_and_model_id():
+    """
+    Test that after a RateLimitError, the router can still route subsequent
+    requests to the same deployment (i.e., mock errors don't permanently
+    cool down the deployment).
+    """
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 2},
+                "litellm_params": {"model": "gpt-3.5-turbo"},
                 "model_info": {
                     "id": "123",
                 },
             }
         ],
         routing_strategy="usage-based-routing-v2",
-        fallbacks=[{"gpt-3.5-turbo": ["123"]}],
     )
 
     ## trigger ratelimit
@@ -816,11 +820,13 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
     except litellm.RateLimitError:
         pass
 
-    router.completion(
+    ## subsequent request should still succeed
+    response = router.completion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hello",
     )
+    assert response is not None
 
 
 @pytest.mark.asyncio()
