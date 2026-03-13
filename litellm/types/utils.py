@@ -1663,7 +1663,7 @@ class StreamingChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = None
+            self.finish_reason = None  # type: ignore[assignment]
         self.index = index
         if delta is not None:
             if isinstance(delta, Delta):

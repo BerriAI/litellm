@@ -282,6 +282,10 @@ class TestBlackForestLabsImageGenerationTransformation:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=self.logging_obj,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
         )
 
         assert len(result.data) == 1
@@ -306,6 +310,10 @@ class TestBlackForestLabsImageGenerationTransformation:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=self.logging_obj,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
         )
 
         assert len(result.data) == 2
@@ -329,6 +337,10 @@ class TestBlackForestLabsImageGenerationTransformation:
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=self.logging_obj,
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
             )
 
     def test_get_error_class(self):

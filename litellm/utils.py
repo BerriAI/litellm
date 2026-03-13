@@ -8141,6 +8141,8 @@ class ProviderConfigManager:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
 
+        return None
+
     @staticmethod
     def get_provider_embedding_config(
         model: str,
