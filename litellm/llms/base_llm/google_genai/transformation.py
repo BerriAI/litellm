@@ -152,7 +152,6 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         contents: GenerateContentContentListUnionDict,
         tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
-        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> dict:
         """
@@ -162,7 +161,6 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             model: The model name
             contents: Input contents
             tools: Tools
-            tool_config: Tool configuration
             generate_content_config_dict: Generation config parameters
             system_instruction: Optional system instruction
 
