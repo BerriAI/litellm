@@ -13,6 +13,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
@@ -552,6 +553,58 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
     guardrail.logging_hook.assert_called_once()
     assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
 
+def test_process_hidden_params_and_response_cost_uses_router_model_id_for_aresponses(
+    logging_obj,
+):
+    logging_obj.stream = False
+    logging_obj.call_type = "aresponses"
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"model_info": {"id": "deployment-custom-pricing-test"}}
+    }
+
+    response = ResponsesAPIResponse(
+        id="resp_test",
+        object="response",
+        created_at=1741476542,
+        status="completed",
+        model="gpt-4o",
+        output=[],
+        parallel_tool_calls=True,
+        usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        text={"format": {"type": "text"}},
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": None, "summary": None},
+        truncation="disabled",
+        user=None,
+    )
+
+    logging_obj._response_cost_calculator = MagicMock(return_value=123.0)
+    logging_obj._build_standard_logging_payload = MagicMock(return_value={})
+
+    import datetime
+
+    start_time = datetime.datetime.now()
+    end_time = datetime.datetime.now()
+
+    logging_obj._process_hidden_params_and_response_cost(
+        logging_result=response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    logging_obj._response_cost_calculator.assert_called_once()
+    assert logging_obj._response_cost_calculator.call_args.kwargs["router_model_id"] == (
+        "deployment-custom-pricing-test"
+    )
 
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
