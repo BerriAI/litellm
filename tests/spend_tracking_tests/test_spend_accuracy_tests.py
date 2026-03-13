@@ -2,6 +2,7 @@ import pytest
 import asyncio
 import aiohttp
 import json
+import time
 from httpx import AsyncClient
 from typing import Any, Optional
 from litellm._uuid import uuid
@@ -113,6 +114,24 @@ async def get_spend_info(session, entity_type: str, entity_id: str):
         return await response.json()
 
 
+async def poll_key_spend_until_nonzero(
+    session, key: str, timeout: int = 120, interval: int = 10
+):
+    """Poll key spend until it becomes non-zero or timeout is reached."""
+    start = time.time()
+    while time.time() - start < timeout:
+        key_info = await get_spend_info(session, "key", key)
+        spend = key_info["info"]["spend"]
+        if spend > 0:
+            print(f"Key spend became non-zero ({spend}) after {time.time() - start:.1f}s")
+            return
+        print(f"Key spend still 0.0, waiting... ({time.time() - start:.1f}s elapsed)")
+        await asyncio.sleep(interval)
+    raise TimeoutError(
+        f"Key spend remained 0.0 after {timeout}s — batch writer may not be running"
+    )
+
+
 @pytest.mark.asyncio
 async def test_basic_spend_accuracy():
     """
@@ -156,8 +175,11 @@ async def test_basic_spend_accuracy():
             response = await chat_completion(session, key)
             print("response: ", response)
 
-        # wait for spend to be updated (batch writes can take a while)
-        await asyncio.sleep(45)
+        # Poll until batch writer has flushed spend (up to 120s)
+        await poll_key_spend_until_nonzero(session, key, timeout=120, interval=10)
+
+        # Allow extra time for all entity spend aggregations to complete
+        await asyncio.sleep(5)
 
         # Get spend information for each entity
         key_info = await get_spend_info(session, "key", key)
@@ -234,8 +256,8 @@ async def test_long_term_spend_accuracy_with_bursts():
             response = await chat_completion(session, key)
             print(f"Burst 1 - Request {i+1}/{BURST_1_REQUESTS} completed")
 
-        # Wait for spend to be updated
-        await asyncio.sleep(30)
+        # Poll until batch writer has flushed burst 1 spend
+        await poll_key_spend_until_nonzero(session, key, timeout=120, interval=10)
 
         # Check intermediate spend
         intermediate_key_info = await get_spend_info(session, "key", key)
@@ -247,8 +269,20 @@ async def test_long_term_spend_accuracy_with_bursts():
             response = await chat_completion(session, key)
             print(f"Burst 2 - Request {i+1}/{BURST_2_REQUESTS} completed")
 
-        # Wait for spend to be updated
-        await asyncio.sleep(30)
+        # Poll until key spend reflects burst 2 (spend should increase beyond burst 1)
+        burst_1_spend = intermediate_key_info["info"]["spend"]
+        start = time.time()
+        while time.time() - start < 120:
+            key_info_check = await get_spend_info(session, "key", key)
+            current_spend = key_info_check["info"]["spend"]
+            if current_spend > burst_1_spend:
+                print(f"Key spend increased to {current_spend} after {time.time() - start:.1f}s")
+                break
+            print(f"Key spend still {current_spend}, waiting for burst 2 flush...")
+            await asyncio.sleep(10)
+
+        # Allow extra time for all entity spend aggregations
+        await asyncio.sleep(5)
 
         # Get final spend information for each entity
         key_info = await get_spend_info(session, "key", key)
