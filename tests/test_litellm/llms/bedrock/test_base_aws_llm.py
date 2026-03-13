@@ -1556,6 +1556,9 @@ def test_sign_request_with_none_header_values():
 
     This reproduces the Bedrock KB GovCloud issue where SigV4 signing failed
     with 'NoneType' object has no attribute 'split'.
+
+    Also verifies that None-valued headers are NOT re-merged into the
+    returned headers dict (which would cause downstream HTTP client failures).
     """
     llm = BaseAWSLLM()
 
@@ -1564,6 +1567,7 @@ def test_sign_request_with_none_header_values():
     headers_with_nones = {
         "Content-Type": "application/json",
         "x-amzn-trace-id": None,
+        "x-forwarded-for": None,
     }
 
     with patch.object(
@@ -1585,6 +1589,12 @@ def test_sign_request_with_none_header_values():
 
         assert "Authorization" in result_headers
         assert result_body is not None
+
+        # None-valued headers must NOT appear in the returned headers
+        for header_name, header_value in result_headers.items():
+            assert header_value is not None, (
+                f"Header '{header_name}' has None value in returned headers"
+            )
 
 
 def test_is_already_running_as_role_ssl_verify_passed():
