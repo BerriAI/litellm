@@ -615,6 +615,79 @@ def test_streaming_handler_with_stop_chunk(
     assert returned_chunk is None
 
 
+def test_finish_reason_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444:
+    Preserve upstream non-OpenAI attributes on final finish_reason chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        created=1742093326,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
+def test_finish_reason_with_holding_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444 holding-chunk path:
+    preserve custom attributes when _is_delta_empty is False after flushing
+    holding_chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.holding_chunk = "filtered text"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test-2",
+        created=1742093327,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert returned_chunk.choices[0].delta.content == "filtered text"
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
 def test_set_response_id_propagation_empty_to_valid(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
