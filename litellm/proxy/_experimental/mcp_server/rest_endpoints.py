@@ -1,6 +1,6 @@
 import importlib
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -905,7 +905,7 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
-            _oauth2_flow = (
+            _oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = (
                 "client_credentials"
                 if client_id and client_secret and request.token_url
                 else None

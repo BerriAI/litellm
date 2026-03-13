@@ -1234,9 +1234,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:  # type: ignore[override]
         """
         Process streaming response chunks to unmask PII tokens when needed.
+
+        Note: the return type includes `bytes` because Anthropic native SSE
+        streaming sends raw bytes chunks that pass through untransformed.
+        The base class declares ModelResponseStream only.
         """
         if self.apply_to_output:
             async for chunk in self._stream_apply_output_masking(
