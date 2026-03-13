@@ -35,8 +35,6 @@ export type UserInfo = {
   spend: number;
 };
 
-
-
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
