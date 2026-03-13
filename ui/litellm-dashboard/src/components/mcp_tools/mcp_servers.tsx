@@ -29,8 +29,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
-  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -129,7 +128,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
       );
     }
-    setFilteredServers(filtered);
+    const sorted = [...filtered].sort((a, b) => {
+      if (!a.created_at && !b.created_at) return 0;
+      if (!a.created_at) return 1;
+      if (!b.created_at) return -1;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    });
+    setFilteredServers(sorted);
   }, [serversWithHealth]);
 
   // Handle team filter change
@@ -164,8 +169,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         handleDelete,
         isLoadingHealth,
         (server: MCPServer) => setByokModalServer(server),
+        recheckServerHealth,
+        recheckingServerIds,
       ),
-    [userRole, isLoadingHealth],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
   );
 
   function handleDelete(server_id: string) {
@@ -204,6 +211,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
     setModalVisible(false);
+    refetch();
   };
 
   // Memoize the selected server to prevent unnecessary re-renders

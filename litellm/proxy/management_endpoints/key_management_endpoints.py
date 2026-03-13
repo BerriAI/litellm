@@ -64,6 +64,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    validate_key_mcp_servers_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -126,7 +127,10 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
 
 
 def _set_key_rotation_fields(
-    data: dict, auto_rotate: bool, rotation_interval: Optional[str], existing_key_alias: Optional[str] = None
+    data: dict,
+    auto_rotate: bool,
+    rotation_interval: Optional[str],
+    existing_key_alias: Optional[str] = None,
 ) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
@@ -637,6 +641,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    # Validate MCP servers in object_permission are within team scope
+    await validate_key_mcp_servers_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1749,6 +1759,36 @@ async def _process_single_key_update(
     return updated_key_info
 
 
+async def _validate_mcp_servers_for_key_update(
+    data: "UpdateKeyRequest",
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    existing_key_row: Any,
+    prisma_client: Any,
+    user_api_key_cache: Any,
+) -> None:
+    """Validate MCP servers in object_permission against the effective team."""
+    effective_team_obj = team_obj
+    # If team_id isn't being changed, resolve the existing key's team
+    if effective_team_obj is None and existing_key_row.team_id:
+        effective_team_obj = await get_team_object(
+            team_id=existing_key_row.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+    object_permission_dict: Optional[dict] = None
+    if data.object_permission is not None:
+        object_permission_dict = (
+            data.object_permission.model_dump()
+            if hasattr(data.object_permission, "model_dump")
+            else dict(data.object_permission)  # type: ignore[arg-type]
+        )
+    await validate_key_mcp_servers_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+    )
+
+
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1946,6 +1986,16 @@ async def update_key_fn(
             )
 
             # Set Management Endpoint Metadata Fields
+
+        # Validate MCP servers in object_permission against the effective team
+        if data.object_permission is not None:
+            await _validate_mcp_servers_for_key_update(
+                data=data,
+                team_obj=team_obj,
+                existing_key_row=existing_key_row,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
@@ -3058,7 +3108,10 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
+    return {
+        "deleted_keys": deleted_tokens,
+        "failed_tokens": failed_tokens,
+    }, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3161,7 +3214,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3376,6 +3429,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3939,8 +3994,7 @@ def _get_member_team_ids_from_objects(
         team.team_id
         for team in team_objects
         if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
             for member in team.members_with_roles
         )
     ]
@@ -4223,9 +4277,7 @@ async def key_aliases(
 
         where_sql = " AND ".join(where_parts)
 
-        count_sql = (
-            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        )
+        count_sql = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
         count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
         total_count = int(count_rows[0]["count"]) if count_rows else 0
 
@@ -4240,7 +4292,9 @@ async def key_aliases(
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
         alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
-        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        aliases: List[str] = [
+            row["key_alias"] for row in alias_rows if row.get("key_alias")
+        ]
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
@@ -4552,9 +4606,11 @@ async def _list_key_helper(
     user_map = {}
     if expand and "user" in expand:
         user_ids = [key.user_id for key in keys if key.user_id]
-        if user_ids:
+        created_by_ids = [key.created_by for key in keys if key.created_by]
+        all_ids = list(set(user_ids + created_by_ids))  # Remove duplicates
+        if all_ids:
             users = await prisma_client.db.litellm_usertable.find_many(
-                where={"user_id": {"in": list(set(user_ids))}}  # Remove duplicates
+                where={"user_id": {"in": all_ids}}
             )
             user_map = {user.user_id: user for user in users}
 
@@ -4572,11 +4628,19 @@ async def _list_key_helper(
             key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
 
         # Include user information if expand includes "user"
-        if expand and "user" in expand and key.user_id and key.user_id in user_map:
-            try:
-                key_dict["user"] = user_map[key.user_id].model_dump()
-            except Exception:
-                key_dict["user"] = user_map[key.user_id].dict()
+        if expand and "user" in expand:
+            if key.user_id and key.user_id in user_map:
+                try:
+                    key_dict["user"] = user_map[key.user_id].model_dump()
+                except Exception:
+                    key_dict["user"] = user_map[key.user_id].dict()
+            if key.created_by and key.created_by in user_map:
+                created_by_user = user_map[key.created_by]
+                key_dict["created_by_user"] = {
+                    "user_id": created_by_user.user_id,
+                    "user_email": created_by_user.user_email,
+                    "user_alias": created_by_user.user_alias,
+                }
 
         if return_full_object is True or (expand and "user" in expand):
             if use_deleted_table:

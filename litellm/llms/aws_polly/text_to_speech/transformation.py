@@ -43,20 +43,20 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     # Voice name mappings from OpenAI voices to Polly voices
     VOICE_MAPPINGS = {
-        "alloy": "Joanna",      # US English female
-        "echo": "Matthew",      # US English male
-        "fable": "Amy",         # British English female
-        "onyx": "Brian",        # British English male
-        "nova": "Ivy",          # US English female (child)
-        "shimmer": "Kendra",    # US English female
+        "alloy": "Joanna",  # US English female
+        "echo": "Matthew",  # US English male
+        "fable": "Amy",  # British English female
+        "onyx": "Brian",  # British English male
+        "nova": "Ivy",  # US English female (child)
+        "shimmer": "Kendra",  # US English female
     }
 
     # Response format mappings from OpenAI to Polly
     FORMAT_MAPPINGS = {
         "mp3": "mp3",
         "opus": "ogg_vorbis",
-        "aac": "mp3",           # Polly doesn't support AAC, use MP3
-        "flac": "mp3",          # Polly doesn't support FLAC, use MP3
+        "aac": "mp3",  # Polly doesn't support AAC, use MP3
+        "flac": "mp3",  # Polly doesn't support FLAC, use MP3
         "wav": "pcm",
         "pcm": "pcm",
     }
@@ -92,9 +92,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             base_llm_http_handler: The BaseLLMHTTPHandler instance from main.py
         """
         # Get AWS region from kwargs or environment
-        aws_region_name = kwargs.get("aws_region_name") or self._get_aws_region_name_for_polly(
-            optional_params=optional_params
-        )
+        aws_region_name = kwargs.get(
+            "aws_region_name"
+        ) or self._get_aws_region_name_for_polly(optional_params=optional_params)
 
         # Convert voice to string if it's a dict
         voice_str: Optional[str] = None
@@ -263,7 +263,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
-            raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
+            raise ImportError(
+                "Missing boto3 to call AWS Polly. Run 'pip install boto3'."
+            )
 
         # Get AWS region
         aws_region_name = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
@@ -388,4 +390,3 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         return HttpxBinaryResponseContent(raw_response)
-

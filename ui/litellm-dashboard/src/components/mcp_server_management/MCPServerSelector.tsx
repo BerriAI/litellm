@@ -13,6 +13,7 @@ interface MCPServerSelectorProps {
   accessToken: string;
   placeholder?: string;
   disabled?: boolean;
+  teamId?: string | null;
 }
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
@@ -22,8 +23,9 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   accessToken,
   placeholder = "Select MCP servers",
   disabled = false,
+  teamId,
 }) => {
-  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers();
+  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
 
   const loading = serversLoading || groupsLoading;

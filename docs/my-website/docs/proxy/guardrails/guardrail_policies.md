@@ -12,17 +12,6 @@ Use policies to group guardrails and control which ones run for specific teams, 
 - Group guardrails into a single policy
 - Inherit from existing policies and override what you need
 
-## Policy types
-
-LiteLLM supports two ways to run guardrails in a policy:
-
-| Type | Description | Use when |
-|------|--------------|----------|
-| **Simple** | All guardrails run independently. If any fail, the request is blocked. | You want a flat list of guardrails with no conditional logic. |
-| **Pipeline (Flow Builder)** | Guardrails run sequentially with configurable ON PASS / ON FAIL actions per step. Supports fallbacks, retries, and escalation. | You need conditional execution (e.g., try strict filter first, fallback to permissive on failure). |
-
-For pipelines, see [Guardrail Pipeline Flow Builder](/docs/proxy/guardrails/guardrail_pipeline_flow_builder) for detailed documentation.
-
 ## Quick Start
 
 <Tabs>
@@ -320,6 +309,10 @@ Response:
 </TabItem>
 </Tabs>
 
+## Policy Flow Builder
+
+For conditional execution (e.g., run a second guardrail only if the first fails), use the [Policy Flow Builder](./policy_flow_builder) to define pipelines with per-step pass/fail actions.
+
 ## Config Reference
 
 ### `policies`
@@ -332,11 +325,9 @@ policies:
     guardrails:
       add: [...]
       remove: [...]
-    pipeline:           # Optional. Enables sequential, conditional execution.
-      mode: pre_call   # or post_call
-      steps: [...]
     condition:
       model: ...
+    pipeline: ...  # optional; see Policy Flow Builder
 ```
 
 | Field | Type | Description |
@@ -345,8 +336,8 @@ policies:
 | `inherit` | `string` | Optional. Parent policy to inherit guardrails from. |
 | `guardrails.add` | `list[string]` | Guardrails to enable. |
 | `guardrails.remove` | `list[string]` | Guardrails to disable (useful with inheritance). |
-| `pipeline` | `object` | Optional. Enables [Flow Builder](/docs/proxy/guardrails/guardrail_pipeline_flow_builder) — sequential execution with ON PASS/ON FAIL actions. |
 | `condition.model` | `string` or `list[string]` | Optional. Only apply when model matches. Supports regex. |
+| `pipeline` | `object` | Optional. Ordered guardrail execution with per-step actions. See [Policy Flow Builder](./policy_flow_builder). |
 
 ### `policy_attachments`
 
