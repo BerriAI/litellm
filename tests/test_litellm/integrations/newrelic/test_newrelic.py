@@ -19,6 +19,7 @@ sys.modules["newrelic.agent"] = _mock_newrelic_agent
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm.integrations.newrelic.newrelic as nr_module
 from litellm.integrations.newrelic.newrelic import NewRelicLogger
 
 
@@ -402,3 +403,99 @@ class TestRecordErrorMetric:
             logger._record_error_metric()
 
         mock_app.record_custom_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
+
+
+# ---------------------------------------------------------------------------
+# 9. _emit_supportability_metric
+# ---------------------------------------------------------------------------
+
+
+class TestEmitSupportabilityMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+        nr_module._last_metric_emission_time = 0.0
+
+    def test_records_metric_with_correct_name_and_value(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        with patch("newrelic.agent.application", return_value=mock_app):
+            with patch.object(self.logger, "_get_litellm_version", return_value="1.80.0"):
+                self.logger._emit_supportability_metric()
+        mock_app.record_custom_metric.assert_called_once_with(
+            "Supportability/Python/ML/LiteLLM/1.80.0", 1
+        )
+
+    def test_updates_last_emission_time(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        fake_now = 9_999_999.0
+        with patch("newrelic.agent.application", return_value=mock_app):
+            with patch("litellm.integrations.newrelic.newrelic.time.time", return_value=fake_now):
+                self.logger._emit_supportability_metric()
+        assert nr_module._last_metric_emission_time == fake_now
+
+    def test_skips_when_app_disabled(self):
+        mock_app = MagicMock()
+        mock_app.enabled = False
+        with patch("newrelic.agent.application", return_value=mock_app):
+            self.logger._emit_supportability_metric()
+        mock_app.record_custom_metric.assert_not_called()
+        assert nr_module._last_metric_emission_time == 0.0
+
+    def test_skips_when_no_app(self):
+        with patch("newrelic.agent.application", return_value=None):
+            self.logger._emit_supportability_metric()
+        assert nr_module._last_metric_emission_time == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 10. _check_and_emit_periodic_metric
+# ---------------------------------------------------------------------------
+
+
+class TestCheckAndEmitPeriodicMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+        nr_module._last_metric_emission_time = 0.0
+
+    def test_emits_on_first_call(self):
+        """_last_metric_emission_time starts at 0.0; any real time satisfies 27-hour window."""
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time", return_value=100_000.0
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
+
+    def test_does_not_re_emit_within_27_hours(self):
+        recent = 1_000_000.0
+        nr_module._last_metric_emission_time = recent
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=recent + 3600,  # 1 hour later
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_not_called()
+
+    def test_re_emits_after_27_hours(self):
+        old = 1_000_000.0
+        nr_module._last_metric_emission_time = old
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=old + 97201,  # 27 hours + 1 second
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
+
+    def test_boundary_exactly_27_hours_triggers_emission(self):
+        old = 1_000_000.0
+        nr_module._last_metric_emission_time = old
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=old + 97200,
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
