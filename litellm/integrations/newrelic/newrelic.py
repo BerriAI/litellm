@@ -102,6 +102,7 @@ class NewRelicLogger(CustomLogger):
             # Validate that newrelic package is available
             try:
                 import newrelic.agent
+
                 newrelic.agent.register_application()
 
                 self.enabled = True
@@ -151,7 +152,8 @@ class NewRelicLogger(CustomLogger):
         """
         try:
             from importlib.metadata import version
-            return version('litellm')
+
+            return version("litellm")
         except Exception as e:
             verbose_logger.warning(f"Unable to determine litellm version: {e}")
             return "unknown"
@@ -171,6 +173,7 @@ class NewRelicLogger(CustomLogger):
 
         try:
             import newrelic.agent
+
             litellm_version = self._get_litellm_version()
             metric_name = f"Supportability/Python/ML/LiteLLM/{litellm_version}"
 
@@ -187,8 +190,9 @@ class NewRelicLogger(CustomLogger):
                     f"Emitted New Relic supportability metric: {metric_name}"
                 )
             else:
-                verbose_logger.info("New Relic application is not enabled; skipping metric recording.")
-
+                verbose_logger.info(
+                    "New Relic application is not enabled; skipping metric recording."
+                )
 
         except Exception as e:
             verbose_logger.warning(f"Failed to emit supportability metric: {e}")
@@ -292,7 +296,9 @@ class NewRelicLogger(CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         return litellm_params.get("custom_llm_provider", "litellm")
 
-    def _get_model_names(self, kwargs: Dict, response_obj: ModelResponse) -> Tuple[str, str]:
+    def _get_model_names(
+        self, kwargs: Dict, response_obj: ModelResponse
+    ) -> Tuple[str, str]:
         """
         Extract request and response model names.
 
@@ -307,16 +313,12 @@ class NewRelicLogger(CustomLogger):
         """Extract usage statistics from response."""
         usage = response_obj.get("usage", None)
         if not usage:
-            return {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0
-            }
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         return {
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0)
+            "total_tokens": usage.get("total_tokens", 0),
         }
 
     def _get_finish_reason(self, response_obj: ModelResponse) -> str:
@@ -330,7 +332,9 @@ class NewRelicLogger(CustomLogger):
             return choices[0].get("finish_reason", "unknown")
         return "unknown"
 
-    def _get_duration(self, kwargs: Dict, start_time: Optional[float], end_time: Optional[float]) -> Optional[float]:
+    def _get_duration(
+        self, kwargs: Dict, start_time: Optional[float], end_time: Optional[float]
+    ) -> Optional[float]:
         """
         Extract duration in milliseconds.
 
@@ -405,7 +409,7 @@ class NewRelicLogger(CustomLogger):
         kwargs: Dict,
         response_obj: ModelResponse,
         response_model: str,
-        vendor: str
+        vendor: str,
     ) -> List[Dict[str, Any]]:
         """
         Extract all messages (request + response) with sequence numbers and timestamps.
@@ -428,13 +432,13 @@ class NewRelicLogger(CustomLogger):
                 "role": msg.get("role", "user"),
                 "sequence": sequence,
                 "response.model": response_model,
-                "vendor": vendor
+                "vendor": vendor,
             }
 
             # Add timestamp for request message if available (convert to milliseconds)
             if start_time is not None:
                 # Handle both datetime objects and float timestamps
-                if hasattr(start_time, 'timestamp'):
+                if hasattr(start_time, "timestamp"):
                     message_data["timestamp"] = int(start_time.timestamp() * 1000.0)
                 else:
                     message_data["timestamp"] = int(start_time * 1000.0)
@@ -457,14 +461,16 @@ class NewRelicLogger(CustomLogger):
                         "sequence": sequence,
                         "response.model": response_model,
                         "vendor": vendor,
-                        "is_response": True
+                        "is_response": True,
                     }
 
                     # Add timestamp for response message if available (convert to milliseconds)
                     if end_time is not None:
                         # Handle both datetime objects and float timestamps
-                        if hasattr(end_time, 'timestamp'):
-                            message_data["timestamp"] = int(end_time.timestamp() * 1000.0)
+                        if hasattr(end_time, "timestamp"):
+                            message_data["timestamp"] = int(
+                                end_time.timestamp() * 1000.0
+                            )
                         else:
                             message_data["timestamp"] = int(end_time * 1000.0)
 
@@ -489,7 +495,7 @@ class NewRelicLogger(CustomLogger):
         num_messages: int,
         usage: Dict[str, int],
         duration: Optional[float] = None,
-        request_params: Optional[Dict[str, Any]] = None
+        request_params: Optional[Dict[str, Any]] = None,
     ):
         """Record LlmChatCompletionSummary event to New Relic."""
         try:
@@ -506,7 +512,7 @@ class NewRelicLogger(CustomLogger):
                 "ingest_source": "litellm",
                 "response.usage.prompt_tokens": usage["prompt_tokens"],
                 "response.usage.completion_tokens": usage["completion_tokens"],
-                "response.usage.total_tokens": usage["total_tokens"]
+                "response.usage.total_tokens": usage["total_tokens"],
             }
 
             # Add optional attributes if present
@@ -540,7 +546,7 @@ class NewRelicLogger(CustomLogger):
         llm_response_id: str,
         trace_id: Optional[str],
         span_id: Optional[str],
-        messages: List[Dict[str, Any]]
+        messages: List[Dict[str, Any]],
     ):
         """Record LlmChatCompletionMessage events to New Relic.
 
@@ -553,6 +559,7 @@ class NewRelicLogger(CustomLogger):
         """
         try:
             import newrelic.agent
+
             app = newrelic.agent.application()
 
             for message in messages:
@@ -566,7 +573,7 @@ class NewRelicLogger(CustomLogger):
                     "response.model": message["response.model"],
                     "vendor": message["vendor"],
                     "ingest_source": "litellm",
-                    "token_count": 0
+                    "token_count": 0,
                 }
 
                 # Add trace context if available
@@ -583,7 +590,6 @@ class NewRelicLogger(CustomLogger):
                 if message.get("is_response"):
                     event_data["is_response"] = True
 
-
                 if app and app.enabled:
                     app.record_custom_event("LlmChatCompletionMessage", event_data)
 
@@ -595,6 +601,7 @@ class NewRelicLogger(CustomLogger):
         """Record error metric to New Relic."""
         try:
             import newrelic.agent
+
             app = newrelic.agent.application()
             if app:
                 app.record_custom_metric("LLM/LiteLLM/Error", 1)
@@ -607,7 +614,7 @@ class NewRelicLogger(CustomLogger):
         kwargs: Dict,
         response_obj: ModelResponse,
         start_time: Optional[float] = None,
-        end_time: Optional[float] = None
+        end_time: Optional[float] = None,
     ):
         """
         Core logic for processing successful LLM calls.
@@ -656,7 +663,7 @@ class NewRelicLogger(CustomLogger):
             num_messages=len(messages),
             usage=usage,
             duration=duration,
-            request_params=request_params
+            request_params=request_params,
         )
 
         # Record message events
@@ -665,7 +672,7 @@ class NewRelicLogger(CustomLogger):
             llm_response_id=llm_response_id,
             trace_id=trace_id,
             span_id=span_id,
-            messages=messages
+            messages=messages,
         )
 
     # CustomLogger interface implementation
