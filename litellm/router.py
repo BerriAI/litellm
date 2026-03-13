@@ -1493,31 +1493,30 @@ class Router:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
 
-        IMPORTANT: We avoid calling safe_deep_copy(kwargs) because it temporarily
-        mutates the original dict (pops litellm_parent_otel_span, replaces with
-        "placeholder", then restores). Since this runs in a background thread while
-        the primary request's async callbacks may still be reading the same dict,
-        that mutation causes a race condition that breaks otel/prometheus callbacks
-        for the primary request.
+        Guarantee metadata isolation: safe_deep_copy falls back to the original
+        reference when deepcopy fails (e.g. metadata contains UserAPIKeyAuth with
+        parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
+        copy of the metadata dict so mutations (model_group, is_silent_experiment)
+        never corrupt the main call's metadata.
         """
-        import copy
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
-        # Shallow copy top-level kwargs — does NOT mutate the original
-        silent_kwargs = dict(kwargs)
+        silent_kwargs = safe_deep_copy(kwargs)
 
-        # Deep-copy metadata so we don't share state with the primary request.
-        # Remove the OTEL span BEFORE deep-copying (it's not picklable and is
-        # thread-bound anyway).
-        original_metadata = kwargs.get("metadata") or {}
-        metadata_copy = {
-            k: v
-            for k, v in original_metadata.items()
-            if k != "litellm_parent_otel_span"
-        }
-        try:
-            silent_kwargs["metadata"] = copy.deepcopy(metadata_copy)
-        except Exception:
-            silent_kwargs["metadata"] = dict(metadata_copy)
+        # safe_deep_copy may fall back to the original metadata reference when
+        # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
+        # Detect this via identity check and force a shallow copy so that setting
+        # model_group / is_silent_experiment on the silent dict doesn't corrupt
+        # the primary call's metadata.
+        original_metadata = kwargs.get("metadata")
+        if (
+            original_metadata is not None
+            and silent_kwargs.get("metadata") is original_metadata
+        ):
+            silent_kwargs["metadata"] = dict(original_metadata)
+
+        if "metadata" not in silent_kwargs:
+            silent_kwargs["metadata"] = {}
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
