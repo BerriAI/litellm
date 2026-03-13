@@ -14,6 +14,7 @@ class KeyManagementSystem(enum.Enum):
     LOCAL = "local"
     AWS_KMS = "aws_kms"
     CUSTOM = "custom"
+    DOCKER = "docker"
 
 
 class KeyManagementSettings(LiteLLMPydanticObjectBase):
@@ -72,3 +73,7 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
 
     aws_sts_endpoint: Optional[str] = None
     """Custom STS endpoint URL (useful for VPC endpoints or testing)"""
+
+    # Docker Secret Manager settings
+    secrets_path: str = "/run/secrets"
+    """Directory where Docker secrets are mounted (default: /run/secrets)"""

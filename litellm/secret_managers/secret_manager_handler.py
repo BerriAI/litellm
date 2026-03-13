@@ -140,10 +140,21 @@ def get_secret_from_manager( # noqa: PLR0915
             print_verbose(f"An error occurred - {str(e)}")
             raise e
             
+    elif key_manager == KeyManagementSystem.DOCKER.value:
+        from litellm.secret_managers.docker_secret_manager import DockerSecretManager
+
+        if isinstance(client, DockerSecretManager):
+            secret = client.sync_read_secret(secret_name=secret_name)
+            # None is valid — caller falls back to env vars
+        else:
+            raise ValueError(
+                f"Docker secret manager client must be an instance of DockerSecretManager, got {type(client).__name__}"
+            )
+
     elif key_manager == KeyManagementSystem.CUSTOM.value:
         # Check if client is a CustomSecretManager instance
         from litellm.integrations.custom_secret_manager import CustomSecretManager
-        
+
         if isinstance(client, CustomSecretManager):
             secret = client.sync_read_secret(
                 secret_name=secret_name,

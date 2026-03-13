@@ -20,6 +20,7 @@ LiteLLM supports **reading secrets (eg. `OPENAI_API_KEY`)** and **writing secret
 - [AWS Secret Manager](./aws_secret_manager)
 - [Azure Key Vault](./azure_key_vault)
 - [CyberArk Conjur](./cyberark)
+- [Docker Secret Manager](./docker_secret_manager)
 - [Google Secret Manager](./google_secret_manager)
 - [Google Key Management Service](./google_kms)
 - [Hashicorp Vault](./hashicorp_vault)

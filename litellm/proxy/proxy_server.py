@@ -3493,6 +3493,15 @@ class ProxyConfig:
                 )
 
                 CyberArkSecretManager()
+            elif key_management_system == KeyManagementSystem.DOCKER.value:
+                ### LOAD DOCKER SECRET MANAGER ###
+                from litellm.secret_managers.docker_secret_manager import (
+                    DockerSecretManager,
+                )
+
+                DockerSecretManager.load_docker_secret_manager(
+                    key_management_settings=litellm._key_management_settings,
+                )
             elif key_management_system == KeyManagementSystem.CUSTOM.value:
                 ### LOAD CUSTOM SECRET MANAGER ###
                 from litellm.secret_managers.custom_secret_manager_loader import (
