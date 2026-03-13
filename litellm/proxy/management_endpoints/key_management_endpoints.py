@@ -1776,11 +1776,13 @@ async def _validate_mcp_servers_for_key_update(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-    object_permission_dict = (
-        data.object_permission.model_dump()
-        if hasattr(data.object_permission, "model_dump")
-        else data.object_permission
-    )
+    object_permission_dict: Optional[dict] = None
+    if data.object_permission is not None:
+        object_permission_dict = (
+            data.object_permission.model_dump()
+            if hasattr(data.object_permission, "model_dump")
+            else dict(data.object_permission)  # type: ignore[arg-type]
+        )
     await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,

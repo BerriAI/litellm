@@ -315,6 +315,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             panw_metadata["litellm_trace_id"] = metadata["litellm_trace_id"]
 
         # Build contents: tool_event takes priority, else prompt/response text
+        contents: List[Dict[str, Any]]
         if tool_event is not None:
             contents = [{"tool_event": tool_event}]
         else:
@@ -1485,7 +1486,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             detail = (
                 e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
             )
-            error_obj = dict(detail.get("error", detail))
+            error_obj: Dict[str, Any] = dict(detail.get("error", detail))  # type: ignore[arg-type]
             error_obj["code"] = e.status_code
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
