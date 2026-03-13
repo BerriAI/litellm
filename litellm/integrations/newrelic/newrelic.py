@@ -544,6 +544,10 @@ class NewRelicLogger(CustomLogger):
 
             if app and app.enabled:
                 app.record_custom_event("LlmChatCompletionSummary", event_data)
+            else:
+                verbose_logger.warning(
+                    "New Relic application is not enabled; skipping summary event recording."
+                )
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic summary event: {e}")
@@ -570,6 +574,12 @@ class NewRelicLogger(CustomLogger):
             import newrelic.agent
 
             app = newrelic.agent.application()
+
+            if not (app and app.enabled):
+                verbose_logger.warning(
+                    "New Relic application is not enabled; skipping message event recording."
+                )
+                return
 
             for message in messages:
                 sequence = message["sequence"]
@@ -606,8 +616,7 @@ class NewRelicLogger(CustomLogger):
                 if "timestamp" in message:
                     event_data["timestamp"] = message["timestamp"]
 
-                if app and app.enabled:
-                    app.record_custom_event("LlmChatCompletionMessage", event_data)
+                app.record_custom_event("LlmChatCompletionMessage", event_data)
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic message events: {e}")
@@ -651,6 +660,9 @@ class NewRelicLogger(CustomLogger):
         # Get trace context
         trace_id, span_id = self._get_trace_context(kwargs)
         if not trace_id:
+            verbose_logger.warning(
+                "Failed to get trace context; skipping New Relic event recording."
+            )
             return
 
         # Generate unique request ID for this request (used as Summary event id)
