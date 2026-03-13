@@ -578,9 +578,9 @@ const sidebars = {
             "proxy/pass_through_guardrails",
           ],
         },
-        "realtime",
-        "rerank",
-        "response_api_compact",
+        { type: "doc", id: "realtime", label: "Realtime API (WebSocket)" },
+        { type: "doc", id: "rerank", label: "Rerank" },
+        { type: "doc", id: "response_api_compact", label: "Responses API (Compact)" },
 
         // ── 5. Admin & Advanced ────────────────────────────────────────
         {

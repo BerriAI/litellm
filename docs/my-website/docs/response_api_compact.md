@@ -1,14 +1,14 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /responses/compact
+# Responses API (Compact)
 
 Compress conversation history using OpenAI's `/responses/compact` endpoint.
 
-| Feature | Supported |
-|---------|-----------|
-| Supported LiteLLM Versions | 1.72.0+ |
-| Supported Providers | `openai` |
+| Feature                    | Supported |
+| -------------------------- | --------- |
+| Supported LiteLLM Versions | 1.72.0+   |
+| Supported Providers        | `openai`  |
 
 ## Usage
 
@@ -69,12 +69,12 @@ print(response.json())
 
 ## Request Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `model` | string | Yes | Model to use for compaction |
-| `input` | string or array | Yes | Input messages to compact |
-| `instructions` | string | No | System instructions |
-| `previous_response_id` | string | No | ID of previous response to continue from |
+| Parameter              | Type            | Required | Description                              |
+| ---------------------- | --------------- | -------- | ---------------------------------------- |
+| `model`                | string          | Yes      | Model to use for compaction              |
+| `input`                | string or array | Yes      | Input messages to compact                |
+| `instructions`         | string          | No       | System instructions                      |
+| `previous_response_id` | string          | No       | ID of previous response to continue from |
 
 ## Response Format
 
@@ -101,4 +101,3 @@ print(response.json())
   }
 }
 ```
-

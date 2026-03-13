@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /realtime
+# Realtime API (WebSocket)
 
 Use this to loadbalance across Azure + OpenAI + xAI and more. 
 
