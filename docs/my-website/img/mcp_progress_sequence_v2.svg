@@ -1,0 +1,86 @@
+<svg width="100%" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#555" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arr-d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#7B68EE" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }</style>
+  </defs>
+
+  <!-- Column headers -->
+  <rect x="20"  y="20" width="120" height="36" rx="8" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="1"/>
+  <text x="80"  y="43" text-anchor="middle" font-size="13" font-weight="500" fill="#26215C">Client</text>
+
+  <rect x="270" y="20" width="140" height="36" rx="8" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="1"/>
+  <text x="340" y="43" text-anchor="middle" font-size="13" font-weight="500" fill="#085041">LiteLLM proxy</text>
+
+  <rect x="530" y="20" width="130" height="36" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="595" y="43" text-anchor="middle" font-size="13" font-weight="500" fill="#2C2C2A">Backend MCP</text>
+
+  <!-- Lifelines -->
+  <line x1="80"  y1="56" x2="80"  y2="510" stroke="#ddd" stroke-width="1" stroke-dasharray="4 3"/>
+  <line x1="340" y1="56" x2="340" y2="510" stroke="#ddd" stroke-width="1" stroke-dasharray="4 3"/>
+  <line x1="595" y1="56" x2="595" y2="510" stroke="#ddd" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- 1: initialize -->
+  <line x1="80" y1="95" x2="335" y2="95" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="205" y="88" text-anchor="middle" font-size="11" fill="#333">POST initialize</text>
+  <line x1="340" y1="108" x2="85" y2="108" stroke="#aaa" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#arr-d)"/>
+  <text x="205" y="122" text-anchor="middle" font-size="11" fill="#7B68EE">← mcp-session-id: abc123</text>
+
+  <!-- 2: GET SSE channel — shown as thick persistent bar -->
+  <line x1="80" y1="150" x2="335" y2="150" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="205" y="143" text-anchor="middle" font-size="11" fill="#333">GET /mcp  (mcp-session-id: abc123)</text>
+
+  <!-- SSE channel open band -->
+  <rect x="68" y="158" width="24" height="230" rx="4" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="1"/>
+  <text x="80" y="278" text-anchor="middle" font-size="9" fill="#534AB7" transform="rotate(-90,80,278)">SSE channel open</text>
+  <rect x="328" y="158" width="24" height="230" rx="4" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="1"/>
+
+  <!-- 3: tools/call POST -->
+  <line x1="92" y1="200" x2="328" y2="200" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="205" y="193" text-anchor="middle" font-size="11" fill="#333">POST tools/call + progressToken</text>
+  <line x1="352" y1="213" x2="528" y2="213" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="440" y="206" text-anchor="middle" font-size="11" fill="#333">forward tools/call</text>
+
+  <!-- backend running -->
+  <text x="595" y="245" text-anchor="middle" font-size="10" fill="#aaa">running...</text>
+
+  <!-- progress 1/3 -->
+  <line x1="528" y1="258" x2="354" y2="258" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="440" y="251" text-anchor="middle" font-size="11" fill="#7B68EE">progress 1/3</text>
+  <line x1="328" y1="268" x2="92" y2="268" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="205" y="261" text-anchor="middle" font-size="11" fill="#7B68EE">notifications/progress {1, 3}</text>
+
+  <!-- progress 2/3 -->
+  <line x1="528" y1="300" x2="354" y2="300" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="440" y="293" text-anchor="middle" font-size="11" fill="#7B68EE">progress 2/3</text>
+  <line x1="328" y1="310" x2="92" y2="310" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="205" y="303" text-anchor="middle" font-size="11" fill="#7B68EE">notifications/progress {2, 3}</text>
+
+  <!-- progress 3/3 -->
+  <line x1="528" y1="342" x2="354" y2="342" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="440" y="335" text-anchor="middle" font-size="11" fill="#7B68EE">progress 3/3</text>
+  <line x1="328" y1="352" x2="92" y2="352" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-d)"/>
+  <text x="205" y="345" text-anchor="middle" font-size="11" fill="#7B68EE">notifications/progress {3, 3}</text>
+
+  <!-- SSE channel close -->
+  <line x1="68" y1="388" x2="92" y2="388" stroke="#AFA9EC" stroke-width="1"/>
+  <line x1="328" y1="388" x2="352" y2="388" stroke="#5DCAA5" stroke-width="1"/>
+
+  <!-- final result -->
+  <line x1="528" y1="410" x2="354" y2="410" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="440" y="403" text-anchor="middle" font-size="11" fill="#333">tool result</text>
+  <line x1="328" y1="423" x2="92" y2="423" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="205" y="416" text-anchor="middle" font-size="11" fill="#333">POST response: final result</text>
+
+  <!-- Legend -->
+  <line x1="30" y1="500" x2="52" y2="500" stroke="#555" stroke-width="1.5"/>
+  <text x="57" y="504" font-size="11" fill="#555">request / result</text>
+  <line x1="175" y1="500" x2="197" y2="500" stroke="#7B68EE" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="202" y="504" font-size="11" fill="#7B68EE">progress notification</text>
+  <rect x="380" y="492" width="12" height="14" rx="2" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="1"/>
+  <text x="397" y="504" font-size="11" fill="#534AB7">SSE channel</text>
+</svg>

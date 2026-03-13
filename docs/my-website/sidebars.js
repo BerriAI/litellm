@@ -613,6 +613,7 @@ const sidebars = {
           label: "/mcp - Model Context Protocol",
           items: [
             "mcp",
+            "mcp_streamable_http",
             "mcp_usage",
             "mcp_openapi",
             "mcp_oauth",
