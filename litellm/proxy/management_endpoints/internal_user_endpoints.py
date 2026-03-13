@@ -721,59 +721,65 @@ async def user_info(
 async def _check_user_info_v2_access(
     user_api_key_dict: UserAPIKeyAuth,
     target_user_id: str,
-) -> bool:
+) -> Optional["LiteLLM_UserTable"]:
     """
     Check if the caller is allowed to access the target user's info.
 
-    Returns True if access is allowed, False otherwise.
+    Returns the target user's DB row if access is allowed, None otherwise.
+    Returning the row avoids a redundant DB fetch in the caller.
 
     Access rules:
     1. Proxy admins / proxy admin viewers can access any user
     2. User can access their own info
     3. Team admins can access info of users in their teams
+
+    Raises on unexpected DB errors so they surface as 500s, not silent 404s.
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    # Rule 1: Proxy admins
+    if prisma_client is None:
+        return None
+
+    # Helper: fetch the target user row (reused across branches)
+    async def _fetch_target_user():
+        return await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": target_user_id}
+        )
+
+    # Rule 1: Proxy admins — fetch and return the target row directly
     if _user_has_admin_view(user_api_key_dict):
-        return True
+        return await _fetch_target_user()
 
     # Rule 2: Self-lookup
     if user_api_key_dict.user_id == target_user_id:
-        return True
+        return await _fetch_target_user()
 
     # Rule 3: Team admins can look up users in their teams
-    if prisma_client is not None and user_api_key_dict.user_id is not None:
-        try:
-            # Get caller's teams
-            caller_user = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_api_key_dict.user_id}
-            )
-            if caller_user is not None and caller_user.teams:
-                # Get teams where caller is admin
-                teams = await prisma_client.db.litellm_teamtable.find_many(
-                    where={"team_id": {"in": caller_user.teams}}
-                )
-                for team in teams:
-                    team_obj = LiteLLM_TeamTable(**team.model_dump())
-                    if _is_user_team_admin(
-                        user_api_key_dict=user_api_key_dict, team_obj=team_obj
-                    ):
-                        # Check if target user is in this team
-                        target_user = await prisma_client.db.litellm_usertable.find_unique(
-                            where={"user_id": target_user_id}
-                        )
-                        if (
-                            target_user is not None
-                            and team.team_id in (target_user.teams or [])
-                        ):
-                            return True
-        except Exception:
-            verbose_proxy_logger.debug(
-                f"Error checking team admin access for user {user_api_key_dict.user_id}"
-            )
+    if user_api_key_dict.user_id is not None:
+        # Get caller's teams
+        caller_user = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if caller_user is not None and caller_user.teams:
+            # Fetch the target user ONCE, before the loop
+            target_user = await _fetch_target_user()
+            if target_user is None:
+                return None
 
-    return False
+            # Get all teams the caller belongs to
+            teams = await prisma_client.db.litellm_teamtable.find_many(
+                where={"team_id": {"in": caller_user.teams}}
+            )
+            for team in teams:
+                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                if _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
+                ):
+                    # Check if target user is in this team
+                    if team.team_id in (target_user.teams or []):
+                        return target_user
+
+    return None
 
 
 @router.get(
@@ -831,21 +837,12 @@ async def user_info_v2(
                 detail="user_id is required. Either pass it as a query parameter or authenticate with a user-bound key.",
             )
 
-        # Check access
-        has_access = await _check_user_info_v2_access(
+        # Check access — returns the user row if allowed, None otherwise.
+        # This avoids a redundant DB fetch since the access check already
+        # loads the target user for team-admin verification.
+        user_row = await _check_user_info_v2_access(
             user_api_key_dict=user_api_key_dict,
             target_user_id=user_id,
-        )
-
-        if not has_access:
-            raise HTTPException(
-                status_code=404,
-                detail=f"User not found: {user_id}",
-            )
-
-        # Fetch user from DB
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}
         )
 
         if user_row is None:
