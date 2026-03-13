@@ -1877,18 +1877,15 @@ class ProxyLogging:
                 litellm_logging_obj.model_call_details["input"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
                     litellm_logging_obj.call_type = CallTypes.aembedding.value
+            # Pass-through endpoints are logged via the callback loop's
+            # async_post_call_failure_hook — skip pre_call and failure handlers.
+            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
+                return
+
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
             )
-
-            # For pass-through endpoints, skip async_failure_handler and
-            # failure_handler here. The callback loop in post_call_failure_hook
-            # will call async_post_call_failure_hook on each CustomLogger,
-            # which handles logging. Firing both paths would produce duplicate
-            # entries in Datadog, Arize, and other callback integrations.
-            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
-                return
 
             # log the custom exception
             await litellm_logging_obj.async_failure_handler(

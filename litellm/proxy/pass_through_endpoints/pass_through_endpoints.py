@@ -961,8 +961,6 @@ async def pass_through_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
-        # Ensure the original logging_obj is in request_payload so
-        # _handle_logging_proxy_only_error reuses it (preserving call_type)
         if logging_obj is not None:
             request_payload["litellm_logging_obj"] = logging_obj
 
