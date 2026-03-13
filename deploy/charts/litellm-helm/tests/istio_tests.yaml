@@ -585,6 +585,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
     asserts:
@@ -602,6 +604,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
     asserts:
@@ -614,6 +618,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
     asserts:
@@ -626,6 +632,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
           trafficPolicy:
@@ -648,6 +656,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
           trafficPolicy:
@@ -665,6 +675,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
           labels:
@@ -685,6 +697,8 @@ tests:
     set:
       istio:
         enabled: true
+        gateway:
+          enabled: true
         destinationRule:
           enabled: true
     asserts:
@@ -694,3 +708,76 @@ tests:
       - isNotNull:
           path: metadata.labels["helm.sh/chart"]
         template: istio-destinationrule.yaml
+
+  #
+  # === Validation Guards ===
+  #
+  - it: should fail when VirtualService has no gateway source
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: false
+        virtualService:
+          enabled: true
+          gateways: []
+    asserts:
+      - failedTemplate:
+          errorMessage: "istio.virtualService: at least one gateway must be configured \u2014 either set istio.gateway.enabled=true or provide istio.virtualService.gateways"
+        template: istio-virtualservice.yaml
+
+  - it: should fail when TLS enabled without credentialName for SIMPLE mode
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: SIMPLE
+            credentialName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "istio.gateway.tls.credentialName must be set for SIMPLE or MUTUAL TLS mode"
+        template: istio-gateway.yaml
+
+  - it: should fail when TLS enabled without credentialName for MUTUAL mode
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: MUTUAL
+            credentialName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "istio.gateway.tls.credentialName must be set for SIMPLE or MUTUAL TLS mode"
+        template: istio-gateway.yaml
+
+  - it: should not emit credentialName for PASSTHROUGH mode
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: PASSTHROUGH
+    asserts:
+      - isNull:
+          path: spec.servers[1].tls.credentialName
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].tls.mode
+          value: PASSTHROUGH
+        template: istio-gateway.yaml

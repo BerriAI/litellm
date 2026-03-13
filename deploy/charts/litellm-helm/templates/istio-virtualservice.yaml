@@ -20,6 +20,9 @@ spec:
     - {{ . | quote }}
     {{- end }}
   gateways:
+    {{- if and (not .Values.istio.gateway.enabled) (not .Values.istio.virtualService.gateways) }}
+    {{- fail "istio.virtualService: at least one gateway must be configured — either set istio.gateway.enabled=true or provide istio.virtualService.gateways" }}
+    {{- end }}
     {{- if .Values.istio.gateway.enabled }}
     - {{ $fullName }}
     {{- end }}

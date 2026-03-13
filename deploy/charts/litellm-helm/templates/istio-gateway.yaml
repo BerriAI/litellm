@@ -35,7 +35,12 @@ spec:
         protocol: HTTPS
       tls:
         mode: {{ .Values.istio.gateway.tls.mode | default "SIMPLE" }}
+        {{- if ne (.Values.istio.gateway.tls.mode | default "SIMPLE") "PASSTHROUGH" }}
+        {{- if not .Values.istio.gateway.tls.credentialName }}
+        {{- fail "istio.gateway.tls.credentialName must be set for SIMPLE or MUTUAL TLS mode" }}
+        {{- end }}
         credentialName: {{ .Values.istio.gateway.tls.credentialName | quote }}
+        {{- end }}
         {{- if .Values.istio.gateway.tls.minProtocolVersion }}
         minProtocolVersion: {{ .Values.istio.gateway.tls.minProtocolVersion }}
         {{- end }}
