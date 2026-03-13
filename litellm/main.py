@@ -7155,6 +7155,15 @@ async def ahealth_check(
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
+
+        # Update model_params with the resolved model name (provider prefix
+        # stripped) so that downstream calls like acompletion receive the
+        # correct model identifier.  Without this, providers such as Ollama
+        # receive "ollama/model-name" instead of just "model-name", causing
+        # a 404 from the Ollama server.  See
+        # https://github.com/BerriAI/litellm/issues/17842
+        model_params["model"] = model
+
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
