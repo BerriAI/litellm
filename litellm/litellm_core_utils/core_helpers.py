@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Union
 
 import httpx
 
@@ -187,6 +187,36 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
             return metadata
 
     return {}
+
+
+_MISSING_MODEL_INFO = object()
+
+
+def get_model_info_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Dict[str, Any]:
+    """
+    Read deployment model_info from supported litellm_params locations.
+
+    metadata.model_info takes precedence, including an explicitly empty dict.
+    """
+    if litellm_params is None:
+        return {}
+
+    metadata = litellm_params.get("metadata", {}) or {}
+    metadata_model_info = metadata.get("model_info", _MISSING_MODEL_INFO)
+    if metadata_model_info is not _MISSING_MODEL_INFO:
+        result = metadata_model_info
+    else:
+        litellm_model_info = litellm_params.get("model_info", _MISSING_MODEL_INFO)
+        if litellm_model_info is not _MISSING_MODEL_INFO:
+            result = litellm_model_info
+        else:
+            result = (litellm_params.get("litellm_metadata", {}) or {}).get(
+                "model_info", {}
+            )
+
+    return result if isinstance(result, dict) else {}
 
 
 def merge_metadata_preserving_deployment_model_info(

@@ -59,7 +59,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
-from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import (
+    get_model_info_from_litellm_params,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -4466,29 +4469,10 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
     return {}
 
 
-_MISSING_MODEL_INFO = object()
-
-
 def _get_model_info_from_litellm_params(
     litellm_params: Optional[dict],
 ) -> Dict[str, Any]:
-    if litellm_params is None:
-        return {}
-
-    metadata = litellm_params.get("metadata", {}) or {}
-    metadata_model_info = metadata.get("model_info", _MISSING_MODEL_INFO)
-    if metadata_model_info is not _MISSING_MODEL_INFO:
-        result = metadata_model_info
-    else:
-        litellm_model_info = litellm_params.get("model_info", _MISSING_MODEL_INFO)
-        if litellm_model_info is not _MISSING_MODEL_INFO:
-            result = litellm_model_info
-        else:
-            result = (litellm_params.get("litellm_metadata", {}) or {}).get(
-                "model_info", {}
-            )
-
-    return result if isinstance(result, dict) else {}
+    return get_model_info_from_litellm_params(litellm_params)
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:

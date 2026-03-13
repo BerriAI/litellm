@@ -6,9 +6,12 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import (
+    get_model_info_from_litellm_params,
+    merge_metadata_preserving_deployment_model_info,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
-    _get_model_info_from_litellm_params,
     use_custom_pricing_for_model,
 )
 from litellm.llms.anthropic import get_anthropic_config
@@ -123,7 +126,7 @@ class AnthropicPassthroughLoggingHandler:
                 "custom_llm_provider"
             )
             litellm_params = logging_obj.model_call_details.get("litellm_params", {}) or {}
-            model_info = _get_model_info_from_litellm_params(litellm_params)
+            model_info = get_model_info_from_litellm_params(litellm_params)
 
             # Prepend custom_llm_provider to model if not already present
             model_for_cost = model
@@ -144,15 +147,12 @@ class AnthropicPassthroughLoggingHandler:
             kwargs.setdefault("litellm_params", {})
             raw_logging_metadata = litellm_params.get("metadata")
             if raw_logging_metadata is not None:
-                logging_metadata = raw_logging_metadata or {}
-                existing_metadata = kwargs["litellm_params"].get("metadata", {}) or {}
-                # Start from logging_obj metadata, let existing pipeline metadata win
-                # for other keys, then restore deployment model_info.
-                merged_metadata = dict(logging_metadata)
-                merged_metadata.update(existing_metadata)
-                if logging_metadata.get("model_info") is not None:
-                    merged_metadata["model_info"] = logging_metadata["model_info"]
-                kwargs["litellm_params"]["metadata"] = merged_metadata
+                kwargs["litellm_params"]["metadata"] = (
+                    merge_metadata_preserving_deployment_model_info(
+                        litellm_metadata=raw_logging_metadata,
+                        user_metadata=kwargs["litellm_params"].get("metadata"),
+                    )
+                )
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )

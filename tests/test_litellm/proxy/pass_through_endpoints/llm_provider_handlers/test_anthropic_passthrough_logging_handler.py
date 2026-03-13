@@ -1,10 +1,12 @@
+import asyncio
 import json
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
@@ -12,10 +14,73 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+
+CUSTOM_INPUT_COST = 0.50
+CUSTOM_OUTPUT_COST = 1.00
+DEPLOYMENT_MODEL_ID = "deployment-custom-pricing-test"
+
+
+class CostCapturingCallback(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.response_cost: Optional[float] = None
+        self.event = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_cost = kwargs.get("response_cost")
+        self.event.set()
+
+
+class MockStreamingHTTPResponse:
+    def __init__(self, lines, status_code=200, headers=None):
+        self.status_code = status_code
+        self._lines = [line.encode("utf-8") for line in lines]
+        self.headers = httpx.Headers(headers or {"content-type": "text/event-stream"})
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line.decode("utf-8")
+
+    async def aiter_bytes(self):
+        for line in self._lines:
+            yield line + b"\n"
+
+    def raise_for_status(self):
+        return None
+
+
+def _make_router_with_custom_pricing(
+    backend_model: str, api_key: str = "fake-key"
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "test-custom-pricing",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": api_key,
+                },
+                "model_info": {
+                    "id": DEPLOYMENT_MODEL_ID,
+                    "input_cost_per_token": CUSTOM_INPUT_COST,
+                    "output_cost_per_token": CUSTOM_OUTPUT_COST,
+                },
+            },
+        ],
+    )
+
+
+@pytest.fixture(autouse=True)
+def cleanup_custom_pricing_state():
+    yield
+    litellm.callbacks = []
+    litellm.model_cost.pop(DEPLOYMENT_MODEL_ID, None)
 
 
 class TestAnthropicLoggingHandlerModelFallback:
@@ -372,6 +437,97 @@ class TestAzureAnthropicCostCalculation:
         call_kwargs = mock_completion_cost.call_args[1]
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
+
+
+class TestAnthropicPassthroughLoggingPayload:
+    @staticmethod
+    def _mock_streaming_events() -> List[str]:
+        return [
+            "event: message_start",
+            f'data: {{"type":"message_start","message":{{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+            "event: message_delta",
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}',
+            "",
+            "event: message_stop",
+            'data: {"type":"message_stop"}',
+        ]
+
+    async def _assert_streaming_custom_pricing(self, metadata: Optional[dict] = None):
+        cost_callback = CostCapturingCallback()
+        litellm.callbacks = [cost_callback]
+
+        try:
+            router = _make_router_with_custom_pricing(
+                "anthropic/claude-sonnet-4-20250514"
+            )
+            mock_stream_response = MockStreamingHTTPResponse(
+                self._mock_streaming_events(),
+                headers={
+                    "content-type": "text/event-stream",
+                    "request-id": "req_test",
+                },
+            )
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_post:
+                mock_post.return_value = mock_stream_response
+
+                response = await router.aanthropic_messages(
+                    model="test-custom-pricing",
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    max_tokens=100,
+                    stream=True,
+                    metadata=metadata,
+                )
+
+                async for _chunk in response:
+                    pass
+
+                try:
+                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    pass
+
+            assert cost_callback.response_cost is not None
+            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
+            assert cost_callback.response_cost == pytest.approx(
+                expected_custom_cost, rel=0.01
+            )
+        finally:
+            litellm.callbacks = []
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_uses_custom_pricing(self):
+        await self._assert_streaming_custom_pricing()
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_with_user_metadata_uses_custom_pricing(self):
+        await self._assert_streaming_custom_pricing(metadata={"user_field": "present"})
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_with_user_model_info_ignored_for_pricing(self):
+        await self._assert_streaming_custom_pricing(
+            metadata={
+                "user_field": "present",
+                "model_info": {
+                    "id": "user-garbage",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            }
+        )
 
 
 class TestAnthropicBatchPassthroughCostTracking:

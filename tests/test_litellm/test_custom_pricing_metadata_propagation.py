@@ -30,11 +30,11 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.core_helpers import (
+    get_model_info_from_litellm_params,
     merge_metadata_preserving_deployment_model_info,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
-    _get_model_info_from_litellm_params,
     use_custom_pricing_for_model,
 )
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
@@ -391,7 +391,7 @@ class TestRouterMetadataPropagation:
 
     def test_get_model_info_preserves_explicit_empty_metadata_model_info(self):
         """Explicit empty metadata.model_info should win over fallback locations."""
-        model_info = _get_model_info_from_litellm_params(
+        model_info = get_model_info_from_litellm_params(
             {
                 "metadata": {"model_info": {}},
                 "model_info": {"id": "top-level"},
@@ -793,229 +793,6 @@ class TestAnthropicMessagesCustomPricingCost:
             ), (
                 f"Cost should use custom pricing ({expected_custom_cost}), "
                 f"got {cost_callback.response_cost}"
-            )
-        finally:
-            litellm.callbacks = []
-
-class TestAnthropicPassthroughLoggingPayload:
-    @pytest.mark.asyncio
-    async def test_streaming_messages_uses_custom_pricing(self):
-        """Streaming /v1/messages should use custom pricing for cost."""
-        cost_callback = CostCapturingCallback()
-        litellm.callbacks = [cost_callback]
-
-        try:
-            router = _make_router_with_custom_pricing(
-                "anthropic/claude-sonnet-4-20250514"
-            )
-
-            # SSE events for streaming Anthropic messages API
-            sse_events = [
-                'event: message_start',
-                f'data: {{"type":"message_start","message":{{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}',
-                '',
-                'event: content_block_start',
-                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-                '',
-                'event: content_block_delta',
-                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}',
-                '',
-                'event: content_block_stop',
-                'data: {"type":"content_block_stop","index":0}',
-                '',
-                'event: message_delta',
-                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}',
-                '',
-                'event: message_stop',
-                'data: {"type":"message_stop"}',
-            ]
-
-            mock_stream_response = MockStreamingHTTPResponse(
-                sse_events,
-                headers={
-                    "content-type": "text/event-stream",
-                    "request-id": "req_test",
-                },
-            )
-
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-                new_callable=AsyncMock,
-            ) as mock_post:
-                mock_post.return_value = mock_stream_response
-
-                response = await router.aanthropic_messages(
-                    model="test-custom-pricing",
-                    messages=[{"role": "user", "content": "Hello!"}],
-                    max_tokens=100,
-                    stream=True,
-                )
-
-                # Consume the stream
-                async for chunk in response:
-                    pass
-
-                # Wait for async callback
-                try:
-                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    pass
-
-            assert cost_callback.response_cost is not None, (
-                "response_cost should be set in the callback"
-            )
-
-            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
-            assert cost_callback.response_cost == pytest.approx(
-                expected_custom_cost, rel=0.01
-            ), (
-                f"Streaming cost should use custom pricing ({expected_custom_cost}), "
-                f"got {cost_callback.response_cost}"
-            )
-        finally:
-            litellm.callbacks = []
-
-    @pytest.mark.asyncio
-    async def test_streaming_messages_with_user_metadata_uses_custom_pricing(self):
-        """Streaming /v1/messages should preserve custom pricing when metadata is also passed."""
-        cost_callback = CostCapturingCallback()
-        litellm.callbacks = [cost_callback]
-
-        try:
-            router = _make_router_with_custom_pricing(
-                "anthropic/claude-sonnet-4-20250514"
-            )
-
-            sse_events = [
-                'event: message_start',
-                f'data: {{"type":"message_start","message":{{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}',
-                '',
-                'event: content_block_start',
-                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-                '',
-                'event: content_block_delta',
-                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}',
-                '',
-                'event: content_block_stop',
-                'data: {"type":"content_block_stop","index":0}',
-                '',
-                'event: message_delta',
-                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}',
-                '',
-                'event: message_stop',
-                'data: {"type":"message_stop"}',
-            ]
-
-            mock_stream_response = MockStreamingHTTPResponse(
-                sse_events,
-                headers={
-                    "content-type": "text/event-stream",
-                    "request-id": "req_test",
-                },
-            )
-
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-                new_callable=AsyncMock,
-            ) as mock_post:
-                mock_post.return_value = mock_stream_response
-
-                response = await router.aanthropic_messages(
-                    model="test-custom-pricing",
-                    messages=[{"role": "user", "content": "Hello!"}],
-                    max_tokens=100,
-                    stream=True,
-                    metadata={"user_field": "present"},
-                )
-
-                async for chunk in response:
-                    pass
-
-                try:
-                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    pass
-
-            assert cost_callback.response_cost is not None
-            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
-            assert cost_callback.response_cost == pytest.approx(
-                expected_custom_cost, rel=0.01
-            )
-        finally:
-            litellm.callbacks = []
-
-    @pytest.mark.asyncio
-    async def test_streaming_messages_with_user_model_info_ignored_for_pricing(self):
-        """Streaming /v1/messages should ignore user-supplied metadata.model_info."""
-        cost_callback = CostCapturingCallback()
-        litellm.callbacks = [cost_callback]
-
-        try:
-            router = _make_router_with_custom_pricing(
-                "anthropic/claude-sonnet-4-20250514"
-            )
-
-            sse_events = [
-                'event: message_start',
-                f'data: {{"type":"message_start","message":{{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}',
-                '',
-                'event: content_block_start',
-                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-                '',
-                'event: content_block_delta',
-                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}',
-                '',
-                'event: content_block_stop',
-                'data: {"type":"content_block_stop","index":0}',
-                '',
-                'event: message_delta',
-                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}',
-                '',
-                'event: message_stop',
-                'data: {"type":"message_stop"}',
-            ]
-
-            mock_stream_response = MockStreamingHTTPResponse(
-                sse_events,
-                headers={
-                    "content-type": "text/event-stream",
-                    "request-id": "req_test",
-                },
-            )
-
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-                new_callable=AsyncMock,
-            ) as mock_post:
-                mock_post.return_value = mock_stream_response
-
-                response = await router.aanthropic_messages(
-                    model="test-custom-pricing",
-                    messages=[{"role": "user", "content": "Hello!"}],
-                    max_tokens=100,
-                    stream=True,
-                    metadata={
-                        "user_field": "present",
-                        "model_info": {
-                            "id": "user-garbage",
-                            "input_cost_per_token": 0.0,
-                            "output_cost_per_token": 0.0,
-                        },
-                    },
-                )
-
-                async for chunk in response:
-                    pass
-
-                try:
-                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    pass
-
-            assert cost_callback.response_cost is not None
-            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
-            assert cost_callback.response_cost == pytest.approx(
-                expected_custom_cost, rel=0.01
             )
         finally:
             litellm.callbacks = []
