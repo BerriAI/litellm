@@ -1806,6 +1806,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
@@ -1954,6 +1955,27 @@ async def update_key_fn(
                 data=data,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+            )
+
+        # Check org key limits if organization_id is being set or already exists on the key
+        _org_id_to_check = data.organization_id or getattr(
+            existing_key_row, "organization_id", None
+        )
+        if _org_id_to_check is not None:
+            org_table = await get_org_object(
+                org_id=_org_id_to_check,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={_org_id_to_check}",
+                )
+            await _check_org_key_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
             )
 
         # if team change - check if this is possible

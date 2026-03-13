@@ -6765,3 +6765,112 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_on_update_within_bounds():
+    """
+    Test that _check_org_key_limits works with UpdateKeyRequest when updating
+    a key's TPM/RPM limits within organization bounds.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-update-1",
+        organization_alias="test-org",
+        budget_id="budget-123",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-123",
+            tpm_limit=20000,
+            rpm_limit=2000,
+        ),
+    )
+
+    data = UpdateKeyRequest(
+        key="sk-test-key",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+        organization_id="test-org-update-1",
+    )
+
+    # Should not raise any exception
+    await _check_org_key_limits(
+        org_table=org_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
+        where={"organization_id": "test-org-update-1"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_on_update_overallocation():
+    """
+    Test that _check_org_key_limits raises HTTPException when updating a key
+    would exceed organization TPM limits.
+    """
+    existing_key = MagicMock()
+    existing_key.tpm_limit = 15000
+    existing_key.rpm_limit = 1500
+    existing_key.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key]
+    )
+
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-update-2",
+        organization_alias="test-org",
+        budget_id="budget-456",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-456",
+            tpm_limit=20000,
+            rpm_limit=2000,
+        ),
+    )
+
+    data = UpdateKeyRequest(
+        key="sk-test-key",
+        tpm_limit=10000,  # 15000 + 10000 = 25000 > 20000
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+        organization_id="test-org-update-2",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _check_org_key_limits(
+            org_table=org_table,
+            data=data,
+            prisma_client=mock_prisma_client,
+        )
+    assert exc.value.status_code == 400
+    assert "TPM limit" in str(exc.value.detail)
+
+
+def test_update_key_request_has_organization_id():
+    """
+    Test that UpdateKeyRequest accepts organization_id field.
+    """
+    data = UpdateKeyRequest(
+        key="sk-test-key",
+        organization_id="test-org-123",
+    )
+    assert data.organization_id == "test-org-123"
+
+    # Also verify it defaults to None
+    data_no_org = UpdateKeyRequest(key="sk-test-key")
+    assert data_no_org.organization_id is None
