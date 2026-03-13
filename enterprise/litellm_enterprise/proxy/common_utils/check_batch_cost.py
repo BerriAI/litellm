@@ -135,7 +135,16 @@ class CheckBatchCost:
                     where={
                         "file_purpose": "batch",
                         "batch_processed": False,
-                        "status": {"not_in": ["failed", "expired", "cancelled", "stale_expired"]},
+                        "status": {
+                            "not_in": [
+                                "failed",
+                                "expired",
+                                "cancelled",
+                                "complete",
+                                "completed",
+                                "stale_expired",
+                            ]
+                        },
                     },
                     take=MAX_OBJECTS_PER_POLL_CYCLE,
                     order={"created_at": "asc"},

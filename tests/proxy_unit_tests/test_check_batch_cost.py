@@ -67,7 +67,7 @@ class TestCheckBatchCost:
     async def test_find_many_uses_pagination_and_excludes_stale(
         self, check_batch_cost_instance, mock_prisma_client
     ):
-        """find_many is called with take, order, and stale_expired excluded from status."""
+        """find_many is called with take, order, and all terminal statuses excluded."""
         from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
@@ -82,7 +82,10 @@ class TestCheckBatchCost:
         find_call = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args
         assert find_call[1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
         assert find_call[1]["order"] == {"created_at": "asc"}
-        assert "stale_expired" in find_call[1]["where"]["status"]["not_in"]
+        not_in = find_call[1]["where"]["status"]["not_in"]
+        assert "stale_expired" in not_in
+        assert "complete" in not_in
+        assert "completed" in not_in
 
     @pytest.mark.asyncio
     async def test_fallback_query_used_when_batch_processed_missing(
@@ -148,33 +151,190 @@ class TestCheckBatchCost:
             return_value=0
         )
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
 
         mock_job = MagicMock()
         mock_job.id = "job-fallback-1"
-        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="  # base64-looking value
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
         mock_job.created_by = "user-1"
 
-        # Primary query fails → fallback path
+        # Simulate column already known absent (e.g. discovered on a previous cycle)
+        check_batch_cost_instance._has_batch_processed_column = False
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            side_effect=[Exception("column batch_processed does not exist"), [mock_job]]
+            return_value=[mock_job]
         )
 
-        # Stub out the heavy per-job processing so we reach the update()
+        # Build a fake batch response whose status triggers the completion branch
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"id":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
         with (
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
-                return_value=None,  # causes "not a valid unified object id" early-continue
+                side_effect=[decoded_id, None],
             ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ),
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("gpt-4", "openai", None, None),
+            ),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.Logging"
+            ) as mock_logging_cls,
         ):
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
             await check_batch_cost_instance.check_batch_cost()
 
-        # Even though the job was skipped (invalid ID), confirm the fallback path was taken
-        # by checking the find_many calls
-        find_calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
-        assert len(find_calls) == 2
-        fallback_where = find_calls[1][1]["where"]
-        assert "batch_processed" not in fallback_where
+        # The update must have been called — this is the core assertion.
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+            "Expected update() to be called exactly once for the completed job"
+        )
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        assert "batch_processed" not in update_data, (
+            "update() must NOT include batch_processed when column is absent"
+        )
+        assert update_data["status"] == "complete"
 
-        # If a completion update were issued, it must not contain batch_processed
-        for call in mock_prisma_client.db.litellm_managedobjecttable.update.call_args_list:
-            assert "batch_processed" not in call[1].get("data", {})
+    @pytest.mark.asyncio
+    async def test_primary_path_completion_update_includes_batch_processed(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """When batch_processed column IS present, completion update must set it to True.
+
+        This is the symmetric counterpart to test_fallback_completion_update_omits_batch_processed
+        and proves the conditional on _has_batch_processed_column governs the update data.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-primary-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"id":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ),
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("gpt-4", "openai", None, None),
+            ),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.Logging"
+            ) as mock_logging_cls,
+        ):
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+            "Expected update() to be called exactly once for the completed job"
+        )
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        assert update_data["batch_processed"] is True, (
+            "update() must include batch_processed=True when column is present"
+        )
+        assert update_data["status"] == "complete"
