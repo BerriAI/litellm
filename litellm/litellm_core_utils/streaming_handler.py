@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.types.llms.openai import ChatCompletionChunk
+from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     Delta,
@@ -745,7 +745,7 @@ class CustomStreamWrapper:
 
     def copy_model_response_level_provider_specific_fields(
         self,
-        original_chunk: Union[ModelResponseStream, ChatCompletionChunk],
+        original_chunk: Union[ModelResponseStream, OpenAIChatCompletionChunk],
         model_response: ModelResponseStream,
     ) -> ModelResponseStream:
         """
@@ -1011,6 +1011,15 @@ class CustomStreamWrapper:
                 self.holding_chunk = ""
             # if delta is None
             _is_delta_empty = self.is_delta_empty(delta=model_response.choices[0].delta)
+
+            # Preserve custom attributes from original chunk (applies to both
+            # empty and non-empty delta final chunks).
+            _original_chunk = response_obj.get("original_chunk", None)
+            if _original_chunk is not None:
+                preserve_upstream_non_openai_attributes(
+                    model_response=model_response,
+                    original_chunk=_original_chunk,
+                )
 
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(
