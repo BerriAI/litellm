@@ -239,6 +239,52 @@ async def test_update_daily_spend_sorting():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_processes_all_batches():
+    """
+    Ensure _update_daily_spend processes transactions beyond BATCH_SIZE.
+
+    Regression coverage for a bug where only the first 100 transactions were
+    processed and remaining entries were silently dropped.
+    """
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    daily_spend_transactions = {}
+    total_transactions = 205  # > BATCH_SIZE (100), should require 3 batches
+    for i in range(total_transactions):
+        daily_spend_transactions[f"test_key_{i}"] = {
+            "user_id": f"user{i}",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_table.upsert.call_count == total_transactions
+    assert len(daily_spend_transactions) == 0
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_tag_with_request_id():
     """
     Test that request_id is included in update_data when updating tag transactions.
