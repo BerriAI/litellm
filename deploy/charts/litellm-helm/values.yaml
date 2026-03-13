@@ -168,7 +168,7 @@ istio:
       # Maximum TLS protocol version
       # maxProtocolVersion: TLSV1_3
   virtualService:
-    enabled: true
+    enabled: false
     labels: {}
     annotations: {}
     # Additional gateways to attach to (e.g. use an existing shared gateway)
@@ -177,8 +177,16 @@ istio:
     # # Example: use an existing shared gateway instead of creating one
     # # gateways:
     # #   - istio-system/shared-gateway
-    # Custom HTTP route rules (overrides the default catch-all route)
-    # http: []
+    # Custom HTTP route rules (overrides the default catch-all route when non-empty)
+    # http:
+    #   - match:
+    #       - uri:
+    #           prefix: /v1
+    #     route:
+    #       - destination:
+    #           host: my-litellm-backend
+    #           port:
+    #             number: 4000
     # Timeout for the default route (e.g. "30s")
     # timeout: "30s"
     # Retry policy for the default route

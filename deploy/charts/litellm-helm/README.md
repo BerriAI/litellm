@@ -177,7 +177,7 @@ Use these **instead of** `ingress` when your cluster runs Istio. Uses `networkin
 | `istio.gateway.tls.maxProtocolVersion`           | Maximum TLS protocol version (e.g. `TLSV1_3`)                                                                                  | `""`                 |
 | `istio.gateway.labels`                          | Additional labels for the Gateway resource                                                                         | `{}`                 |
 | `istio.gateway.annotations`                     | Additional annotations for the Gateway resource                                                                    | `{}`                 |
-| `istio.virtualService.enabled`                  | Create a VirtualService resource                                                                                   | `true`               |
+| `istio.virtualService.enabled`                  | Create a VirtualService resource                                                                                   | `false`              |
 | `istio.virtualService.gateways`                 | Additional gateway references (e.g. `["istio-system/shared-gateway"]`). The chart's own Gateway is auto-included  | `[]`                 |
 | `istio.virtualService.http`                     | Custom HTTP route rules. When set, overrides the default catch-all route                                           | `[]`                 |
 | `istio.virtualService.timeout`                  | Request timeout for the default route (e.g. `"30s"`)                                                              | `""`                 |
