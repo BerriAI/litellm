@@ -264,6 +264,53 @@ class TestExtractAllMessagesContentDisabled:
             assert "content" not in msg
 
 
+class TestExtractAllMessagesTimestamps:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_input_messages_get_start_time_timestamp(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        # make_kwargs sets start_time=1_000_000.0 and end_time=1_000_001.5
+        response = make_response()
+
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        input_msg = next(m for m in messages if not m.get("is_response"))
+        assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
+
+    def test_output_messages_get_end_time_timestamp(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_response()
+
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        output_msg = next(m for m in messages if m.get("is_response"))
+        assert output_msg["timestamp"] == int(1_000_001.5 * 1000.0)
+
+    def test_timestamp_forwarded_to_event_data(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        kwargs = make_kwargs(
+            traceparent="00-aabbccddeeff00112233445566778899-0011223344556677-01",
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+        response = make_response()
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            logger._process_success(kwargs, response, start_time=1.0, end_time=2.5)
+
+        calls = mock_app.record_custom_event.call_args_list
+        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
+        for event in message_events:
+            assert "timestamp" in event
+
+
 # ---------------------------------------------------------------------------
 # 6. Helper edge cases
 # ---------------------------------------------------------------------------
