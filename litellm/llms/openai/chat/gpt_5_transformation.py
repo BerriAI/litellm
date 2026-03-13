@@ -223,19 +223,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
-        # gpt-5.4: function calls not supported when reasoning_effort != "none"
-        # Drop reasoning_effort when tools are present (small minority of volume)
-        if self.is_model_gpt_5_4_model(model):
-            has_tools = bool(
-                non_default_params.get("tools") or optional_params.get("tools")
-            )
-            if has_tools and effective_effort not in (None, "none"):
-                # Check if this will be routed to Responses API
-                # If so, keep reasoning_effort; otherwise drop it for chat completions API
-                if not self.is_model_gpt_5_4_plus_model(model):
-                    non_default_params.pop("reasoning_effort", None)
-                    optional_params.pop("reasoning_effort", None)
-
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")
         if supports_none:
