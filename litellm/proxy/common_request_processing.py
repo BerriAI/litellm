@@ -246,6 +246,26 @@ async def create_response(
     )
 
 
+def _is_azure_model_router_request(model: str) -> bool:
+    """
+    Check if the requested model is an Azure Model Router.
+
+    Azure Model Router models follow the pattern:
+    - azure_ai/model_router/<deployment-name>
+    - azure_ai/model-router
+    - model_router/<deployment-name>
+    - model-router
+
+    Args:
+        model: The requested model name
+
+    Returns:
+        bool: True if this is an Azure Model Router request
+    """
+    model_lower = model.lower()
+    return "model-router" in model_lower or "model_router" in model_lower
+
+
 def _override_openai_response_model(
     *,
     response_obj: Any,
@@ -265,9 +285,11 @@ def _override_openai_response_model(
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
 
-    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-    we should preserve the actual model that was used (the fallback model) rather than
-    overriding it with the originally requested model.
+    Exceptions:
+    1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+       we preserve the actual model that was used (the fallback model).
+    2. If the request was to an Azure Model Router, we preserve the actual model
+       that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     """
     if not requested_model:
         return
@@ -287,6 +309,14 @@ def _override_openai_response_model(
                 attempted_fallbacks,
             )
             return
+
+    # Check if this is an Azure Model Router request - if so, preserve the actual model used
+    if _is_azure_model_router_request(requested_model):
+        verbose_proxy_logger.debug(
+            "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
+            log_context,
+        )
+        return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
@@ -744,6 +774,8 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -920,6 +952,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=dict(request.headers),
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -1028,6 +1061,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=dict(request.headers),
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1196,6 +1230,9 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=(self.data.get("proxy_server_request") or {}).get(
+                    "headers", {}
+                ),
             )
             if callback_headers:
                 headers.update(callback_headers)

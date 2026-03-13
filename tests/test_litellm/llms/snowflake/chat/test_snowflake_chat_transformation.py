@@ -105,11 +105,21 @@ class TestSnowflakeToolTransformation:
 
     def test_transform_request_with_string_tool_choice(self):
         """
-        Test that string tool_choice values pass through unchanged.
+        Test that string tool_choice values are transformed to Snowflake object format.
+
+        Snowflake's API (like Anthropic) requires tool_choice as an object
+        with a "type" field, not as a bare string. OpenAI's "required" maps
+        to Snowflake's "any".
         """
         config = SnowflakeConfig()
 
-        for value in ["auto", "required", "none"]:
+        expected_mappings = {
+            "auto": {"type": "auto"},
+            "required": {"type": "any"},
+            "none": {"type": "none"},
+        }
+
+        for value, expected in expected_mappings.items():
             optional_params = {"tool_choice": value}
 
             transformed_request = config.transform_request(
@@ -120,7 +130,10 @@ class TestSnowflakeToolTransformation:
                 headers={},
             )
 
-            assert transformed_request["tool_choice"] == value
+            assert transformed_request["tool_choice"] == expected, (
+                f"tool_choice='{value}' should be transformed to {expected}, "
+                f"got {transformed_request['tool_choice']}"
+            )
 
     def test_transform_response_with_tool_calls(self):
         """

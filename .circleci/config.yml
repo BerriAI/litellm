@@ -69,9 +69,11 @@ jobs:
       - run:
           name: Install Python
           command: |
-            choco install python --version=3.11.0 -y
+            choco install python --version=3.11.0 -y --no-progress --force
             refreshenv
             python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
           command: |
@@ -4335,7 +4337,8 @@ jobs:
           name: Check for expected error
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
+               (grep -q "Database setup failed after multiple retries" docker_output.log || \
+                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."
