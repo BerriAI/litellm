@@ -10323,7 +10323,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10337,7 +10337,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10351,7 +10351,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10365,7 +10365,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10379,7 +10379,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10393,7 +10393,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10407,7 +10407,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10421,7 +10421,7 @@
             "original_pricing_per_minute": 0.0125
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10435,7 +10435,7 @@
             "original_pricing_per_minute": 0.0145
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10449,7 +10449,7 @@
             "original_pricing_per_minute": 0.0145
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10463,7 +10463,7 @@
             "original_pricing_per_minute": 0.0145
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10477,7 +10477,7 @@
             "original_pricing_per_minute": 0.0145
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10491,7 +10491,7 @@
             "original_pricing_per_minute": 0.0145
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10505,7 +10505,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10519,7 +10519,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10533,7 +10533,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10547,7 +10547,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10561,7 +10561,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10575,7 +10575,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10589,7 +10589,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10603,7 +10603,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10617,7 +10617,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10631,7 +10631,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10645,7 +10645,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10659,7 +10659,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10673,7 +10673,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10687,7 +10687,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10701,7 +10701,7 @@
             "original_pricing_per_minute": 0.0052
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10715,7 +10715,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10729,7 +10729,7 @@
             "original_pricing_per_minute": 0.0043
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10742,7 +10742,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10755,7 +10755,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10768,7 +10768,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10781,7 +10781,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10794,7 +10794,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -10807,7 +10807,7 @@
             "notes": "Deepgram's hosted OpenAI Whisper models - pricing may differ from native Deepgram models"
         },
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
+        "output_cost_per_second": null,
         "source": "https://deepgram.com/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -14527,17 +14527,14 @@
         "uses_embed_content": true
     },
     "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_audio_per_second": 0.00016,
-        "input_cost_per_image": 0.00012,
-        "input_cost_per_token": 2e-07,
-        "input_cost_per_video_per_second": 0.00079,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -14552,18 +14549,6 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "uses_embed_content": true
-    },
-    "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "vertex_ai",
-        "max_input_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "embedding",
-        "output_cost_per_token": 0,
-        "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
-        "supports_multimodal": true,
         "uses_embed_content": true
     },
     "gemini/gemini-embedding-001": {
@@ -30938,7 +30923,9 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#glm-models",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
