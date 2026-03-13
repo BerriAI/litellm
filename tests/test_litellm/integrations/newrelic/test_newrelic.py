@@ -220,6 +220,16 @@ class TestGetTraceContext:
         assert trace_id is not None
         assert len(trace_id) == 32
 
+    def test_extracts_trace_id_from_mixed_case_traceparent_header(self):
+        # Callers passing headers directly may not normalise case; per W3C spec
+        # header names are case-insensitive, so "Traceparent" must work too.
+        kwargs = make_kwargs()
+        kwargs["litellm_params"]["metadata"]["headers"] = {
+            "Traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        }
+        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+
 
 # ---------------------------------------------------------------------------
 # 4. _extract_message_content edge cases
@@ -413,6 +423,10 @@ class TestGetFinishReason:
 
     def test_returns_unknown_when_choices_missing(self):
         assert self.logger._get_finish_reason({}) == "unknown"
+
+    def test_returns_unknown_when_finish_reason_explicitly_none(self):
+        response = {"choices": [{"finish_reason": None}]}
+        assert self.logger._get_finish_reason(response) == "unknown"
 
 
 class TestToEpochMs:
