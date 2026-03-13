@@ -107,8 +107,8 @@ class LLMResponseFormat(Enum):
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def __init__(self, **kwargs: Any) -> None:
         self.flush_lock = asyncio.Lock()
+        kwargs.setdefault("guardrail_name", "rubrik")
         super().__init__(
-            guardrail_name="rubrik",
             flush_lock=self.flush_lock,
             **kwargs,
         )
