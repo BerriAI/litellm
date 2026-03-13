@@ -53,7 +53,7 @@ export function clearTokenCookies() {
 export function setTokenCookie(token: string) {
   if (typeof window === "undefined" || typeof document === "undefined") return;
   const isSecure = window.location.protocol === "https:";
-  document.cookie = `token=${token}; Path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
+  document.cookie = `token=${encodeURIComponent(token)}; Path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
 }
 
 /**
@@ -64,5 +64,5 @@ export function setTokenCookie(token: string) {
 export function getCookie(name: string) {
   if (typeof document === "undefined") return null;
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
+  return cookieValue ? decodeURIComponent(cookieValue.split("=")[1]) : null;
 }

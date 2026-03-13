@@ -80,6 +80,38 @@ describe("networking - expired session handling", () => {
   });
 });
 
+describe("loginCall - setTokenCookie integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls setTokenCookie when response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt" }),
+    }) as any;
+    const { setTokenCookie } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(setTokenCookie).toHaveBeenCalledWith("my-jwt");
+  });
+
+  it("does not call setTokenCookie when response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ redirect_url: "/ui/?login=success" }),
+    }) as any;
+    const { setTokenCookie } = await import("@/utils/cookieUtils");
+    await Networking.loginCall("admin", "pass");
+    expect(setTokenCookie).not.toHaveBeenCalled();
+  });
+});
+
 describe("daily activity helpers", () => {
   const startTime = new Date("2025-02-12T00:00:00.000Z");
   const endTime = new Date("2025-02-19T00:00:00.000Z");
