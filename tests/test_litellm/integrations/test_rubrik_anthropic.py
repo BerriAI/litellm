@@ -13,12 +13,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-# Set environment variable BEFORE importing the plugin
-os.environ["RUBRIK_WEBHOOK_URL"] = "http://localhost:8080"
-
-# Patch asyncio.create_task to avoid event loop issues during import
-with patch("asyncio.create_task", Mock()):
-    from litellm.integrations.rubrik import LLMResponseFormat, RubrikLogger  # noqa: E402
+from litellm.integrations.rubrik import LLMResponseFormat, RubrikLogger
 
 
 @pytest.fixture

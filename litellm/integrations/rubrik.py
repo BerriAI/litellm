@@ -74,7 +74,7 @@ _DELTA_TYPE_INPUT_JSON = "input_json_delta"
 
 # Endpoint URL suffixes for format detection
 _ENDPOINT_OPENAI_CHAT_COMPLETIONS = "/chat/completions"
-_ENDPOINT_ANTHROPIC_MESSAGES = "/messages"
+_ENDPOINT_ANTHROPIC_MESSAGES = "/v1/messages"
 
 # Webhook endpoint paths
 _WEBHOOK_PATH_TOOL_BLOCKING = "/v1/after_completion/openai/v1"
@@ -323,8 +323,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
         try:
             async for chunk in handler(buffering_generator()):
-                buffered_chunks.clear()
                 yield chunk
+            # Handler completed successfully — clear buffer so fail-open doesn't replay
+            buffered_chunks.clear()
         except Exception as e:
             verbose_logger.error(
                 f"Streaming tool blocking failed: {e}. Passing through buffered and remaining chunks.",
@@ -498,7 +499,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return
 
         existing = accumulated_tool_calls[delta_index]
-        if existing.function and existing.function.arguments is None:
+        if not existing.function:
+            verbose_logger.warning(f"Stored tool call delta missing function field at index {delta_index}")
+            return
+        if existing.function.arguments is None:
             existing.function.arguments = ""
         existing.function.arguments += delta.function.arguments or ""
 
