@@ -179,6 +179,23 @@ def test_merge_metadata_preserving_deployment_model_info_keeps_router_model_info
     assert merged_metadata["user_field"] == "present"
 
 
+def test_merge_metadata_preserving_deployment_model_info_preserves_explicit_none():
+    from litellm.litellm_core_utils.core_helpers import (
+        merge_metadata_preserving_deployment_model_info,
+    )
+
+    merged_metadata = merge_metadata_preserving_deployment_model_info(
+        litellm_metadata={"model_info": None, "deployment": "test"},
+        user_metadata={"model_info": {"id": "user"}, "user_field": "present"},
+        model_info={"id": "top-level"},
+    )
+
+    assert "model_info" in merged_metadata
+    assert merged_metadata["model_info"] is None
+    assert merged_metadata["deployment"] == "test"
+    assert merged_metadata["user_field"] == "present"
+
+
 def test_logging_prevent_double_logging(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
@@ -615,6 +632,63 @@ def test_process_hidden_params_and_response_cost_uses_router_model_id_for_arespo
         logging_result=response,
         start_time=start_time,
         end_time=end_time,
+    )
+
+    logging_obj._response_cost_calculator.assert_called_once()
+    assert logging_obj._response_cost_calculator.call_args.kwargs["router_model_id"] == (
+        "deployment-custom-pricing-test"
+    )
+
+
+def test_streaming_response_cost_uses_router_model_id_for_aresponses_websocket(
+    logging_obj,
+):
+    import datetime
+
+    logging_obj.stream = True
+    logging_obj.call_type = "_aresponses_websocket"
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"model_info": {"id": "deployment-custom-pricing-test"}}
+    }
+    logging_obj.sync_streaming_chunks = [{"choices": []}]
+
+    response = ResponsesAPIResponse(
+        id="resp_test",
+        object="response",
+        created_at=1741476542,
+        status="completed",
+        model="gpt-4o",
+        output=[],
+        parallel_tool_calls=True,
+        usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        text={"format": {"type": "text"}},
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": None, "summary": None},
+        truncation="disabled",
+        user=None,
+    )
+
+    logging_obj._get_assembled_streaming_response = MagicMock(return_value=response)
+    logging_obj._response_cost_calculator = MagicMock(return_value=123.0)
+    logging_obj._build_standard_logging_payload = MagicMock(return_value={})
+
+    start_time = datetime.datetime.now()
+    end_time = datetime.datetime.now()
+
+    logging_obj.success_handler(
+        result=response,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=False,
     )
 
     logging_obj._response_cost_calculator.assert_called_once()

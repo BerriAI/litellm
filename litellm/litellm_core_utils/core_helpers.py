@@ -231,9 +231,9 @@ def merge_metadata_preserving_deployment_model_info(
     metadata.model_info, but direct callers may still pass model_info top-level.
     """
     merged_metadata = dict(litellm_metadata or {})
-    deployment_model_info = merged_metadata.pop("model_info", None)
+    deployment_model_info = merged_metadata.pop("model_info", _MISSING_MODEL_INFO)
     merged_metadata.update(user_metadata or {})
-    if deployment_model_info is not None:
+    if deployment_model_info is not _MISSING_MODEL_INFO:
         merged_metadata["model_info"] = deployment_model_info
     elif "model_info" not in merged_metadata and model_info is not None:
         merged_metadata["model_info"] = model_info
