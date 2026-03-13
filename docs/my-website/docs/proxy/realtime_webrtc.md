@@ -16,6 +16,20 @@ Connect to the Realtime API via WebRTC for browser and mobile clients. LiteLLM h
 | **Audio routing** | Through proxy | Direct to provider |
 | **Auth** | LiteLLM API key | Encrypted short-lived token |
 
+## How it works
+
+LiteLLM issues tokens and relays SDP; audio never passes through the proxy.
+
+```
+Browser                  LiteLLM Proxy              OpenAI/Azure
+  |                           |                          |
+  |-- POST client_secrets --->|-- POST sessions -------->|
+  |<-- encrypted_token -------|<-- ek_... ---------------|
+  |-- POST calls [SDP+token] ->|-- POST calls ----------->|
+  |<-- SDP answer ------------|<-- SDP answer -----------|
+  |===== audio P2P direct ===============================>|
+```
+
 ## Setup
 
 ### 1. Configure `config.yaml`

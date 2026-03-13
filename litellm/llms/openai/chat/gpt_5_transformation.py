@@ -25,6 +25,22 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
+def _get_effort_level(value: Union[str, dict, None]) -> Optional[str]:
+    """Extract the effective effort level from reasoning_effort (string or dict).
+
+    Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
+    Ensures dict inputs like {"effort": "none", "summary": "detailed"} are correctly
+    treated as effort="none" for validation purposes.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and "effort" in value:
+        return value["effort"]
+    return None
+
+
 class OpenAIGPT5Config(OpenAIGPTConfig):
     """Configuration for gpt-5 models including GPT-5-Codex variants.
 
@@ -69,6 +85,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         """Check if the model is a gpt-5.4 variant (including pro)."""
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.4")
+
+    @classmethod
+    def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
+        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
+        model_name = model.split("/")[-1]
+        if not model_name.startswith("gpt-5."):
+            return False
+        try:
+            version_str = model_name.replace("gpt-5.", "").split("-")[0]
+            major = version_str.split(".")[0]
+            return int(major) >= 4
+        except (ValueError, IndexError):
+            return False
 
     @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
@@ -150,21 +179,30 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 drop_params=drop_params,
             )
 
-        # Normalize reasoning_effort: chat completion API expects a string, not a dict
-        # (e.g. {'effort': 'high', 'summary': 'detailed'} -> 'high')
-        raw_reasoning_effort = (
-            non_default_params.get("reasoning_effort")
-            or optional_params.get("reasoning_effort")
-        )
-        normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
-        if raw_reasoning_effort is not None and normalized is not None:
-            if "reasoning_effort" in non_default_params:
-                non_default_params["reasoning_effort"] = normalized
-            if "reasoning_effort" in optional_params:
-                optional_params["reasoning_effort"] = normalized
+        # Get raw reasoning_effort and effective effort level for all guards.
+        # Use effective_effort (extracted string) for xhigh validation, "none" checks, and
+        # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
+        # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
+        raw_reasoning_effort = non_default_params.get(
+            "reasoning_effort"
+        ) or optional_params.get("reasoning_effort")
+        effective_effort = _get_effort_level(raw_reasoning_effort)
 
-        reasoning_effort = normalized or raw_reasoning_effort
-        if reasoning_effort is not None and reasoning_effort == "xhigh":
+        # Normalize to string for Chat Completions API when dict has only "effort".
+        # Preserve full dict (e.g. {"effort": "high", "summary": "detailed"}) for Responses API.
+        if isinstance(raw_reasoning_effort, dict) and set(
+            raw_reasoning_effort.keys()
+        ) <= {"effort"}:
+            normalized = _normalize_reasoning_effort_for_chat_completion(
+                raw_reasoning_effort
+            )
+            if normalized is not None:
+                if "reasoning_effort" in non_default_params:
+                    non_default_params["reasoning_effort"] = normalized
+                if "reasoning_effort" in optional_params:
+                    optional_params["reasoning_effort"] = normalized
+
+        if effective_effort is not None and effective_effort == "xhigh":
             if not self._supports_reasoning_effort_level(model, "xhigh"):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
@@ -185,23 +223,22 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
-        # gpt-5.4: function calls not supported when reasoning_effort != "none"
-        # Drop reasoning_effort when tools are present (small minority of volume)
+        # gpt-5.4: reasoning_effort + tools is only supported in the Responses API
+        # Drop reasoning_effort when tools are present in chat completions
         if self.is_model_gpt_5_4_model(model):
             has_tools = bool(
                 non_default_params.get("tools") or optional_params.get("tools")
             )
-            if has_tools and reasoning_effort not in (None, "none"):
+            if has_tools and effective_effort is not None:
                 non_default_params.pop("reasoning_effort", None)
                 optional_params.pop("reasoning_effort", None)
-                reasoning_effort = None
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")
         if supports_none:
             sampling_params = ["logprobs", "top_logprobs", "top_p"]
             has_sampling = any(p in non_default_params for p in sampling_params)
-            if has_sampling and reasoning_effort not in (None, "none"):
+            if has_sampling and effective_effort not in (None, "none"):
                 if litellm.drop_params or drop_params:
                     for p in sampling_params:
                         non_default_params.pop(p, None)
@@ -211,7 +248,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                             "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
                             "reasoning_effort='none'. Current reasoning_effort='{}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(reasoning_effort),
+                        ).format(effective_effort),
                         status_code=400,
                     )
 
@@ -219,7 +256,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (reasoning_effort == "none" or reasoning_effort is None):
+                if supports_none and (
+                    effective_effort == "none" or effective_effort is None
+                ):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value

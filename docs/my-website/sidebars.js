@@ -578,6 +578,9 @@ const sidebars = {
             "proxy/pass_through_guardrails",
           ],
         },
+        "realtime",
+        "rerank",
+        "response_api_compact",
 
         // ── 5. Admin & Advanced ────────────────────────────────────────
         {
