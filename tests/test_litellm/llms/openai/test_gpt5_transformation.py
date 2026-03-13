@@ -410,8 +410,12 @@ def test_gpt5_normalizes_reasoning_effort_dict_with_summary_from_optional_params
     assert params["reasoning_effort"] == "medium"
 
 
-def test_gpt5_4_drops_reasoning_effort_when_tools_present(config: OpenAIConfig):
-    """gpt-5.4: function calls not supported with reasoning_effort != 'none'. Drop reasoning_effort."""
+def test_gpt5_4_passes_through_reasoning_effort_with_tools(config: OpenAIConfig):
+    """gpt-5.4 with tools + reasoning_effort: map_openai_params passes through both.
+
+    Routing to Responses API (which supports tools + reasoning) happens at completion()
+    level (responses_api_bridge_check). See test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses.
+    """
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "high", "tools": tools},
@@ -419,7 +423,7 @@ def test_gpt5_4_drops_reasoning_effort_when_tools_present(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert "reasoning_effort" not in params
+    assert params["reasoning_effort"] == "high"
     assert params["tools"] == tools
 
 
