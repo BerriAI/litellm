@@ -37,7 +37,7 @@ class JSONProviderRegistry:
             return
 
         json_path = Path(__file__).parent / "providers.json"
-        
+
         if not json_path.exists():
             # No JSON file yet, that's okay
             cls._loaded = True
@@ -52,7 +52,9 @@ class JSONProviderRegistry:
 
             cls._loaded = True
         except Exception as e:
-            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
+            verbose_logger.warning(
+                f"Warning: Failed to load JSON provider configs: {e}"
+            )
             cls._loaded = True
 
     @classmethod

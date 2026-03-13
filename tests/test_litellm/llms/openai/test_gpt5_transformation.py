@@ -324,10 +324,11 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
-def test_gpt5_normalizes_reasoning_effort_dict_to_string(config: OpenAIConfig):
-    """Chat completion API expects reasoning_effort as a string, not a dict.
+def test_gpt5_preserves_reasoning_effort_dict_with_summary(config: OpenAIConfig):
+    """Dict with summary/generate_summary is preserved for Responses API.
 
     Config/deployments may pass Responses API format: {'effort': 'high', 'summary': 'detailed'}.
+    We preserve the full dict so it reaches the Responses API transformation.
     """
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
@@ -335,21 +336,85 @@ def test_gpt5_normalizes_reasoning_effort_dict_to_string(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == "high"
+    assert params["reasoning_effort"] == {"effort": "high", "summary": "detailed"}
 
 
-def test_gpt5_normalizes_reasoning_effort_dict_from_optional_params(config: OpenAIConfig):
-    """reasoning_effort dict in optional_params (e.g. from model config) is normalized."""
+def test_gpt5_xhigh_dict_triggers_validation(config: OpenAIConfig):
+    """Dict with effort='xhigh' triggers xhigh model-support validation.
+
+    Regression: when reasoning_effort is a dict, effective_effort must be used for
+    the xhigh guard so validation is not silently skipped.
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_xhigh_dict_accepted_for_supported_model(config: OpenAIConfig):
+    """Dict with effort='xhigh' passes through for gpt-5.4+."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "xhigh", "summary": "detailed"}
+
+
+def test_gpt5_none_dict_with_tools_no_tool_drop(config: OpenAIConfig):
+    """Dict with effort='none' and tools: reasoning_effort dropped for gpt-5.4.
+
+    gpt-5.4 drops all reasoning_effort when tools are present,
+    since that combination is only supported in the Responses API.
+    """
+    tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "none", "summary": "detailed"}, "tools": tools},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in params
+    assert params["tools"] == tools
+
+
+def test_gpt5_none_dict_with_sampling_params_allowed(config: OpenAIConfig):
+    """Dict with effort='none' allows logprobs/top_p/top_logprobs.
+
+    Regression: effective_effort='none' must be used for sampling guard so
+    {"effort": "none", "summary": "detailed"} does not incorrectly trigger sampling errors.
+    """
+    params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "logprobs": True,
+            "top_p": 0.9,
+        },
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == {"effort": "none", "summary": "detailed"}
+    assert params["logprobs"] is True
+    assert params["top_p"] == 0.9
+
+
+def test_gpt5_preserves_reasoning_effort_dict_with_summary_from_optional_params(config: OpenAIConfig):
+    """reasoning_effort dict with summary in optional_params is preserved."""
     params = config.map_openai_params(
         non_default_params={},
         optional_params={"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == "medium"
+    assert params["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
 
 
-def test_gpt5_4_drops_reasoning_effort_when_tools_present(config: OpenAIConfig):
+def test_gpt5_4_drops_reasoning_effort_when_user_sends_reasoning_and_tools(config: OpenAIConfig):
     """gpt-5.4: function calls not supported with reasoning_effort != 'none'. Drop reasoning_effort."""
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
@@ -373,8 +438,8 @@ def test_gpt5_4_keeps_reasoning_effort_when_no_tools(config: OpenAIConfig):
     assert params["reasoning_effort"] == "high"
 
 
-def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
-    """reasoning_effort='none' is kept when tools are present."""
+def test_gpt5_4_drops_reasoning_effort_none_with_tools(config: OpenAIConfig):
+    """reasoning_effort='none' is also dropped when tools are present for gpt-5.4."""
     tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "none", "tools": tools},
@@ -382,7 +447,7 @@ def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
         model="gpt-5.4",
         drop_params=False,
     )
-    assert params["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in params
     assert params["tools"] == tools
 
 

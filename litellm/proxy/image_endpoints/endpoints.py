@@ -23,13 +23,6 @@ import io
 
 from fastapi import UploadFile
 
-try:
-    import multipart  # noqa: F401
-
-    _HAS_MULTIPART = True
-except Exception:
-    _HAS_MULTIPART = False
-
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
@@ -209,151 +202,127 @@ async def image_generation(
             )
 
 
-if _HAS_MULTIPART:
-    @router.post(
-        "/v1/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        tags=["images"],
-    )
-    @router.post(
-        "/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        tags=["images"],
-    )
-    @router.post(
-        "/openai/deployments/{model:path}/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        response_class=ORJSONResponse,
-        tags=["images"],
-    )  # azure compatible endpoint
-    async def image_edit_api(
-        request: Request,
-        fastapi_response: Response,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        image: Optional[List[UploadFile]] = File(None),
-        image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
-        mask: Optional[List[UploadFile]] = File(None),
-        mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
-        model: Optional[str] = None,
-    ):
-        """
-        Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
+@router.post(
+    "/v1/images/edits",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+)
+@router.post(
+    "/images/edits",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+)
+@router.post(
+    "/openai/deployments/{model:path}/images/edits",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["images"],
+)  # azure compatible endpoint
+async def image_edit_api(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    image: Optional[List[UploadFile]] = File(None),
+    image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
+    mask: Optional[List[UploadFile]] = File(None),
+    mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
+    model: Optional[str] = None,
+):
+    """
+    Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
 
-        ```bash
-        curl -s -D >(grep -i x-request-id >&2) \
-        -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
-        -X POST "http://localhost:4000/v1/images/edits" \
-        -H "Authorization: Bearer sk-1234" \
-            -F "model=gpt-image-1" \
-            -F "image[]=@soap.png" \
-            -F 'prompt=Create a studio ghibli image of this'
-        ```
-        """
-        if image is not None and image_array is not None:
-            raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
-        if mask is not None and mask_array is not None:
-            raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
-        if image is None and image_array is not None:
-            image = image_array
-        if mask is None and mask_array is not None:
-            mask = mask_array
-
-        # if image is None:
-        #     raise HTTPException(status_code=422, detail="Field required: image")
-        # Note: Image is optional for some models (e.g., Bedrock Stability style-transfer)
-        # The validation will be done at the model level if image is truly required
-
-        from litellm.proxy.proxy_server import (
-            _read_request_body,
-            general_settings,
-            llm_router,
-            proxy_config,
-            proxy_logging_obj,
-            select_data_generator,
-            user_api_base,
-            user_max_tokens,
-            user_model,
-            user_request_timeout,
-            user_temperature,
-            version,
-        )
-
-        #########################################################
-        # Read request body and convert UploadFiles to BytesIO
-        #########################################################
-        data = await _read_request_body(request=request)
-        image_files = await batch_to_bytesio(image)
-        mask_files = await batch_to_bytesio(mask)
-        if image_files:
-            data["image"] = image_files
-        if mask_files:
-            data["mask"] = mask_files
-
-        # Ensure prompt exists in data (default to None for models that don't require it)
-        if "prompt" not in data:
-            data["prompt"] = None
-
-        data["model"] = (
-            model
-            or general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
-        )
-        #########################################################
-        # Process request
-        #########################################################
-
-        processor = ProxyBaseLLMRequestProcessing(data=data)
-        try:
-            return await processor.base_process_llm_request(
-                request=request,
-                fastapi_response=fastapi_response,
-                user_api_key_dict=user_api_key_dict,
-                route_type="aimage_edit",
-                proxy_logging_obj=proxy_logging_obj,
-                llm_router=llm_router,
-                general_settings=general_settings,
-                proxy_config=proxy_config,
-                select_data_generator=select_data_generator,
-                model=None,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                version=version,
-            )
-        except Exception as e:
-            raise await processor._handle_llm_api_exception(
-                e=e,
-                user_api_key_dict=user_api_key_dict,
-                proxy_logging_obj=proxy_logging_obj,
-                version=version,
-            )
-else:
-    @router.post(
-        "/v1/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        tags=["images"],
-    )
-    @router.post(
-        "/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        tags=["images"],
-    )
-    @router.post(
-        "/openai/deployments/{model:path}/images/edits",
-        dependencies=[Depends(user_api_key_auth)],
-        response_class=ORJSONResponse,
-        tags=["images"],
-    )  # azure compatible endpoint
-    async def image_edit_api(
-        request: Request,
-        fastapi_response: Response,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        model: Optional[str] = None,
-    ):
+    ```bash
+    curl -s -D >(grep -i x-request-id >&2) \
+    -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
+    -X POST "http://localhost:4000/v1/images/edits" \
+    -H "Authorization: Bearer sk-1234" \
+        -F "model=gpt-image-1" \
+        -F "image[]=@soap.png" \
+        -F 'prompt=Create a studio ghibli image of this'
+    ```
+    """
+    if image is not None and image_array is not None:
         raise HTTPException(
-            status_code=500,
-            detail='Form data requires "python-multipart" to be installed.',
+            status_code=422, detail="Cannot specify both 'image' and 'image[]'"
+        )
+    if mask is not None and mask_array is not None:
+        raise HTTPException(
+            status_code=422, detail="Cannot specify both 'mask' and 'mask[]'"
+        )
+    if image is None and image_array is not None:
+        image = image_array
+    if mask is None and mask_array is not None:
+        mask = mask_array
+
+    # if image is None:
+    #     raise HTTPException(status_code=422, detail="Field required: image")
+    # Note: Image is optional for some models (e.g., Bedrock Stability style-transfer)
+    # The validation will be done at the model level if image is truly required
+
+    from litellm.proxy.proxy_server import (
+        _read_request_body,
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    #########################################################
+    # Read request body and convert UploadFiles to BytesIO
+    #########################################################
+    data = await _read_request_body(request=request)
+    image_files = await batch_to_bytesio(image)
+    mask_files = await batch_to_bytesio(mask)
+    if image_files:
+        data["image"] = image_files
+    if mask_files:
+        data["mask"] = mask_files
+
+    # Ensure prompt exists in data (default to None for models that don't require it)
+    if "prompt" not in data:
+        data["prompt"] = None
+
+    data["model"] = (
+        model
+        or general_settings.get("image_generation_model", None)  # server default
+        or user_model  # model name passed via cli args
+        or data.get("model", None)  # default passed in http request
+    )
+    #########################################################
+    # Process request
+    #########################################################
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aimage_edit",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
         )
