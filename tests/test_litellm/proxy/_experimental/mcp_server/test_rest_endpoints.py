@@ -759,12 +759,14 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
+            auth_type = None
 
         stub_server = StubServer()
 
