@@ -331,8 +331,14 @@ class NewRelicLogger(CustomLogger):
             return choices[0].get("finish_reason", "unknown")
         return "unknown"
 
+    def _to_epoch_ms(self, t: Any) -> float:
+        """Convert a datetime or float timestamp to epoch milliseconds."""
+        if hasattr(t, "timestamp"):
+            return t.timestamp() * 1000.0
+        return float(t) * 1000.0
+
     def _get_duration(
-        self, kwargs: Dict, start_time: Optional[float], end_time: Optional[float]
+        self, kwargs: Dict, start_time: Any, end_time: Any
     ) -> Optional[float]:
         """
         Extract duration in milliseconds.
@@ -347,7 +353,7 @@ class NewRelicLogger(CustomLogger):
 
         # Fall back to calculating from timestamps
         if start_time is not None and end_time is not None:
-            return (end_time - start_time) * 1000.0  # Convert to milliseconds
+            return self._to_epoch_ms(end_time) - self._to_epoch_ms(start_time)
 
         return None
 
@@ -436,11 +442,7 @@ class NewRelicLogger(CustomLogger):
 
             # Add timestamp for request message if available (convert to milliseconds)
             if start_time is not None:
-                # Handle both datetime objects and float timestamps
-                if hasattr(start_time, "timestamp"):
-                    message_data["timestamp"] = int(start_time.timestamp() * 1000.0)
-                else:
-                    message_data["timestamp"] = int(start_time * 1000.0)
+                message_data["timestamp"] = int(self._to_epoch_ms(start_time))
 
             # Only add content if recording is enabled
             if self._should_record_content():
@@ -465,13 +467,7 @@ class NewRelicLogger(CustomLogger):
 
                     # Add timestamp for response message if available (convert to milliseconds)
                     if end_time is not None:
-                        # Handle both datetime objects and float timestamps
-                        if hasattr(end_time, "timestamp"):
-                            message_data["timestamp"] = int(
-                                end_time.timestamp() * 1000.0
-                            )
-                        else:
-                            message_data["timestamp"] = int(end_time * 1000.0)
+                        message_data["timestamp"] = int(self._to_epoch_ms(end_time))
 
                     # Only add content if recording is enabled
                     if self._should_record_content():
@@ -602,7 +598,7 @@ class NewRelicLogger(CustomLogger):
             import newrelic.agent
 
             app = newrelic.agent.application()
-            if app:
+            if app and app.enabled:
                 app.record_custom_metric("LLM/LiteLLM/Error", 1)
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
