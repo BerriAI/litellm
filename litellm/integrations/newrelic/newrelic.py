@@ -253,7 +253,10 @@ class NewRelicLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params") or {}
             metadata = litellm_params.get("metadata") or {}
             headers = metadata.get("headers") or {}
-            traceparent = headers.get("traceparent", None)
+            # Normalize header key lookup to be case-insensitive per W3C spec
+            traceparent = next(
+                (v for k, v in headers.items() if k.lower() == "traceparent"), None
+            )
 
             trace_id = None
             span_id = None
@@ -300,7 +303,7 @@ class NewRelicLogger(CustomLogger):
     def _get_vendor(self, kwargs: Dict) -> str:
         """Extract vendor/provider from kwargs."""
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        return litellm_params.get("custom_llm_provider", "litellm")
+        return litellm_params.get("custom_llm_provider") or "litellm"
 
     def _get_model_names(
         self, kwargs: Dict, response_obj: ModelResponse
@@ -335,7 +338,7 @@ class NewRelicLogger(CustomLogger):
         """
         choices = response_obj.get("choices") or []
         if choices and len(choices) > 0:
-            return choices[0].get("finish_reason", "unknown")
+            return choices[0].get("finish_reason") or "unknown"
         return "unknown"
 
     def _to_epoch_ms(self, t: Any) -> float:
@@ -441,7 +444,7 @@ class NewRelicLogger(CustomLogger):
         request_messages = kwargs.get("messages") or []
         for msg in request_messages:
             message_data = {
-                "role": msg.get("role", "user"),
+                "role": msg.get("role") or "user",
                 "sequence": sequence,
                 "response.model": response_model,
                 "vendor": vendor,
@@ -465,7 +468,7 @@ class NewRelicLogger(CustomLogger):
                 message = choice.get("message", None)
                 if message:
                     message_data = {
-                        "role": message.get("role", "assistant"),
+                        "role": message.get("role") or "assistant",
                         "sequence": sequence,
                         "response.model": response_model,
                         "vendor": vendor,
