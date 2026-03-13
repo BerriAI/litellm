@@ -2765,6 +2765,69 @@ class SSOAuthenticationHandler:
         return code_verifier, code_challenge
 
     @staticmethod
+    def _validate_token_response(response: "httpx.Response") -> dict:
+        """
+        Parse and validate the token endpoint response.
+
+        Ensures the response is valid JSON, a dict, and contains a non-null
+        access_token string. Raises ProxyException on any validation failure.
+        """
+        try:
+            token_response_raw = response.json()
+        except Exception as json_err:
+            verbose_proxy_logger.error(
+                "Failed to parse token response as JSON: %s. Body: %s",
+                json_err,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=f"Token endpoint returned invalid JSON: {json_err}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not isinstance(token_response_raw, dict):
+            verbose_proxy_logger.error(
+                "Token endpoint returned non-dict JSON (type=%s). Body: %s",
+                type(token_response_raw).__name__,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=(
+                    f"Token endpoint returned unexpected response format "
+                    f"(expected JSON object, got {type(token_response_raw).__name__})"
+                ),
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+        token_response: dict = token_response_raw
+
+        access_token_val = token_response.get("access_token")
+        if not isinstance(access_token_val, str) or not access_token_val:
+            error = token_response.get("error")
+            error_desc = token_response.get("error_description", "")
+            if error:
+                detail = f"{error} - {error_desc}" if error_desc else error
+            else:
+                detail = (
+                    "token endpoint returned HTTP 200 but no access_token "
+                    f"(response keys: {sorted(token_response.keys())})"
+                )
+            verbose_proxy_logger.error(
+                "Token response missing or null access_token. detail=%s", detail
+            )
+            raise ProxyException(
+                message=f"Token exchange failed: {detail}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        return token_response
+
+    @staticmethod
     async def _pkce_token_exchange(
         authorization_code: str,
         code_verifier: str,
@@ -2854,63 +2917,7 @@ class SSOAuthenticationHandler:
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
-        try:
-            token_response_raw = response.json()
-        except Exception as json_err:
-            verbose_proxy_logger.error(
-                "Failed to parse token response as JSON: %s. Body: %s",
-                json_err,
-                response.text[:500],
-            )
-            raise ProxyException(
-                message=f"Token endpoint returned invalid JSON: {json_err}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        # Guard against HTTP 200 with body `null` — response.json() returns Python None
-        # in that case, and calling .get() on None raises AttributeError.
-        if not isinstance(token_response_raw, dict):
-            verbose_proxy_logger.error(
-                "Token endpoint returned non-dict JSON (type=%s). Body: %s",
-                type(token_response_raw).__name__,
-                response.text[:500],
-            )
-            raise ProxyException(
-                message=(
-                    f"Token endpoint returned unexpected response format "
-                    f"(expected JSON object, got {type(token_response_raw).__name__})"
-                ),
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-        token_response: dict = token_response_raw
-
-        # Some providers return HTTP 200 with an error body (e.g. expired code, replay attack).
-        # Also guard against JSON `null` for access_token — it passes key-existence checks
-        # but would produce a "Bearer None" Authorization header downstream.
-        access_token_val = token_response.get("access_token")
-        if not isinstance(access_token_val, str) or not access_token_val:
-            error = token_response.get("error")
-            error_desc = token_response.get("error_description", "")
-            if error:
-                detail = f"{error} - {error_desc}" if error_desc else error
-            else:
-                detail = (
-                    "token endpoint returned HTTP 200 but no access_token "
-                    f"(response keys: {sorted(token_response.keys())})"
-                )
-            verbose_proxy_logger.error(
-                "Token response missing or null access_token. detail=%s", detail
-            )
-            raise ProxyException(
-                message=f"Token exchange failed: {detail}",
-                type=ProxyErrorTypes.auth_error,
-                param="token_exchange",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+        token_response = SSOAuthenticationHandler._validate_token_response(response)
 
         verbose_proxy_logger.debug(
             "PKCE token exchange successful. id_token_present=%s",
