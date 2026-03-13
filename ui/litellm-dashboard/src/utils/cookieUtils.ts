@@ -64,5 +64,5 @@ export function setTokenCookie(token: string) {
 export function getCookie(name: string) {
   if (typeof document === "undefined") return null;
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? decodeURIComponent(cookieValue.split("=")[1]) : null;
+  return cookieValue ? (() => { try { return decodeURIComponent(cookieValue.split("=")[1]); } catch { return cookieValue.split("=")[1]; } })() : null;
 }
