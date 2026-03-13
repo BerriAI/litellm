@@ -1,5 +1,6 @@
 import importlib
 import os
+from unittest.mock import MagicMock, patch
 
 import litellm.litellm_core_utils.default_encoding as default_encoding
 
@@ -31,10 +32,17 @@ def test_custom_tiktoken_cache_dir_override(monkeypatch, tmp_path):
     """
     CUSTOM_TIKTOKEN_CACHE_DIR must override the default bundled directory
     and the directory should be created if it does not exist.
+    Reload with an empty custom dir would otherwise trigger tiktoken to
+    download the vocab; we patch get_encoding so the test is offline-safe
+    and does not depend on tiktoken's in-memory cache state.
     """
     custom_dir = tmp_path / "tiktoken_cache"
     monkeypatch.setenv("CUSTOM_TIKTOKEN_CACHE_DIR", str(custom_dir))
-    _reload_default_encoding(monkeypatch)
+    with patch(
+        "litellm.litellm_core_utils.default_encoding.tiktoken.get_encoding",
+        return_value=MagicMock(),
+    ):
+        _reload_default_encoding(monkeypatch)
 
     cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR")
     assert cache_dir == str(custom_dir)
