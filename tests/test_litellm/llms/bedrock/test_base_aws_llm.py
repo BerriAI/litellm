@@ -14,15 +14,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
+from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.credentials import Credentials
-from botocore.awsrequest import AWSRequest, AWSPreparedRequest
+
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
 )
-from litellm.caching.caching import DualCache
 
 # Global variable for the base_aws_llm.py file path
 
@@ -1517,6 +1518,73 @@ def test_is_already_running_as_role_invalid_target_arn():
 
     # Should return False without making any API calls
     assert base_aws_llm._is_already_running_as_role("not-a-valid-arn") is False
+
+
+def test_filter_headers_skips_none_values():
+    """
+    Test that _filter_headers_for_aws_signature skips headers with None values.
+
+    Reproduces the issue where botocore's SigV4Auth crashes with
+    'NoneType' object has no attribute 'split' when a header value is None.
+    """
+    llm = BaseAWSLLM()
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-amz-security-token": None,
+        "x-amzn-bedrock-kb-session-id": None,
+        "host": None,
+        "x-amz-date": "20240101T000000Z",
+        "x-custom-header": None,
+    }
+
+    filtered = llm._filter_headers_for_aws_signature(headers)
+
+    assert filtered["Content-Type"] == "application/json"
+    assert filtered["x-amz-date"] == "20240101T000000Z"
+    assert "x-amz-security-token" not in filtered
+    assert "x-amzn-bedrock-kb-session-id" not in filtered
+    assert "host" not in filtered
+    # Non-AWS headers are excluded regardless
+    assert "x-custom-header" not in filtered
+
+
+def test_sign_request_with_none_header_values():
+    """
+    End-to-end test that _sign_request does not crash when headers contain
+    None values for x-amz-* keys.
+
+    This reproduces the Bedrock KB GovCloud issue where SigV4 signing failed
+    with 'NoneType' object has no attribute 'split'.
+    """
+    llm = BaseAWSLLM()
+
+    mock_credentials = Credentials("test_key", "test_secret")
+
+    headers_with_nones = {
+        "Content-Type": "application/json",
+        "x-amzn-trace-id": None,
+    }
+
+    with patch.object(
+        llm, "get_credentials", return_value=mock_credentials
+    ), patch.object(
+        llm, "_get_aws_region_name", return_value="us-gov-west-1"
+    ):
+        result_headers, result_body = llm._sign_request(
+            service_name="bedrock",
+            headers=headers_with_nones,
+            optional_params={
+                "aws_access_key_id": "test_key",
+                "aws_secret_access_key": "test_secret",
+                "aws_region_name": "us-gov-west-1",
+            },
+            request_data={"retrievalQuery": {"text": "test query"}},
+            api_base="https://bedrock-agent-runtime.us-gov-west-1.amazonaws.com/knowledgebases/KB123/retrieve",
+        )
+
+        assert "Authorization" in result_headers
+        assert result_body is not None
 
 
 def test_is_already_running_as_role_ssl_verify_passed():

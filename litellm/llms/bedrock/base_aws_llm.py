@@ -1298,6 +1298,8 @@ class BaseAWSLLM:
         }
 
         for header_name, header_value in headers.items():
+            if header_value is None:
+                continue
             header_lower = header_name.lower()
             if (
                 header_lower in aws_headers
