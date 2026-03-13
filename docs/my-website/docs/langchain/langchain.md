@@ -1,3 +1,7 @@
+---
+slug: /langchain
+---
+
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 

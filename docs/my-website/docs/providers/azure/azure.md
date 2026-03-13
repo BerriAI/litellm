@@ -1,3 +1,6 @@
+---
+slug: /providers/azure
+---
 
 import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';

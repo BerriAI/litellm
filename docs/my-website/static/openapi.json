@@ -3,7 +3,7 @@
   "info": {
     "title": "LiteLLM API",
     "version": "1.0.0",
-    "description": "Complete reference for all LiteLLM API endpoints. LiteLLM is a unified interface for 100+ LLM providers — OpenAI, Anthropic, Gemini, AWS Bedrock, Azure, Cohere, and more.",
+    "description": "Complete reference for all LiteLLM API endpoints. LiteLLM is a unified interface for 100+ LLM providers \u2014 OpenAI, Anthropic, Gemini, AWS Bedrock, Azure, Cohere, and more.",
     "contact": {
       "name": "LiteLLM",
       "url": "https://docs.litellm.ai"
@@ -30,6 +30,18 @@
       "description": "Chat completions, text completions, and response APIs"
     },
     {
+      "name": "Anthropic Native",
+      "description": "Direct Anthropic API pass-through endpoints (`/v1/messages`) with LiteLLM's load balancing, cost tracking, and guardrails."
+    },
+    {
+      "name": "Anthropic Skills",
+      "description": "[Beta] Anthropic Skills API \u2014 create, list, retrieve, and delete reusable skills for Claude models."
+    },
+    {
+      "name": "Google GenAI",
+      "description": "Google AI Studio / Gemini native API endpoints (`generateContent`, `streamGenerateContent`, `countTokens`) with LiteLLM's unified authentication and cost tracking."
+    },
+    {
       "name": "Audio & Speech",
       "description": "Speech-to-text and text-to-speech endpoints"
     },
@@ -38,12 +50,24 @@
       "description": "Image generation, editing, and variation endpoints"
     },
     {
+      "name": "Containers",
+      "description": "Manage OpenAI code interpreter containers and their files. Use containers to run code, manage files, and build interactive coding environments."
+    },
+    {
+      "name": "OCR",
+      "description": "Extract and structure text from documents and images. Returns structured Markdown output per page."
+    },
+    {
       "name": "Embeddings & Retrieval",
       "description": "Embeddings and reranking endpoints"
     },
     {
       "name": "Vector Stores & RAG",
       "description": "Vector store management and semantic search"
+    },
+    {
+      "name": "RAG",
+      "description": "Retrieval-Augmented Generation. Ingest documents (Upload \u2192 Chunk \u2192 Embed \u2192 Vector Store) and query them (Search \u2192 Rerank \u2192 LLM Completion)."
     },
     {
       "name": "Files & Storage",
@@ -74,8 +98,20 @@
       "description": "List available models"
     },
     {
-      "name": "Web Search",
-      "description": "Transparent server-side web search execution for any LLM provider. LiteLLM intercepts `litellm_web_search` tool calls and executes them using your configured search provider (Perplexity, Tavily, Exa, etc.), then returns a single final answer — no extra client-side logic needed."
+      "name": "A2A Agents",
+      "description": "[Beta] Agent-to-Agent (A2A) Gateway. Register, publish, and invoke agents using the A2A protocol."
+    },
+    {
+      "name": "Search",
+      "description": "Perplexity-compatible Search API. Execute web searches across 13+ providers (Perplexity, Tavily, Exa AI, Brave, Google PSE, and more) with unified request/response format, cost tracking, and load balancing."
+    },
+    {
+      "name": "Videos",
+      "description": "Video generation, status polling, and content retrieval. Supports Veo and other video generation models."
+    },
+    {
+      "name": "Realtime",
+      "description": "Real-time audio and text streaming. Create client secrets for WebRTC sessions and proxy realtime calls."
     }
   ],
   "paths": {
@@ -155,7 +191,7 @@
                 },
                 "web_search": {
                   "summary": "Web search interception",
-                  "description": "Include the `litellm_web_search` tool — LiteLLM intercepts the tool call, executes the search against your configured provider, and returns a single final answer.",
+                  "description": "Include the `litellm_web_search` tool \u2014 LiteLLM intercepts the tool call, executes the search against your configured provider, and returns a single final answer.",
                   "value": {
                     "model": "gpt-4o",
                     "messages": [
@@ -318,6 +354,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -342,6 +381,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -377,6 +419,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -422,6 +467,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -454,6 +502,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -486,38 +537,9 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/images/variations": {
-      "post": {
-        "tags": [
-          "Images & Video"
-        ],
-        "summary": "Create image variation",
-        "description": "Creates a variation of a given image.",
-        "operationId": "createImageVariation",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/ImageVariationRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Image variations",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ImageGenerationResponse"
-                }
-              }
-            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -570,6 +592,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -616,6 +641,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -647,6 +675,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -689,6 +720,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -715,6 +749,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -739,8 +776,51 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
+      },
+      "post": {
+        "summary": "Update vector store",
+        "tags": [
+          "Vector Stores & RAG"
+        ],
+        "operationId": "updateVectorStore",
+        "parameters": [
+          {
+            "name": "vector_store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vector store updated"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/v1/vector_stores/{vector_store_id}/files": {
@@ -787,6 +867,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -822,6 +905,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -851,6 +937,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -878,8 +967,59 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
+      },
+      "post": {
+        "summary": "Update vector store file",
+        "tags": [
+          "Vector Stores & RAG"
+        ],
+        "operationId": "updateVectorStoreFile",
+        "parameters": [
+          {
+            "name": "vector_store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File updated"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/v1/vector_stores/{vector_store_id}/search": {
@@ -927,6 +1067,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -959,6 +1102,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1007,6 +1153,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1033,6 +1182,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1057,6 +1209,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1084,6 +1239,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1116,6 +1274,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1151,35 +1312,14 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
     },
     "/assistants/{assistant_id}": {
-      "get": {
-        "tags": [
-          "Assistants & Threads"
-        ],
-        "summary": "Retrieve assistant",
-        "operationId": "getAssistant",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/AssistantId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Assistant object",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Assistant"
-                }
-              }
-            }
-          }
-        }
-      },
       "delete": {
         "tags": [
           "Assistants & Threads"
@@ -1201,6 +1341,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1244,6 +1387,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1270,6 +1416,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1306,6 +1455,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1341,6 +1493,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1409,6 +1564,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1419,7 +1577,7 @@
           "Batches"
         ],
         "summary": "Create batch",
-        "description": "Creates and executes a batch from an uploaded JSONL file of requests. Async processing — up to 50% cheaper than real-time requests.",
+        "description": "Creates and executes a batch from an uploaded JSONL file of requests. Async processing \u2014 up to 50% cheaper than real-time requests.",
         "operationId": "createBatch",
         "requestBody": {
           "required": true,
@@ -1441,6 +1599,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1479,6 +1640,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1505,6 +1669,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1531,6 +1698,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1563,6 +1733,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       },
@@ -1601,6 +1774,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1627,6 +1803,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1653,306 +1832,9 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/evals": {
-      "post": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Create evaluation",
-        "description": "Creates an evaluation configuration to test model performance against a dataset and grading criteria.",
-        "operationId": "createEval",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EvalCreateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Eval object",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Eval"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "List evaluations",
-        "operationId": "listEvals",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Limit"
           },
-          {
-            "$ref": "#/components/parameters/After"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of evals",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Eval"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/evals/{eval_id}": {
-      "get": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Retrieve evaluation",
-        "operationId": "getEval",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Eval object",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Eval"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Update evaluation",
-        "operationId": "updateEval",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "metadata": {
-                    "type": "object"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Updated eval",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Eval"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Delete evaluation",
-        "operationId": "deleteEval",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeletedObject"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/evals/{eval_id}/runs": {
-      "post": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Create eval run",
-        "description": "Executes an evaluation against a model and data source.",
-        "operationId": "createEvalRun",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "name",
-                  "data_source"
-                ],
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "data_source": {
-                    "type": "object",
-                    "description": "Data source configuration for this run"
-                  },
-                  "model": {
-                    "type": "string",
-                    "description": "Model to evaluate (overrides eval default)"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Eval run",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EvalRun"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "List eval runs",
-        "operationId": "listEvalRuns",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of runs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/EvalRun"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/evals/{eval_id}/runs/{run_id}": {
-      "get": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Retrieve eval run",
-        "operationId": "getEvalRun",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          },
-          {
-            "$ref": "#/components/parameters/RunId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Eval run",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EvalRun"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Evaluations"
-        ],
-        "summary": "Delete eval run",
-        "operationId": "deleteEvalRun",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/EvalId"
-          },
-          {
-            "$ref": "#/components/parameters/RunId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Deleted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeletedObject"
-                }
-              }
-            }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -1985,6 +1867,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2023,6 +1908,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2030,7 +1918,7 @@
     "/v1/ocr": {
       "post": {
         "tags": [
-          "Safety & Moderation"
+          "OCR"
         ],
         "summary": "Extract text from document (OCR)",
         "description": "Extracts and structures text from documents and images using OCR. Returns structured Markdown output per page.",
@@ -2055,6 +1943,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
@@ -2129,18 +2020,2200 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           }
         }
       }
     },
-    "/v1/chat/completions": {
+    "/v1/search": {
       "post": {
-        "summary": "Chat completion with web search",
-        "description": "Creates a chat completion with automatic web search execution. Include the `litellm_web_search` function in `tools` — when the model triggers it, LiteLLM executes the search using your configured provider and returns the final answer in a single response.\n\n**Supported search providers:** Perplexity, Tavily, Exa AI, Parallel AI, Google PSE, DataForSEO, Firecrawl, SearXNG, Linkup.\n\nConfigure via `config.yaml`:\n```yaml\nlitellm_settings:\n  callbacks:\n    - websearch_interception:\n        enabled_providers: [openai, anthropic, mistral]\n        search_tool_name: perplexity-search\n\nsearch_tools:\n  - search_tool_name: perplexity-search\n    litellm_params:\n      search_provider: perplexity\n      api_key: os.environ/PERPLEXITY_API_KEY\n```\n\nSee [Web Search Integration docs](/docs/integrations/websearch_interception) for full configuration.",
+        "summary": "Execute a web search",
+        "description": "Executes a web search using the configured search provider. Follows the [Perplexity Search API](https://docs.perplexity.ai/api-reference/search-post) request/response format.\n\nSupported providers: Perplexity, Tavily, Exa AI, Brave, Parallel AI, Google PSE, DataForSEO, Firecrawl, SearXNG, Linkup, Serper, DuckDuckGo, SearchAPI.\n\nConfigure in `config.yaml`:\n```yaml\nsearch_tools:\n  - search_tool_name: perplexity-search\n    litellm_params:\n      search_provider: perplexity\n      api_key: os.environ/PERPLEXITYAI_API_KEY\n```",
         "tags": [
-          "Web Search"
+          "Search"
         ],
-        "operationId": "createChatCompletionWithWebSearch",
+        "operationId": "search",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ],
+                    "description": "Search query string, or array of strings for batch search",
+                    "example": "latest AI developments 2024"
+                  },
+                  "search_tool_name": {
+                    "type": "string",
+                    "description": "Name of the search tool configured in `config.yaml` (required when using proxy without tool name in URL)",
+                    "example": "perplexity-search"
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (1\u201320). Default: 10",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10
+                  },
+                  "search_domain_filter": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Filter results to specific domains (max 20)",
+                    "example": [
+                      "arxiv.org",
+                      "nature.com"
+                    ]
+                  },
+                  "max_tokens_per_page": {
+                    "type": "integer",
+                    "description": "Maximum tokens per page to process. Default: 1024",
+                    "default": 1024
+                  },
+                  "country": {
+                    "type": "string",
+                    "description": "Country code filter, e.g. `US`, `GB`, `DE`",
+                    "example": "US"
+                  }
+                }
+              },
+              "example": {
+                "search_tool_name": "perplexity-search",
+                "query": "latest AI developments 2024",
+                "max_results": 5,
+                "search_domain_filter": [
+                  "arxiv.org",
+                  "nature.com"
+                ],
+                "country": "US"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "example": "search"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "description": "Title of the search result"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "URL of the search result"
+                          },
+                          "snippet": {
+                            "type": "string",
+                            "description": "Text snippet from the result"
+                          },
+                          "date": {
+                            "type": "string",
+                            "description": "Publication or last-updated date (optional)"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "object": "search",
+                    "results": [
+                      {
+                        "title": "Latest Advances in Artificial Intelligence",
+                        "url": "https://arxiv.org/paper/example",
+                        "snippet": "This paper discusses recent developments in AI including new model architectures...",
+                        "date": "2024-01-15"
+                      },
+                      {
+                        "title": "Machine Learning Breakthroughs 2024",
+                        "url": "https://nature.com/articles/ml-2024",
+                        "snippet": "Researchers have achieved new milestones in large language model efficiency...",
+                        "date": "2024-01-10"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request \u2014 missing or invalid parameters"
+          },
+          "401": {
+            "description": "Unauthorized \u2014 invalid or missing API key"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/search/{search_tool_name}": {
+      "post": {
+        "summary": "Execute a web search (tool name in URL)",
+        "description": "Executes a web search with the search tool name specified in the URL path. This keeps the request body fully Perplexity-compatible \u2014 no `search_tool_name` field needed in the body.\n\n**Recommended** when you want to maintain compatibility with Perplexity's API format.",
+        "tags": [
+          "Search"
+        ],
+        "operationId": "searchWithToolName",
+        "parameters": [
+          {
+            "name": "search_tool_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name of the search tool configured in `config.yaml`",
+            "example": "perplexity-search"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ],
+                    "description": "Search query string, or array of strings for batch search",
+                    "example": "latest AI developments 2024"
+                  },
+                  "search_tool_name": {
+                    "type": "string",
+                    "description": "Name of the search tool configured in `config.yaml` (required when using proxy without tool name in URL)",
+                    "example": "perplexity-search"
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (1\u201320). Default: 10",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10
+                  },
+                  "search_domain_filter": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Filter results to specific domains (max 20)",
+                    "example": [
+                      "arxiv.org",
+                      "nature.com"
+                    ]
+                  },
+                  "max_tokens_per_page": {
+                    "type": "integer",
+                    "description": "Maximum tokens per page to process. Default: 1024",
+                    "default": 1024
+                  },
+                  "country": {
+                    "type": "string",
+                    "description": "Country code filter, e.g. `US`, `GB`, `DE`",
+                    "example": "US"
+                  }
+                }
+              },
+              "example": {
+                "query": "latest AI developments 2024",
+                "max_results": 5,
+                "search_domain_filter": [
+                  "arxiv.org",
+                  "nature.com"
+                ],
+                "country": "US"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "example": "search"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "description": "Title of the search result"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "URL of the search result"
+                          },
+                          "snippet": {
+                            "type": "string",
+                            "description": "Text snippet from the result"
+                          },
+                          "date": {
+                            "type": "string",
+                            "description": "Publication or last-updated date (optional)"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "object": "search",
+                    "results": [
+                      {
+                        "title": "Latest Advances in Artificial Intelligence",
+                        "url": "https://arxiv.org/paper/example",
+                        "snippet": "This paper discusses recent developments in AI including new model architectures...",
+                        "date": "2024-01-15"
+                      },
+                      {
+                        "title": "Machine Learning Breakthroughs 2024",
+                        "url": "https://nature.com/articles/ml-2024",
+                        "snippet": "Researchers have achieved new milestones in large language model efficiency...",
+                        "date": "2024-01-10"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request \u2014 missing or invalid parameters"
+          },
+          "401": {
+            "description": "Unauthorized \u2014 invalid or missing API key"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/evals": {
+      "post": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Create evaluation",
+        "description": "Creates an evaluation configuration to test model performance against a dataset and grading criteria.",
+        "operationId": "createEval",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Eval object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "List evaluations",
+        "operationId": "listEvals",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of evals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Eval"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/evals/{eval_id}": {
+      "get": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Retrieve evaluation",
+        "operationId": "getEval",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eval object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Delete evaluation",
+        "operationId": "deleteEval",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Update evaluation",
+        "operationId": "updateEval",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated eval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Eval"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/evals/{eval_id}/runs": {
+      "post": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Create eval run",
+        "description": "Executes an evaluation against a model and data source.",
+        "operationId": "createEvalRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "data_source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "object",
+                    "description": "Data source configuration for this run"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Model to evaluate (overrides eval default)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Eval run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "List eval runs",
+        "operationId": "listEvalRuns",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EvalRun"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/evals/{eval_id}/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Retrieve eval run",
+        "operationId": "getEvalRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          },
+          {
+            "$ref": "#/components/parameters/RunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eval run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Evaluations"
+        ],
+        "summary": "Delete eval run",
+        "operationId": "deleteEvalRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvalId"
+          },
+          {
+            "$ref": "#/components/parameters/RunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "summary": "Cancel eval run",
+        "tags": [
+          "Evaluations"
+        ],
+        "operationId": "cancelEvalRun",
+        "parameters": [
+          {
+            "name": "eval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run cancelled"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/evals/{eval_id}/cancel": {
+      "post": {
+        "summary": "Cancel evaluation",
+        "tags": [
+          "Evaluations"
+        ],
+      "operationId": "cancelEval",
+        "parameters": [
+          {
+            "name": "eval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evaluation cancelled"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/content": {
+      "get": {
+        "summary": "Get vector store file content",
+        "tags": [
+          "Vector Stores & RAG"
+        ],
+        "operationId": "getVectorStoreFileContent",
+        "parameters": [
+          {
+            "name": "vector_store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/ocr": {
+      "post": {
+        "tags": [
+          "OCR"
+        ],
+        "summary": "Extract text from document (OCR)",
+        "description": "Extracts and structures text from documents and images using OCR. Returns structured Markdown output per page.",
+        "operationId": "createOCRNoPrefix",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OCRRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OCR result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OCRResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "summary": "Execute a web search",
+        "description": "Executes a web search using the configured search provider. Follows the [Perplexity Search API](https://docs.perplexity.ai/api-reference/search-post) request/response format.\n\nSupported providers: Perplexity, Tavily, Exa AI, Brave, Parallel AI, Google PSE, DataForSEO, Firecrawl, SearXNG, Linkup, Serper, DuckDuckGo, SearchAPI.\n\nConfigure in `config.yaml`:\n```yaml\nsearch_tools:\n  - search_tool_name: perplexity-search\n    litellm_params:\n      search_provider: perplexity\n      api_key: os.environ/PERPLEXITYAI_API_KEY\n```",
+        "tags": [
+          "Search"
+        ],
+        "operationId": "searchNoPrefix",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ],
+                    "description": "Search query string, or array of strings for batch search",
+                    "example": "latest AI developments 2024"
+                  },
+                  "search_tool_name": {
+                    "type": "string",
+                    "description": "Name of the search tool configured in `config.yaml` (required when using proxy without tool name in URL)",
+                    "example": "perplexity-search"
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (1\u201320). Default: 10",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10
+                  },
+                  "search_domain_filter": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Filter results to specific domains (max 20)",
+                    "example": [
+                      "arxiv.org",
+                      "nature.com"
+                    ]
+                  },
+                  "max_tokens_per_page": {
+                    "type": "integer",
+                    "description": "Maximum tokens per page to process. Default: 1024",
+                    "default": 1024
+                  },
+                  "country": {
+                    "type": "string",
+                    "description": "Country code filter, e.g. `US`, `GB`, `DE`",
+                    "example": "US"
+                  }
+                }
+              },
+              "example": {
+                "search_tool_name": "perplexity-search",
+                "query": "latest AI developments 2024",
+                "max_results": 5,
+                "search_domain_filter": [
+                  "arxiv.org",
+                  "nature.com"
+                ],
+                "country": "US"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "example": "search"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "description": "Title of the search result"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "URL of the search result"
+                          },
+                          "snippet": {
+                            "type": "string",
+                            "description": "Text snippet from the result"
+                          },
+                          "date": {
+                            "type": "string",
+                            "description": "Publication or last-updated date (optional)"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "object": "search",
+                    "results": [
+                      {
+                        "title": "Latest Advances in Artificial Intelligence",
+                        "url": "https://arxiv.org/paper/example",
+                        "snippet": "This paper discusses recent developments in AI including new model architectures...",
+                        "date": "2024-01-15"
+                      },
+                      {
+                        "title": "Machine Learning Breakthroughs 2024",
+                        "url": "https://nature.com/articles/ml-2024",
+                        "snippet": "Researchers have achieved new milestones in large language model efficiency...",
+                        "date": "2024-01-10"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request \u2014 missing or invalid parameters"
+          },
+          "401": {
+            "description": "Unauthorized \u2014 invalid or missing API key"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/search/{search_tool_name}": {
+      "post": {
+        "summary": "Execute a web search (tool name in URL)",
+        "description": "Executes a web search with the search tool name specified in the URL path. This keeps the request body fully Perplexity-compatible \u2014 no `search_tool_name` field needed in the body.\n\n**Recommended** when you want to maintain compatibility with Perplexity's API format.",
+        "tags": [
+          "Search"
+        ],
+        "operationId": "searchWithToolNameNoPrefix",
+        "parameters": [
+          {
+            "name": "search_tool_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Name of the search tool configured in `config.yaml`",
+            "example": "perplexity-search"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ],
+                    "description": "Search query string, or array of strings for batch search",
+                    "example": "latest AI developments 2024"
+                  },
+                  "search_tool_name": {
+                    "type": "string",
+                    "description": "Name of the search tool configured in `config.yaml` (required when using proxy without tool name in URL)",
+                    "example": "perplexity-search"
+                  },
+                  "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (1\u201320). Default: 10",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10
+                  },
+                  "search_domain_filter": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Filter results to specific domains (max 20)",
+                    "example": [
+                      "arxiv.org",
+                      "nature.com"
+                    ]
+                  },
+                  "max_tokens_per_page": {
+                    "type": "integer",
+                    "description": "Maximum tokens per page to process. Default: 1024",
+                    "default": 1024
+                  },
+                  "country": {
+                    "type": "string",
+                    "description": "Country code filter, e.g. `US`, `GB`, `DE`",
+                    "example": "US"
+                  }
+                }
+              },
+              "example": {
+                "query": "latest AI developments 2024",
+                "max_results": 5,
+                "search_domain_filter": [
+                  "arxiv.org",
+                  "nature.com"
+                ],
+                "country": "US"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "example": "search"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": {
+                            "type": "string",
+                            "description": "Title of the search result"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "URL of the search result"
+                          },
+                          "snippet": {
+                            "type": "string",
+                            "description": "Text snippet from the result"
+                          },
+                          "date": {
+                            "type": "string",
+                            "description": "Publication or last-updated date (optional)"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "object": "search",
+                    "results": [
+                      {
+                        "title": "Latest Advances in Artificial Intelligence",
+                        "url": "https://arxiv.org/paper/example",
+                        "snippet": "This paper discusses recent developments in AI including new model architectures...",
+                        "date": "2024-01-15"
+                      },
+                      {
+                        "title": "Machine Learning Breakthroughs 2024",
+                        "url": "https://nature.com/articles/ml-2024",
+                        "snippet": "Researchers have achieved new milestones in large language model efficiency...",
+                        "date": "2024-01-10"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request \u2014 missing or invalid parameters"
+          },
+          "401": {
+            "description": "Unauthorized \u2014 invalid or missing API key"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/search/tools": {
+      "get": {
+        "summary": "List configured search tools",
+        "description": "Returns all search tools configured in `config.yaml` under `search_tools`.",
+        "tags": [
+          "Search"
+        ],
+        "operationId": "listSearchTools",
+        "responses": {
+          "200": {
+            "description": "List of configured search tools",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "search_tool_name": {
+                        "type": "string"
+                      },
+                      "search_provider": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "example": [
+                    {
+                      "search_tool_name": "perplexity-search",
+                      "search_provider": "perplexity"
+                    },
+                    {
+                      "search_tool_name": "tavily-search",
+                      "search_provider": "tavily"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/search/tools": {
+      "get": {
+        "summary": "List configured search tools",
+        "description": "Returns all search tools configured in `config.yaml` under `search_tools`.",
+        "tags": [
+          "Search"
+        ],
+        "operationId": "listSearchToolsV1",
+        "responses": {
+          "200": {
+            "description": "List of configured search tools",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "search_tool_name": {
+                        "type": "string"
+                      },
+                      "search_provider": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "example": [
+                    {
+                      "search_tool_name": "perplexity-search",
+                      "search_provider": "perplexity"
+                    },
+                    {
+                      "search_tool_name": "tavily-search",
+                      "search_provider": "tavily"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/videos": {
+      "post": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Generate video",
+        "operationId": "generateVideo",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model",
+                  "prompt"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "example": "veo-2"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "example": "A drone shot of a mountain at sunrise"
+                  },
+                  "duration_seconds": {
+                    "type": "integer"
+                  },
+                  "aspect_ratio": {
+                    "type": "string",
+                    "example": "16:9"
+                  },
+                  "resolution": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Video generation job started"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List videos",
+        "operationId": "listVideos",
+        "responses": {
+          "200": {
+            "description": "List of video generation jobs"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/videos": {
+      "post": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Generate video",
+        "operationId": "generateVideoV1",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model",
+                  "prompt"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "example": "veo-2"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "example": "A drone shot of a mountain at sunrise"
+                  },
+                  "duration_seconds": {
+                    "type": "integer"
+                  },
+                  "aspect_ratio": {
+                    "type": "string",
+                    "example": "16:9"
+                  },
+                  "resolution": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Video generation job started"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List videos",
+        "operationId": "listVideosV1",
+        "responses": {
+          "200": {
+            "description": "List of video generation jobs"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/videos/{video_id}": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get video status",
+        "operationId": "getVideoStatus",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Video generation status and metadata"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/videos/{video_id}/content": {
+      "get": {
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get video content",
+        "operationId": "getVideoContent",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Video file content"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/realtime/client_secrets": {
+      "post": {
+        "tags": [
+          "Realtime"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create realtime client secret",
+        "operationId": "createRealtimeClientSecret",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "example": "gpt-4o-realtime-preview"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Client secret for WebRTC session"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/realtime/calls": {
+      "post": {
+        "tags": [
+          "Realtime"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Proxy realtime calls",
+        "operationId": "proxyRealtimeCalls",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Realtime call response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/responses/{response_id}/input_items": {
+      "get": {
+        "summary": "Get response input items",
+        "tags": [
+          "Chat & Text"
+        ],
+        "operationId": "getResponseInputItems",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Input items for the response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/responses/{response_id}/cancel": {
+      "post": {
+        "summary": "Cancel response",
+        "tags": [
+          "Chat & Text"
+        ],
+        "operationId": "cancelResponse",
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response cancelled"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/responses/compact": {
+      "post": {
+        "summary": "Compact response",
+        "description": "Returns a compacted version of a response, useful for truncating context in long conversations.",
+        "tags": [
+          "Chat & Text"
+        ],
+        "operationId": "compactResponse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Compacted response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/rerank": {
+      "post": {
+        "tags": [
+          "Embeddings & Retrieval"
+        ],
+        "summary": "Rerank documents",
+        "description": "Reranks a list of documents by relevance to a query. Supports Cohere, Voyage AI, Jina AI, and other reranking providers.",
+        "operationId": "rerankV1",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              },
+              "examples": {
+                "basic": {
+                  "value": {
+                    "model": "rerank-english-v3.0",
+                    "query": "What is the capital of France?",
+                    "documents": [
+                      "Paris is the capital of France.",
+                      "London is the capital of the UK.",
+                      "The Eiffel Tower is in Paris."
+                    ],
+                    "top_n": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reranked documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v2/rerank": {
+      "post": {
+        "tags": [
+          "Embeddings & Retrieval"
+        ],
+        "summary": "Rerank documents",
+        "description": "Reranks a list of documents by relevance to a query. Supports Cohere, Voyage AI, Jina AI, and other reranking providers.",
+        "operationId": "rerankV2",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              },
+              "examples": {
+                "basic": {
+                  "value": {
+                    "model": "rerank-english-v3.0",
+                    "query": "What is the capital of France?",
+                    "documents": [
+                      "Paris is the capital of France.",
+                      "London is the capital of the UK.",
+                      "The Eiffel Tower is in Paris."
+                    ],
+                    "top_n": 2
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reranked documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/containers": {
+      "post": {
+        "summary": "Create container",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "createContainer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Container created"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "summary": "List containers",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "listContainers",
+        "responses": {
+          "200": {
+            "description": "List of containers"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/containers/{container_id}": {
+      "get": {
+        "summary": "Retrieve container",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "retrieveContainer",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Container details"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete container",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "deleteContainer",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Container deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/containers/{container_id}/files": {
+      "get": {
+        "summary": "List container files",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "listContainerFiles",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of files"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Upload file to container",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "uploadContainerFile",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File uploaded"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/containers/{container_id}/files/{file_id}": {
+      "get": {
+        "summary": "Retrieve container file",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "retrieveContainerFile",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File details"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete container file",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "deleteContainerFile",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/containers/{container_id}/files/{file_id}/content": {
+      "get": {
+        "summary": "Get container file content",
+        "tags": [
+          "Containers"
+        ],
+        "operationId": "getContainerFileContent",
+        "parameters": [
+          {
+            "name": "container_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File binary content"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/rag/ingest": {
+      "post": {
+        "summary": "Ingest documents",
+        "description": "Upload, chunk, embed, and store documents into a vector store. Full pipeline: Upload \u2192 Chunk \u2192 Embed \u2192 Vector Store.",
+        "tags": [
+          "RAG"
+        ],
+        "operationId": "ragIngest",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file_path"
+                ],
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "vector_store_id": {
+                    "type": "string"
+                  },
+                  "chunk_size": {
+                    "type": "integer",
+                    "default": 1000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Documents ingested successfully"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/rag/query": {
+      "post": {
+        "summary": "Query documents",
+        "description": "Search vector store, rerank results, and generate an LLM completion. Full pipeline: Search \u2192 Rerank \u2192 LLM Completion.",
+        "tags": [
+          "RAG"
+        ],
+        "operationId": "ragQuery",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "query"
+                ],
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "vector_store_id": {
+                    "type": "string"
+                  },
+                  "top_k": {
+                    "type": "integer",
+                    "default": 5
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Query results with LLM-generated answer"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "summary": "Anthropic Messages API",
+        "description": "Pass-through for Anthropic's `/v1/messages` endpoint. Supports all Claude models with LiteLLM's load balancing, spend tracking, and guardrails applied transparently.",
+        "tags": [
+          "Anthropic Native"
+        ],
+        "operationId": "anthropicMessages",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model",
+                  "messages",
+                  "max_tokens"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "example": "claude-opus-4-6"
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "max_tokens": {
+                    "type": "integer",
+                    "example": 1024
+                  },
+                  "stream": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "system": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Anthropic messages response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/messages/count_tokens": {
+      "post": {
+        "summary": "Count tokens (Anthropic)",
+        "description": "Count tokens for an Anthropic messages request without generating a response.",
+        "tags": [
+          "Anthropic Native"
+        ],
+        "operationId": "anthropicCountTokens",
         "requestBody": {
           "required": true,
           "content": {
@@ -2153,233 +4226,425 @@
                 ],
                 "properties": {
                   "model": {
-                    "type": "string",
-                    "description": "Model ID to use, e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash`",
-                    "example": "gpt-4o"
+                    "type": "string"
                   },
                   "messages": {
                     "type": "array",
-                    "description": "Conversation history",
-                    "items": {
-                      "type": "object",
-                      "required": [
-                        "role",
-                        "content"
-                      ],
-                      "properties": {
-                        "role": {
-                          "type": "string",
-                          "enum": [
-                            "system",
-                            "user",
-                            "assistant"
-                          ]
-                        },
-                        "content": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "example": [
-                      {
-                        "role": "user",
-                        "content": "What is the latest news on LLM releases?"
-                      }
-                    ]
-                  },
-                  "tools": {
-                    "type": "array",
-                    "description": "Include the `litellm_web_search` function definition to enable automatic web search execution",
                     "items": {
                       "type": "object"
-                    },
-                    "example": [
-                      {
-                        "type": "function",
-                        "function": {
-                          "name": "litellm_web_search",
-                          "description": "Search the web for current information",
-                          "parameters": {
-                            "type": "object",
-                            "properties": {
-                              "query": {
-                                "type": "string",
-                                "description": "The search query"
-                              }
-                            },
-                            "required": [
-                              "query"
-                            ]
-                          }
-                        }
-                      }
-                    ]
-                  },
-                  "tool_choice": {
-                    "description": "Controls which tool the model calls. Defaults to `auto`",
-                    "oneOf": [
-                      {
-                        "type": "string",
-                        "enum": [
-                          "none",
-                          "auto",
-                          "required"
-                        ]
-                      },
-                      {
-                        "type": "object"
-                      }
-                    ]
-                  },
-                  "stream": {
-                    "type": "boolean",
-                    "description": "Stream SSE delta events. Defaults to `false`",
-                    "default": false
-                  },
-                  "temperature": {
-                    "type": "number",
-                    "description": "Sampling temperature between 0 and 2",
-                    "minimum": 0,
-                    "maximum": 2
-                  },
-                  "max_tokens": {
-                    "type": "integer",
-                    "description": "Maximum number of tokens to generate"
-                  }
-                }
-              },
-              "example": {
-                "model": "gpt-4o",
-                "messages": [
-                  {
-                    "role": "user",
-                    "content": "What is the latest news on LLM releases?"
-                  }
-                ],
-                "tools": [
-                  {
-                    "type": "function",
-                    "function": {
-                      "name": "litellm_web_search",
-                      "description": "Search the web for current information",
-                      "parameters": {
-                        "type": "object",
-                        "properties": {
-                          "query": {
-                            "type": "string",
-                            "description": "The search query"
-                          }
-                        },
-                        "required": [
-                          "query"
-                        ]
-                      }
                     }
                   }
-                ]
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "A single final chat completion response. The intermediate web search tool call and result are handled internally — your application always receives a clean completion object.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "object": {
-                      "type": "string",
-                      "example": "chat.completion"
-                    },
-                    "created": {
-                      "type": "integer"
-                    },
-                    "model": {
-                      "type": "string"
-                    },
-                    "choices": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "index": {
-                            "type": "integer"
-                          },
-                          "message": {
-                            "type": "object",
-                            "properties": {
-                              "role": {
-                                "type": "string"
-                              },
-                              "content": {
-                                "type": "string"
-                              }
-                            }
-                          },
-                          "finish_reason": {
-                            "type": "string"
-                          }
-                        }
-                      }
-                    },
-                    "usage": {
-                      "type": "object",
-                      "properties": {
-                        "prompt_tokens": {
-                          "type": "integer"
-                        },
-                        "completion_tokens": {
-                          "type": "integer"
-                        },
-                        "total_tokens": {
-                          "type": "integer"
-                        }
-                      }
-                    }
-                  },
-                  "example": {
-                    "id": "chatcmpl-wsearch123",
-                    "object": "chat.completion",
-                    "created": 1700000000,
-                    "model": "gpt-4o-2024-11-20",
-                    "choices": [
-                      {
-                        "index": 0,
-                        "message": {
-                          "role": "assistant",
-                          "content": "Here are the latest LLM releases as of today: OpenAI released GPT-4o with improved multimodal capabilities, Anthropic launched Claude 3.5 Sonnet with extended context, and Google DeepMind announced Gemini 2.0 Flash with real-time capabilities..."
-                        },
-                        "finish_reason": "stop"
-                      }
-                    ],
-                    "usage": {
-                      "prompt_tokens": 120,
-                      "completion_tokens": 85,
-                      "total_tokens": 205
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request — invalid parameters"
+            "description": "Token count"
           },
           "401": {
-            "description": "Unauthorized — invalid or missing API key"
-          },
-          "500": {
-            "description": "Internal server error"
+            "$ref": "#/components/responses/Unauthorized"
           }
         },
         "security": [
           {
-            "bearerAuth": []
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1beta/models/{model_name}:generateContent": {
+      "post": {
+        "summary": "Generate content (Google)",
+        "description": "Google AI `generateContent` endpoint. Compatible with Google AI Studio and Vertex AI.",
+        "tags": [
+          "Google GenAI"
+        ],
+        "operationId": "googleGenerateContent",
+        "parameters": [
+          {
+            "name": "model_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "gemini-2.0-flash"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "contents"
+                ],
+                "properties": {
+                  "contents": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "generationConfig": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated content"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1beta/models/{model_name}:countTokens": {
+      "post": {
+        "summary": "Count tokens (Google)",
+        "tags": [
+          "Google GenAI"
+        ],
+        "operationId": "googleCountTokens",
+        "parameters": [
+          {
+            "name": "model_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token count"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "summary": "List agents",
+        "tags": [
+          "A2A Agents"
+        ],
+        "operationId": "listAgents",
+        "responses": {
+          "200": {
+            "description": "List of registered agents"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Create agent",
+        "tags": [
+          "A2A Agents"
+        ],
+        "operationId": "createAgent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Agent created"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}": {
+      "get": {
+        "summary": "Get agent",
+        "tags": [
+          "A2A Agents"
+        ],
+        "operationId": "getAgent",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent details"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Update agent",
+        "tags": [
+          "A2A Agents"
+        ],
+        "operationId": "updateAgent",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Agent updated"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/a2a/{agent_id}": {
+      "post": {
+        "summary": "Invoke agent (A2A)",
+        "description": "Invoke an agent using the A2A protocol.",
+        "tags": [
+          "A2A Agents"
+        ],
+        "operationId": "invokeAgent",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Agent response"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/skills": {
+      "post": {
+        "summary": "Create skill",
+        "tags": [
+          "Anthropic Skills"
+        ],
+        "operationId": "createSkill",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Skill created"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "summary": "List skills",
+        "tags": [
+          "Anthropic Skills"
+        ],
+        "operationId": "listSkills",
+        "responses": {
+          "200": {
+            "description": "List of skills"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/skills/{skill_id}": {
+      "get": {
+        "summary": "Get skill",
+        "tags": [
+          "Anthropic Skills"
+        ],
+        "operationId": "getSkill",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill details"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete skill",
+        "tags": [
+          "Anthropic Skills"
+        ],
+        "operationId": "deleteSkill",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
           }
         ]
       }
@@ -2491,12 +4756,12 @@
         "schema": {
           "type": "string"
         },
-        "description": "Cursor for pagination — ID of the last item from the previous page"
+        "description": "Cursor for pagination \u2014 ID of the last item from the previous page"
       }
     },
     "responses": {
       "BadRequest": {
-        "description": "Bad request — invalid or missing parameters",
+        "description": "Bad request \u2014 invalid or missing parameters",
         "content": {
           "application/json": {
             "schema": {
@@ -2506,11 +4771,19 @@
         }
       },
       "Unauthorized": {
-        "description": "Unauthorized — invalid or missing API key",
+        "description": "Unauthorized \u2014 invalid or missing API key",
         "content": {
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": {
+                "message": "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix.",
+                "type": "auth_error",
+                "param": "None",
+                "code": "401"
+              }
             }
           }
         }
@@ -2561,6 +4834,10 @@
               },
               "code": {
                 "type": "string"
+              },
+              "param": {
+                "type": "string",
+                "nullable": true
               }
             }
           }
@@ -2688,7 +4965,7 @@
         "properties": {
           "model": {
             "type": "string",
-            "description": "Model ID. Supports any provider prefix — e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash`, `bedrock/anthropic.claude-3-5-sonnet`, `azure/gpt-4o`.",
+            "description": "Model ID. Supports any provider prefix \u2014 e.g. `gpt-4o`, `claude-opus-4-6`, `gemini/gemini-2.0-flash`, `bedrock/anthropic.claude-3-5-sonnet`, `azure/gpt-4o`.",
             "example": "gpt-4o"
           },
           "messages": {
@@ -3144,7 +5421,7 @@
           "file": {
             "type": "string",
             "format": "binary",
-            "description": "Audio file to transcribe (mp3, mp4, mpeg, mpga, m4a, wav, webm — max 25MB)"
+            "description": "Audio file to transcribe (mp3, mp4, mpeg, mpga, m4a, wav, webm \u2014 max 25MB)"
           },
           "model": {
             "type": "string",
@@ -3329,7 +5606,7 @@
           "mask": {
             "type": "string",
             "format": "binary",
-            "description": "Optional mask PNG — white areas indicate where to edit"
+            "description": "Optional mask PNG \u2014 white areas indicate where to edit"
           },
           "model": {
             "type": "string",
@@ -4514,7 +6791,7 @@
                   "additionalProperties": {
                     "type": "number"
                   },
-                  "description": "Confidence scores for each category (0–1)"
+                  "description": "Confidence scores for each category (0\u20131)"
                 }
               }
             }

@@ -1,4 +1,4 @@
-# /rag/query
+# RAG Query
 
 RAG Query endpoint: **Search Vector Store → (Rerank) → LLM Completion**
 

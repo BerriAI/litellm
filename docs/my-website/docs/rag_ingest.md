@@ -1,4 +1,4 @@
-# /rag/ingest
+# RAG Ingest
 
 All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector Store**
 

@@ -41,6 +41,8 @@ const sidebars = {
       type: "category",
       label: "Guardrails",
       items: [
+        "apply_guardrail",
+        "moderation",
         "proxy/guardrails/quick_start",
         "proxy/guardrails/team_based_guardrails",
         "proxy/guardrails/guardrail_load_balancing",
@@ -544,6 +546,39 @@ const sidebars = {
             "router_architecture",
           ],
         },
+        // ── Pass-through Endpoints ─────────────────────────────────────
+        {
+          type: "category",
+          label: "Pass-through Endpoints",
+          collapsed: true,
+          link: { type: "doc", id: "pass_through/intro" },
+          items: [
+            "pass_through/anthropic_completion",
+            "pass_through/assembly_ai",
+            "pass_through/bedrock",
+            "pass_through/azure_passthrough",
+            "pass_through/cohere",
+            "pass_through/cursor",
+            "pass_through/google_ai_studio",
+            "pass_through/langfuse",
+            "pass_through/mistral",
+            "pass_through/openai_passthrough",
+            {
+              type: "category",
+              label: "Vertex AI",
+              collapsed: true,
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+                "pass_through/vertex_ai_search_datastores",
+              ],
+            },
+            "pass_through/vllm",
+            "proxy/pass_through",
+            "proxy/pass_through_guardrails",
+          ],
+        },
+
         // ── 5. Admin & Advanced ────────────────────────────────────────
         {
           type: "category",
@@ -807,6 +842,7 @@ const sidebars = {
           label: "Realtime",
           collapsed: true,
           items: [
+            "proxy/realtime_webrtc",
             "providers/bedrock_realtime_with_audio",
             "providers/google_ai_studio/realtime",
             "providers/vertex_realtime",
@@ -867,6 +903,19 @@ const sidebars = {
           ],
         },
 
+        // ── RAG ───────────────────────────────────────────────────────
+        {
+          type: "category",
+          label: "RAG",
+          collapsed: true,
+          items: [
+            "rag_ingest",
+            "rag_query",
+            "providers/gemini_file_search",
+            "completion/knowledgebase",
+          ],
+        },
+
         // ── Reranking ─────────────────────────────────────────────────
         {
           type: "category",
@@ -904,6 +953,30 @@ const sidebars = {
             "providers/azure_document_intelligence",
             "providers/azure_ocr",
             "providers/vertex_ocr",
+          ],
+        },
+
+        // ── Search APIs ───────────────────────────────────────────────
+        {
+          type: "category",
+          label: "Search APIs",
+          collapsed: true,
+          link: { type: "doc", id: "search/index" },
+          items: [
+            "providers/anthropic_tool_search",
+            "providers/gemini_file_search",
+            "search/perplexity",
+            "search/tavily",
+            "search/exa_ai",
+            "search/brave",
+            "search/parallel_ai",
+            "search/google_pse",
+            "search/dataforseo",
+            "search/firecrawl",
+            "search/searxng",
+            "search/linkup",
+            "search/searchapi",
+            "search/serper",
           ],
         },
 
@@ -1122,9 +1195,10 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "completion/knowledgebase",
-            "providers/anthropic_tool_search",
             "guides/code_interpreter",
             "proxy/veo_video_generation",
+            { type: "doc", id: "rag_ingest", label: "RAG Ingest" },
+            { type: "doc", id: "rag_query", label: "RAG Query" },
           ],
         },
         {
