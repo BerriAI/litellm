@@ -18,18 +18,20 @@ GOOGLE_IMPORT_ERROR_MESSAGE = (
 
 # AWS params recognized in WIF credential JSON for explicit auth.
 # These match the kwargs accepted by BaseAWSLLM.get_credentials().
-_AWS_CREDENTIAL_KEYS = frozenset({
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-})
+_AWS_CREDENTIAL_KEYS = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+    }
+)
 
 
 class VertexAIAwsWifAuth:
@@ -46,11 +48,7 @@ class VertexAIAwsWifAuth:
         Returns a dict of {param_name: value} for any recognized aws_* keys
         found in the JSON. Returns empty dict if none are present.
         """
-        return {
-            key: json_obj[key]
-            for key in _AWS_CREDENTIAL_KEYS
-            if key in json_obj
-        }
+        return {key: json_obj[key] for key in _AWS_CREDENTIAL_KEYS if key in json_obj}
 
     @staticmethod
     def credentials_from_explicit_aws(json_obj, aws_params, scopes):

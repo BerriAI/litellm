@@ -14,22 +14,22 @@ from litellm.utils import get_model_info
 def _is_azure_model_router(model: str) -> bool:
     """
     Check if the model is Azure AI Foundry Model Router.
-    
+
     Detects patterns like:
     - "azure-model-router"
-    - "model-router"  
+    - "model-router"
     - "model_router/<actual-model>"
     - "model-router/<actual-model>"
-    
+
     Args:
         model: The model name
-    
+
     Returns:
         bool: True if this is a model router model
     """
     model_lower = model.lower()
     return (
-        "model-router" in model_lower 
+        "model-router" in model_lower
         or "model_router" in model_lower
         or model_lower == "azure-model-router"
     )
@@ -38,50 +38,50 @@ def _is_azure_model_router(model: str) -> bool:
 def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> float:
     """
     Calculate the flat cost for Azure AI Foundry Model Router.
-    
+
     Args:
         model: The model name (should be a model router model)
         prompt_tokens: Number of prompt tokens
-    
+
     Returns:
         float: The flat cost in USD, or 0.0 if not applicable
     """
     if not _is_azure_model_router(model):
         return 0.0
-    
+
     # Get the model router pricing from model_prices_and_context_window.json
     # Use "model_router" as the key (without actual model name suffix)
     model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
     router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
-    
+
     if router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token
-    
+
     return 0.0
 
 
 def cost_per_token(
-    model: str, 
-    usage: Usage, 
+    model: str,
+    usage: Usage,
     response_time_ms: Optional[float] = 0.0,
     request_model: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
-    
+
     For Azure AI Foundry Model Router:
     - Adds a flat cost of $0.14 per million input tokens (from model_prices_and_context_window.json)
     - Plus the cost of the actual model used (handled by generic_cost_per_token)
-    
+
     Args:
         model: str, the model name without provider prefix (from response)
         usage: LiteLLM Usage block
         response_time_ms: Optional response time in milliseconds
         request_model: Optional[str], the original request model name (to detect router usage)
-    
+
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
-    
+
     Raises:
         ValueError: If the model is not found in the cost map and cost cannot be calculated
             (except for Model Router models where we return just the routing flat cost)
@@ -119,7 +119,9 @@ def cost_per_token(
     if is_router_request:
         # Use the request model for flat cost calculation if available, otherwise use response model
         router_model_for_calc = request_model if request_model else model
-        router_flat_cost = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
+        router_flat_cost = calculate_azure_model_router_flat_cost(
+            router_model_for_calc, usage.prompt_tokens
+        )
 
         if router_flat_cost > 0:
             verbose_logger.debug(

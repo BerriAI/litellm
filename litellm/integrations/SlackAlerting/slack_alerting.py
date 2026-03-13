@@ -96,7 +96,9 @@ class SlackAlerting(CustomBatchLogger):
         self.alert_type_config: Dict[str, AlertTypeConfig] = {}
         if alert_type_config:
             for key, val in alert_type_config.items():
-                self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
+                self.alert_type_config[key] = (
+                    AlertTypeConfig(**val) if isinstance(val, dict) else val
+                )
         self.digest_buckets: Dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
@@ -126,7 +128,9 @@ class SlackAlerting(CustomBatchLogger):
                 self.periodic_started = True
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
-                self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
+                self.alert_type_config[key] = (
+                    AlertTypeConfig(**val) if isinstance(val, dict) else val
+                )
 
         if alert_to_webhook_url is not None:
             # update the dict
@@ -1367,7 +1371,7 @@ Model Info:
 
         return False
 
-    async def send_alert( # noqa: PLR0915
+    async def send_alert(  # noqa: PLR0915
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
@@ -1439,7 +1443,9 @@ Model Info:
                 self.alert_to_webhook_url is not None
                 and alert_type in self.alert_to_webhook_url
             ):
-                _digest_webhook: Optional[Union[str, List[str]]] = self.alert_to_webhook_url[alert_type]
+                _digest_webhook: Optional[
+                    Union[str, List[str]]
+                ] = self.alert_to_webhook_url[alert_type]
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
@@ -1588,11 +1594,21 @@ Model Info:
                 if isinstance(webhook_url, list):
                     for url in webhook_url:
                         self.log_queue.append(
-                            {"url": url, "headers": headers, "payload": payload, "alert_type": alert_type_name}
+                            {
+                                "url": url,
+                                "headers": headers,
+                                "payload": payload,
+                                "alert_type": alert_type_name,
+                            }
                         )
                 else:
                     self.log_queue.append(
-                        {"url": webhook_url, "headers": headers, "payload": payload, "alert_type": alert_type_name}
+                        {
+                            "url": webhook_url,
+                            "headers": headers,
+                            "payload": payload,
+                            "alert_type": alert_type_name,
+                        }
                     )
                 flushed_keys.append(key)
 

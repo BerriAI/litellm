@@ -41,7 +41,9 @@ class BraintrustLogger(CustomLogger):
         self.is_mock_mode = should_use_braintrust_mock()
         if self.is_mock_mode:
             create_mock_braintrust_client()
-            verbose_logger.info("[BRAINTRUST MOCK] Braintrust logger initialized in mock mode")
+            verbose_logger.info(
+                "[BRAINTRUST MOCK] Braintrust logger initialized in mock mode"
+            )
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
@@ -50,9 +52,9 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[str, str] = (
-            {}
-        )  # Cache mapping project names to IDs
+        self._project_id_cache: Dict[
+            str, str
+        ] = {}  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -214,7 +216,7 @@ class BraintrustLogger(CustomLogger):
 
             # Allow metadata override for span name
             span_name = dynamic_metadata.get("span_name", "Chat Completion")
-            
+
             # Span parents is a special case
             span_parents = dynamic_metadata.get("span_parents")
 
@@ -236,7 +238,7 @@ class BraintrustLogger(CustomLogger):
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
 
-            # Braintrust cannot specify 'tags' for non-root spans 
+            # Braintrust cannot specify 'tags' for non-root spans
             if dynamic_metadata.get("root_span_id") is None:
                 request_data["tags"] = tags
 
@@ -386,7 +388,7 @@ class BraintrustLogger(CustomLogger):
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
 
-            # Braintrust cannot specify 'tags' for non-root spans 
+            # Braintrust cannot specify 'tags' for non-root spans
             if dynamic_metadata.get("root_span_id") is None:
                 request_data["tags"] = tags
 

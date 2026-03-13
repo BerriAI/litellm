@@ -97,7 +97,6 @@ from ..common_utils import (
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
-    _build_vertex_schema_for_gemini_2,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -468,7 +467,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return None
 
     def _map_function(  # noqa: PLR0915
-        self, value: List[dict], optional_params: dict, model: str = ""
+        self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -499,9 +498,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
+            openai_function_object: Optional[
+                ChatCompletionToolParamFunctionChunk
+            ] = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -511,21 +510,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
-                ):
-                    if supports_response_json_schema(model):
-                        # Gemini 2.0+: minimal transform (resolve $ref only)
-                        _openai_function_object["parameters"] = (
-                            _build_vertex_schema_for_gemini_2(
-                                _openai_function_object["parameters"]
-                            )
-                        )
-                    else:
-                        # Gemini 1.5: full OpenAPI-style transform
-                        _openai_function_object["parameters"] = (
-                            _build_vertex_schema(
-                                _openai_function_object["parameters"]
-                            )
-                        )
+                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
+                    _openai_function_object["parameters"] = _build_vertex_schema(
+                        _openai_function_object["parameters"]
+                    )
 
                 openai_function_object = _openai_function_object
 
@@ -644,15 +632,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools_list.append(search_tool)
         if googleSearchRetrieval is not None:
             retrieval_tool = Tools()
-            retrieval_tool[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = (
-                googleSearchRetrieval
-            )
+            retrieval_tool[
+                VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+            ] = googleSearchRetrieval
             _tools_list.append(retrieval_tool)
         if enterpriseWebSearch is not None:
             enterprise_tool = Tools()
-            enterprise_tool[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = (
-                enterpriseWebSearch
-            )
+            enterprise_tool[
+                VertexToolName.ENTERPRISE_WEB_SEARCH.value
+            ] = enterpriseWebSearch
             _tools_list.append(enterprise_tool)
         if code_execution is not None:
             code_tool = Tools()
@@ -814,12 +802,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
         # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview, etc.
         is_gemini3flash = model and (
-            "gemini-3-flash" in model.lower()
-            or "gemini-3.1-flash" in model.lower()
+            "gemini-3-flash" in model.lower() or "gemini-3.1-flash" in model.lower()
         )
-        is_gemini31pro = model and (
-            "gemini-3.1-pro-preview" in model.lower()
-        )
+        is_gemini31pro = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -1063,7 +1048,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = self._map_function(
-                    value=value, optional_params=optional_params, model=model
+                    value=value, optional_params=optional_params
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, mapped_tools
@@ -1102,16 +1087,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_description="thinking_budget",
                     )
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params["thinkingConfig"] = (
-                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                                effort_value, model
-                            )
+                        optional_params[
+                            "thinkingConfig"
+                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                            effort_value, model
                         )
                     else:
-                        optional_params["thinkingConfig"] = (
-                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                                effort_value, model
-                            )
+                        optional_params[
+                            "thinkingConfig"
+                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                            effort_value, model
                         )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -1120,11 +1105,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     param_name="thinking",
                     param_description="thinking_budget",
                 )
-                optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_thinking_param(
-                        cast(AnthropicThinkingParam, value),
-                        model=model,
-                    )
+                optional_params[
+                    "thinkingConfig"
+                ] = VertexGeminiConfig._map_thinking_param(
+                    cast(AnthropicThinkingParam, value),
+                    model=model,
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -1242,12 +1227,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
-    _GEMINI_FINISH_REASON_KEYS = frozenset({
-        "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "FINISH_REASON_UNSPECIFIED",
-        "MALFORMED_FUNCTION_CALL", "LANGUAGE", "OTHER", "BLOCKLIST",
-        "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
-        "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE",
-    })
+    _GEMINI_FINISH_REASON_KEYS = frozenset(
+        {
+            "STOP",
+            "MAX_TOKENS",
+            "SAFETY",
+            "RECITATION",
+            "FINISH_REASON_UNSPECIFIED",
+            "MALFORMED_FUNCTION_CALL",
+            "LANGUAGE",
+            "OTHER",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+            "IMAGE_SAFETY",
+            "IMAGE_PROHIBITED_CONTENT",
+            "TOO_MANY_TOOL_CALLS",
+            "MALFORMED_RESPONSE",
+        }
+    )
 
     @staticmethod
     def get_finish_reason_mapping() -> Dict[str, OpenAIChatCompletionFinishReason]:
@@ -1470,10 +1468,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
-                        _tool_response_chunk["id"] = (
-                            _encode_tool_call_id_with_signature(
-                                _tool_response_chunk["id"] or "", thought_signature
-                            )
+                        _tool_response_chunk[
+                            "id"
+                        ] = _encode_tool_call_id_with_signature(
+                            _tool_response_chunk["id"] or "", thought_signature
                         )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
@@ -2283,35 +2281,37 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
-                grounding_metadata
-            )
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = grounding_metadata
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
 
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
-                url_context_metadata
-            )
+            model_response._hidden_params[
+                "vertex_ai_url_context_metadata"
+            ] = url_context_metadata
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_safety_results"
+            ] = safety_ratings  # older approach - maintaining to prevent regressions
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_citation_metadata"
+            ] = citation_metadata  # older approach - maintaining to prevent regressions
 
             ## ADD TRAFFIC TYPE ##
             traffic_type = completion_response.get("usageMetadata", {}).get(
                 "trafficType"
             )
             if traffic_type:
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+                model_response._hidden_params.setdefault(
+                    "provider_specific_fields", {}
+                )["traffic_type"] = traffic_type
 
         except Exception as e:
             raise VertexAIError(
@@ -2967,7 +2967,11 @@ class ModelResponseIterator:
                 # to correctly set finish_reason="tool_calls" per the OpenAI spec.
                 if not self.has_seen_tool_calls:
                     for choice in model_response.choices:
-                        if hasattr(choice, "delta") and choice.delta and choice.delta.tool_calls:
+                        if (
+                            hasattr(choice, "delta")
+                            and choice.delta
+                            and choice.delta.tool_calls
+                        ):
                             self.has_seen_tool_calls = True
                             break
 
@@ -2983,8 +2987,10 @@ class ModelResponseIterator:
                             if self.has_seen_tool_calls:
                                 mapped_finish_reason = "tool_calls"
                             else:
-                                mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
-                                    None, finish_reason_str
+                                mapped_finish_reason = (
+                                    VertexGeminiConfig._check_finish_reason(
+                                        None, finish_reason_str
+                                    )
                                 )
                             choice = StreamingChoices(
                                 finish_reason=mapped_finish_reason,
@@ -3017,7 +3023,9 @@ class ModelResponseIterator:
                     "trafficType"
                 )
                 if traffic_type:
-                    model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+                    model_response._hidden_params.setdefault(
+                        "provider_specific_fields", {}
+                    )["traffic_type"] = traffic_type
 
             setattr(model_response, "usage", usage)  # type: ignore
 

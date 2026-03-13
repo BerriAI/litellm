@@ -68,9 +68,13 @@ def _prepare_mcp_server_data(
 
     # Handle tool name override serialization
     if data.tool_name_to_display_name is not None:
-        data_dict["tool_name_to_display_name"] = safe_dumps(data.tool_name_to_display_name)
+        data_dict["tool_name_to_display_name"] = safe_dumps(
+            data.tool_name_to_display_name
+        )
     if data.tool_name_to_description is not None:
-        data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
+        data_dict["tool_name_to_description"] = safe_dumps(
+            data.tool_name_to_description
+        )
 
     # mcp_access_groups is already List[str], no serialization needed
 
@@ -405,7 +409,9 @@ async def update_mcp_server(
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
-    has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials = (
+        "credentials" in data_dict and data_dict["credentials"] is not None
+    )
     if data.auth_type or has_credentials:
         existing = await prisma_client.db.litellm_mcpservertable.find_unique(
             where={"server_id": data.server_id}
@@ -746,7 +752,9 @@ async def get_mcp_submissions(
     )
     items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
 
-    pending = sum(1 for i in items if i.approval_status == MCPApprovalStatus.pending_review)
+    pending = sum(
+        1 for i in items if i.approval_status == MCPApprovalStatus.pending_review
+    )
     active = sum(1 for i in items if i.approval_status == MCPApprovalStatus.active)
     rejected = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
 

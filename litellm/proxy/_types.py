@@ -857,6 +857,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
+    models: Optional[List[str]] = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1129,13 +1130,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_by: Optional[str] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_at: Optional[datetime] = Field(
-        None, description="Server-managed: set by the endpoint; caller values are overridden."
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
     @model_validator(mode="before")
@@ -2460,7 +2464,9 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
-    created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user is used
+    created_by_user: Optional[
+        Any
+    ] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
