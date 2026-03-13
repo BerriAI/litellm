@@ -18,8 +18,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 @pytest.mark.asyncio
 async def test_vector_store_retrieve_basic():
     """Test basic vector store retrieve functionality."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_test123",
         "object": "vector_store",
@@ -40,6 +38,7 @@ async def test_vector_store_retrieve_basic():
         "litellm.vector_stores.main.aretrieve",
         new=AsyncMock(return_value=mock_response),
     ) as mock_retrieve:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_retrieve(
             vector_store_id="vs_test123",
             custom_llm_provider="openai",
@@ -54,8 +53,6 @@ async def test_vector_store_retrieve_basic():
 @pytest.mark.asyncio
 async def test_vector_store_list_basic():
     """Test basic vector store list functionality."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "object": "list",
         "data": [
@@ -81,6 +78,7 @@ async def test_vector_store_list_basic():
         "litellm.vector_stores.main.alist",
         new=AsyncMock(return_value=mock_response),
     ) as mock_list:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_list(
             limit=20,
             order="desc",
@@ -96,8 +94,6 @@ async def test_vector_store_list_basic():
 @pytest.mark.asyncio
 async def test_vector_store_update_basic():
     """Test basic vector store update functionality."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_test123",
         "object": "vector_store",
@@ -111,6 +107,7 @@ async def test_vector_store_update_basic():
         "litellm.vector_stores.main.aupdate",
         new=AsyncMock(return_value=mock_response),
     ) as mock_update:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_update(
             vector_store_id="vs_test123",
             name="Updated Name",
@@ -127,8 +124,6 @@ async def test_vector_store_update_basic():
 @pytest.mark.asyncio
 async def test_vector_store_delete_basic():
     """Test basic vector store delete functionality."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_test123",
         "object": "vector_store.deleted",
@@ -139,6 +134,7 @@ async def test_vector_store_delete_basic():
         "litellm.vector_stores.main.adelete",
         new=AsyncMock(return_value=mock_response),
     ) as mock_delete:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_delete(
             vector_store_id="vs_test123",
             custom_llm_provider="openai",
@@ -153,8 +149,6 @@ async def test_vector_store_delete_basic():
 @pytest.mark.asyncio
 async def test_async_vector_store_retrieve():
     """Test async vector store retrieve."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_async123",
         "object": "vector_store",
@@ -165,6 +159,7 @@ async def test_async_vector_store_retrieve():
         "litellm.vector_stores.main.aretrieve",
         new=AsyncMock(return_value=mock_response),
     ) as mock_aretrieve:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_retrieve(
             vector_store_id="vs_async123",
             custom_llm_provider="openai",
@@ -177,8 +172,6 @@ async def test_async_vector_store_retrieve():
 @pytest.mark.asyncio
 async def test_async_vector_store_list():
     """Test async vector store list."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "object": "list",
         "data": [{"id": "vs_1"}, {"id": "vs_2"}],
@@ -188,6 +181,7 @@ async def test_async_vector_store_list():
         "litellm.vector_stores.main.alist",
         new=AsyncMock(return_value=mock_response),
     ) as mock_alist:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_list(
             limit=10,
             custom_llm_provider="openai",
@@ -200,8 +194,6 @@ async def test_async_vector_store_list():
 @pytest.mark.asyncio
 async def test_async_vector_store_update():
     """Test async vector store update."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_async123",
         "name": "Updated Async Name",
@@ -211,6 +203,7 @@ async def test_async_vector_store_update():
         "litellm.vector_stores.main.aupdate",
         new=AsyncMock(return_value=mock_response),
     ) as mock_aupdate:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_update(
             vector_store_id="vs_async123",
             name="Updated Async Name",
@@ -224,8 +217,6 @@ async def test_async_vector_store_update():
 @pytest.mark.asyncio
 async def test_async_vector_store_delete():
     """Test async vector store delete."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "id": "vs_async123",
         "deleted": True,
@@ -235,6 +226,7 @@ async def test_async_vector_store_delete():
         "litellm.vector_stores.main.adelete",
         new=AsyncMock(return_value=mock_response),
     ) as mock_adelete:
+        router = litellm.Router(model_list=[])
         result = await router.avector_store_delete(
             vector_store_id="vs_async123",
             custom_llm_provider="openai",
@@ -247,8 +239,6 @@ async def test_async_vector_store_delete():
 @pytest.mark.asyncio
 async def test_vector_store_list_with_pagination():
     """Test vector store list with pagination parameters."""
-    router = litellm.Router(model_list=[])
-    
     mock_response = {
         "object": "list",
         "data": [{"id": f"vs_{i}"} for i in range(5)],
@@ -261,6 +251,7 @@ async def test_vector_store_list_with_pagination():
         "litellm.vector_stores.main.list",
         return_value=mock_response,
     ) as mock_list:
+        router = litellm.Router(model_list=[])
         result = router.vector_store_list(
             limit=5,
             after="vs_previous",
@@ -281,8 +272,6 @@ async def test_vector_store_list_with_pagination():
 @pytest.mark.asyncio
 async def test_vector_store_update_with_expires_after():
     """Test vector store update with expiration policy."""
-    router = litellm.Router(model_list=[])
-    
     expires_after = {
         "anchor": "last_active_at",
         "days": 7,
@@ -298,6 +287,7 @@ async def test_vector_store_update_with_expires_after():
         "litellm.vector_stores.main.update",
         return_value=mock_response,
     ) as mock_update:
+        router = litellm.Router(model_list=[])
         result = router.vector_store_update(
             vector_store_id="vs_test123",
             expires_after=expires_after,

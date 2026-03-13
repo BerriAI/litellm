@@ -153,6 +153,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         is_multimodal = _is_multimodal_input(input)
         use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        mode: Literal["embedding", "batch_embedding"]
         if use_embed_content:
             mode = "embedding"
         else:
@@ -200,6 +201,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         ### TRANSFORMATION (sync path) ###
+        request_data: Any
         if use_embed_content:
             resolved_files = {}
             if api_key:

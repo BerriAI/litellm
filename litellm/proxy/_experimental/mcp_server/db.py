@@ -142,9 +142,9 @@ def decrypt_credentials(
         "aws_session_token",
     ]
     for field in secret_fields:
-        value = credentials.get(field)
-        if value is not None:
-            credentials[field] = decrypt_value_helper(
+        value = credentials.get(field)  # type: ignore[literal-required]
+        if value is not None and isinstance(value, str):
+            credentials[field] = decrypt_value_helper(  # type: ignore[literal-required]
                 value=value,
                 key=field,
                 exception_type="debug",

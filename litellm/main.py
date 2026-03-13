@@ -99,6 +99,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -934,6 +935,8 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    tools: Optional[List[Any]] = None,
+    reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -949,6 +952,17 @@ def responses_api_bridge_check(
             model_info["mode"] = mode
 
         if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
+
+        # OpenAI gpt-5.4+ chat-completions calls with both tools + reasoning_effort
+        # must be bridged to Responses API.
+        if (
+            custom_llm_provider == "openai"
+            and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+            and tools
+            and reasoning_effort is not None
+        ):
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
     except Exception as e:
@@ -1596,10 +1610,16 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            tools=tools,
+            reasoning_effort=reasoning_effort,
         )
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
+
+            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
+                optional_params = dict(optional_params)
+                optional_params["reasoning_effort"] = reasoning_effort
 
             return responses_api_bridge.completion(
                 model=model,
@@ -7700,7 +7720,7 @@ async def acount_tokens(
     local_count = litellm.token_counter(
         model=model,
         messages=fallback_messages,
-        tools=tools,
+        tools=tools,  # type: ignore[arg-type]
     )
 
     return TokenCountResponse(

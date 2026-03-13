@@ -1897,7 +1897,7 @@ if TYPE_CHECKING:
     supports_reasoning: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., _ModelInfoType]
+    get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
