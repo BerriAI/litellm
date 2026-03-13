@@ -227,22 +227,15 @@ export function useLogFilterLogic({
   // Choose which filtered logs to expose: backend result when active, otherwise client-derived
   const filteredLogs: PaginatedResponse = useMemo(() => {
     if (hasBackendFilters) {
-      // Prefer backend result if present; otherwise fall back to latest logs
-      if (backendFilteredLogs && backendFilteredLogs.data && backendFilteredLogs.data.length > 0) {
-        return backendFilteredLogs;
-      }
-      return (
-        logs || {
-          data: [],
-          total: 0,
-          page: 1,
-          page_size: 50,
-          total_pages: 0,
-        }
-      );
+      // Always use the backend result so that pagination metadata (total, total_pages)
+      // stays consistent with the filtered query – even when the current page is empty.
+      // Falling back to the unfiltered `logs` here would cause the UI to display stale
+      // data and wrong page counts (e.g. key_alias partial-match on page 1 returning
+      // results, but page 2 falling back to the unfiltered main query).
+      return backendFilteredLogs;
     }
     return clientDerivedFilteredLogs;
-  }, [hasBackendFilters, backendFilteredLogs, clientDerivedFilteredLogs, logs]);
+  }, [hasBackendFilters, backendFilteredLogs, clientDerivedFilteredLogs]);
 
   // Fetch all teams and users for potential filter dropdowns (optional, can be adapted)
   const { data: allTeams } = useQuery<Team[], Error>({
