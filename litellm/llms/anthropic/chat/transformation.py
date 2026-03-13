@@ -764,6 +764,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
             )
+        elif reasoning_effort == "xhigh":
+            # xhigh maps to same as high for Anthropic (max available)
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
@@ -1034,6 +1040,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # not thinking budget_tokens. Map reasoning_effort to output_config.
                 if AnthropicConfig._is_claude_4_6_model(model):
                     effort_map = {
+                        "none": None,  # Don't set output_config for "none"
                         "low": "low",
                         "minimal": "low",
                         "medium": "medium",
@@ -1041,7 +1048,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "max": "max",
                     }
                     mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    if mapped_effort is not None:
+                        optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
