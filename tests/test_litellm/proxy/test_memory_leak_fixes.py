@@ -148,7 +148,7 @@ class TestSpendLogQueueBounding:
 
         max_size = 100  # Use a small value for testing
         with patch(
-            "litellm.proxy.db.db_spend_update_writer.MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE",
+            "litellm.constants.MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE",
             max_size,
         ):
             # Fill the queue beyond the limit
@@ -178,7 +178,7 @@ class TestSpendLogQueueBounding:
 
         max_size = 20
         with patch(
-            "litellm.proxy.db.db_spend_update_writer.MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE",
+            "litellm.constants.MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE",
             max_size,
         ):
             # Fill exactly to the limit
