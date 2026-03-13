@@ -73,7 +73,6 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         contents: Any,
         tools: Optional[Any],
         generate_content_config_dict: Dict,
-        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> dict:
         """
@@ -90,11 +89,8 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         if tools:
             result["tools"] = tools
 
-        if tool_config is not None:
-            result["toolConfig"] = tool_config
-
         # Add systemInstruction if provided
-        if system_instruction is not None:
+        if system_instruction:
             result["systemInstruction"] = system_instruction
 
         # Handle generationConfig - Vertex AI expects it in the same format
