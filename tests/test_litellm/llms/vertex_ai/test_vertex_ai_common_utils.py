@@ -212,7 +212,7 @@ def test_build_vertex_schema():
         "properties": {
             "state": {
                 "properties": {
-                    "messages": {"items": {}, "type": "array"},
+                    "messages": {"items": {"type": "object"}, "type": "array"},
                     "conversation_id": {"type": "string"},
                 },
                 "required": ["messages", "conversation_id"],
@@ -226,7 +226,7 @@ def test_build_vertex_schema():
                     "callbacks": {
                         "anyOf": [
                             {"type": "array", "nullable": True},
-                            {"nullable": True},
+                            {"type": "object", "nullable": True},
                         ]
                     },
                     "run_name": {"type": "string"},
@@ -270,28 +270,23 @@ def test_process_items_basic():
     """Test basic functionality of process_items."""
     from litellm.llms.vertex_ai.common_utils import process_items
 
-    # Test empty items — should preserve "any type" semantics (not coerce to object)
+    # Test empty items
     schema = {"type": "array", "items": {}}
     process_items(schema)
-    assert schema["items"] == {}
+    assert schema["items"] == {"type": "object"}
 
-    # Test nested items — should preserve "any type" semantics
+    # Test nested items
     schema = {"type": "array", "items": {"type": "array", "items": {}}}
     process_items(schema)
-    assert schema["items"]["items"] == {}
+    assert schema["items"]["items"] == {"type": "object"}
 
-    # Test items in properties — should preserve "any type" semantics
+    # Test items in properties
     schema = {
         "type": "object",
         "properties": {"nested": {"type": "array", "items": {}}},
     }
     process_items(schema)
-    assert schema["properties"]["nested"]["items"] == {}
-
-    # Test items with actual type — should not be modified
-    schema = {"type": "array", "items": {"type": "string"}}
-    process_items(schema)
-    assert schema["items"] == {"type": "string"}
+    assert schema["properties"]["nested"]["items"] == {"type": "object"}
 
 
 def test_vertex_ai_complex_response_schema():
@@ -563,69 +558,49 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     assert url == expected_url
 
 
-@pytest.mark.parametrize(
-    "supported_regions, expected_result",
-    [
-        (None, False),  # get_supported_regions returns None
-        ([], False),  # empty list, no global region
-        (["us-central1"], False),  # only regional, no global
-        (["global"], True),  # only global region
-        (["global", "us-central1"], True),  # global and other regions
-        (
-            ["us-central1", "global", "europe-west1"],
-            True,
-        ),  # global among multiple regions
-    ],
-)
-def test_is_global_only_vertex_model(supported_regions, expected_result):
-    """Test is_global_only_vertex_model with various supported regions scenarios"""
-    from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
-
-    with patch("litellm.utils.get_supported_regions") as mock_get_supported_regions:
-        mock_get_supported_regions.return_value = supported_regions
-
-        result = is_global_only_vertex_model("test-model")
-
-        assert result == expected_result
-        mock_get_supported_regions.assert_called_once_with(
-            model="test-model", custom_llm_provider="vertex_ai"
-        )
-
 
 @pytest.mark.parametrize(
-    "model_is_global_only, vertex_region, expected_region",
+    "model_cost_entry, vertex_region, expected_region",
     [
-        (True, None, "global"),  # Global-only model with no region specified
-        (True, "us-central1", "global"),  # Global-only model overrides specified region
-        (True, "europe-west1", "global"),  # Global-only model overrides any region
-        (False, None, "us-central1"),  # Non-global model defaults to us-central1
-        (
-            False,
-            "europe-west1",
-            "europe-west1",
-        ),  # Non-global model uses specified region
-        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+        # Model with supported_regions=["global"], no user region -> use "global"
+        ({"supported_regions": ["global"]}, None, "global"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "us-central1", "global"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "europe-west1", "global"),
+        # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
+        ({"supported_regions": ["us-west2"]}, None, "us-west2"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes supported region -> respect it
+        ({"supported_regions": ["us-west2", "us-central1"]}, "us-central1", "us-central1"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes unsupported region -> override
+        ({"supported_regions": ["us-west2", "us-central1"]}, "europe-west1", "us-west2"),
+        # No model_cost entry, no user region -> default us-central1
+        ({}, None, "us-central1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "europe-west1", "europe-west1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "us-east1", "us-east1"),
     ],
 )
 def test_get_vertex_region_global_only_model(
-    model_is_global_only, vertex_region, expected_region
+    model_cost_entry, vertex_region, expected_region
 ):
-    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    """Test get_vertex_region resolves region from model_cost supported_regions"""
+    import litellm
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     vertex_base = VertexBase()
 
-    with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
-    ) as mock_is_global_only:
-        mock_is_global_only.return_value = model_is_global_only
-
+    with patch.dict(
+        litellm.model_cost,
+        {"vertex_ai/test-model": model_cost_entry},
+        clear=False,
+    ):
         result = vertex_base.get_vertex_region(
             vertex_region=vertex_region, model="test-model"
         )
 
         assert result == expected_region
-        mock_is_global_only.assert_called_once_with("test-model")
 
 
 def test_vertex_filter_format_uri():
@@ -1407,89 +1382,3 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
-
-
-def test_is_any_type_schema():
-    """Test _is_any_type_schema correctly identifies unconstrained schemas."""
-    from litellm.llms.vertex_ai.common_utils import _is_any_type_schema
-
-    # Empty schema = any type
-    assert _is_any_type_schema({}) is True
-
-    # Only metadata keys = any type
-    assert _is_any_type_schema({"description": "Any value"}) is True
-    assert _is_any_type_schema({"title": "MyField"}) is True
-    assert _is_any_type_schema({"title": "X", "description": "Y", "default": 0}) is True
-
-    # Has type-constraining keys = NOT any type
-    assert _is_any_type_schema({"type": "object"}) is False
-    assert _is_any_type_schema({"type": "string"}) is False
-    assert _is_any_type_schema({"properties": {"a": {}}}) is False
-    assert _is_any_type_schema({"items": {"type": "string"}}) is False
-    assert _is_any_type_schema({"anyOf": [{"type": "string"}]}) is False
-    assert _is_any_type_schema({"$schema": "https://json-schema.org/draft/2020-12/schema"}) is False
-    assert _is_any_type_schema({"enum": ["a", "b"]}) is False
-
-
-def test_add_object_type_preserves_any_type_schema():
-    """Test add_object_type does NOT add type:object to empty schemas (any type)."""
-    from litellm.llms.vertex_ai.common_utils import add_object_type
-
-    # Empty schema should be preserved (any type)
-    schema = {}
-    add_object_type(schema)
-    assert "type" not in schema, "Empty schema (any type) should not get type: object"
-
-    # Schema with only description should be preserved
-    schema = {"description": "Any JSON value"}
-    add_object_type(schema)
-    assert "type" not in schema
-
-    # Schema with $schema key should still get type: object (tool with no args)
-    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema"}
-    add_object_type(schema)
-    assert schema["type"] == "object"
-
-
-def test_convert_anyof_preserves_any_type_members():
-    """Test convert_anyof_null_to_nullable does NOT coerce empty anyOf members to object."""
-    from litellm.llms.vertex_ai.common_utils import convert_anyof_null_to_nullable
-
-    # anyOf with empty schema and null — empty should be preserved
-    schema = {
-        "anyOf": [
-            {},
-            {"type": "null"},
-        ]
-    }
-    convert_anyof_null_to_nullable(schema)
-    # null should be removed, empty schema should be preserved (not coerced to object)
-    assert len(schema["anyOf"]) == 1
-    assert "type" not in schema["anyOf"][0] or schema["anyOf"][0].get("type") != "object"
-    assert schema["anyOf"][0].get("nullable") is True
-
-
-def test_build_vertex_schema_jsonvalue():
-    """
-    End-to-end: Pydantic JsonValue generates {} in $defs.
-    _build_vertex_schema should preserve any-type semantics.
-    Regression test for https://github.com/BerriAI/litellm/issues/22391
-    """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
-
-    # Simulates what Pydantic generates for a model with JsonValue field
-    schema = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "value": {},  # after $ref resolution, this is what JsonValue becomes
-        },
-        "required": ["name", "value"],
-    }
-    result = _build_vertex_schema(schema)
-
-    # The "value" field should NOT have been coerced to type: object
-    value_schema = result["properties"]["value"]
-    assert value_schema.get("type") != "object", (
-        "JsonValue schema {} should not be coerced to {type: object}"
-    )

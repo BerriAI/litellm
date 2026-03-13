@@ -60,9 +60,7 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS = (
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
-MAX_BASE64_LENGTH_FOR_LOGGING = int(
-    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
-)
+MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
@@ -1214,12 +1212,8 @@ OPENAI_FINISH_REASONS = [
     "stop",
     "length",
     "function_call",
+    "tool_calls",
     "content_filter",
-    "null",
-    "finish_reason_unspecified",
-    "malformed_function_call",
-    "guardrail_intervened",
-    "eos",
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
@@ -1242,6 +1236,11 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
+LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
+    "Truncation is a DB storage safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -1420,9 +1419,7 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
-DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
-    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
-)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
