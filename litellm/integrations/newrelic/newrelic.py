@@ -243,9 +243,9 @@ class NewRelicLogger(CustomLogger):
             - span_id: str or None (only present if found in headers)
         """
         try:
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {})
-            headers = metadata.get("headers", {})
+            litellm_params = kwargs.get("litellm_params") or {}
+            metadata = litellm_params.get("metadata") or {}
+            headers = metadata.get("headers") or {}
             traceparent = headers.get("traceparent", None)
 
             trace_id = None
@@ -326,7 +326,7 @@ class NewRelicLogger(CustomLogger):
 
         Returns "unknown" if choices are not present or finish_reason is not found.
         """
-        choices = response_obj.get("choices", [])
+        choices = response_obj.get("choices") or []
         if choices and len(choices) > 0:
             return choices[0].get("finish_reason", "unknown")
         return "unknown"
@@ -363,7 +363,7 @@ class NewRelicLogger(CustomLogger):
 
         Returns dict with available parameters, omitting those not present.
         """
-        optional_params = kwargs.get("optional_params", {})
+        optional_params = kwargs.get("optional_params") or {}
         params = {}
 
         temperature = optional_params.get("temperature")
@@ -431,7 +431,7 @@ class NewRelicLogger(CustomLogger):
         end_time = kwargs.get("end_time")
 
         # Extract request messages
-        request_messages = kwargs.get("messages", [])
+        request_messages = kwargs.get("messages") or []
         for msg in request_messages:
             message_data = {
                 "role": msg.get("role", "user"),
@@ -452,7 +452,7 @@ class NewRelicLogger(CustomLogger):
             sequence += 1
 
         # Extract response messages from choices
-        choices = response_obj.get("choices", [])
+        choices = response_obj.get("choices") or []
         if choices and len(choices) > 0:
             for choice in choices:
                 message = choice.get("message", None)
