@@ -2474,7 +2474,12 @@ if MCP_AVAILABLE:
             except Exception:
                 raise e
         except ProxyException as e:
-            status_code = int(e.code) if e.code else 500
+            status_code = 500
+            try:
+                if e.code:
+                    status_code = int(e.code)
+            except (ValueError, TypeError):
+                pass
             verbose_logger.warning(
                 "MCP auth error (status=%s): %s", status_code, e.message
             )
@@ -2524,7 +2529,7 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # Validate MCP servers exist (same as handle_streamable_http_mcp)
+            # Validate MCP servers exist and check OAuth requirements (same as handle_streamable_http_mcp)
             for server_name in mcp_servers or []:
                 server = global_mcp_server_manager.get_mcp_server_by_name(
                     server_name, client_ip=_sse_client_ip
@@ -2533,6 +2538,20 @@ if MCP_AVAILABLE:
                     raise HTTPException(
                         status_code=404,
                         detail=f"MCP server '{server_name}' not found",
+                    )
+                if server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    request = StarletteRequest(scope)
+                    base_url = get_request_base_url(request)
+
+                    authorization_uri = (
+                        f"Bearer authorization_uri="
+                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    )
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
                     )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -2566,7 +2585,12 @@ if MCP_AVAILABLE:
             except Exception:
                 raise e
         except ProxyException as e:
-            status_code = int(e.code) if e.code else 500
+            status_code = 500
+            try:
+                if e.code:
+                    status_code = int(e.code)
+            except (ValueError, TypeError):
+                pass
             verbose_logger.warning(
                 "MCP SSE auth error (status=%s): %s", status_code, e.message
             )
