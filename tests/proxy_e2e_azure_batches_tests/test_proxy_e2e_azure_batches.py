@@ -205,7 +205,7 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
 
         return metadata
 
-    def _delete_file(self, file_id, label, max_retries=6, retry_delay=10):
+    def _delete_file(self, file_id, label, max_retries=9, retry_delay=20):
         print(f"\nDeleting {label}: {self.shorten_id(file_id)}")
         for attempt in range(max_retries):
             try:
