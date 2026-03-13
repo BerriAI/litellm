@@ -188,9 +188,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         ) or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(raw_reasoning_effort)
 
-        # Normalize dict reasoning_effort to string for Chat Completions API.
-        # Example: {"effort": "high", "summary": "detailed"} -> "high"
-        if isinstance(raw_reasoning_effort, dict) and "effort" in raw_reasoning_effort:
+        # Normalize to string for Chat Completions API when dict has only "effort".
+        # Preserve full dict (e.g. {"effort": "high", "summary": "detailed"}) for Responses API.
+        if isinstance(raw_reasoning_effort, dict) and set(
+            raw_reasoning_effort.keys()
+        ) <= {"effort"}:
             normalized = _normalize_reasoning_effort_for_chat_completion(
                 raw_reasoning_effort
             )
@@ -220,6 +222,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
+
+        # gpt-5.4: reasoning_effort + tools is only supported in the Responses API
+        # Drop reasoning_effort when tools are present in chat completions
+        if self.is_model_gpt_5_4_model(model):
+            has_tools = bool(
+                non_default_params.get("tools") or optional_params.get("tools")
+            )
+            if has_tools and effective_effort is not None:
+                non_default_params.pop("reasoning_effort", None)
+                optional_params.pop("reasoning_effort", None)
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")
