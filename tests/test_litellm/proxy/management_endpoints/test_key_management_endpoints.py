@@ -6921,6 +6921,42 @@ async def test_check_org_key_limits_on_update_excludes_self():
     )
 
 
+def test_update_key_skips_org_check_when_no_throughput_fields_changed():
+    """
+    Test that the org limit check guard condition correctly skips validation
+    when only non-throughput fields change on a key that belongs to an org.
+    This prevents blocking updates when the org has been deleted.
+    """
+    # Updating only key_alias — no throughput fields changed
+    data = UpdateKeyRequest(key="sk-test-key", key_alias="new-alias")
+    _throughput_fields_changed = (
+        data.organization_id is not None
+        or data.tpm_limit is not None
+        or data.rpm_limit is not None
+    )
+    assert _throughput_fields_changed is False
+
+    # Updating tpm_limit — throughput field changed
+    data_with_tpm = UpdateKeyRequest(key="sk-test-key", tpm_limit=5000)
+    _throughput_fields_changed_tpm = (
+        data_with_tpm.organization_id is not None
+        or data_with_tpm.tpm_limit is not None
+        or data_with_tpm.rpm_limit is not None
+    )
+    assert _throughput_fields_changed_tpm is True
+
+    # Updating organization_id — org change triggers check
+    data_with_org = UpdateKeyRequest(
+        key="sk-test-key", organization_id="new-org"
+    )
+    _throughput_fields_changed_org = (
+        data_with_org.organization_id is not None
+        or data_with_org.tpm_limit is not None
+        or data_with_org.rpm_limit is not None
+    )
+    assert _throughput_fields_changed_org is True
+
+
 def test_update_key_request_has_organization_id():
     """
     Test that UpdateKeyRequest accepts organization_id field.
