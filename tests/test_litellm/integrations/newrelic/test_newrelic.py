@@ -126,6 +126,16 @@ class TestNewRelicLoggerInit:
                 logger = NewRelicLogger()
         assert logger.enabled is False
 
+    def test_disabled_on_agent_startup_error(self):
+        with patch.object(
+            _mock_newrelic_agent,
+            "register_application",
+            side_effect=RuntimeError("agent startup failed"),
+        ):
+            with patch.dict(os.environ, NR_ENV):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
     def test_record_content_default_true(self):
         logger = make_logger()
         assert logger.record_content is True
