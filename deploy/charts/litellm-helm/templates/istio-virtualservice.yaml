@@ -1,0 +1,49 @@
+{{- if and .Values.istio.enabled .Values.istio.virtualService.enabled -}}
+{{- $fullName := include "litellm.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+    {{- with .Values.istio.virtualService.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.istio.virtualService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  hosts:
+    {{- range .Values.istio.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  gateways:
+    {{- if .Values.istio.gateway.enabled }}
+    - {{ $fullName }}
+    {{- end }}
+    {{- range .Values.istio.virtualService.gateways }}
+    - {{ . | quote }}
+    {{- end }}
+  http:
+    {{- if .Values.istio.virtualService.http }}
+    {{- toYaml .Values.istio.virtualService.http | nindent 4 }}
+    {{- else }}
+    - match:
+        - uri:
+            prefix: /
+      {{- if .Values.istio.virtualService.timeout }}
+      timeout: {{ .Values.istio.virtualService.timeout }}
+      {{- end }}
+      {{- if .Values.istio.virtualService.retries }}
+      retries:
+        {{- toYaml .Values.istio.virtualService.retries | nindent 8 }}
+      {{- end }}
+      route:
+        - destination:
+            host: {{ $fullName }}
+            port:
+              number: {{ $svcPort }}
+    {{- end }}
+{{- end }}

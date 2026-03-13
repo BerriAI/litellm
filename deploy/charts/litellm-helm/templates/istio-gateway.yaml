@@ -1,0 +1,50 @@
+{{- if and .Values.istio.enabled .Values.istio.gateway.enabled -}}
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+    {{- with .Values.istio.gateway.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.istio.gateway.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    {{- toYaml .Values.istio.gateway.selector | nindent 4 }}
+  servers:
+    - port:
+        number: {{ .Values.istio.gateway.httpPort | default 80 }}
+        name: http
+        protocol: HTTP
+      {{- if .Values.istio.gateway.tls.enabled }}
+      tls:
+        httpsRedirect: true
+      {{- end }}
+      hosts:
+        {{- range .Values.istio.hosts }}
+        - {{ . | quote }}
+        {{- end }}
+    {{- if .Values.istio.gateway.tls.enabled }}
+    - port:
+        number: {{ .Values.istio.gateway.tls.httpsPort | default 443 }}
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: {{ .Values.istio.gateway.tls.mode | default "SIMPLE" }}
+        credentialName: {{ .Values.istio.gateway.tls.credentialName | quote }}
+        {{- if .Values.istio.gateway.tls.minProtocolVersion }}
+        minProtocolVersion: {{ .Values.istio.gateway.tls.minProtocolVersion }}
+        {{- end }}
+        {{- if .Values.istio.gateway.tls.maxProtocolVersion }}
+        maxProtocolVersion: {{ .Values.istio.gateway.tls.maxProtocolVersion }}
+        {{- end }}
+      hosts:
+        {{- range .Values.istio.hosts }}
+        - {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

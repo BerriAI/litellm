@@ -1,0 +1,696 @@
+suite: Istio Gateway and VirtualService Tests
+templates:
+  - istio-gateway.yaml
+  - istio-virtualservice.yaml
+  - istio-destinationrule.yaml
+tests:
+  #
+  # === Disabled by Default ===
+  #
+  - it: should not create Gateway or VirtualService by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: istio-gateway.yaml
+      - hasDocuments:
+          count: 0
+        template: istio-virtualservice.yaml
+
+  - it: should not create Gateway or VirtualService when istio.enabled is false
+    set:
+      istio.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: istio-gateway.yaml
+      - hasDocuments:
+          count: 0
+        template: istio-virtualservice.yaml
+
+  #
+  # === VirtualService Only (existing Gateway) ===
+  #
+  - it: should create VirtualService without Gateway when gateway.enabled is false
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: false
+        virtualService:
+          enabled: true
+          gateways:
+            - istio-system/shared-gateway
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: istio-gateway.yaml
+      - hasDocuments:
+          count: 1
+        template: istio-virtualservice.yaml
+      - isKind:
+          of: VirtualService
+        template: istio-virtualservice.yaml
+      - isAPIVersion:
+          of: networking.istio.io/v1
+        template: istio-virtualservice.yaml
+
+  - it: should reference external gateway in VirtualService spec
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: false
+        virtualService:
+          enabled: true
+          gateways:
+            - istio-system/shared-gateway
+    asserts:
+      - equal:
+          path: spec.gateways[0]
+          value: istio-system/shared-gateway
+        template: istio-virtualservice.yaml
+
+  #
+  # === Gateway + VirtualService Together ===
+  #
+  - it: should create both Gateway and VirtualService when both enabled
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: istio-gateway.yaml
+      - hasDocuments:
+          count: 1
+        template: istio-virtualservice.yaml
+      - isKind:
+          of: Gateway
+        template: istio-gateway.yaml
+      - isKind:
+          of: VirtualService
+        template: istio-virtualservice.yaml
+
+  - it: should use correct API version for both resources
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - isAPIVersion:
+          of: networking.istio.io/v1
+        template: istio-gateway.yaml
+      - isAPIVersion:
+          of: networking.istio.io/v1
+        template: istio-virtualservice.yaml
+
+  #
+  # === Gateway Configuration ===
+  #
+  - it: should set Gateway name using fullname
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+        template: istio-gateway.yaml
+
+  - it: should set Gateway selector from values
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          selector:
+            istio: ingressgateway
+    asserts:
+      - equal:
+          path: spec.selector.istio
+          value: ingressgateway
+        template: istio-gateway.yaml
+
+  - it: should set custom Gateway selector
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          selector:
+            istio: my-custom-gateway
+    asserts:
+      - equal:
+          path: spec.selector.istio
+          value: my-custom-gateway
+        template: istio-gateway.yaml
+
+  - it: should configure Gateway hosts
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+          - api2.example.com
+        gateway:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.servers[0].hosts[0]
+          value: api.example.com
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[0].hosts[1]
+          value: api2.example.com
+        template: istio-gateway.yaml
+
+  - it: should configure HTTP-only Gateway by default
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.servers[0].port.number
+          value: 80
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[0].port.protocol
+          value: HTTP
+        template: istio-gateway.yaml
+      - isNull:
+          path: spec.servers[1]
+        template: istio-gateway.yaml
+
+  - it: should configure Gateway with TLS
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            credentialName: litellm-tls-cert
+    asserts:
+      # HTTP server with redirect
+      - equal:
+          path: spec.servers[0].port.protocol
+          value: HTTP
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[0].tls.httpsRedirect
+          value: true
+        template: istio-gateway.yaml
+      # HTTPS server
+      - equal:
+          path: spec.servers[1].port.number
+          value: 443
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.protocol
+          value: HTTPS
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].tls.mode
+          value: SIMPLE
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].tls.credentialName
+          value: litellm-tls-cert
+        template: istio-gateway.yaml
+
+  - it: should support custom TLS mode and ports
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          httpPort: 8080
+          tls:
+            enabled: true
+            httpsPort: 8443
+            mode: MUTUAL
+            credentialName: litellm-mtls-cert
+            minProtocolVersion: TLSV1_2
+    asserts:
+      - equal:
+          path: spec.servers[0].port.number
+          value: 8080
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.number
+          value: 8443
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].tls.mode
+          value: MUTUAL
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].tls.minProtocolVersion
+          value: TLSV1_2
+        template: istio-gateway.yaml
+
+  - it: should add Gateway labels
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          labels:
+            team: platform
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: platform
+        template: istio-gateway.yaml
+
+  - it: should add Gateway annotations
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          annotations:
+            external-dns.alpha.kubernetes.io/hostname: api.example.com
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: api.example.com
+        template: istio-gateway.yaml
+
+  #
+  # === VirtualService Configuration ===
+  #
+  - it: should set VirtualService name using fullname
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+        template: istio-virtualservice.yaml
+
+  - it: should configure VirtualService hosts
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+          - api2.example.com
+        virtualService:
+          enabled: true
+          gateways:
+            - some-gateway
+    asserts:
+      - equal:
+          path: spec.hosts[0]
+          value: api.example.com
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.hosts[1]
+          value: api2.example.com
+        template: istio-virtualservice.yaml
+
+  - it: should auto-reference chart Gateway when gateway.enabled
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.gateways[0]
+          value: RELEASE-NAME-litellm
+        template: istio-virtualservice.yaml
+
+  - it: should include both chart Gateway and additional gateways
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+          gateways:
+            - mesh
+    asserts:
+      - equal:
+          path: spec.gateways[0]
+          value: RELEASE-NAME-litellm
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.gateways[1]
+          value: mesh
+        template: istio-virtualservice.yaml
+
+  - it: should generate default route to service
+    set:
+      service:
+        port: 4000
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.http[0].match[0].uri.prefix
+          value: /
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.http[0].route[0].destination.host
+          value: RELEASE-NAME-litellm
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.http[0].route[0].destination.port.number
+          value: 4000
+        template: istio-virtualservice.yaml
+
+  - it: should use custom service port in VirtualService route
+    set:
+      service:
+        port: 8080
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.http[0].route[0].destination.port.number
+          value: 8080
+        template: istio-virtualservice.yaml
+
+  - it: should allow custom HTTP routes
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+          http:
+            - match:
+                - uri:
+                    prefix: /v1
+              route:
+                - destination:
+                    host: litellm-v1
+                    port:
+                      number: 4000
+            - match:
+                - uri:
+                    prefix: /v2
+              route:
+                - destination:
+                    host: litellm-v2
+                    port:
+                      number: 4000
+    asserts:
+      - equal:
+          path: spec.http[0].match[0].uri.prefix
+          value: /v1
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.http[0].route[0].destination.host
+          value: litellm-v1
+        template: istio-virtualservice.yaml
+      - equal:
+          path: spec.http[1].match[0].uri.prefix
+          value: /v2
+        template: istio-virtualservice.yaml
+
+  - it: should add VirtualService labels
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        virtualService:
+          enabled: true
+          labels:
+            version: v1
+          gateways:
+            - some-gateway
+    asserts:
+      - equal:
+          path: metadata.labels.version
+          value: v1
+        template: istio-virtualservice.yaml
+
+  - it: should add VirtualService annotations
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        virtualService:
+          enabled: true
+          annotations:
+            external-dns.alpha.kubernetes.io/hostname: api.example.com
+          gateways:
+            - some-gateway
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: api.example.com
+        template: istio-virtualservice.yaml
+
+  - it: should include standard labels on Gateway
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+    asserts:
+      - isNotNull:
+          path: metadata.labels["app.kubernetes.io/name"]
+        template: istio-gateway.yaml
+      - isNotNull:
+          path: metadata.labels["helm.sh/chart"]
+        template: istio-gateway.yaml
+
+  - it: should include standard labels on VirtualService
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: true
+    asserts:
+      - isNotNull:
+          path: metadata.labels["app.kubernetes.io/name"]
+        template: istio-virtualservice.yaml
+      - isNotNull:
+          path: metadata.labels["helm.sh/chart"]
+        template: istio-virtualservice.yaml
+
+  - it: should not create VirtualService when virtualService.enabled is false
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+        virtualService:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: istio-gateway.yaml
+      - hasDocuments:
+          count: 0
+        template: istio-virtualservice.yaml
+
+  #
+  # === DestinationRule Tests ===
+  #
+  - it: should not create DestinationRule by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: istio-destinationrule.yaml
+
+  - it: should not create DestinationRule when istio.enabled is false
+    set:
+      istio.enabled: false
+      istio.destinationRule.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: istio-destinationrule.yaml
+
+  - it: should create DestinationRule when enabled
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: istio-destinationrule.yaml
+      - isKind:
+          of: DestinationRule
+        template: istio-destinationrule.yaml
+      - isAPIVersion:
+          of: networking.istio.io/v1
+        template: istio-destinationrule.yaml
+
+  - it: should set DestinationRule name using fullname
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+        template: istio-destinationrule.yaml
+
+  - it: should set DestinationRule host to service fullname
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.host
+          value: RELEASE-NAME-litellm
+        template: istio-destinationrule.yaml
+
+  - it: should render trafficPolicy when provided
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+          trafficPolicy:
+            connectionPool:
+              tcp:
+                maxConnections: 100
+              http:
+                http1MaxPendingRequests: 100
+    asserts:
+      - equal:
+          path: spec.trafficPolicy.connectionPool.tcp.maxConnections
+          value: 100
+        template: istio-destinationrule.yaml
+      - equal:
+          path: spec.trafficPolicy.connectionPool.http.http1MaxPendingRequests
+          value: 100
+        template: istio-destinationrule.yaml
+
+  - it: should render outlierDetection in trafficPolicy
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+          trafficPolicy:
+            outlierDetection:
+              consecutive5xxErrors: 5
+              interval: "30s"
+              baseEjectionTime: "30s"
+    asserts:
+      - equal:
+          path: spec.trafficPolicy.outlierDetection.consecutive5xxErrors
+          value: 5
+        template: istio-destinationrule.yaml
+
+  - it: should add DestinationRule labels and annotations
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+          labels:
+            team: platform
+          annotations:
+            note: managed-by-helm
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: platform
+        template: istio-destinationrule.yaml
+      - equal:
+          path: metadata.annotations.note
+          value: managed-by-helm
+        template: istio-destinationrule.yaml
+
+  - it: should include standard labels on DestinationRule
+    set:
+      istio:
+        enabled: true
+        destinationRule:
+          enabled: true
+    asserts:
+      - isNotNull:
+          path: metadata.labels["app.kubernetes.io/name"]
+        template: istio-destinationrule.yaml
+      - isNotNull:
+          path: metadata.labels["helm.sh/chart"]
+        template: istio-destinationrule.yaml

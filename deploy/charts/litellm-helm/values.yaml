@@ -137,6 +137,70 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
+# Istio Gateway and VirtualService configuration
+# Use this instead of 'ingress' when running with Istio service mesh
+istio:
+  enabled: false
+  # Hosts that the Gateway and VirtualService will match on
+  hosts:
+    - api.example.local
+  gateway:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Selector to bind the Gateway to the Istio ingress gateway deployment
+    selector:
+      istio: ingressgateway
+    # HTTP port for the Gateway server
+    httpPort: 80
+    tls:
+      enabled: false
+      # HTTPS port for the Gateway server
+      httpsPort: 443
+      # TLS mode: SIMPLE, MUTUAL, PASSTHROUGH, etc.
+      mode: SIMPLE
+      # Name of the Kubernetes secret holding the TLS cert/key (in istio-system namespace)
+      credentialName: ""
+      # Minimum TLS protocol version (e.g. TLSV1_2)
+      # minProtocolVersion: TLSV1_2
+      # Maximum TLS protocol version
+      # maxProtocolVersion: TLSV1_3
+  virtualService:
+    enabled: true
+    labels: {}
+    annotations: {}
+    # Additional gateways to attach to (e.g. use an existing shared gateway)
+    # If istio.gateway.enabled is true, the chart's own Gateway is automatically included
+    gateways: []
+    # # Example: use an existing shared gateway instead of creating one
+    # # gateways:
+    # #   - istio-system/shared-gateway
+    # Custom HTTP route rules (overrides the default catch-all route)
+    # http: []
+    # Timeout for the default route (e.g. "30s")
+    # timeout: "30s"
+    # Retry policy for the default route
+    # retries:
+    #   attempts: 3
+    #   perTryTimeout: "10s"
+    #   retryOn: "gateway-error,connect-failure,refused-stream"
+  destinationRule:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Traffic policy for circuit breaking and connection pool tuning
+    # trafficPolicy:
+    #   connectionPool:
+    #     tcp:
+    #       maxConnections: 100
+    #     http:
+    #       http1MaxPendingRequests: 100
+    #       http2MaxRequests: 1000
+    #   outlierDetection:
+    #     consecutive5xxErrors: 5
+    #     interval: "30s"
+    #     baseEjectionTime: "30s"
+
 # masterkey: changeit
 
 # if set, use this secret for the master key; otherwise, autogenerate a new one

@@ -155,6 +155,85 @@ data:
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
 
+
+### Istio Service Mesh Settings
+
+These settings configure Istio-native networking resources (Gateway, VirtualService, DestinationRule).
+Use these **instead of** `ingress` when your cluster runs Istio. Uses `networking.istio.io/v1` (GA since Istio 1.22).
+
+| Name                                            | Description                                                                                                        | Value                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------- |
+| `istio.enabled`                                 | Enable Istio networking resources                                                                                  | `false`              |
+| `istio.hosts`                                   | List of hostnames for the Gateway and VirtualService                                                               | `["api.example.local"]` |
+| `istio.gateway.enabled`                         | Create an Istio Gateway resource. Set `false` to use an existing shared gateway (recommended in production)        | `false`              |
+| `istio.gateway.selector`                        | Label selector to bind the Gateway to an ingress gateway pod                                                       | `{istio: ingressgateway}` |
+| `istio.gateway.httpPort`                        | HTTP port number on the Gateway server                                                                             | `80`                 |
+| `istio.gateway.tls.enabled`                     | Add a HTTPS server block with TLS to the Gateway (also sets HTTP→HTTPS redirect)                                  | `false`              |
+| `istio.gateway.tls.httpsPort`                   | HTTPS port number on the Gateway server                                                                            | `443`                |
+| `istio.gateway.tls.mode`                        | Istio TLS mode: `SIMPLE`, `MUTUAL`, or `PASSTHROUGH`                                                               | `SIMPLE`             |
+| `istio.gateway.tls.credentialName`              | Name of the Kubernetes Secret (in `istio-system`) holding the TLS certificate                                      | `""`                 |
+| `istio.gateway.labels`                          | Additional labels for the Gateway resource                                                                         | `{}`                 |
+| `istio.gateway.annotations`                     | Additional annotations for the Gateway resource                                                                    | `{}`                 |
+| `istio.virtualService.enabled`                  | Create a VirtualService resource                                                                                   | `true`               |
+| `istio.virtualService.gateways`                 | Additional gateway references (e.g. `["istio-system/shared-gateway"]`). The chart's own Gateway is auto-included  | `[]`                 |
+| `istio.virtualService.http`                     | Custom HTTP route rules. When set, overrides the default catch-all route                                           | `[]`                 |
+| `istio.virtualService.timeout`                  | Request timeout for the default route (e.g. `"30s"`)                                                              | `""`                 |
+| `istio.virtualService.retries`                  | Retry policy for the default route. See [Istio HTTPRetry](https://istio.io/latest/docs/reference/config/networking/virtual-service/#HTTPRetry) | `{}` |
+| `istio.virtualService.labels`                   | Additional labels for the VirtualService resource                                                                  | `{}`                 |
+| `istio.virtualService.annotations`              | Additional annotations for the VirtualService resource                                                             | `{}`                 |
+| `istio.destinationRule.enabled`                 | Create a DestinationRule resource for circuit breaking and connection pool tuning                                   | `false`              |
+| `istio.destinationRule.trafficPolicy`           | Istio TrafficPolicy block (connectionPool, outlierDetection, tls, etc.)                                            | `{}`                 |
+| `istio.destinationRule.labels`                  | Additional labels for the DestinationRule resource                                                                 | `{}`                 |
+| `istio.destinationRule.annotations`             | Additional annotations for the DestinationRule resource                                                            | `{}`                 |
+
+#### Example: VirtualService with existing shared Gateway
+
+```yaml
+istio:
+  enabled: true
+  hosts:
+    - litellm.example.com
+  gateway:
+    enabled: false        # platform team owns the Gateway
+  virtualService:
+    enabled: true
+    gateways:
+      - istio-system/shared-gateway
+    timeout: "60s"
+    retries:
+      attempts: 3
+      perTryTimeout: "20s"
+      retryOn: "gateway-error,connect-failure,refused-stream"
+```
+
+#### Example: Standalone Gateway with TLS + DestinationRule
+
+```yaml
+istio:
+  enabled: true
+  hosts:
+    - litellm.example.com
+  gateway:
+    enabled: true
+    tls:
+      enabled: true
+      credentialName: litellm-tls-cert
+  virtualService:
+    enabled: true
+  destinationRule:
+    enabled: true
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 100
+        http:
+          http2MaxRequests: 1000
+      outlierDetection:
+        consecutive5xxErrors: 5
+        interval: "30s"
+        baseEjectionTime: "30s"
+```
+
 ### Migration Job Settings
 
 The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
