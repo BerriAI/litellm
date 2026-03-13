@@ -34,6 +34,7 @@ services:
       - .env # Load local .env file
     depends_on:
       - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+      - redis  # Ensure Redis starts before litellm for caching support
     healthcheck:  # Defines the health check configuration for the container
       test:
         - CMD-SHELL
@@ -74,8 +75,24 @@ services:
       - "--storage.tsdb.retention.time=15d"
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    container_name: litellm_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+
 volumes:
   prometheus_data:
     driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
+  redis_data:
+    driver: local
