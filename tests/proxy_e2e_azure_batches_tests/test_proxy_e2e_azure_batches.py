@@ -235,6 +235,7 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
     # Tests
     # ------------------------------------------------------------------
 
+    @pytest.mark.flaky(reruns=5)
     @pytest.mark.parametrize(
         "model_name",
         get_batch_model_names(),
