@@ -265,11 +265,6 @@ class NewRelicLogger(CustomLogger):
 
             return trace_id, span_id
 
-        except ImportError:
-            verbose_logger.warning(
-                "New Relic Python agent not available."
-            )
-            return None, None
         except Exception as e:
             verbose_logger.warning(f"Unable to get New Relic trace context: {e}")
             return None, None
@@ -600,7 +595,9 @@ class NewRelicLogger(CustomLogger):
         """Record error metric to New Relic."""
         try:
             import newrelic.agent
-            newrelic.agent.record_custom_metric("LLM/LiteLLM/Error", 1)
+            app = newrelic.agent.application()
+            if app:
+                app.record_custom_metric("LLM/LiteLLM/Error", 1)
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
             self.handle_callback_failure("newrelic")
@@ -620,19 +617,13 @@ class NewRelicLogger(CustomLogger):
         if not self.enabled:
             return
 
-        # Check and emit periodic supportability metric if 23 hours have passed
+        # Check and emit periodic supportability metric if 27 hours have passed
         self._check_and_emit_periodic_metric()
-
-        # import pprint
-        # verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
 
         # Get trace context
         trace_id, span_id = self._get_trace_context(kwargs)
         if not trace_id:
-            # verbose_logger.debug("No trace_id available, skipping New Relic event recording.")
             return
-
-        # verbose_logger.info(f"Trace ID: {trace_id}, Span ID: {span_id or '(none)'}")
 
         # Generate unique request ID for this request (used as Summary event id)
         request_id = str(uuid.uuid4())
