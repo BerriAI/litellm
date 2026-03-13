@@ -97,7 +97,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // They are only cleared on logout
   useEffect(() => {
     const handleBeforeUnload = () => {
+      const token = sessionStorage.getItem("token");
       sessionStorage.clear();
+      if (token) {
+        sessionStorage.setItem("token", token);
+      }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
