@@ -384,6 +384,25 @@ def _get_cost_breakdown_from_logging_obj(
     return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
+def _has_attribute_error_in_chain(exc: Exception, _depth: int = 0) -> bool:
+    """Walk the exception chain to find an AttributeError at any depth.
+
+    Checks __cause__, __context__, and the litellm-specific original_exception
+    attribute recursively. Depth is capped to avoid infinite loops from
+    circular exception references.
+    """
+    if _depth > 10:
+        return False
+    if isinstance(exc, AttributeError):
+        return True
+    for attr in ("__cause__", "__context__", "original_exception"):
+        inner = getattr(exc, attr, None)
+        if inner is not None and isinstance(inner, BaseException):
+            if _has_attribute_error_in_chain(inner, _depth + 1):
+                return True
+    return False
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -1281,23 +1300,11 @@ class ProxyBaseLLMRequestProcessing:
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
-        # Check for AttributeError in various places:
-        # 1. Direct AttributeError (already handled above)
-        # 2. In underlying exception (__cause__, __context__, original_exception)
-        has_attribute_error = (
-            (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__cause__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__context__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "original_exception", None), AttributeError)
-            )
-        )
+        # Check for AttributeError in the exception chain.
+        # The AttributeError may be wrapped in multiple layers
+        # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
+        # so walk __cause__, __context__, and original_exception recursively.
+        has_attribute_error = _has_attribute_error_in_chain(e)
 
         if has_attribute_error:
             raise ProxyException(
