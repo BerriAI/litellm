@@ -141,6 +141,12 @@ async def background_streaming_task(  # noqa: PLR0915
                 last_update_time = current_time
 
         # Handle StreamingResponse
+        if not hasattr(response, "body_iterator"):
+            verbose_proxy_logger.warning(
+                f"background_streaming_task: response for {polling_id} has no "
+                "body_iterator; this may indicate a misconfiguration or provider error"
+            )
+
         if hasattr(response, "body_iterator"):
             async for chunk in response.body_iterator:
                 # Parse chunk
