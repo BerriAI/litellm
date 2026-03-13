@@ -1492,13 +1492,32 @@ class Router:
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
-        """
-        # Copy kwargs to ensure isolation (use safe_deep_copy to handle non-serializable objects like OTEL spans)
-        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
-        silent_kwargs = safe_deep_copy(kwargs)
-        if "metadata" not in silent_kwargs:
-            silent_kwargs["metadata"] = {}
+        IMPORTANT: We avoid calling safe_deep_copy(kwargs) because it temporarily
+        mutates the original dict (pops litellm_parent_otel_span, replaces with
+        "placeholder", then restores). Since this runs in a background thread while
+        the primary request's async callbacks may still be reading the same dict,
+        that mutation causes a race condition that breaks otel/prometheus callbacks
+        for the primary request.
+        """
+        import copy
+
+        # Shallow copy top-level kwargs — does NOT mutate the original
+        silent_kwargs = dict(kwargs)
+
+        # Deep-copy metadata so we don't share state with the primary request.
+        # Remove the OTEL span BEFORE deep-copying (it's not picklable and is
+        # thread-bound anyway).
+        original_metadata = kwargs.get("metadata") or {}
+        metadata_copy = {
+            k: v
+            for k, v in original_metadata.items()
+            if k != "litellm_parent_otel_span"
+        }
+        try:
+            silent_kwargs["metadata"] = copy.deepcopy(metadata_copy)
+        except Exception:
+            silent_kwargs["metadata"] = dict(metadata_copy)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
