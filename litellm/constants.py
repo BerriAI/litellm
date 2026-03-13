@@ -1344,6 +1344,11 @@ SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+# Maximum number of spend log entries to hold in-memory before dropping oldest.
+# Prevents unbounded memory growth when DB writes are slow or failing.
+MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE = int(
+    os.getenv("MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

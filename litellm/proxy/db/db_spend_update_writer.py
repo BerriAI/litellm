@@ -720,16 +720,29 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
+        from litellm.constants import MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE
+
         verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
         )
-        if prisma_client is not None and spend_logs_url is not None:
+        if prisma_client is not None:
             async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
-        elif prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
+                # Prevent unbounded queue growth when DB writes are slow/failing
+                if (
+                    len(prisma_client.spend_log_transactions)
+                    >= MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE
+                ):
+                    drop_count = MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE // 10
+                    prisma_client.spend_log_transactions = (
+                        prisma_client.spend_log_transactions[drop_count:]
+                    )
+                    verbose_proxy_logger.warning(
+                        "Spend log queue exceeded %d entries, dropped oldest %d to prevent memory leak",
+                        MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE,
+                        drop_count,
+                    )
                 prisma_client.spend_log_transactions.append(payload)
         else:
             verbose_proxy_logger.debug(
