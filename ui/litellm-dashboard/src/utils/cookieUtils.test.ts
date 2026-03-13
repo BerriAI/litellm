@@ -188,5 +188,10 @@ describe("cookieUtils", () => {
       sessionStorage.setItem("token", "session-value");
       expect(getCookie("token")).toBe("cookie-value");
     });
+
+    it("should not fall back to sessionStorage for non-token keys", () => {
+      sessionStorage.setItem("other", "other-value");
+      expect(getCookie("other")).toBeNull();
+    });
   });
 });

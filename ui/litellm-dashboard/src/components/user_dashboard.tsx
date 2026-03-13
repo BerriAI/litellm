@@ -1,5 +1,5 @@
 "use client";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
 import { Typography } from "antd";
 import { jwtDecode } from "jwt-decode";
@@ -35,11 +35,7 @@ export type UserInfo = {
   spend: number;
 };
 
-function getCookie(name: string) {
-  console.log("COOKIES", document.cookie);
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
-}
+
 
 interface UserDashboardProps {
   userID: string | null;

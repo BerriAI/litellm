@@ -84,7 +84,7 @@ export function getCookie(name: string) {
   }
   // Fallback to sessionStorage — covers the case where a reverse proxy
   // added HttpOnly to the server-set cookie, making it invisible to JS.
-  if (typeof window !== "undefined") {
+  if (name === "token" && typeof window !== "undefined") {
     try {
       return sessionStorage.getItem(name);
     } catch {
