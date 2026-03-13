@@ -4544,14 +4544,23 @@ class ProxyUpdateSpend:
                         ) in end_user_list_transactions.items():
                             if litellm.max_end_user_budget is not None:
                                 pass
+                            create_data = {
+                                "user_id": end_user_id,
+                                "spend": response_cost,
+                                "blocked": False,
+                            }
+                            if litellm.max_end_user_budget_id is not None:
+                                # [Budget Reset Fix] Proactive Persistence
+                                # Assign the default budget_id during initial user creation
+                                # to ensure they are immediately traceable by the ResetBudgetJob.
+                                create_data[
+                                    "budget_id"
+                                ] = litellm.max_end_user_budget_id
+
                             batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
                                 data={
-                                    "create": {
-                                        "user_id": end_user_id,
-                                        "spend": response_cost,
-                                        "blocked": False,
-                                    },
+                                    "create": create_data,  # type: ignore
                                     "update": {"spend": {"increment": response_cost}},
                                 },
                             )

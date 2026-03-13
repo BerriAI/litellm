@@ -824,6 +824,20 @@ async def get_default_end_user_budget(
         return None
 
 
+async def _persist_end_user_budget_id(
+    prisma_client: PrismaClient,
+    user_id: str,
+    budget_id: str,
+):
+    try:
+        await prisma_client.db.litellm_endusertable.update(
+            where={"user_id": user_id},
+            data={"budget_id": budget_id},
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error persisting end user budget id: {str(e)}")
+
+
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
@@ -860,8 +874,22 @@ async def _apply_default_budget_to_end_user(
     if default_budget is not None:
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
+        # end_user_obj.budget_id = litellm.max_end_user_budget_id
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+        )
+
+        # [Budget Reset Fix]
+        # Persist the budget_id to the database. This ensures the ResetBudgetJob
+        # (which queries by budget_id) can identify and reset this user's spend.
+        # Fire-and-forget: we use asyncio.create_task to avoid blocking the
+        # latency-sensitive authentication hot-path with a database write.
+        asyncio.create_task(
+            _persist_end_user_budget_id(
+                prisma_client=prisma_client,
+                user_id=end_user_obj.user_id,
+                budget_id=litellm.max_end_user_budget_id,
+            )
         )
 
     return end_user_obj
@@ -936,12 +964,23 @@ async def get_end_user_object(
         return_obj = LiteLLM_EndUserTable(**cached_user_obj)
 
         # Apply default budget if needed
+        # Track if the budget was newly applied so we can update the cache
+        _initial_budget_id = return_obj.budget_id
         return_obj = await _apply_default_budget_to_end_user(
             end_user_obj=return_obj,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
+
+        # [Budget Reset Fix]
+        # Synchronization: If a default budget was newly applied above during the
+        # auth-check, we update the cache immediately so subsequent requests
+        # recognize the budget_id without triggering another DB write task.
+        if _initial_budget_id != return_obj.budget_id:
+            await user_api_key_cache.async_set_cache(
+                key=_key, value=return_obj.model_dump()
+            )
 
         # Check budget limits
         _check_end_user_budget(end_user_obj=return_obj, route=route)

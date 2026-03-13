@@ -2833,6 +2833,11 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     user_id: str
     blocked: bool
     alias: Optional[str] = None
+    # [Budget Reset Fix]
+    # budget_id is the foreign key for the ResetBudgetJob.
+    # While litellm_budget_table contains the nested relation, this scalar
+    # budget_id is required for direct DB updates and reset-job queries.
+    budget_id: Optional[str] = None
     spend: float = 0.0
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None

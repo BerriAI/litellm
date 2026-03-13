@@ -351,6 +351,11 @@ async def new_end_user(
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
             new_end_user_obj["budget_id"] = data.budget_id
+        elif litellm.max_end_user_budget_id is not None:
+            # [Budget Reset Fix]
+            # Proactive Persistence: Assign the default budget ID during manual user creation.
+            # This ensures they are immediately discoverable by the ResetBudgetJob.
+            new_end_user_obj["budget_id"] = litellm.max_end_user_budget_id
 
         _user_data = data.dict(exclude_none=True)
 
