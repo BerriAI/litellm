@@ -924,9 +924,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   }}
                 >
-                  <Option value="default" label="Default">
+                  <Option value="default" label="Full Access">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Default</div>
+                      <div style={{ fontWeight: 500 }}>Full Access</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
                         Can call AI APIs + Management routes
                       </div>

@@ -528,6 +528,12 @@ describe("KeyEditView", () => {
       const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
       expect(hasAIAPIs).toBe(true);
 
+      const hasFullAccess = optionTexts.some((text) => text?.includes("Full Access"));
+      expect(hasFullAccess).toBe(true);
+
+      const hasDefault = optionTexts.some((text) => text?.includes("Default"));
+      expect(hasDefault).toBe(false);
+
       // Verify old "LLM API" label does NOT appear
       const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
       expect(hasLLMAPI).toBe(false);

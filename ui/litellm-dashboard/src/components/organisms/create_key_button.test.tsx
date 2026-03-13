@@ -287,6 +287,19 @@ describe("CreateKey", () => {
     });
   });
 
+  it("should display 'Full Access' label for the default key type option", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Full Access")).toBeInTheDocument();
+      expect(screen.queryByText(/^Default$/)).not.toBeInTheDocument();
+    });
+  });
+
   it("should include access_group_ids in keyCreateCall payload when access groups are selected", async () => {
     renderWithProviders(<CreateKey {...defaultProps} />);
 
