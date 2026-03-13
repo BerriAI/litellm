@@ -1944,12 +1944,12 @@ from litellm.proxy._types import LiteLLM_UserTable
         (
             "anthropic/*",
             {"model": "anthropic/*"},
-            ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
+            ["anthropic/claude-haiku-4-5-20251001", "anthropic/claude-opus-4-6"],
         ),
         (
             "vertex_ai/gemini-*",
             {"model": "vertex_ai/gemini-*"},
-            ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+            ["vertex_ai/gemini-2.5-flash", "vertex_ai/gemini-2.5-pro"],
         ),
         (
             "foo/*",

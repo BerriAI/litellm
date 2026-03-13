@@ -1832,8 +1832,12 @@ def test_get_max_tokens_for_model_claude_35():
     config = AnthropicConfig()
 
     # Claude 3.5 Sonnet should return 8192
-    max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
-    assert max_tokens == 8192
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        return_value=8192,
+    ):
+        max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
+        assert max_tokens == 8192
 
 
 def test_get_max_tokens_for_model_claude_37():
@@ -1879,17 +1883,34 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
-    # Claude 3 model should get 4096
-    config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
-    assert config_claude3["max_tokens"] == 4096
 
-    # Claude 3.5 model should get 8192
-    config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
-    assert config_claude35["max_tokens"] == 8192
+    def _mock_get_max_tokens(model):
+        """Return expected max_output_tokens for each model."""
+        model_map = {
+            "claude-3-sonnet-20240229": 4096,
+            "claude-3-5-sonnet-20241022": 8192,
+            "claude-3-7-sonnet-20250219": 64000,
+        }
+        result = model_map.get(model)
+        if result is None:
+            raise Exception(f"Model {model} not found")
+        return result
 
-    # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
-    config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
-    assert config_claude37["max_tokens"] == 64000
+    with patch(
+        "litellm.llms.anthropic.chat.transformation.get_max_tokens",
+        side_effect=_mock_get_max_tokens,
+    ):
+        # Claude 3 model should get 4096
+        config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
+        assert config_claude3["max_tokens"] == 4096
+
+        # Claude 3.5 model should get 8192
+        config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
+        assert config_claude35["max_tokens"] == 8192
+
+        # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
+        config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
+        assert config_claude37["max_tokens"] == 64000
 
 
 def test_get_config_without_model_uses_fallback():
@@ -1911,16 +1932,16 @@ def test_transform_request_uses_dynamic_max_tokens():
 
     messages = [{"role": "user", "content": "Hello"}]
 
-    # Claude 3.5 model should get 8192 as default max_tokens
+    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-7-sonnet-20250219",
         messages=messages,
         optional_params={},  # No max_tokens provided
         litellm_params={},
         headers={}
     )
 
-    assert result["max_tokens"] == 8192
+    assert result["max_tokens"] == 64000
 
 
 def test_transform_request_respects_user_max_tokens():
@@ -1934,7 +1955,7 @@ def test_transform_request_respects_user_max_tokens():
 
     # User provides explicit max_tokens=1000, should not be overridden
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-7-sonnet-20250219",
         messages=messages,
         optional_params={"max_tokens": 1000},
         litellm_params={},

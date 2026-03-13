@@ -267,6 +267,7 @@ model LiteLLM_ObjectPermissionTable {
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
+  models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
@@ -315,6 +316,11 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
+  approval_status       String    @default("approved")
+  submitted_by          String?
+  submitted_at          DateTime?
+  reviewed_at           DateTime?
+  review_notes          String?
 }
 
 // Per-user BYOK credentials for MCP servers
@@ -388,9 +394,6 @@ model LiteLLM_VerificationToken {
 
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
     @@index([budget_reset_at, expires])
-
-    // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (...) ORDER BY "public"."LiteLLM_VerificationToken"."key_alias" ASC
-    @@index([key_alias])
 }
 
 model LiteLLM_JWTKeyMapping {
@@ -556,9 +559,6 @@ model LiteLLM_SpendLogs {
   @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
-
-  // SELECT ... FROM "LiteLLM_SpendLogs" WHERE ("startTime" >= $1 AND "startTime" <= $2 AND "user" = $3) GROUP BY ...
-  @@index([user, startTime])
 }
 
 // View spend, model, api_key per request

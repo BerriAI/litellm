@@ -64,9 +64,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -145,7 +145,9 @@ async def _check_duplicate_user_field(
             error_label = label or field_name
             raise HTTPException(
                 status_code=409,
-                detail={"error": f"User with {error_label} {existing_value} already exists"},
+                detail={
+                    "error": f"User with {error_label} {existing_value} already exists"
+                },
             )
 
 
@@ -418,18 +420,19 @@ async def new_user(
                 status_code=403,
                 detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
             )
-        
+
         # Only proxy admins can create administrative users
         # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
         # This can happen when the function is called directly in tests
         if (
-            data.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+            data.user_role
+            in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
             and isinstance(user_api_key_dict, UserAPIKeyAuth)
             and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):
             raise HTTPException(
                 status_code=403,
-                detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}"
+                detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
         data_json = data.json()  # type: ignore
@@ -618,7 +621,9 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
+            return await _get_user_info_for_proxy_admin(
+                user_api_key_dict=user_api_key_dict
+            )
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -626,7 +631,7 @@ async def user_info(
         user_info = None
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        
+
         if user_info is None:
             raise HTTPException(
                 status_code=404,
@@ -918,11 +923,11 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
-    
+
     # Get admin's own user_id and user_info
     admin_user_id = user_api_key_dict.user_id
     admin_user_info = None
-    
+
     if admin_user_id is not None:
         admin_user_info = await prisma_client.get_data(user_id=admin_user_id)
         if admin_user_info is not None:
@@ -931,7 +936,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
                 if isinstance(admin_user_info, BaseModel)
                 else admin_user_info
             )
-    
+
     return UserInfoResponse(
         user_id=admin_user_id,
         user_info=admin_user_info,
@@ -964,11 +969,11 @@ def _process_keys_for_user_info(
             except Exception:
                 # if using pydantic v1
                 _key = key.dict()
-            
+
             # Filter out UI session tokens (team_id="litellm-dashboard")
             if _key.get("team_id") == UI_SESSION_TOKEN_TEAM_ID:
                 continue
-            
+
             if (
                 "team_id" in _key
                 and _key["team_id"] is not None
@@ -992,8 +997,8 @@ def _update_internal_user_params(
     data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
 ) -> dict:
     non_default_values = {}
-    fields_set = data.fields_set() if hasattr(data, 'fields_set') else set()
-    
+    fields_set = data.fields_set() if hasattr(data, "fields_set") else set()
+
     for k, v in data_json.items():
         if k == "max_budget":
             if "max_budget" in fields_set:
@@ -1030,9 +1035,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1652,7 +1657,9 @@ async def _authorize_user_list_request(
     if user_api_key_dict.user_id is None:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only proxy admins and organization admins can list users."},
+            detail={
+                "error": "Only proxy admins and organization admins can list users."
+            },
         )
     try:
         caller_user = await get_user_object(
@@ -1665,12 +1672,16 @@ async def _authorize_user_list_request(
     except ValueError:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only proxy admins and organization admins can list users."},
+            detail={
+                "error": "Only proxy admins and organization admins can list users."
+            },
         )
     if caller_user is None:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only proxy admins and organization admins can list users."},
+            detail={
+                "error": "Only proxy admins and organization admins can list users."
+            },
         )
 
     allowed_org_ids = [
@@ -1681,17 +1692,23 @@ async def _authorize_user_list_request(
     if not allowed_org_ids:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only proxy admins and organization admins can list users."},
+            detail={
+                "error": "Only proxy admins and organization admins can list users."
+            },
         )
 
     # If client also sent organization_ids, intersect with allowed orgs
     if organization_ids:
-        requested = set(oid.strip() for oid in organization_ids.split(",") if oid.strip())
+        requested = set(
+            oid.strip() for oid in organization_ids.split(",") if oid.strip()
+        )
         intersection = list(requested & set(allowed_org_ids))
         if not intersection:
             raise HTTPException(
                 status_code=403,
-                detail={"error": "You do not have org_admin access to the requested organization(s)."},
+                detail={
+                    "error": "You do not have org_admin access to the requested organization(s)."
+                },
             )
         allowed_org_ids = intersection
 
@@ -1824,7 +1841,9 @@ async def get_users(
         }
 
     if organization_ids:
-        org_id_list = [oid.strip() for oid in organization_ids.split(",") if oid.strip()]
+        org_id_list = [
+            oid.strip() for oid in organization_ids.split(",") if oid.strip()
+        ]
         if org_id_list:
             where_conditions["organization_memberships"] = {
                 "some": {"organization_id": {"in": org_id_list}}
@@ -2131,8 +2150,11 @@ async def _resolve_org_filter_for_user_search(
 
     if team_id is not None:
         return await _resolve_team_org_filter(
-            user_api_key_dict, team_id, prisma_client,
-            user_api_key_cache, proxy_logging_obj,
+            user_api_key_dict,
+            team_id,
+            prisma_client,
+            user_api_key_cache,
+            proxy_logging_obj,
         )
 
     raise HTTPException(
@@ -2273,13 +2295,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:

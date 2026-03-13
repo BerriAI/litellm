@@ -13,6 +13,7 @@ class CustomSSOLoginHandler(CustomLogger):
     Useful when you have an OAuth proxy in front of LiteLLM
     and you want to use the headers from the proxy to sign in the user
     """
+
     async def handle_custom_ui_sso_sign_in(
         self,
         request: Request,

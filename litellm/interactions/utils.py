@@ -29,22 +29,23 @@ def get_provider_interactions_api_config(
 ) -> Optional[BaseInteractionsAPIConfig]:
     """
     Get the interactions API config for the given provider.
-    
+
     Args:
         provider: The LLM provider name
         model: Optional model name
-        
+
     Returns:
         The provider-specific interactions API config, or None if not supported
     """
     from litellm.types.utils import LlmProviders
-    
+
     if provider == LlmProviders.GEMINI.value or provider == "gemini":
         from litellm.llms.gemini.interactions.transformation import (
             GoogleAIStudioInteractionsConfig,
         )
+
         return GoogleAIStudioInteractionsConfig()
-    
+
     return None
 
 
@@ -76,7 +77,9 @@ class InteractionsAPIRequestUtils:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS},
+                default_param_values={
+                    k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS
+                },
                 additional_endpoint_specific_params=["input", "model", "agent"],
             )
         )

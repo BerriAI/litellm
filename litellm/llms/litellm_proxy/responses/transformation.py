@@ -15,7 +15,7 @@ from litellm.types.utils import LlmProviders
 class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
     """
     Configuration for LiteLLM Proxy Responses API support.
-    
+
     Extends OpenAI's config since the proxy follows OpenAI's API spec,
     but uses LITELLM_PROXY_API_BASE for the base URL.
     """
@@ -31,11 +31,11 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> str:
         """
         Get the endpoint for LiteLLM Proxy responses API.
-        
+
         Uses LITELLM_PROXY_API_BASE environment variable if api_base is not provided.
         """
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
-        
+
         if api_base is None:
             raise ValueError(
                 "api_base not set for LiteLLM Proxy responses API. "

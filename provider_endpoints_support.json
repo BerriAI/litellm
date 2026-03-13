@@ -458,6 +458,24 @@
         "interactions": true
       }
     },
+    "charity_engine": {
+      "display_name": "Charity Engine (`charity_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "chutes": {
       "display_name": "Chutes (`chutes`)",
       "endpoints": {
@@ -2517,6 +2535,39 @@
         "rerank": false,
         "search": true,
         "a2a": false
+      }
+    },
+    "black_forest_labs": {
+      "display_name": "Black Forest Labs (`black_forest_labs`)",
+      "url": "https://docs.litellm.ai/docs/providers/black_forest_labs",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "charity_engine": {
+      "display_name": "Charity Engine (`charity_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
       }
     }
   },

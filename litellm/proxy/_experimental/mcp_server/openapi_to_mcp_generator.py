@@ -71,6 +71,7 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
             raise
     return asyncio.run(load_openapi_spec_async(filepath))
 
+
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -92,26 +93,55 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
-        return spec["servers"][0]["url"]
+        server_url = spec["servers"][0]["url"]
+
+        # If the server URL is relative (starts with /), derive base from spec_path
+        if server_url.startswith("/") and spec_path:
+            if spec_path.startswith("http://") or spec_path.startswith("https://"):
+                # Extract base URL from spec_path (e.g., https://petstore3.swagger.io/api/v3/openapi.json)
+                # Combine domain with the relative server URL
+                from urllib.parse import urlparse
+
+                parsed = urlparse(spec_path)
+                base_domain = f"{parsed.scheme}://{parsed.netloc}"
+                full_base_url = base_domain + server_url
+                verbose_logger.info(
+                    f"OpenAPI spec has relative server URL '{server_url}'. "
+                    f"Deriving base from spec_path: {full_base_url}"
+                )
+                return full_base_url
+
+        return server_url
     # OpenAPI 2.x (Swagger)
     elif "host" in spec:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
-    
+
     # Fallback: derive base URL from spec_path if it's a URL
-    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
-        for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
+    if spec_path and (
+        spec_path.startswith("http://") or spec_path.startswith("https://")
+    ):
+        for suffix in [
+            "/openapi.json",
+            "/openapi.yaml",
+            "/swagger.json",
+            "/swagger.yaml",
+        ]:
             if spec_path.endswith(suffix):
-                base_url = spec_path[:-len(suffix)]
-                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                base_url = spec_path[: -len(suffix)]
+                verbose_logger.info(
+                    f"No server info in OpenAPI spec. Using derived base URL: {base_url}"
+                )
                 return base_url
-        
+
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
-            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            verbose_logger.info(
+                f"No server info in OpenAPI spec. Using derived base URL: {base_url}"
+            )
             return base_url
-    
+
     return ""
 
 
@@ -165,7 +195,9 @@ def resolve_operation_params(
     path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
     op_level = _resolve_param_list(operation.get("parameters", []), component_params)
     op_keys = {(p["name"], p.get("in")) for p in op_level}
-    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
+    merged = [
+        p for p in path_level if (p["name"], p.get("in")) not in op_keys
+    ] + op_level
     result = dict(operation)
     result["parameters"] = merged
     return result
@@ -350,7 +382,9 @@ def create_tool_function(
                 url, params=params, json=json_body, headers=effective_headers
             )
         elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=effective_headers)
+            response = await client.delete(
+                url, params=params, headers=effective_headers
+            )
         elif original_method == "patch":
             response = await client.patch(
                 url, params=params, json=json_body, headers=effective_headers

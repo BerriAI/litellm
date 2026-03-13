@@ -40,9 +40,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
     DEFAULT_BASE_URL: str = "https://api.stability.ai"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         """
         Return list of OpenAI params supported by Stability AI.
 
@@ -52,7 +50,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             "n",  # Number of images (Stability always returns 1, we can loop)
             "size",  # Maps to aspect_ratio
             "response_format",  # b64_json or url (Stability only returns b64)
-            "mask"  
+            "mask",
         ]
 
     def map_openai_params(
@@ -188,7 +186,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         data: Dict[str, Any] = {
             "output_format": "png",  # Default to PNG
         }
-        
+
         # Add prompt only if provided (some Stability endpoints don't require it)
         if prompt is not None and prompt != "":
             data["prompt"] = prompt
@@ -241,7 +239,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "select_prompt",
                 "control_strength",
                 "composition_fidelity",
-                "change_strength"
+                "change_strength",
             ]:
                 data[key] = value  # type: ignore
 
@@ -310,7 +308,9 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         model_info = get_model_info(model, custom_llm_provider="stability")
         cost_per_image = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
+            model_response._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ] = float(cost_per_image)
         return model_response
 
     def use_multipart_form_data(self) -> bool:

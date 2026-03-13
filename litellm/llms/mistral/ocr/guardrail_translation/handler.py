@@ -108,9 +108,7 @@ class OCRHandler(BaseTranslation):
             Modified OCRResponse with guardrailed page text
         """
         if not hasattr(response, "pages") or not response.pages:
-            verbose_proxy_logger.debug(
-                "OCR guardrail: No pages found in OCR response"
-            )
+            verbose_proxy_logger.debug("OCR guardrail: No pages found in OCR response")
             return response
 
         # Extract markdown text from all pages

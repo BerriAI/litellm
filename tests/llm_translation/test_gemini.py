@@ -271,7 +271,7 @@ def test_gemini_context_caching_separate_messages():
 def test_gemini_image_generation():
     # litellm._turn_on_debug()
     response = completion(
-        model="gemini/gemini-2.0-flash-exp-image-generation",
+        model="gemini/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
         modalities=["image", "text"],
     )

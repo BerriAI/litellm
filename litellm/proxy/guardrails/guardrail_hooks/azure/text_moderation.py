@@ -116,9 +116,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationGuardrailResponse,
         )
 
-        chunks = self.split_text_by_words(
-            text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
-        )
+        chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: Optional[AzureTextModerationGuardrailResponse] = None
 

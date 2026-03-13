@@ -907,6 +907,7 @@ export const keyCreateForAgentCall = async (
   keyAlias: string,
   models: string[],
   metadata?: Record<string, any>,
+  teamId?: string | null,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
   const body: Record<string, any> = {
@@ -914,6 +915,9 @@ export const keyCreateForAgentCall = async (
     key_alias: keyAlias,
     models: models.length > 0 ? models : [],
   };
+  if (teamId) {
+    body.team_id = teamId;
+  }
   if (metadata && Object.keys(metadata).length > 0) {
     body.metadata = metadata;
   }

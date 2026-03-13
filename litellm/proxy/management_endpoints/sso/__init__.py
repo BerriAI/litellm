@@ -9,4 +9,3 @@ from litellm.proxy.management_endpoints.sso.custom_microsoft_sso import (
 )
 
 __all__ = ["CustomMicrosoftSSO"]
-

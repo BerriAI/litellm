@@ -104,7 +104,7 @@ class PangeaHandler(CustomGuardrail):
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=supported_event_hooks,
-            **kwargs
+            **kwargs,
         )
         verbose_proxy_logger.debug(
             f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
@@ -172,7 +172,7 @@ class PangeaHandler(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: str
+        call_type: str,
     ):
         transformer = None
         messages: Any = None
@@ -184,10 +184,7 @@ class PangeaHandler(CustomGuardrail):
 
         ai_guard_payload = {
             "debug": False,
-            "input": {
-                "messages": messages,  # type: ignore
-                "tools": data.get("tools")
-            },
+            "input": {"messages": messages, "tools": data.get("tools")},  # type: ignore
             "event_type": "input",
         }
         if self.pangea_input_recipe:
@@ -205,11 +202,10 @@ class PangeaHandler(CustomGuardrail):
 
         output = ai_guard_response.get("result", {}).get("output", {})
         if call_type == "text_completion" or call_type == "atext_completion":
-            data = transformer.update_original_body(output["messages"]) # type: ignore
+            data = transformer.update_original_body(output["messages"])  # type: ignore
         else:
             data["messages"] = output["messages"]
         return data
-
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -227,7 +223,9 @@ class PangeaHandler(CustomGuardrail):
             return data
 
         try:
-            return await self._async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+            return await self._async_pre_call_hook(
+                user_api_key_dict, cache, data, call_type
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -237,7 +235,7 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Error in Pangea Guardrail",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e
 
     async def _async_post_call_success_hook(
@@ -321,7 +319,9 @@ class PangeaHandler(CustomGuardrail):
             )
             return data
         try:
-            return await self._async_post_call_success_hook(data, user_api_key_dict, response)
+            return await self._async_post_call_success_hook(
+                data, user_api_key_dict, response
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -331,7 +331,7 @@ class PangeaHandler(CustomGuardrail):
                     "error": "Error in Pangea Guardrail",
                     "guardrail_name": self.guardrail_name,
                     "exceptions": str(e),
-                }
+                },
             ) from e
 
     @staticmethod

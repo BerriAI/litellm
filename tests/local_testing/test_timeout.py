@@ -260,7 +260,7 @@ async def test_anthropic_timeout(streaming, sync_mode):
     try:
         if sync_mode:
             response = litellm.completion(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-sonnet-4-5-20250929",
                 timeout=0.01,
                 messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
                 stream=streaming,
@@ -270,7 +270,7 @@ async def test_anthropic_timeout(streaming, sync_mode):
                     pass
         else:
             response = await litellm.acompletion(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-sonnet-4-5-20250929",
                 timeout=0.01,
                 messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
                 stream=streaming,

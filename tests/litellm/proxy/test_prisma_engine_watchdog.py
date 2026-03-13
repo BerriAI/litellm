@@ -342,8 +342,23 @@ async def test_stop_watchdog_task_also_stops_engine_watcher(
 
 
 # ---------------------------------------------------------------------------
-# waitpid thread (cross-platform)
+# waitpid thread (Unix only; Windows falls back to os.kill polling)
 # ---------------------------------------------------------------------------
+
+
+def test_try_waitpid_watch_returns_false_on_windows(engine_client):
+    """_try_waitpid_watch returns False on Windows (os.waitpid/WNOHANG unavailable)."""
+    with patch("sys.platform", "win32"):
+        result = engine_client._try_waitpid_watch(1234)
+    assert result is False
+    assert engine_client._engine_wait_thread is None
+
+
+def test_reap_all_zombies_returns_empty_on_windows(engine_client):
+    """_reap_all_zombies returns empty set on Windows (waitpid unavailable)."""
+    with patch("sys.platform", "win32"):
+        reaped = PrismaClient._reap_all_zombies()
+    assert reaped == set()
 
 
 def test_try_waitpid_watch_returns_false_when_not_child(engine_client):

@@ -68,9 +68,13 @@ def _prepare_mcp_server_data(
 
     # Handle tool name override serialization
     if data.tool_name_to_display_name is not None:
-        data_dict["tool_name_to_display_name"] = safe_dumps(data.tool_name_to_display_name)
+        data_dict["tool_name_to_display_name"] = safe_dumps(
+            data.tool_name_to_display_name
+        )
     if data.tool_name_to_description is not None:
-        data_dict["tool_name_to_description"] = safe_dumps(data.tool_name_to_description)
+        data_dict["tool_name_to_description"] = safe_dumps(
+            data.tool_name_to_description
+        )
 
     # mcp_access_groups is already List[str], no serialization needed
 
@@ -138,9 +142,9 @@ def decrypt_credentials(
         "aws_session_token",
     ]
     for field in secret_fields:
-        value = credentials.get(field)
-        if value is not None:
-            credentials[field] = decrypt_value_helper(
+        value = credentials.get(field)  # type: ignore[literal-required]
+        if value is not None and isinstance(value, str):
+            credentials[field] = decrypt_value_helper(  # type: ignore[literal-required]
                 value=value,
                 key=field,
                 exception_type="debug",
@@ -405,7 +409,9 @@ async def update_mcp_server(
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
-    has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials = (
+        "credentials" in data_dict and data_dict["credentials"] is not None
+    )
     if data.auth_type or has_credentials:
         existing = await prisma_client.db.litellm_mcpservertable.find_unique(
             where={"server_id": data.server_id}
@@ -628,6 +634,24 @@ async def store_user_oauth_credential(
     )
 
 
+def is_oauth_credential_expired(cred: Dict[str, Any]) -> bool:
+    """Return True if the OAuth2 credential's access_token has expired.
+
+    Checks the ``expires_at`` ISO-format string stored in the credential payload.
+    Returns False when ``expires_at`` is absent or unparseable (treat as non-expired).
+    """
+    expires_at = cred.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        exp_dt = datetime.fromisoformat(expires_at)
+        if exp_dt.tzinfo is None:
+            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > exp_dt
+    except (ValueError, TypeError):
+        return False
+
+
 async def get_user_oauth_credential(
     prisma_client: PrismaClient,
     user_id: str,
@@ -728,7 +752,9 @@ async def get_mcp_submissions(
     )
     items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
 
-    pending = sum(1 for i in items if i.approval_status == MCPApprovalStatus.pending_review)
+    pending = sum(
+        1 for i in items if i.approval_status == MCPApprovalStatus.pending_review
+    )
     active = sum(1 for i in items if i.approval_status == MCPApprovalStatus.active)
     rejected = sum(1 for i in items if i.approval_status == MCPApprovalStatus.rejected)
 

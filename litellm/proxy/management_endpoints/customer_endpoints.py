@@ -21,13 +21,15 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_daily_activity import \
-    get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission, handle_update_object_permission_common)
+    _set_object_permission,
+    handle_update_object_permission_common,
+)
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.types.proxy.management_endpoints.common_daily_activity import \
-    SpendAnalyticsPaginatedResponse
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 
 router = APIRouter()
 
@@ -111,8 +113,9 @@ async def unblock_user(data: BlockUsers):
     ```
     """
     try:
-        from enterprise.enterprise_hooks.blocked_user_list import \
-            _ENTERPRISE_BlockedUserList
+        from enterprise.enterprise_hooks.blocked_user_list import (
+            _ENTERPRISE_BlockedUserList,
+        )
     except ImportError:
         raise HTTPException(
             status_code=400,
@@ -164,7 +167,10 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
 
     if budget_kv_pairs:
         budget_request = BudgetNewRequest(**budget_kv_pairs)
-        if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
+        if (
+            budget_request.budget_reset_at is None
+            and budget_request.budget_duration is not None
+        ):
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
             )
@@ -296,8 +302,11 @@ async def new_end_user(
     - end-user object
     - currently allowed models 
     """
-    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
-                                            llm_router, prisma_client)
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+    )
 
     if prisma_client is None:
         raise HTTPException(
@@ -373,7 +382,13 @@ async def new_end_user(
         response_dict = end_user_record.model_dump()
         if response_dict.get("object_permission"):
             # Remove reverse relations from object_permission
-            for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+            for field in [
+                "teams",
+                "verification_tokens",
+                "organizations",
+                "users",
+                "end_users",
+            ]:
                 response_dict["object_permission"].pop(field, None)
 
         return response_dict
@@ -432,7 +447,8 @@ async def end_user_info(
             )
 
         user_info = await prisma_client.db.litellm_endusertable.find_first(
-            where={"user_id": end_user_id}, include={"litellm_budget_table": True, "object_permission": True}
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True, "object_permission": True},
         )
 
         if user_info is None:
@@ -447,11 +463,17 @@ async def end_user_info(
         response_dict = user_info.model_dump(exclude_none=True)
         if response_dict.get("object_permission"):
             # Remove reverse relations from object_permission
-            for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+            for field in [
+                "teams",
+                "verification_tokens",
+                "organizations",
+                "users",
+                "end_users",
+            ]:
                 response_dict["object_permission"].pop(field, None)
 
         return response_dict
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
@@ -459,6 +481,7 @@ async def end_user_info(
             )
         )
         raise handle_exception_on_proxy(e)
+
 
 @router.post(
     "/customer/update",
@@ -527,8 +550,7 @@ async def update_end_user(
     ```
     """
 
-    from litellm.proxy.proxy_server import (litellm_proxy_admin_name,
-                                            prisma_client)
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.json()
@@ -645,7 +667,13 @@ async def update_end_user(
             response_dict = response.model_dump()
             if response_dict.get("object_permission"):
                 # Remove reverse relations from object_permission
-                for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                for field in [
+                    "teams",
+                    "verification_tokens",
+                    "organizations",
+                    "users",
+                    "end_users",
+                ]:
                     response_dict["object_permission"].pop(field, None)
 
             return response_dict
@@ -751,6 +779,7 @@ async def delete_end_user(
         )
         raise handle_exception_on_proxy(e)
 
+
 @router.get(
     "/customer/list",
     tags=["Customer Management"],
@@ -808,11 +837,17 @@ async def list_end_user(
             item_dict = item.model_dump()
             # Remove reverse relations from object_permission
             if item_dict.get("object_permission"):
-                for field in ["teams", "verification_tokens", "organizations", "users", "end_users"]:
+                for field in [
+                    "teams",
+                    "verification_tokens",
+                    "organizations",
+                    "users",
+                    "end_users",
+                ]:
                     item_dict["object_permission"].pop(field, None)
             returned_response.append(LiteLLM_EndUserTable(**item_dict))
         return returned_response
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
@@ -820,6 +855,7 @@ async def list_end_user(
             )
         )
         raise handle_exception_on_proxy(e)
+
 
 @router.get(
     "/customer/daily/activity",
@@ -844,7 +880,6 @@ async def get_customer_daily_activity(
     exclude_end_user_ids: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
@@ -864,7 +899,6 @@ async def get_customer_daily_activity(
             exclude_end_user_ids.split(",") if exclude_end_user_ids else None
         )
 
-    
     # Fetch organization aliases for metadata
     where_condition = {}
     if end_user_ids_list:
@@ -872,10 +906,7 @@ async def get_customer_daily_activity(
     end_user_aliases = await prisma_client.db.litellm_endusertable.find_many(
         where=where_condition
     )
-    end_user_alias_metadata = {
-        e.user_id: {"alias": e.alias}
-        for e in end_user_aliases
-    }
+    end_user_alias_metadata = {e.user_id: {"alias": e.alias} for e in end_user_aliases}
 
     # Query daily activity for organizations
     return await get_daily_activity(

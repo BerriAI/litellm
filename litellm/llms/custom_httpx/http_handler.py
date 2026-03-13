@@ -51,6 +51,7 @@ try:
 except Exception:
     version = "0.0.0"
 
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -63,6 +64,7 @@ def get_default_headers() -> dict:
         return {"User-Agent": user_agent}
 
     return {"User-Agent": f"litellm/{version}"}
+
 
 # Initialize headers (User-Agent)
 headers = get_default_headers()
@@ -1235,7 +1237,9 @@ def get_async_httpx_client(
 
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
@@ -1284,7 +1288,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))

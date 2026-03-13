@@ -91,7 +91,7 @@ class UISettings(BaseModel):
 
     require_auth_for_public_ai_hub: bool = Field(
         default=False,
-        description="If true, requires authentication for accessing the public AI Hub."
+        description="If true, requires authentication for accessing the public AI Hub.",
     )
 
     forward_client_headers_to_llm_api: bool = Field(
@@ -423,7 +423,9 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
+    settings: Union[
+        DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings
+    ],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,
@@ -864,9 +866,7 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
             verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
         if "LITELLM_FAVICON_URL" in os.environ:
             del os.environ["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug(
-                "Removed LITELLM_FAVICON_URL from environment"
-            )
+            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from environment")
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
@@ -1062,7 +1062,9 @@ async def get_ui_settings():
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
-    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    _flags_to_sync = {
+        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
+    }
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1153,7 +1155,9 @@ async def update_ui_settings(
 
     # Sync runtime flags to general_settings so the proxy picks them up
     # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    _flags_to_sync = {
+        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
+    }
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
