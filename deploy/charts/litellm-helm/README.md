@@ -168,10 +168,13 @@ Use these **instead of** `ingress` when your cluster runs Istio. Uses `networkin
 | `istio.gateway.enabled`                         | Create an Istio Gateway resource. Set `false` to use an existing shared gateway (recommended in production)        | `false`              |
 | `istio.gateway.selector`                        | Label selector to bind the Gateway to an ingress gateway pod                                                       | `{istio: ingressgateway}` |
 | `istio.gateway.httpPort`                        | HTTP port number on the Gateway server                                                                             | `80`                 |
-| `istio.gateway.tls.enabled`                     | Add a HTTPS server block with TLS to the Gateway (also sets HTTP→HTTPS redirect)                                  | `false`              |
+| `istio.gateway.tls.enabled`                     | Add a TLS server block to the Gateway. For SIMPLE/MUTUAL, also enables HTTP→HTTPS redirect (configurable via `httpsRedirect`) | `false`              |
 | `istio.gateway.tls.httpsPort`                   | HTTPS port number on the Gateway server                                                                            | `443`                |
+| `istio.gateway.tls.httpsRedirect`                | Redirect HTTP to HTTPS on the Gateway. Automatically disabled for PASSTHROUGH mode                                             | `true`               |
 | `istio.gateway.tls.mode`                        | Istio TLS mode: `SIMPLE`, `MUTUAL`, or `PASSTHROUGH`                                                               | `SIMPLE`             |
 | `istio.gateway.tls.credentialName`              | Name of the Kubernetes Secret (in `istio-system`) holding the TLS certificate                                      | `""`                 |
+| `istio.gateway.tls.minProtocolVersion`           | Minimum TLS protocol version (e.g. `TLSV1_2`)                                                                                  | `""`                 |
+| `istio.gateway.tls.maxProtocolVersion`           | Maximum TLS protocol version (e.g. `TLSV1_3`)                                                                                  | `""`                 |
 | `istio.gateway.labels`                          | Additional labels for the Gateway resource                                                                         | `{}`                 |
 | `istio.gateway.annotations`                     | Additional annotations for the Gateway resource                                                                    | `{}`                 |
 | `istio.virtualService.enabled`                  | Create a VirtualService resource                                                                                   | `true`               |

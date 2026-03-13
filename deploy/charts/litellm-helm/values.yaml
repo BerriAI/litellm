@@ -155,6 +155,8 @@ istio:
     httpPort: 80
     tls:
       enabled: false
+      # Redirect HTTP to HTTPS (disabled automatically for PASSTHROUGH mode)
+      httpsRedirect: true
       # HTTPS port for the Gateway server
       httpsPort: 443
       # TLS mode: SIMPLE, MUTUAL, PASSTHROUGH, etc.

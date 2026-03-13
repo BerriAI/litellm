@@ -20,9 +20,11 @@ spec:
         number: {{ .Values.istio.gateway.httpPort | default 80 }}
         name: http
         protocol: HTTP
-      {{- if .Values.istio.gateway.tls.enabled }}
+      {{- $tlsMode := .Values.istio.gateway.tls.mode | default "SIMPLE" }}
+      {{- $isPassthrough := or (eq $tlsMode "PASSTHROUGH") (eq $tlsMode "AUTO_PASSTHROUGH") }}
+      {{- if and .Values.istio.gateway.tls.enabled (not $isPassthrough) }}
       tls:
-        httpsRedirect: true
+        httpsRedirect: {{ if hasKey .Values.istio.gateway.tls "httpsRedirect" }}{{ .Values.istio.gateway.tls.httpsRedirect }}{{ else }}true{{ end }}
       {{- end }}
       hosts:
         {{- range .Values.istio.hosts }}
@@ -31,11 +33,11 @@ spec:
     {{- if .Values.istio.gateway.tls.enabled }}
     - port:
         number: {{ .Values.istio.gateway.tls.httpsPort | default 443 }}
-        name: https
-        protocol: HTTPS
+        name: {{ if $isPassthrough }}tls{{ else }}https{{ end }}
+        protocol: {{ if $isPassthrough }}TLS{{ else }}HTTPS{{ end }}
       tls:
-        mode: {{ .Values.istio.gateway.tls.mode | default "SIMPLE" }}
-        {{- if ne (.Values.istio.gateway.tls.mode | default "SIMPLE") "PASSTHROUGH" }}
+        mode: {{ $tlsMode }}
+        {{- if not $isPassthrough }}
         {{- if not .Values.istio.gateway.tls.credentialName }}
         {{- fail "istio.gateway.tls.credentialName must be set for SIMPLE or MUTUAL TLS mode" }}
         {{- end }}

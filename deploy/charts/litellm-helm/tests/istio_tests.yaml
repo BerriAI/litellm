@@ -762,7 +762,7 @@ tests:
           errorMessage: "istio.gateway.tls.credentialName must be set for SIMPLE or MUTUAL TLS mode"
         template: istio-gateway.yaml
 
-  - it: should not emit credentialName for PASSTHROUGH mode
+  - it: should not emit credentialName for PASSTHROUGH mode and should use TLS protocol
     set:
       istio:
         enabled: true
@@ -780,4 +780,81 @@ tests:
       - equal:
           path: spec.servers[1].tls.mode
           value: PASSTHROUGH
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.name
+          value: tls
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.protocol
+          value: TLS
+        template: istio-gateway.yaml
+      # PASSTHROUGH should NOT have httpsRedirect on the HTTP server
+      - isNull:
+          path: spec.servers[0].tls
+        template: istio-gateway.yaml
+
+  - it: should use HTTPS protocol and https name for SIMPLE TLS mode
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: SIMPLE
+            credentialName: litellm-tls-cert
+    asserts:
+      - equal:
+          path: spec.servers[1].port.name
+          value: https
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.protocol
+          value: HTTPS
+        template: istio-gateway.yaml
+
+  - it: should allow disabling httpsRedirect
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: SIMPLE
+            credentialName: litellm-tls-cert
+            httpsRedirect: false
+    asserts:
+      - equal:
+          path: spec.servers[0].tls.httpsRedirect
+          value: false
+        template: istio-gateway.yaml
+
+  - it: should use TLS protocol for AUTO_PASSTHROUGH mode
+    set:
+      istio:
+        enabled: true
+        hosts:
+          - api.example.com
+        gateway:
+          enabled: true
+          tls:
+            enabled: true
+            mode: AUTO_PASSTHROUGH
+    asserts:
+      - equal:
+          path: spec.servers[1].port.name
+          value: tls
+        template: istio-gateway.yaml
+      - equal:
+          path: spec.servers[1].port.protocol
+          value: TLS
+        template: istio-gateway.yaml
+      - isNull:
+          path: spec.servers[0].tls
         template: istio-gateway.yaml
