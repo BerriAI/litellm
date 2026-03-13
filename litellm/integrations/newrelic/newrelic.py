@@ -186,12 +186,13 @@ class NewRelicLogger(CustomLogger):
             # Record metric with value of 1 (will be aggregated by New Relic)
             app = newrelic.agent.application()
 
+            # Always update the timestamp so the 27-hour back-off applies
+            # regardless of whether the app is ready, preventing lock contention
+            # on every request when the agent is slow to register or never starts.
+            _last_metric_emission_time = time.time()
+
             if app and app.enabled:
                 app.record_custom_metric(metric_name, 1)
-
-                # Update last emission time
-                _last_metric_emission_time = time.time()
-
                 verbose_logger.info(
                     f"Emitted New Relic supportability metric: {metric_name}"
                 )

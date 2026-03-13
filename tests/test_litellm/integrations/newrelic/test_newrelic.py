@@ -607,12 +607,15 @@ class TestEmitSupportabilityMetric:
         with patch("newrelic.agent.application", return_value=mock_app):
             self.logger._emit_supportability_metric()
         mock_app.record_custom_metric.assert_not_called()
-        assert nr_module._last_metric_emission_time == 0.0
+        # Timestamp is still updated to back off lock contention during registration.
+        assert nr_module._last_metric_emission_time != 0.0
 
     def test_skips_when_no_app(self):
         with patch("newrelic.agent.application", return_value=None):
             self.logger._emit_supportability_metric()
-        assert nr_module._last_metric_emission_time == 0.0
+        # Timestamp is updated even when app is None to back off lock contention
+        # if the agent never starts or is slow to initialise.
+        assert nr_module._last_metric_emission_time != 0.0
 
 
 # ---------------------------------------------------------------------------
