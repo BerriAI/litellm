@@ -173,7 +173,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var"
             )
 
-        aws_region_name = self._get_aws_region_name(optional_params, model)
+        s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
+            "s3_region_name"
+        )
+        aws_region_name = s3_region_name or self._get_aws_region_name(
+            optional_params, model
+        )
 
         file_data = data.get("file")
         purpose = data.get("purpose")
@@ -397,6 +402,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             litellm_params=litellm_params,
             data=create_file_data,
         )
+
+        # If s3_region_name is set and aws_region_name is not, propagate it so
+        # SigV4 signing uses the correct region (e.g. GovCloud us-gov-west-1).
+        s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
+            "s3_region_name"
+        )
+        if s3_region_name and not optional_params.get("aws_region_name"):
+            optional_params = {**optional_params, "aws_region_name": s3_region_name}
 
         # Sign the request and return a pre-signed request object
         signed_headers, signed_body = self._sign_s3_request(

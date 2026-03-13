@@ -272,6 +272,110 @@ class TestBedrockFilesTransformation:
         assert "messages" in model_input
         assert "max_tokens" in model_input
 
+    def test_get_complete_file_url_respects_s3_region_name(self):
+        """
+        s3_region_name in litellm_params must be used when building the S3 URL.
+        Previously the code fell back to us-west-2 even when s3_region_name was set,
+        breaking GovCloud (us-gov-west-1) deployments.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        create_file_data = {
+            "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+            "purpose": "batch",
+        }
+
+        litellm_params = {
+            "s3_bucket_name": "litellm-batch-352026",
+            "s3_region_name": "us-gov-west-1",
+        }
+
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="amazon.nova-pro-v1:0",
+            optional_params={},
+            litellm_params=litellm_params,
+            data=create_file_data,
+        )
+
+        assert "us-gov-west-1" in url, (
+            f"Expected us-gov-west-1 in URL but got: {url}"
+        )
+        assert "us-west-2" not in url, (
+            f"us-west-2 must not appear when s3_region_name is set, got: {url}"
+        )
+        assert "litellm-batch-352026" in url
+
+    def test_transform_create_file_request_injects_s3_region_for_signing(self):
+        """
+        When s3_region_name is provided, transform_create_file_request must pass
+        that region to _sign_s3_request so SigV4 signatures use the correct region.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        create_file_data = {
+            "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+            "purpose": "batch",
+        }
+
+        litellm_params = {
+            "s3_bucket_name": "litellm-batch-352026",
+            "s3_region_name": "us-gov-west-1",
+        }
+
+        captured_optional_params: dict = {}
+
+        def fake_sign(content, api_base, optional_params):
+            captured_optional_params.update(optional_params)
+            return {"Authorization": "fake"}, content
+
+        with patch.object(config, "_sign_s3_request", side_effect=fake_sign):
+            config.transform_create_file_request(
+                model="amazon.nova-pro-v1:0",
+                create_file_data=create_file_data,
+                optional_params={},
+                litellm_params=litellm_params,
+            )
+
+        assert captured_optional_params.get("aws_region_name") == "us-gov-west-1", (
+            "s3_region_name must be forwarded as aws_region_name for SigV4 signing"
+        )
+
     def test_openai_passthrough_still_works(self):
         """
         Regression test: ensure OpenAI-compatible models (e.g. gpt-oss)
