@@ -211,14 +211,14 @@ class TestGetTraceContext:
         kwargs = make_kwargs()
         trace_id, span_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
-        assert len(trace_id) == 36  # UUID format
+        assert len(trace_id) == 32  # 32-char lowercase hex, matches W3C traceparent format
 
     def test_generates_uuid_when_traceparent_malformed(self):
         kwargs = make_kwargs(traceparent="not-valid")
         trace_id, span_id = self.logger._get_trace_context(kwargs)
-        # Falls back to a generated UUID
+        # Falls back to a 32-char lowercase hex, matching W3C traceparent format
         assert trace_id is not None
-        assert len(trace_id) == 36
+        assert len(trace_id) == 32
 
 
 # ---------------------------------------------------------------------------

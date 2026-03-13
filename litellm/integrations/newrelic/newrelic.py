@@ -267,7 +267,7 @@ class NewRelicLogger(CustomLogger):
 
             if not trace_id:
                 # Generate a random trace_id for grouping AI monitoring events
-                trace_id = str(uuid.uuid4())
+                trace_id = uuid.uuid4().hex
                 verbose_logger.debug(
                     f"New Relic trace_id not available from distributed tracing headers. "
                     f"Generated trace_id={trace_id} for AI monitoring event grouping."
