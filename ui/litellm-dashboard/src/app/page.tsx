@@ -56,10 +56,12 @@ import { ConfigProvider, theme } from "antd";
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
-  try {
-    sessionStorage.removeItem(name);
-  } catch {
-    // sessionStorage may be unavailable
+  if (name === "token") {
+    try {
+      sessionStorage.removeItem(name);
+    } catch {
+      // sessionStorage may be unavailable
+    }
   }
 }
 

@@ -56,6 +56,10 @@ export function clearTokenCookies() {
  * Stores the login token in sessionStorage.
  * This ensures the token is available even when a reverse proxy adds HttpOnly
  * to server-set cookies, making them invisible to JavaScript.
+ *
+ * Note: sessionStorage is per-tab, so users behind an HttpOnly proxy must log
+ * in once per tab. We intentionally avoid localStorage here because it persists
+ * after browser close and is readable by any injected script (XSS).
  */
 export function storeLoginToken(token: string) {
   if (typeof window === "undefined") return;
