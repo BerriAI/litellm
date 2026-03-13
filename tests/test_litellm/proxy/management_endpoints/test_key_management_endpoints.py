@@ -1837,6 +1837,65 @@ async def test_check_team_key_limits_rpm_overallocation():
 
 
 @pytest.mark.asyncio
+async def test_check_team_key_limits_on_update_excludes_self():
+    """
+    Test that _check_team_key_limits excludes the key being updated from the
+    allocated totals. Without this, the key's current limits would be
+    double-counted: once from find_many and once from data.tpm_limit/rpm_limit.
+    """
+    from litellm.proxy._types import hash_token as _ht
+
+    # The key being updated is returned by find_many with its current limits.
+    # In the DB, token is stored as a SHA-256 hash of the raw key.
+    self_key = MagicMock()
+    self_key.token = _ht("sk-self-team-key")
+    self_key.tpm_limit = 6000
+    self_key.rpm_limit = 600
+    self_key.metadata = {}
+
+    # Another key in the team
+    other_key = MagicMock()
+    other_key.token = _ht("sk-other-team-key")
+    other_key.tpm_limit = 3000
+    other_key.rpm_limit = 300
+    other_key.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[self_key, other_key]
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-self",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Updating the key to 7000 TPM. Other key uses 3000, so total = 10000 <= 10000.
+    # Without the fix, this would be 6000 (self) + 3000 (other) + 7000 = 16000 > 10000.
+    data = UpdateKeyRequest(
+        key="sk-self-team-key",
+        tpm_limit=7000,
+        rpm_limit=700,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should not raise - the key's own limits should be excluded from the sum
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
 async def test_check_team_key_limits_no_team_limits():
     """
     Test _check_team_key_limits when team has no TPM/RPM limits set.
@@ -6819,8 +6878,10 @@ async def test_check_org_key_limits_on_update_overallocation():
     Test that _check_org_key_limits raises HTTPException when updating a key
     would exceed organization TPM limits.
     """
+    from litellm.proxy._types import hash_token as _hash_token
+
     existing_key = MagicMock()
-    existing_key.token = "sk-other-key"
+    existing_key.token = _hash_token("sk-other-key")
     existing_key.tpm_limit = 15000
     existing_key.rpm_limit = 1500
     existing_key.metadata = {}
@@ -6869,16 +6930,19 @@ async def test_check_org_key_limits_on_update_excludes_self():
     allocated totals. Without this, the key's current limits would be
     double-counted: once from find_many and once from data.tpm_limit/rpm_limit.
     """
-    # The key being updated is returned by find_many with its current limits
+    from litellm.proxy._types import hash_token
+
+    # The key being updated is returned by find_many with its current limits.
+    # In the DB, token is stored as a SHA-256 hash of the raw key.
     self_key = MagicMock()
-    self_key.token = "sk-test-key"
+    self_key.token = hash_token("sk-test-key")
     self_key.tpm_limit = 10000
     self_key.rpm_limit = 1000
     self_key.metadata = {}
 
     # Another key in the org
     other_key = MagicMock()
-    other_key.token = "sk-other-key"
+    other_key.token = hash_token("sk-other-key")
     other_key.tpm_limit = 5000
     other_key.rpm_limit = 500
     other_key.metadata = {}
@@ -6927,34 +6991,40 @@ def test_update_key_skips_org_check_when_no_throughput_fields_changed():
     when only non-throughput fields change on a key that belongs to an org.
     This prevents blocking updates when the org has been deleted.
     """
+    def _check_throughput_changed(data: UpdateKeyRequest) -> bool:
+        return (
+            data.organization_id is not None
+            or data.tpm_limit is not None
+            or data.rpm_limit is not None
+            or data.tpm_limit_type is not None
+            or data.rpm_limit_type is not None
+        )
+
     # Updating only key_alias — no throughput fields changed
     data = UpdateKeyRequest(key="sk-test-key", key_alias="new-alias")
-    _throughput_fields_changed = (
-        data.organization_id is not None
-        or data.tpm_limit is not None
-        or data.rpm_limit is not None
-    )
-    assert _throughput_fields_changed is False
+    assert _check_throughput_changed(data) is False
 
     # Updating tpm_limit — throughput field changed
     data_with_tpm = UpdateKeyRequest(key="sk-test-key", tpm_limit=5000)
-    _throughput_fields_changed_tpm = (
-        data_with_tpm.organization_id is not None
-        or data_with_tpm.tpm_limit is not None
-        or data_with_tpm.rpm_limit is not None
-    )
-    assert _throughput_fields_changed_tpm is True
+    assert _check_throughput_changed(data_with_tpm) is True
 
     # Updating organization_id — org change triggers check
     data_with_org = UpdateKeyRequest(
         key="sk-test-key", organization_id="new-org"
     )
-    _throughput_fields_changed_org = (
-        data_with_org.organization_id is not None
-        or data_with_org.tpm_limit is not None
-        or data_with_org.rpm_limit is not None
+    assert _check_throughput_changed(data_with_org) is True
+
+    # Updating tpm_limit_type — limit type change triggers check
+    data_with_tpm_type = UpdateKeyRequest(
+        key="sk-test-key", tpm_limit_type="guaranteed_throughput"
     )
-    assert _throughput_fields_changed_org is True
+    assert _check_throughput_changed(data_with_tpm_type) is True
+
+    # Updating rpm_limit_type — limit type change triggers check
+    data_with_rpm_type = UpdateKeyRequest(
+        key="sk-test-key", rpm_limit_type="guaranteed_throughput"
+    )
+    assert _check_throughput_changed(data_with_rpm_type) is True
 
 
 def test_update_key_request_has_organization_id():
