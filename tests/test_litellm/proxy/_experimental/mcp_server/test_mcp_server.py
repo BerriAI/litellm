@@ -720,17 +720,21 @@ async def test_concurrent_initialize_session_managers():
     # Reset state before test
     original_initialized = mcp_server._SESSION_MANAGERS_INITIALIZED
     original_session_cm = mcp_server._session_manager_cm
+    original_session_stateful_cm = mcp_server._session_manager_stateful_cm
     original_sse_session_cm = mcp_server._sse_session_manager_cm
 
     try:
         mcp_server._SESSION_MANAGERS_INITIALIZED = False
         mcp_server._session_manager_cm = None
+        mcp_server._session_manager_stateful_cm = None
         mcp_server._sse_session_manager_cm = None
 
         # Mock the session managers to avoid actual MCP initialization
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.session_manager"
-        ) as mock_session_manager, patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless"
+        ) as mock_session_manager_stateless, patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful"
+        ) as mock_session_manager_stateful, patch(
             "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
         ) as mock_sse_session_manager, patch(
             "litellm.proxy._experimental.mcp_server.server.verbose_logger"
@@ -740,7 +744,8 @@ async def test_concurrent_initialize_session_managers():
             mock_cm.__aenter__ = AsyncMock()
             mock_cm.__aexit__ = AsyncMock()
 
-            mock_session_manager.run.return_value = mock_cm
+            mock_session_manager_stateless.run.return_value = mock_cm
+            mock_session_manager_stateful.run.return_value = mock_cm
             mock_sse_session_manager.run.return_value = mock_cm
 
             # Create multiple concurrent tasks that call initialize_session_managers
@@ -757,18 +762,21 @@ async def test_concurrent_initialize_session_managers():
                 result == "success" for result in results
             ), f"Some tasks failed: {results}"
 
-            # session_manager.run() should only be called once due to the lock
+            # Each session manager.run() should only be called once due to the lock
             assert (
-                mock_session_manager.run.call_count == 1
-            ), f"Expected 1 call to session_manager.run(), got {mock_session_manager.run.call_count}"
+                mock_session_manager_stateless.run.call_count == 1
+            ), f"Expected 1 call to session_manager_stateless.run(), got {mock_session_manager_stateless.run.call_count}"
+            assert (
+                mock_session_manager_stateful.run.call_count == 1
+            ), f"Expected 1 call to session_manager_stateful.run(), got {mock_session_manager_stateful.run.call_count}"
             assert (
                 mock_sse_session_manager.run.call_count == 1
             ), f"Expected 1 call to sse_session_manager.run(), got {mock_sse_session_manager.run.call_count}"
 
-            # The context managers should only be entered once each
+            # The context managers should only be entered once each (3 managers)
             assert (
-                mock_cm.__aenter__.call_count == 2
-            ), f"Expected 2 calls to __aenter__ (one for each session manager), got {mock_cm.__aenter__.call_count}"
+                mock_cm.__aenter__.call_count == 3
+            ), f"Expected 3 calls to __aenter__ (one per session manager), got {mock_cm.__aenter__.call_count}"
 
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
@@ -777,30 +785,127 @@ async def test_concurrent_initialize_session_managers():
         # Restore original state
         mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
         mcp_server._session_manager_cm = original_session_cm
+        mcp_server._session_manager_stateful_cm = original_session_stateful_cm
         mcp_server._sse_session_manager_cm = original_sse_session_cm
 
 
 @pytest.mark.asyncio
 async def test_streamable_http_session_manager_is_stateless():
     """
-    Test that the StreamableHTTPSessionManager is initialized with stateless=True.
+    Test that the StreamableHTTPSessionManager is initialized with both stateless and stateful managers.
 
     Regression test for GitHub issue #20242 / PR #19809.
     When stateless=False, the mcp library rejects non-initialize requests
     that lack an mcp-session-id header, breaking clients like MCP Inspector,
     curl, and any HTTP client without automatic session management.
+    
+    Now we support both:
+    - stateless manager for clients without session IDs (curl, Inspector)
+    - stateful manager for clients with session IDs (Claude Code, Cursor, VSCode)
     """
     try:
-        from litellm.proxy._experimental.mcp_server.server import session_manager
+        from litellm.proxy._experimental.mcp_server.server import (
+            session_manager_stateful,
+            session_manager_stateless,
+        )
     except ImportError:
         pytest.skip("MCP server not available")
 
-    # The session manager must be stateless to avoid requiring mcp-session-id
+    # The stateless session manager must be stateless to avoid requiring mcp-session-id
     # on every request. This was regressed by PR #19809 (stateless=True -> False).
-    assert session_manager.stateless is True, (
-        "StreamableHTTPSessionManager must be initialized with stateless=True. "
+    assert session_manager_stateless.stateless is True, (
+        "session_manager_stateless must be initialized with stateless=True. "
         "stateless=False breaks MCP clients that don't manage session IDs. "
         "See: https://github.com/BerriAI/litellm/issues/20242"
+    )
+
+    # The stateful session manager must be stateful to support progress notifications
+    assert session_manager_stateful.stateless is False, (
+        "session_manager_stateful must be initialized with stateless=False. "
+        "stateless=True breaks progress notifications for clients that manage session IDs."
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
+    """
+    Test that routing correctly sends:
+    - initialize (no mcp-session-id) → stateful manager (so client gets mcp-session-id)
+    - tools/list (no mcp-session-id) → stateless manager (curl, Inspector)
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    async def make_request(method_body: bytes, path: str = "/mcp/progress_test"):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"authorization", b"Bearer test-key"),
+            ],
+        }
+        receive = AsyncMock(return_value={"type": "http.request", "body": method_body, "more_body": False})
+        send = AsyncMock()
+
+        stateless_called = []
+        stateful_called = []
+
+        async def stateless_handle(s, r, se):
+            stateless_called.append(1)
+
+        async def stateful_handle(s, r, se):
+            stateful_called.append(1)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ), patch.object(
+            session_manager_stateless,
+            "handle_request",
+            side_effect=stateless_handle,
+        ), patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=stateful_handle,
+        ), patch.object(
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ), patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            {},
+        ):
+            await handle_streamable_http_mcp(scope, receive, send)
+
+        return bool(stateless_called), bool(stateful_called)
+
+    # initialize → stateful
+    init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
+    stateless_called, stateful_called = await make_request(init_body)
+    assert stateful_called and not stateless_called, (
+        "initialize (no session) should route to stateful, not stateless"
+    )
+
+    # tools/list → stateless
+    tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    stateless_called, stateful_called = await make_request(tools_body)
+    assert stateless_called and not stateful_called, (
+        "tools/list (no session) should route to stateless, not stateful"
     )
 
 
