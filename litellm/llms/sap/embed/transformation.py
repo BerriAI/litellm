@@ -52,8 +52,10 @@ class EmbeddingModel(BaseModel):
     timeout: Optional[int] = Field(default=None, ge=1, le=600)
     max_retries: Optional[int] = Field(default=None, ge=0, le=5)
 
+
 class EmbeddingsModelConfig(BaseModel):
     model: EmbeddingModel
+
 
 class EmbeddingsModules(BaseModel):
     embeddings: EmbeddingsModelConfig
@@ -64,8 +66,10 @@ class EmbeddingInput(BaseModel):
     text: Union[str, List[str]]
     type: Optional[Literal["text", "document", "query"]] = None
 
+
 class EmbeddingConfig(BaseModel):
     modules: EmbeddingsModules
+
 
 class EmbeddingRequest(BaseModel):
     config: EmbeddingConfig
@@ -170,12 +174,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         masking = optional_params.get("masking")
         masking = {"masking": masking} if masking is not None else {}
         body = {
-            "config": {
-                "modules": {
-                    "embeddings": {"model": model_dict},
-                    **masking
-                }
-            },
+            "config": {"modules": {"embeddings": {"model": model_dict}, **masking}},
             "input": input_dict,
         }
         body = validate_dict(body, EmbeddingRequest)

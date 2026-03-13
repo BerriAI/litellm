@@ -1,6 +1,6 @@
 from typing import Union, Literal, Optional
 from enum import Enum
-import  warnings
+import warnings
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -9,16 +9,16 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
     if v in ((), {}, []):
         return ""
     elif isinstance(v, dict) and "text" in v:
-        return v['text']
+        return v["text"]
     elif isinstance(v, list):
         new_v = []
         for item in v:
             if isinstance(item, dict) and "text" in item:
-                if item['text']:
-                    new_v.append(item['text'])
+                if item["text"]:
+                    new_v.append(item["text"])
             elif isinstance(item, str):
                 new_v.append(item)
-        return '\n'.join(new_v)
+        return "\n".join(new_v)
     elif isinstance(v, str):
         return v
     raise ValueError("Content must be a string")
@@ -82,7 +82,9 @@ class SAPMessage(BaseModel):
     role: Literal["system", "developer"] = "system"
     content: str
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(
+        validate_different_content
+    )
 
 
 class SAPUserMessage(BaseModel):
@@ -98,8 +100,9 @@ class SAPAssistantMessage(BaseModel):
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
-
+    _content_validator = field_validator("content", mode="before")(
+        validate_different_content
+    )
 
 
 class SAPToolChatMessage(BaseModel):
@@ -107,7 +110,9 @@ class SAPToolChatMessage(BaseModel):
     tool_call_id: str
     content: str
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(
+        validate_different_content
+    )
 
 
 ChatMessage = Union[SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage, SAPMessage]
@@ -135,14 +140,14 @@ class KeyValueListPair(BaseModel):
 
 
 class DocumentMetadataKeyValueListPairs(KeyValueListPair):
-    select_mode: Optional[list[Literal['ignoreIfKeyAbsent']]] = None
+    select_mode: Optional[list[Literal["ignoreIfKeyAbsent"]]] = None
 
 
 class GroundingSearchConfig(BaseModel):
     max_chunk_count: Optional[int] = Field(default=None, ge=0)
     max_document_count: Optional[int] = Field(default=None, ge=0)
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_max_chunk_count_and_max_document_count(self):
         if self.max_chunk_count is not None and self.max_document_count is not None:
             raise ValueError("Cannot specify both maxChunkCount and maxDocumentCount.")
@@ -153,7 +158,7 @@ class DocumentGroundingFilter(BaseModel):
     id_: Optional[str] = Field(default=None, alias="id")
     data_repository_type: Literal["vector", "help.sap.com"]
     search_config: Optional[GroundingSearchConfig] = None
-    data_repositories: Optional[list[str]]= None
+    data_repositories: Optional[list[str]] = None
     data_repository_metadata: Optional[list[KeyValueListPair]] = None
     document_metadata: Optional[list[DocumentMetadataKeyValueListPairs]] = None
     chunk_metadata: Optional[list[KeyValueListPair]] = None
@@ -171,7 +176,9 @@ class DocumentGroundingConfig(BaseModel):
 
 
 class GroundingModuleConfig(BaseModel):
-    type_: Literal["document_grounding_service"] = Field(default="document_grounding_service", alias="type")
+    type_: Literal["document_grounding_service"] = Field(
+        default="document_grounding_service", alias="type"
+    )
     config: DocumentGroundingConfig
 
 
@@ -284,6 +291,7 @@ class DPIMethodConstant(BaseModel):
     """
     Replaces the entity with the specified value followed by an incrementing number
     """
+
     method: Literal["constant"] = "constant"
     value: str
 
@@ -292,6 +300,7 @@ class DPIMethodFabricatedData(BaseModel):
     """
     Replaces the entity with a randomly generated value appropriate to its type.
     """
+
     method: Literal["fabricated_data"] = "fabricated_data"
 
 
@@ -300,6 +309,7 @@ class DPICustomEntity(BaseModel):
     regex: Regular expression to match the entity
     replacement_strategy: Replacement strategy to be used for the entity
     """
+
     regex: str
     replacement_strategy: DPIMethodConstant
 
@@ -309,8 +319,11 @@ class DPIStandardEntity(BaseModel):
     type: Standard entity type to be masked
     replacement_strategy: Replacement strategy to be used for the entity
     """
+
     type_: SAPMaskingProfileEntity = Field(..., alias="type")
-    replacement_strategy: Optional[Union[DPIMethodConstant, DPIMethodFabricatedData]] = None
+    replacement_strategy: Optional[
+        Union[DPIMethodConstant, DPIMethodFabricatedData]
+    ] = None
 
 
 class MaskGroundingInput(BaseModel):
@@ -318,6 +331,7 @@ class MaskGroundingInput(BaseModel):
     Controls whether the input to the grounding module will be masked with the configuration
     supplied in the masking module
     """
+
     enabled: bool = False
 
 
@@ -338,6 +352,7 @@ class MaskingProviderConfig(BaseModel):
 
         mask_grounding_input: A flag indicating whether to mask input to the grounding module.
     """
+
     type_: str = Field(default="sap_data_privacy_integration", alias="type")
     method: Literal["anonymization", "pseudonymization"]
     entities: list[Union[DPIStandardEntity, DPICustomEntity]]
@@ -355,12 +370,14 @@ class MaskingModuleConfig(BaseModel):
     IMPORTANT: use exactly one of the parameters to set the list of masking provider configurations.
     DEPRECATED: parameter 'masking_providers' will be removed Sept 15, 2026. Use 'providers' instead.
     """
+
     providers: Optional[list[MaskingProviderConfig]] = Field(min_length=1, default=None)
-    masking_providers: Optional[list[MaskingProviderConfig]] = Field(min_length=1, default=None)
+    masking_providers: Optional[list[MaskingProviderConfig]] = Field(
+        min_length=1, default=None
+    )
 
     @model_validator(mode="after")
     def enforce_exactly_one_provider_list(self):
-
         has_providers = self.providers is not None
         has_masking_providers = self.masking_providers is not None
 
@@ -443,7 +460,8 @@ class AzureContentSafetyInput(AzureContentFilter):
             self_harm: Threshold for self-harm content.
 
             prompt_shield: A flag to use prompt shield
-        """
+    """
+
     prompt_shield: Optional[bool] = False
 
 
@@ -539,29 +557,34 @@ class FilteringStreamOptions(BaseModel):
     overlap: Number of characters that should be additionally sent to content filtering services
     from previous chunks as additional context.
     """
+
     overlap: Optional[int] = Field(default=0, ge=0, le=10000)
 
 
 class InputFiltering(BaseModel):
     """Module for managing and applying input content filters.
 
-        Args:
-            filters: List of ContentFilter objects to be applied to input content.
+    Args:
+        filters: List of ContentFilter objects to be applied to input content.
     """
-    filters: list[Union[AzureContentSafetyInputFilterConfig, LlamaGuard38bFilterConfig]] = Field(min_length=1)
+
+    filters: list[
+        Union[AzureContentSafetyInputFilterConfig, LlamaGuard38bFilterConfig]
+    ] = Field(min_length=1)
 
 
 class OutputFiltering(BaseModel):
     """Module for managing and applying output content filters.
 
-        Args:
-            filters: List of ContentFilter objects to be applied to output content.
+    Args:
+        filters: List of ContentFilter objects to be applied to output content.
 
-            stream_options: Module-specific streaming options.
+        stream_options: Module-specific streaming options.
     """
 
     filters: list[
-        Union[AzureContentSafetyOutputFilterConfig, LlamaGuard38bFilterConfig]] = Field(min_length=1)
+        Union[AzureContentSafetyOutputFilterConfig, LlamaGuard38bFilterConfig]
+    ] = Field(min_length=1)
     stream_options: Optional[FilteringStreamOptions] = None
 
 
@@ -573,6 +596,7 @@ class FilteringModuleConfig(BaseModel):
 
         output: Module for filtering and validating output content after generation.
     """
+
     input: Optional[InputFiltering] = None
     output: Optional[OutputFiltering] = None
 
@@ -598,6 +622,7 @@ class SAPDocumentTranslationApplyToSelector(BaseModel):
                 targets the value of "user_input" in placeholder_values specified in the request payload;
                 and considers the value to be in German.
     """
+
     category: Literal["placeholders", "template_roles"]
     items: list[str]
     source_language: str
@@ -612,6 +637,7 @@ class InputTranslationConfig(BaseModel):
             target_language: Language to which the text should be translated. Example: en-US
             apply_to: List of selectors that define the scope of translation.
     """
+
     source_language: Optional[str] = None
     target_language: str
     apply_to: Optional[list[SAPDocumentTranslationApplyToSelector]] = None
@@ -633,6 +659,7 @@ class SAPDocumentTranslationInput(BaseModel):
 
         config: Configuration object for the translation module.
     """
+
     type_: str = Field(default="sap_document_translation", alias="type")
     translate_messages_history: Optional[bool] = None
     config: InputTranslationConfig
@@ -647,6 +674,7 @@ class SAPDocumentTranslationOutput(BaseModel):
 
         config: Configuration object for the translation module.
     """
+
     type_: str = Field(default="sap_document_translation", alias="type")
     config: OutputTranslationConfig
 
@@ -660,6 +688,7 @@ class TranslationModuleConfig(BaseModel):
 
         output: Configuration for output translation
     """
+
     input: Optional[SAPDocumentTranslationInput] = None
     output: Optional[SAPDocumentTranslationOutput] = None
 
