@@ -1705,6 +1705,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default="desc",
         description="Sort order: asc or desc",
     ),
+    tags: Optional[str] = fastapi.Query(
+        default=None,
+        description="Comma-separated list of tags to filter by (logs must contain at least one)",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1850,6 +1854,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
+        tags_list: List[str] = []
+        if tags is not None and tags.strip():
+            tags_list = [t.strip() for t in tags.split(",") if t.strip()]
+
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
             if min_spend is not None:
@@ -1885,12 +1893,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         order_column = sort_by
         order_direction = (sort_order or "desc").lower()
 
-        # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
-            where=where_conditions,
-        )
-
-        # Build raw SQL to fetch paginated data WITHOUT heavy columns
+        # Build raw SQL conditions first (needed for count when tags filter is used)
         # (messages, response, proxy_server_request can be hundreds of KB per row).
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
         sql_conditions: List[str] = []
@@ -1957,6 +1960,29 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             )
             sql_params.append(f"%{error_message}%")
             p += 1
+
+        # Tags filter: request_tags is a JSON array; match if it contains any selected tag
+        if tags_list:
+            tag_conditions = []
+            for tag in tags_list:
+                tag_conditions.append(f"request_tags @> ${p}::jsonb")
+                sql_params.append(json.dumps([tag]))
+                p += 1
+            sql_conditions.append(f"({' OR '.join(tag_conditions)})")
+
+        # Get total count: use raw SQL when tags filter is present (Prisma where
+        # does not support JSON array containment), otherwise use Prisma count
+        if tags_list:
+            count_sql = (
+                f'SELECT COUNT(*)::int AS count FROM "LiteLLM_SpendLogs" '
+                f'WHERE {" AND ".join(sql_conditions)}'
+            )
+            count_result = await prisma_client.db.query_raw(count_sql, *sql_params)
+            total_records = count_result[0]["count"] if count_result else 0
+        else:
+            total_records = await prisma_client.db.litellm_spendlogs.count(
+                where=where_conditions,
+            )
 
         # Quote column names that need quoting in SQL
         _sql_col = (

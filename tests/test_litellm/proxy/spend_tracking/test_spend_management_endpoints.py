@@ -1307,6 +1307,112 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_tags_filter(client, monkeypatch):
+    """Test that /spend/logs/ui filters by tags when tags param is provided."""
+    mock_spend_logs = [
+        {
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "request_tags": ["prod", "v1"],
+            "spend": 0.05,
+            "total_tokens": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:01:00+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "user2",
+            "request_tags": ["test", "v2"],
+            "spend": 0.10,
+            "total_tokens": 200,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:01:00+00:00",
+            "model": "gpt-4",
+        },
+    ]
+
+    def _tags_from_params(params):
+        """Extract tag values from query_raw params (json arrays like '["prod"]')."""
+        tags = []
+        for p in params:
+            if isinstance(p, str) and p.startswith("[") and p.endswith("]"):
+                try:
+                    arr = json.loads(p)
+                    if isinstance(arr, list) and len(arr) == 1 and isinstance(arr[0], str):
+                        tags.append(arr[0])
+                except json.JSONDecodeError:
+                    pass
+        return tags
+
+    def _log_has_tag(log, tag):
+        rt = log.get("request_tags")
+        if isinstance(rt, list):
+            return tag in rt
+        if isinstance(rt, str):
+            try:
+                arr = json.loads(rt)
+                return isinstance(arr, list) and tag in arr
+            except json.JSONDecodeError:
+                return False
+        return False
+
+    async def mock_query_raw(sql_query, *params):
+        requested_tags = _tags_from_params(params)
+        if requested_tags:
+            filtered = [log for log in mock_spend_logs if any(_log_has_tag(log, t) for t in requested_tags)]
+        else:
+            filtered = list(mock_spend_logs)
+
+        if "COUNT(*)" in sql_query:
+            return [{"count": len(filtered)}]
+
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return filtered[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(return_value=0)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_admin_view_safe", lambda user_api_key_dict: True
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "tags": "prod",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "data" in data and "total" in data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["request_id"] == "req1"
+        assert "prod" in (data["data"][0].get("request_tags") or [])
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
     """Poll until mock has been called at least once, or timeout."""
     import time

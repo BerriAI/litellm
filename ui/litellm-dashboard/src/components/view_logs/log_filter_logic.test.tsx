@@ -112,6 +112,7 @@ describe("useLogFilterLogic", () => {
     expect(filters["Key Alias"]).toBe("");
     expect(filters["Error Code"]).toBe("");
     expect(filters["Error Message"]).toBe("");
+    expect(filters["Tags"]).toBe("");
   });
 
   it("should return all logs when no filters are applied", () => {
@@ -444,6 +445,29 @@ describe("useLogFilterLogic", () => {
         expect(uiSpendLogsCall).toHaveBeenCalledWith(
           expect.objectContaining({
             params: expect.objectContaining({ error_message: "rate limit exceeded" }),
+          }),
+        );
+      },
+      { timeout: 500 },
+    );
+  });
+
+  it("should call uiSpendLogsCall with tags when Tags filter is set", async () => {
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(
+      createPaginatedResponse([createLogEntry()]),
+    );
+    const logs = createPaginatedResponse([createLogEntry()]);
+    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+
+    act(() => {
+      result.current.handleFilterChange({ Tags: "prod" });
+    });
+
+    await waitFor(
+      () => {
+        expect(uiSpendLogsCall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            params: expect.objectContaining({ tags: "prod" }),
           }),
         );
       },
