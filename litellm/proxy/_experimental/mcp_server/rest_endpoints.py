@@ -905,6 +905,12 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
+            _oauth2_flow = (
+                "client_credentials"
+                if client_id and client_secret and request.token_url
+                else None
+            )
+
             server_model = MCPServer(
                 server_id=request.server_id or "",
                 name=request.alias or request.server_name or "",
@@ -922,6 +928,7 @@ if MCP_AVAILABLE:
                 scopes=scopes,
                 authorization_url=request.authorization_url,
                 registration_url=request.registration_url,
+                oauth2_flow=_oauth2_flow,
             )
 
             stdio_env = global_mcp_server_manager._build_stdio_env(

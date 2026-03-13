@@ -6142,8 +6142,18 @@ async def test_list_team_v1_batches_key_queries():
         new_callable=AsyncMock,
         return_value=[],
     ):
-        mock_find_many = AsyncMock(return_value=[key1, key2, key3])
-        mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+        async def filtered_find_many(**kwargs):
+            where = kwargs.get("where", {})
+            tid = where.get("team_id")
+            if tid == "team-1":
+                return [key1, key2]
+            elif tid == "team-2":
+                return [key3]
+            return [key1, key2, key3]
+
+        mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+            side_effect=filtered_find_many
+        )
 
         result = await list_team(
             http_request=mock_request,
