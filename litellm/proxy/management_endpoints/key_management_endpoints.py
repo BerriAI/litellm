@@ -1963,11 +1963,16 @@ async def update_key_fn(
                 user_api_key_cache=user_api_key_cache,
             )
 
-        # Check org key limits if organization_id is being set or already exists on the key
+        # Check org key limits only when throughput-related fields or organization_id change
         _org_id_to_check = data.organization_id or getattr(
             existing_key_row, "organization_id", None
         )
-        if _org_id_to_check is not None:
+        _throughput_fields_changed = (
+            data.organization_id is not None
+            or data.tpm_limit is not None
+            or data.rpm_limit is not None
+        )
+        if _org_id_to_check is not None and _throughput_fields_changed:
             org_table = await get_org_object(
                 org_id=_org_id_to_check,
                 user_api_key_cache=user_api_key_cache,
