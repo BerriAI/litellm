@@ -638,7 +638,9 @@ This is useful when you want to use [Responses API](https://platform.openai.com/
 
 :::tip gpt-5.4 + reasoning_effort + function tools
 
-OpenAI does not support `reasoning_effort` with function tools for `gpt-5.4` in `/v1/chat/completions`. Use the responses bridge instead:
+LiteLLM drops `reasoning_effort` from `gpt-5.4` requests to `litellm.completion()` that include tools, since that combination is supported in the Responses API.
+
+If you need reasoning **and** tools together, use the responses bridge instead:
 
 ```python
 response = litellm.completion(

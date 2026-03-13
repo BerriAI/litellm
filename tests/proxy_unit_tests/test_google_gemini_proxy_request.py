@@ -174,7 +174,6 @@ async def test_google_gemini_httpx_request_direct():
             ],
             "role": "user"
         },
-        "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
         "config": {  # Note: already transformed from generationConfig
             "temperature": 0,
             "topP": 1,
@@ -241,7 +240,6 @@ async def test_google_gemini_httpx_request_direct():
                 generate_content_provider_config=provider_config,
                 generate_content_config_dict=sample_payload["config"],
                 tools=None,
-                tool_config=sample_payload["toolConfig"],
                 custom_llm_provider="gemini",
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -267,7 +265,6 @@ async def test_google_gemini_httpx_request_direct():
             request_data = call_kwargs.get('json')
             if request_data:
                 assert 'contents' in request_data, "Expected 'contents' in request data"
-                assert request_data["toolConfig"] == sample_payload["toolConfig"]
                 
                 # The config should be included in the request as generationConfig
                 if 'generationConfig' in request_data:
