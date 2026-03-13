@@ -34,10 +34,12 @@ def test_get_silent_experiment_kwargs():
     assert result["stream"] is False
     # proxy_server_request must be preserved for spend log metadata
     assert "proxy_server_request" in result
-    # parent OTEL span must be removed — it's thread-bound and invalid in the
-    # background thread's new event loop
-    assert "litellm_parent_otel_span" not in result["metadata"]
-    # CRITICAL: original kwargs must NOT be mutated (race condition with primary callbacks)
+    # CRITICAL: metadata must be a DIFFERENT dict object than the original,
+    # so that setting model_group / is_silent_experiment on the silent dict
+    # doesn't corrupt the primary call's metadata.
+    assert result["metadata"] is not kwargs["metadata"]
+    # Original metadata must NOT be mutated
+    assert "is_silent_experiment" not in kwargs["metadata"]
     assert kwargs["metadata"]["litellm_parent_otel_span"] is mock_span
 
 
