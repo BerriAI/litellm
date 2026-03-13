@@ -4871,11 +4871,12 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
-            assert provider_config is not None
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+            if provider_config is not None:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+            raise
 
     async def async_realtime_calls_handler(
         self,
@@ -4956,11 +4957,12 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
-            assert provider_config is not None
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+            if provider_config is not None:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+            raise
 
     async def async_responses_websocket(
         self,

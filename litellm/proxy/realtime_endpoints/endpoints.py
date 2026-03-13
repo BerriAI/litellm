@@ -181,9 +181,10 @@ async def create_realtime_client_secret(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        raise HTTPException(
+        return Response(
+            content=upstream_resp.content,
             status_code=upstream_resp.status_code,
-            detail=upstream_resp.text,
+            media_type="application/json",
         )
 
     upstream_json: dict = upstream_resp.json()
