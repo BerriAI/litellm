@@ -516,3 +516,146 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     )
 
     assert "reasoning_effort" not in supported_params
+
+
+def test_openrouter_deduplicate_tool_use_in_messages():
+    """
+    Test that tool_use blocks in content are removed when tool_calls is present.
+
+    This prevents "tool_use ids must be unique" errors when OpenRouter converts
+    OpenAI format to Anthropic format. If an assistant message has both:
+    1. content list with tool_use blocks (Anthropic style)
+    2. tool_calls field (OpenAI style)
+
+    The tool_use blocks in content will be removed to avoid duplicates after
+    OpenRouter's conversion.
+    """
+    config = OpenrouterConfig()
+
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "tool_use",  # Should be removed
+                    "id": "toolu_01ABC123",
+                    "name": "get_weather",
+                    "input": {"location": "SF"},
+                },
+            ],
+            "tool_calls": [  # Should be kept
+                {
+                    "id": "toolu_01ABC123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"location": "SF"}'},
+                }
+            ],
+        },
+    ]
+
+    result = config._deduplicate_tool_use_in_messages(messages)
+
+    # Check that tool_use block was removed from content
+    assistant_msg = result[1]
+    content = assistant_msg["content"]
+    tool_use_blocks = [b for b in content if b.get("type") == "tool_use"]
+
+    assert len(tool_use_blocks) == 0, f"Expected no tool_use blocks, got {len(tool_use_blocks)}"
+    assert assistant_msg.get("tool_calls") is not None, "Expected tool_calls to be preserved"
+
+
+def test_openrouter_deduplicate_preserves_other_content_types():
+    """
+    Test that other content types are preserved when removing tool_use blocks.
+    """
+    config = OpenrouterConfig()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Some text"},
+                {"type": "tool_use", "id": "toolu_01ABC", "name": "tool1", "input": {}},
+                {"type": "thinking", "thinking": "Some thought"},
+            ],
+            "tool_calls": [
+                {"id": "toolu_01ABC", "type": "function", "function": {"name": "tool1", "arguments": "{}"}}
+            ],
+        },
+    ]
+
+    result = config._deduplicate_tool_use_in_messages(messages)
+    content = result[0]["content"]
+
+    content_types = [b.get("type") for b in content]
+
+    # Should have text and thinking, but no tool_use
+    assert "text" in content_types
+    assert "thinking" in content_types
+    assert "tool_use" not in content_types
+
+
+def test_openrouter_no_deduplication_when_no_tool_calls():
+    """
+    Test that tool_use blocks are preserved when there are no tool_calls.
+    """
+    config = OpenrouterConfig()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Some text"},
+                {"type": "tool_use", "id": "toolu_01ABC", "name": "tool1", "input": {}},
+            ],
+            # No tool_calls field
+        },
+    ]
+
+    result = config._deduplicate_tool_use_in_messages(messages)
+    content = result[0]["content"]
+
+    tool_use_blocks = [b for b in content if b.get("type") == "tool_use"]
+
+    # Should preserve tool_use blocks when no tool_calls
+    assert len(tool_use_blocks) == 1
+
+
+def test_openrouter_transform_request_deduplicates_tool_use():
+    """
+    Test that transform_request properly deduplicates tool_use blocks.
+    """
+    config = OpenrouterConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hi"},
+                {"type": "tool_use", "id": "tool1", "name": "tool", "input": {}},
+            ],
+            "tool_calls": [
+                {"id": "tool1", "type": "function", "function": {"name": "tool", "arguments": "{}"}}
+            ],
+        },
+    ]
+
+    transformed_request = config.transform_request(
+        model="openrouter/anthropic/claude-3-5-sonnet",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    # Check assistant message content
+    assistant_msg = transformed_request["messages"][1]
+    content = assistant_msg["content"]
+    tool_use_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+
+    assert len(tool_use_blocks) == 0, "tool_use blocks should be removed from content"
+    assert assistant_msg.get("tool_calls") is not None, "tool_calls should be preserved"
+
