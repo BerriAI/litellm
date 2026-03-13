@@ -47,6 +47,16 @@ export function clearTokenCookies() {
 }
 
 /**
+ * Sets the token cookie from a login response body.
+ * This ensures the token is JS-accessible even when a reverse proxy adds HttpOnly to server-set cookies.
+ */
+export function setTokenCookie(token: string) {
+  if (typeof document === "undefined") return;
+  const isSecure = window.location.protocol === "https:";
+  document.cookie = `token=${token}; Path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
+}
+
+/**
  * Gets a cookie value by name
  * @param name The name of the cookie to retrieve
  * @returns The cookie value or null if not found

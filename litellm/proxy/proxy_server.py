@@ -11030,7 +11030,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
         litellm_dashboard_ui += "?login=success"
 
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui},
+            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
         json_response.set_cookie(key="token", value=jwt_token)

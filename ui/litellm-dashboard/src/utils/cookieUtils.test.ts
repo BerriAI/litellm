@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { clearTokenCookies, getCookie } from "./cookieUtils";
+import { clearTokenCookies, getCookie, setTokenCookie } from "./cookieUtils";
 
 describe("cookieUtils", () => {
   beforeEach(() => {
@@ -115,6 +115,30 @@ describe("cookieUtils", () => {
       expect(uiPathCalls.length).toBeGreaterThan(0);
 
       vi.restoreAllMocks();
+    });
+  });
+
+  describe("setTokenCookie", () => {
+    it("should set a token cookie readable by getCookie", () => {
+      setTokenCookie("my-jwt-token");
+      expect(getCookie("token")).toBe("my-jwt-token");
+    });
+
+    it("should overwrite an existing token cookie", () => {
+      setTokenCookie("old-token");
+      expect(getCookie("token")).toBe("old-token");
+
+      setTokenCookie("new-token");
+      expect(getCookie("token")).toBe("new-token");
+    });
+
+    it("should not throw when document is undefined (server-side rendering)", () => {
+      const originalDocument = global.document;
+      delete (global as any).document;
+
+      expect(() => setTokenCookie("token")).not.toThrow();
+
+      global.document = originalDocument;
     });
   });
 

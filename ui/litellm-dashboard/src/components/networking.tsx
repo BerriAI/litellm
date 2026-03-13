@@ -69,7 +69,7 @@ export const getInProductNudgesCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import { message } from "antd";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearTokenCookies, setTokenCookie } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
@@ -8976,6 +8976,7 @@ export interface LoginRequest {
 
 interface LoginResponse {
   redirect_url: string;
+  token?: string;
 }
 
 export const loginCall = async (username: string, password: string): Promise<LoginResponse> => {
@@ -9003,6 +9004,9 @@ export const loginCall = async (username: string, password: string): Promise<Log
   }
 
   const data = await response.json();
+  if (data.token) {
+    setTokenCookie(data.token);
+  }
   return data;
 };
 

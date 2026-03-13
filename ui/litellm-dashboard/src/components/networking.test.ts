@@ -5,6 +5,7 @@ import * as Networking from "./networking";
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
+  setTokenCookie: vi.fn(),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
