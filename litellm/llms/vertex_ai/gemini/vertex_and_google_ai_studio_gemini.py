@@ -2370,9 +2370,6 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
-    if timeout is not None and isinstance(timeout, (float, int)):
-        timeout = httpx.Timeout(timeout)
-
     if gemini_client is not None:
         client = gemini_client
     if client is None:

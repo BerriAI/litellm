@@ -35,9 +35,6 @@ def make_sync_call(
     stream_chunk_size: int = 1024,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
-    if timeout is not None and isinstance(timeout, (float, int)):
-        timeout = httpx.Timeout(timeout)
-
     if client is None:
         _params: dict = {}
         if timeout is not None:

@@ -197,9 +197,6 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     try:
-        if timeout is not None and isinstance(timeout, (float, int)):
-            timeout = httpx.Timeout(timeout)
-
         if client is None:
             _params: dict = {}
             if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify"):
