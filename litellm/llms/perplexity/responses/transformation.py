@@ -63,12 +63,12 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
 
     def _ensure_message_type(
         self, input: Union[str, ResponseInputParam]
-    ) -> Union[str, List[Dict[str, Any]]]:
+    ) -> Union[str, ResponseInputParam]:
         """Ensure list input items have type='message' (required by Perplexity)."""
         if isinstance(input, str):
             return input
         if isinstance(input, list):
-            result = []
+            result: List[Any] = []
             for item in input:
                 if isinstance(item, dict) and "type" not in item:
                     item = {**item, "type": "message"}

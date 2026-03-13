@@ -106,9 +106,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if (self.output_parse_pii or self.apply_to_output) and not logging_only:
             current_hook = self.event_hook
             if isinstance(current_hook, str) and current_hook != "post_call":
-                self.event_hook = [current_hook, "post_call"]
+                self.event_hook = cast(List[GuardrailEventHooks], [current_hook, "post_call"])
             elif isinstance(current_hook, list) and "post_call" not in current_hook:
-                self.event_hook = current_hook + ["post_call"]
+                self.event_hook = cast(List[GuardrailEventHooks], current_hook + ["post_call"])
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
@@ -908,7 +908,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.apply_to_output is True:
             if self._is_anthropic_message_response(response):
                 return await self._process_anthropic_response_for_pii(
-                    response=response, request_data=data, mode="mask"
+                    response=cast(dict, response), request_data=data, mode="mask"
                 )
             return await self._mask_output_response(
                 response=response, request_data=data
@@ -927,7 +927,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
         elif self._is_anthropic_message_response(response):
             await self._process_anthropic_response_for_pii(
-                response=response, request_data=data, mode="unmask"
+                response=cast(dict, response), request_data=data, mode="unmask"
             )
         return response
 
@@ -1234,7 +1234,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Process streaming response chunks to unmask PII tokens when needed.
         """
