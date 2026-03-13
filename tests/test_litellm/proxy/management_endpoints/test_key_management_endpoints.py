@@ -6820,6 +6820,7 @@ async def test_check_org_key_limits_on_update_overallocation():
     would exceed organization TPM limits.
     """
     existing_key = MagicMock()
+    existing_key.token = "sk-other-key"
     existing_key.tpm_limit = 15000
     existing_key.rpm_limit = 1500
     existing_key.metadata = {}
@@ -6859,6 +6860,65 @@ async def test_check_org_key_limits_on_update_overallocation():
         )
     assert exc.value.status_code == 400
     assert "TPM limit" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_check_org_key_limits_on_update_excludes_self():
+    """
+    Test that _check_org_key_limits excludes the key being updated from the
+    allocated totals. Without this, the key's current limits would be
+    double-counted: once from find_many and once from data.tpm_limit/rpm_limit.
+    """
+    # The key being updated is returned by find_many with its current limits
+    self_key = MagicMock()
+    self_key.token = "sk-test-key"
+    self_key.tpm_limit = 10000
+    self_key.rpm_limit = 1000
+    self_key.metadata = {}
+
+    # Another key in the org
+    other_key = MagicMock()
+    other_key.token = "sk-other-key"
+    other_key.tpm_limit = 5000
+    other_key.rpm_limit = 500
+    other_key.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[self_key, other_key]
+    )
+
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org-self",
+        organization_alias="test-org",
+        budget_id="budget-789",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget-789",
+            tpm_limit=20000,
+            rpm_limit=2000,
+        ),
+    )
+
+    # Updating the key to 12000 TPM. Other key uses 5000, so total = 17000 < 20000.
+    # Without the fix, this would be 10000 (self) + 5000 (other) + 12000 = 27000 > 20000.
+    data = UpdateKeyRequest(
+        key="sk-test-key",
+        tpm_limit=12000,
+        rpm_limit=1200,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+        organization_id="test-org-self",
+    )
+
+    # Should not raise - the key's own limits should be excluded from the sum
+    await _check_org_key_limits(
+        org_table=org_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
 
 
 def test_update_key_request_has_organization_id():
