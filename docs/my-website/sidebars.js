@@ -100,6 +100,7 @@ const sidebars = {
       label: "Policies",
       items: [
         "proxy/guardrails/guardrail_policies",
+        "proxy/guardrails/policy_flow_builder",
         "proxy/guardrails/policy_templates",
         "proxy/guardrails/policy_tags",
       ],
@@ -331,6 +332,7 @@ const sidebars = {
               label: "Setup & SSO",
               items: [
                 "proxy/admin_ui_sso",
+                "proxy/ui/ui_edit_logo",
                 "proxy/custom_sso",
                 "proxy/custom_root_ui",
                 "tutorials/scim_litellm",
@@ -668,6 +670,7 @@ const sidebars = {
         "rag_ingest",
         "rag_query",
         "realtime",
+        "proxy/realtime_webrtc",
         "rerank",
         "response_api",
         "response_api_compact",

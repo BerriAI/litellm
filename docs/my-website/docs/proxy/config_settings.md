@@ -910,6 +910,7 @@ router_settings:
 | PILLAR_API_BASE | Base URL for Pillar API Guardrails
 | PILLAR_API_KEY | API key for Pillar API Guardrails
 | PILLAR_ON_FLAGGED_ACTION | Action to take when content is flagged ('block' or 'monitor')
+| PKCE_STRICT_CACHE_MISS | When set to `true`, the SSO callback will return a 401 error if the PKCE code_verifier is not found in the cache (e.g. due to a cache miss across pods). When `false` (default), it logs a warning and continues without the code_verifier.
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | POSTHOG_API_KEY | API key for PostHog analytics integration
 | POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
@@ -944,7 +945,7 @@ router_settings:
 | QDRANT_URL | Connection URL for Qdrant database
 | QDRANT_VECTOR_SIZE | Vector size for Qdrant operations. Default is 1536
 | REDIS_CONNECTION_POOL_TIMEOUT | Timeout in seconds for Redis connection pool. Default is 5
-| REDIS_CLUSTER_NODES | JSON-formatted list of Redis cluster startup nodes for Redis Cluster mode. Example: '[{"host": "node1", "port": 6379}]'
+| REDIS_CLUSTER_NODES | JSON-formatted list of Redis cluster startup nodes for Redis Cluster mode. Example: `[{"host": "node1", "port": 6379}]`
 | REDIS_HOST | Hostname for Redis server
 | REDIS_PASSWORD | Password for Redis service
 | REDIS_PORT | Port number for Redis server

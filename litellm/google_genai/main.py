@@ -39,6 +39,15 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _get_tool_config_from_kwargs(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Read toolConfig/tool_config without dropping intentionally empty dicts."""
+    if "toolConfig" in kwargs:
+        return kwargs["toolConfig"]
+    if "tool_config" in kwargs:
+        return kwargs["tool_config"]
+    return None
+
+
 class GenerateContentSetupResult(BaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
@@ -168,13 +177,17 @@ class GenerateContentHelper:
             )
         )
         # Extract systemInstruction from kwargs to pass to transform
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
+        tool_config = _get_tool_config_from_kwargs(kwargs)
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
                 contents=contents,
                 tools=tools,
                 generate_content_config_dict=generate_content_config_dict,
+                tool_config=tool_config,
                 system_instruction=system_instruction,
             )
         )
@@ -318,7 +331,10 @@ def generate_content(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
+        tool_config = _get_tool_config_from_kwargs(kwargs)
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -350,6 +366,7 @@ def generate_content(
             _is_async=_is_async,
             client=kwargs.get("client"),
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            tool_config=tool_config,
             system_instruction=system_instruction,
         )
 
@@ -407,7 +424,10 @@ async def agenerate_content_stream(
         )
 
         # Extract systemInstruction from kwargs to pass to handler
-        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
+        tool_config = _get_tool_config_from_kwargs(kwargs)
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -446,6 +466,7 @@ async def agenerate_content_stream(
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            tool_config=tool_config,
             system_instruction=system_instruction,
         )
 
@@ -514,6 +535,10 @@ def generate_content_stream(
             )
 
         # Call the handler with streaming enabled (sync version)
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
+        tool_config = _get_tool_config_from_kwargs(kwargs)
         return base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
@@ -530,6 +555,8 @@ def generate_content_stream(
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            tool_config=tool_config,
+            system_instruction=system_instruction,
         )
 
     except Exception as e:

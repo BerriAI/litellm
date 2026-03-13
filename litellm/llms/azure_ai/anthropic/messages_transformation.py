@@ -125,6 +125,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
 
         Processes both `system` and `messages` content blocks.
         """
+
         def _sanitize(cache_control: Any) -> None:
             if isinstance(cache_control, dict):
                 cache_control.pop("scope", None)
@@ -163,4 +164,3 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request
-
