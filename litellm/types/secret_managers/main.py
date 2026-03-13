@@ -75,5 +75,5 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     """Custom STS endpoint URL (useful for VPC endpoints or testing)"""
 
     # Docker Secret Manager settings
-    secrets_path: str = "/run/secrets"
-    """Directory where Docker secrets are mounted (default: /run/secrets)"""
+    secrets_path: Optional[str] = None
+    """Directory where Docker secrets are mounted (default: /run/secrets). Only used when key_management_system is 'docker'."""
