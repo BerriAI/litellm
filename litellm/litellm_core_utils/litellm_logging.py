@@ -154,6 +154,7 @@ from ..integrations.litellm_agent import LiteLLMAgentModelResolver
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
+from ..integrations.newrelic import NewRelicLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.posthog import PostHogLogger
@@ -4280,8 +4281,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
         elif logging_integration == "newrelic":
-            from litellm.integrations.newrelic import NewRelicLogger
-
             for callback in _in_memory_loggers:
                 if isinstance(callback, NewRelicLogger):
                     return callback  # type: ignore
@@ -4554,8 +4553,6 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, SMTPEmailLogger):
                     return callback
         elif logging_integration == "newrelic":
-            from litellm.integrations.newrelic import NewRelicLogger
-
             for callback in _in_memory_loggers:
                 if isinstance(callback, NewRelicLogger):
                     return callback
