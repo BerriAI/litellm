@@ -17,7 +17,6 @@ import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
-import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -2801,20 +2800,19 @@ class SSOAuthenticationHandler:
         if redirect_url:
             token_data["redirect_uri"] = redirect_url
 
-        post_kwargs: Dict[str, Any] = {
-            "data": token_data,
-            "headers": {
-                **additional_headers,
-                "Content-Type": "application/x-www-form-urlencoded",  # must not be overridden
-                "Accept": "application/json",
-            },
-            "timeout": 30.0,
+        request_headers = {
+            **additional_headers,
+            "Content-Type": "application/x-www-form-urlencoded",  # must not be overridden
+            "Accept": "application/json",
         }
 
         if not include_client_id:
             # Use Basic Auth only when a secret is available; public PKCE clients omit it.
             if client_secret:
-                post_kwargs["auth"] = httpx.BasicAuth(client_id, client_secret)
+                credentials = base64.b64encode(
+                    f"{client_id}:{client_secret}".encode()
+                ).decode()
+                request_headers["Authorization"] = f"Basic {credentials}"
             else:
                 token_data["client_id"] = client_id
         else:
@@ -2822,27 +2820,27 @@ class SSOAuthenticationHandler:
             if client_secret:
                 token_data["client_secret"] = client_secret
 
-        # The try/except is INSIDE the async with so that TLS teardown exceptions
-        # from __aexit__ propagate as-is and are NOT mis-labelled as "Token endpoint
-        # request failed".  httpx buffers the full response body before __aexit__,
-        # so status_code / text / json() remain valid after the context exits.
-        async with httpx.AsyncClient() as http_client:
-            try:
-                response = await http_client.post(token_endpoint, **post_kwargs)
-            except Exception as exc:
-                # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
-                # wrap them as a clean ProxyException rather than leaking raw
-                # httpx or OS exceptions to callers.
-                verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
-                raise ProxyException(
-                    message=f"Token endpoint request failed: {exc}",
-                    type=ProxyErrorTypes.auth_error,
-                    param="token_exchange",
-                    code=status.HTTP_401_UNAUTHORIZED,
-                ) from exc
-
-        # Response processing outside the async with — httpx buffers the full
-        # response body so status_code / text / json() remain valid after __aexit__.
+        http_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SSO_HANDLER
+        )
+        try:
+            response = await http_client.post(
+                url=token_endpoint,
+                data=token_data,
+                headers=request_headers,
+                timeout=30.0,
+            )
+        except Exception as exc:
+            # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
+            # wrap them as a clean ProxyException rather than leaking raw
+            # httpx or OS exceptions to callers.
+            verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
+            raise ProxyException(
+                message=f"Token endpoint request failed: {exc}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            ) from exc
         if response.status_code != 200:
             verbose_proxy_logger.error(
                 "PKCE token exchange failed. status=%s body=%s",
@@ -2970,41 +2968,43 @@ class SSOAuthenticationHandler:
 
         if userinfo_endpoint:
             try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        userinfo_endpoint,
-                        headers={
-                            **additional_headers,
-                            "Authorization": f"Bearer {access_token}",  # must not be overridden
-                        },
-                        timeout=30.0,
-                    )
-                    if resp.status_code == 200:
-                        try:
-                            userinfo_raw = resp.json()
-                            if not userinfo_raw:
-                                # JSON null (None) or empty dict ({}) — no identity claims.
-                                # Treat as failure so id_token fallback can be attempted.
-                                verbose_proxy_logger.warning(
-                                    "Userinfo endpoint returned an empty or null response "
-                                    "(type=%s); treating as failure and attempting id_token fallback. "
-                                    "Check your provider's userinfo endpoint configuration.",
-                                    type(userinfo_raw).__name__,
-                                )
-                                userinfo = None
-                            else:
-                                userinfo = userinfo_raw
-                        except Exception as json_err:
+                client = get_async_httpx_client(
+                    llm_provider=httpxSpecialProvider.SSO_HANDLER
+                )
+                resp = await client.get(
+                    url=userinfo_endpoint,
+                    headers={
+                        **additional_headers,
+                        "Authorization": f"Bearer {access_token}",  # must not be overridden
+                    },
+                    timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    try:
+                        userinfo_raw = resp.json()
+                        if not userinfo_raw:
+                            # JSON null (None) or empty dict ({}) — no identity claims.
+                            # Treat as failure so id_token fallback can be attempted.
                             verbose_proxy_logger.warning(
-                                "Userinfo endpoint returned non-JSON response (status 200): %s",
-                                json_err,
+                                "Userinfo endpoint returned an empty or null response "
+                                "(type=%s); treating as failure and attempting id_token fallback. "
+                                "Check your provider's userinfo endpoint configuration.",
+                                type(userinfo_raw).__name__,
                             )
-                    else:
+                            userinfo = None
+                        else:
+                            userinfo = userinfo_raw
+                    except Exception as json_err:
                         verbose_proxy_logger.warning(
-                            "Userinfo endpoint returned %s (body: %s), falling back to id_token",
-                            resp.status_code,
-                            resp.text[:500],
+                            "Userinfo endpoint returned non-JSON response (status 200): %s",
+                            json_err,
                         )
+                else:
+                    verbose_proxy_logger.warning(
+                        "Userinfo endpoint returned %s (body: %s), falling back to id_token",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "Userinfo endpoint error: %s, falling back to id_token", e
