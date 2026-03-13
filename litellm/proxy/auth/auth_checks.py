@@ -481,8 +481,16 @@ async def common_checks(  # noqa: PLR0915
         )
 
         # 4. If user is in budget
-        ## 4.1 check user budget (applies to all keys - personal and team)
-        if user_object is not None and user_object.max_budget is not None:
+        ## 4.1 check user budget
+        _enforce_user_budget_on_team_keys = general_settings.get(
+            "enforce_user_budget_on_team_keys", False
+        )
+        _is_personal_key = team_object is None or team_object.team_id is None
+        if (
+            user_object is not None
+            and user_object.max_budget is not None
+            and (_is_personal_key or _enforce_user_budget_on_team_keys)
+        ):
             user_budget = user_object.max_budget
             if user_budget < user_object.spend:
                 raise litellm.BudgetExceededError(

@@ -1633,7 +1633,7 @@ async def test_custom_auth_common_checks_opt_in():
 
 @pytest.mark.asyncio
 async def test_user_budget_enforced_with_team_key():
-    """Test that user budget is enforced even when the key belongs to a team."""
+    """Test that user budget is enforced for team keys when enforce_user_budget_on_team_keys is enabled."""
     from fastapi import Request
 
     from litellm.proxy.auth.auth_checks import common_checks
@@ -1659,6 +1659,8 @@ async def test_user_budget_enforced_with_team_key():
         spend=60.0,  # Over user budget
     )
 
+    general_settings = {"enforce_user_budget_on_team_keys": True}
+
     with pytest.raises(litellm.BudgetExceededError):
         await common_checks(
             request_body=request_body,
@@ -1666,7 +1668,7 @@ async def test_user_budget_enforced_with_team_key():
             user_object=user_object,
             end_user_object=None,
             global_proxy_spend=None,
-            general_settings={},
+            general_settings=general_settings,
             route="/chat/completions",
             llm_router=None,
             proxy_logging_obj=MagicMock(),
@@ -1677,7 +1679,7 @@ async def test_user_budget_enforced_with_team_key():
 
 @pytest.mark.asyncio
 async def test_user_budget_not_exceeded_with_team_key():
-    """Test that request passes when user budget is not exceeded with a team key."""
+    """Test that request passes when user budget is not exceeded with a team key and flag enabled."""
     from fastapi import Request
 
     from litellm.proxy.auth.auth_checks import common_checks
@@ -1703,6 +1705,54 @@ async def test_user_budget_not_exceeded_with_team_key():
         spend=30.0,  # Under user budget
     )
 
+    general_settings = {"enforce_user_budget_on_team_keys": True}
+
+    result = await common_checks(
+        request_body=request_body,
+        team_object=team_object,
+        user_object=user_object,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_user_budget_skipped_for_team_key_without_flag():
+    """Test that user budget is NOT enforced for team keys when flag is disabled (default)."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_request = MagicMock(spec=Request)
+
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        max_budget=100.0,
+        spend=10.0,
+    )
+
+    user_object = LiteLLM_UserTable(
+        user_id="user-123",
+        max_budget=50.0,
+        spend=60.0,  # Over user budget, but flag is off
+    )
+
+    # Default behavior: flag not set, team key bypasses user budget
     result = await common_checks(
         request_body=request_body,
         team_object=team_object,
