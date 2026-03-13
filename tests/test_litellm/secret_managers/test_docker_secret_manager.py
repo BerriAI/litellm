@@ -211,6 +211,7 @@ def test_path_traversal_via_symlink_is_safe(manager, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.getuid() == 0, reason="root can read chmod 000 files; test is meaningless as root")
 def test_unreadable_file_returns_none(manager, populated_secrets_dir):
     secret_file = populated_secrets_dir / "openai_api_key"
     original_mode = secret_file.stat().st_mode
@@ -254,6 +255,25 @@ def test_load_factory_no_settings(tmp_path):
     assert m.secrets_path == "/run/secrets"
     # cleanup
     litellm.secret_manager_client = None
+
+
+def test_load_factory_secrets_path_none_uses_default():
+    """
+    Regression: KeyManagementSettings.secrets_path is Optional[str] defaulting
+    to None. When an operator omits secrets_path from their config the attribute
+    exists on the object but evaluates to None, so a bare getattr() returns None
+    rather than the fallback string — causing os.path.realpath(None) to raise
+    TypeError. The factory must guard against this.
+    """
+    settings = KeyManagementSettings(access_mode="read_only")  # secrets_path omitted
+    assert settings.secrets_path is None  # confirm the field is actually None
+
+    # Must not raise TypeError
+    m = DockerSecretManager.load_docker_secret_manager(key_management_settings=settings)
+    assert m.secrets_path == "/run/secrets"
+    # cleanup
+    litellm.secret_manager_client = None
+    litellm._key_management_system = None
     litellm._key_management_system = None
 
 

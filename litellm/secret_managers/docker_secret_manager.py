@@ -78,7 +78,7 @@ class DockerSecretManager(BaseSecretManager):
         if not os.path.isdir(self.secrets_path):
             verbose_logger.warning(
                 "DockerSecretManager: secrets directory %r does not exist. "
-                "Secrets will fall back to environment variables.",
+                "All secret lookups will return None until the directory is available.",
                 self.secrets_path,
             )
 
@@ -228,7 +228,10 @@ class DockerSecretManager(BaseSecretManager):
         """Factory used by ``initialize_secret_manager`` in the proxy server."""
         secrets_path = _DOCKER_SECRETS_DEFAULT_PATH
         if key_management_settings is not None:
-            secrets_path = getattr(key_management_settings, "secrets_path", secrets_path)
+            # `or` guard handles the case where the field exists but is None
+            # (KeyManagementSettings.secrets_path is Optional[str] defaulting to None,
+            # so getattr returns None rather than the fallback when the attr exists)
+            secrets_path = getattr(key_management_settings, "secrets_path", secrets_path) or _DOCKER_SECRETS_DEFAULT_PATH
         return cls(secrets_path=secrets_path)
 
 
