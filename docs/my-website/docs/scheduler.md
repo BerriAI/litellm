@@ -1,14 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] Request Prioritization
-
-:::info 
-
-Beta feature. Use for testing only. 
-
-[Help us improve this](https://github.com/BerriAI/litellm/issues)
-:::
+# Request Prioritization
 
 Prioritize LLM API requests in high-traffic.
 
