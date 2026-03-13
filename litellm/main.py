@@ -955,7 +955,7 @@ def responses_api_bridge_check(
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
 
-        # OpenAI gpt-5.4 chat-completions calls with both tools + reasoning_effort
+        # OpenAI gpt-5.4+ chat-completions calls with both tools + reasoning_effort
         # must be bridged to Responses API.
         if (
             custom_llm_provider == "openai"
@@ -1616,6 +1616,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
+
+            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
+                optional_params = dict(optional_params)
+                optional_params["reasoning_effort"] = reasoning_effort
 
             return responses_api_bridge.completion(
                 model=model,

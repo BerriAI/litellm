@@ -188,11 +188,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         ) or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(raw_reasoning_effort)
 
-        # Normalize to string for Chat Completions API when dict has only "effort".
-        # Preserve full dict (e.g. {"effort": "high", "summary": "detailed"}) for Responses API.
-        if isinstance(raw_reasoning_effort, dict) and set(
-            raw_reasoning_effort.keys()
-        ) <= {"effort"}:
+        # Normalize dict reasoning_effort to string for Chat Completions API.
+        # Example: {"effort": "high", "summary": "detailed"} -> "high"
+        if isinstance(raw_reasoning_effort, dict) and "effort" in raw_reasoning_effort:
             normalized = _normalize_reasoning_effort_for_chat_completion(
                 raw_reasoning_effort
             )
