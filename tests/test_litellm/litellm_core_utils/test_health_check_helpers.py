@@ -83,8 +83,8 @@ def test_get_litellm_internal_health_check_user_api_key_auth():
 
 
 @pytest.mark.asyncio
-async def test_get_mode_handlers_image_generation_uses_default_prompt_when_none():
-    """Health check image_generation handler should fall back to a default prompt when none is provided."""
+async def test_get_mode_handlers_image_generation_allows_none_prompt():
+    """Health check image_generation handler should forward a None prompt when none is provided."""
     with patch("litellm.aimage_generation", new_callable=AsyncMock) as mock_aimage_generation, patch(
         "litellm.litellm_core_utils.health_check_utils._filter_model_params",
         return_value={"model": "gpt-image-1"},
@@ -100,7 +100,8 @@ async def test_get_mode_handlers_image_generation_uses_default_prompt_when_none(
 
         mock_aimage_generation.assert_awaited_once()
         _, kwargs = mock_aimage_generation.call_args
-        assert kwargs["prompt"] == "test image generation"
+        assert "prompt" in kwargs
+        assert kwargs["prompt"] is None
 
 
 @pytest.mark.asyncio
