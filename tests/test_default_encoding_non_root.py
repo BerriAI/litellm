@@ -49,3 +49,9 @@ def test_custom_tiktoken_cache_dir_override(monkeypatch, tmp_path):
     cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR")
     assert cache_dir == str(custom_dir)
     assert os.path.isdir(cache_dir)
+
+    # Restore module to a clean state so default_encoding.encoding is a real
+    # tiktoken Encoding, not the MagicMock, for any test that runs after this.
+    monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
+    monkeypatch.delenv("CUSTOM_TIKTOKEN_CACHE_DIR", raising=False)
+    importlib.reload(default_encoding)
