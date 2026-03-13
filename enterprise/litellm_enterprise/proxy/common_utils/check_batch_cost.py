@@ -33,6 +33,9 @@ class CheckBatchCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
+        # Cached after the first poll cycle. Once we know the column is absent we skip
+        # the guaranteed-failing primary query on every subsequent cycle.
+        self._has_batch_processed_column: bool = True
 
     async def _get_user_info(self, batch_id, user_id) -> dict:
         """
@@ -74,6 +77,26 @@ class CheckBatchCost:
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
             )
 
+    async def _fallback_find_jobs(self) -> list:
+        """Query batch jobs without the batch_processed filter (for older schemas)."""
+        return await self.prisma_client.db.litellm_managedobjecttable.find_many(
+            where={
+                "file_purpose": "batch",
+                "status": {
+                    "not_in": [
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "complete",
+                        "completed",
+                        "stale_expired",
+                    ]
+                },
+            },
+            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            order={"created_at": "asc"},
+        )
+
     async def check_batch_cost(self):
         """
         Check if the batch JOB has been tracked.
@@ -95,46 +118,39 @@ class CheckBatchCost:
             get_model_id_from_unified_batch_id,
         )
 
-        await self._cleanup_stale_managed_objects()
+        try:
+            await self._cleanup_stale_managed_objects()
+        except Exception as cleanup_err:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: stale cleanup failed (poll will continue): {cleanup_err}"
+            )
 
         # Look for all batches that have not yet been processed by CheckBatchCost.
-        # _has_batch_processed_column tracks whether the column exists so the
-        # completion update can omit it on older schemas (avoiding a silent failure
-        # that would cause infinite reprocessing and duplicate cost logging).
-        _has_batch_processed_column = True
-        try:
-            jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
-                where={
-                    "file_purpose": "batch",
-                    "batch_processed": False,
-                    "status": {"not_in": ["failed", "expired", "cancelled", "stale_expired"]},
-                },
-                take=MAX_OBJECTS_PER_POLL_CYCLE,
-                order={"created_at": "asc"},
-            )
-        except Exception:
-            # Fallback: batch_processed column may not exist on older schemas
-            _has_batch_processed_column = False
-            verbose_proxy_logger.warning(
-                "CheckBatchCost: batch_processed column not found, querying without it"
-            )
-            jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
-                where={
-                    "file_purpose": "batch",
-                    "status": {
-                        "not_in": [
-                            "failed",
-                            "expired",
-                            "cancelled",
-                            "complete",
-                            "completed",
-                            "stale_expired",
-                        ]
+        # self._has_batch_processed_column is cached after the first probe so that
+        # older schemas don't pay a guaranteed-failing primary query + warning on
+        # every subsequent poll cycle.
+        if self._has_batch_processed_column:
+            try:
+                jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                    where={
+                        "file_purpose": "batch",
+                        "batch_processed": False,
+                        "status": {"not_in": ["failed", "expired", "cancelled", "stale_expired"]},
                     },
-                },
-                take=MAX_OBJECTS_PER_POLL_CYCLE,
-                order={"created_at": "asc"},
-            )
+                    take=MAX_OBJECTS_PER_POLL_CYCLE,
+                    order={"created_at": "asc"},
+                )
+            except Exception as query_err:
+                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
+                    raise
+                # Permanent schema gap — cache the result so future cycles skip straight to fallback
+                self._has_batch_processed_column = False
+                verbose_proxy_logger.warning(
+                    "CheckBatchCost: batch_processed column not found, querying without it"
+                )
+                jobs = await self._fallback_find_jobs()
+        else:
+            jobs = await self._fallback_find_jobs()
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
@@ -297,7 +313,7 @@ class CheckBatchCost:
                         "status": "complete",
                         "file_object": response.model_dump_json(),
                     }
-                    if _has_batch_processed_column:
+                    if self._has_batch_processed_column:
                         update_data["batch_processed"] = True
                     await self.prisma_client.db.litellm_managedobjecttable.update(
                         where={"id": job.id},

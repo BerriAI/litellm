@@ -61,7 +61,12 @@ class CheckResponsesCost:
         - Cost is automatically tracked by litellm.aget_responses()
         - Mark completed/failed/cancelled responses as complete in the database
         """
-        await self._cleanup_stale_managed_objects()
+        try:
+            await self._cleanup_stale_managed_objects()
+        except Exception as cleanup_err:
+            verbose_proxy_logger.warning(
+                f"CheckResponsesCost: stale cleanup failed (poll will continue): {cleanup_err}"
+            )
 
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={

@@ -94,7 +94,7 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
             return_value=0
         )
-        # First find_many (primary query) raises; second (fallback) returns empty list
+        # First find_many (primary query) raises with a schema error; second (fallback) returns empty
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             side_effect=[Exception("column batch_processed does not exist"), []]
         )
@@ -104,12 +104,34 @@ class TestCheckBatchCost:
         calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
         assert len(calls) == 2
         fallback_where = calls[1][1]["where"]
-        # Fallback must not reference batch_processed
         assert "batch_processed" not in fallback_where
-        # Fallback must exclude stale_expired
         assert "stale_expired" in fallback_where["status"]["not_in"]
-        # Fallback must still paginate
         assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
+        # Column absence is now cached — next call should go straight to fallback
+        assert check_batch_cost_instance._has_batch_processed_column is False
+
+    @pytest.mark.asyncio
+    async def test_column_absence_cached_across_cycles(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        """After column absence is discovered, subsequent cycles skip the primary query entirely."""
+        from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        # Simulate column already known absent from a previous cycle
+        check_batch_cost_instance._has_batch_processed_column = False
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        await check_batch_cost_instance.check_batch_cost()
+
+        # Only one find_many call — the fallback directly, no primary query attempt
+        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
+        fallback_where = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[1]["where"]
+        assert "batch_processed" not in fallback_where
 
     @pytest.mark.asyncio
     async def test_fallback_completion_update_omits_batch_processed(
