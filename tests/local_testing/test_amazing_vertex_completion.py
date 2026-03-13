@@ -1302,8 +1302,8 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
     [
-        ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
-        ("gemini/gemini-1.5-pro", None, True),
+        ("vertex_ai_beta/gemini-2.0-flash-001", "us-central1", True),
+        ("gemini/gemini-2.0-flash", None, True),
         ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
@@ -1492,8 +1492,8 @@ async def test_anthropic_message_via_anthropic_messages():
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
     [
-        ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
-        ("gemini/gemini-1.5-pro", None, True),
+        ("vertex_ai_beta/gemini-2.0-flash-001", "us-central1", True),
+        ("gemini/gemini-2.0-flash", None, True),
         ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
@@ -2906,7 +2906,7 @@ def test_gemini_function_call_parameter_in_messages():
             mock_client.return_value = mock_response
             try:
                 completion(
-                    model="vertex_ai/gemini-1.5-pro",
+                    model="vertex_ai/gemini-2.0-flash",
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
