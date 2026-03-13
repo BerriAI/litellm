@@ -5204,6 +5204,12 @@ def embedding(  # noqa: PLR0915
             except Exception:
                 uses_embed_content = False
 
+            # Fallback: models with "gemini-embedding" prefix use the
+            # embedContent API, not the legacy :predict endpoint. This
+            # ensures correct routing even when model info lookup fails.
+            if not uses_embed_content and model.startswith("gemini-embedding"):
+                uses_embed_content = True
+
             if uses_embed_content:
                 response = google_batch_embeddings.batch_embeddings(  # type: ignore
                     model=model,
