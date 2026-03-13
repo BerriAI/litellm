@@ -375,37 +375,37 @@ items={[
 icon: "🔀",
 title: "Router & Fallbacks",
 description: "Load balance across deployments and set automatic fallbacks.",
-to: "./routing.md",
+to: "/docs/routing",
 },
 {
 icon: "🔑",
 title: "Virtual Keys",
 description: "Manage access, budgets, and rate limits per team or user.",
-to: "./proxy/virtual_keys.md",
+to: "/docs/proxy/virtual_keys",
 },
 {
 icon: "📊",
 title: "Spend Tracking",
 description: "Track costs per key, team, and user across all providers.",
-to: "./proxy/cost_tracking.md",
+to: "/docs/proxy/cost_tracking",
 },
 {
 icon: "🛡️",
 title: "Guardrails",
 description: "Add content filtering, PII masking, and safety checks.",
-to: "./proxy/guardrails/quick_start.md",
+to: "/docs/proxy/guardrails/quick_start",
 },
 {
 icon: "📡",
 title: "Observability",
 description: "Integrate with Langfuse, MLflow, Helicone, and more.",
-to: "./observability/callbacks.md",
+to: "/docs/observability/callbacks",
 },
 {
 icon: "🏭",
 title: "Enterprise",
 description: "SSO/SAML, audit logs, and advanced security for production.",
-to: "./enterprise.md",
+to: "/docs/enterprise",
 },
 ]}
 />

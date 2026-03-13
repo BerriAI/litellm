@@ -58,7 +58,7 @@ items={[
     icon: "🛠️",
     title: "AI Coding Tools",
     description: "Claude Code, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Qwen Code, OpenAI Codex.",
-    to: "/docs/ai_tools",
+    to: "/ai_tools",
   },
   {
     icon: "🔑",
