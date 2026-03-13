@@ -6,7 +6,7 @@ from unittest import mock
 
 import litellm
 
-CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1/"
+CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1"
 
 
 def test_crusoe_json_registry():

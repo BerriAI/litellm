@@ -1,9 +1,7 @@
 import os
-import sys
-
 from unittest.mock import patch
 
-CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1/"
+CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1"
 
 
 def test_crusoe_json_registry():
