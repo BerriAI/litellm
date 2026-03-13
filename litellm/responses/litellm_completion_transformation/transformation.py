@@ -410,7 +410,7 @@ class LiteLLMCompletionResponsesConfig:
                                     else getattr(new_msg, "role", None)
                                 )
                                 if new_role == "assistant":
-                                    new_tcs = (
+                                    new_tcs: list = (
                                         new_msg.get("tool_calls")
                                         if isinstance(new_msg, dict)
                                         else getattr(new_msg, "tool_calls", None)

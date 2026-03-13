@@ -1778,7 +1778,7 @@ async def _validate_mcp_servers_for_key_update(
         )
     object_permission_dict = (
         data.object_permission.model_dump()
-        if hasattr(data.object_permission, "model_dump")
+        if data.object_permission is not None and hasattr(data.object_permission, "model_dump")
         else data.object_permission
     )
     await validate_key_mcp_servers_against_team(

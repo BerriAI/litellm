@@ -7700,7 +7700,7 @@ async def acount_tokens(
     local_count = litellm.token_counter(
         model=model,
         messages=fallback_messages,
-        tools=tools,
+        tools=tools,  # type: ignore[arg-type]
     )
 
     return TokenCountResponse(
