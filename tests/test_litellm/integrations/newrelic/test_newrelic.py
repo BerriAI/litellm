@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -290,6 +291,18 @@ class TestGetFinishReason:
         assert self.logger._get_finish_reason({}) == "unknown"
 
 
+class TestToEpochMs:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_float_passthrough(self):
+        assert self.logger._to_epoch_ms(1.0) == pytest.approx(1000.0)
+
+    def test_datetime_converted(self):
+        dt = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        assert self.logger._to_epoch_ms(dt) == pytest.approx(dt.timestamp() * 1000.0)
+
+
 class TestGetDuration:
     def setup_method(self):
         self.logger = make_logger()
@@ -298,9 +311,16 @@ class TestGetDuration:
         kwargs = {"llm_api_duration_ms": 750.0}
         assert self.logger._get_duration(kwargs, 0.0, 1.0) == 750.0
 
-    def test_calculates_from_timestamps_when_kwarg_absent(self):
+    def test_calculates_from_float_timestamps(self):
         kwargs = {}
         result = self.logger._get_duration(kwargs, 1.0, 2.5)
+        assert result == pytest.approx(1500.0)
+
+    def test_calculates_from_datetime_timestamps(self):
+        kwargs = {}
+        start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2024, 1, 1, 0, 0, 1, 500000, tzinfo=timezone.utc)  # +1.5s
+        result = self.logger._get_duration(kwargs, start, end)
         assert result == pytest.approx(1500.0)
 
     def test_returns_none_when_nothing_available(self):
@@ -398,11 +418,22 @@ class TestRecordErrorMetric:
     def test_calls_record_custom_metric(self):
         logger = make_logger()
         mock_app = MagicMock()
+        mock_app.enabled = True
 
         with patch("newrelic.agent.application", return_value=mock_app):
             logger._record_error_metric()
 
         mock_app.record_custom_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
+
+    def test_skips_when_app_disabled(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = False
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            logger._record_error_metric()
+
+        mock_app.record_custom_metric.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
