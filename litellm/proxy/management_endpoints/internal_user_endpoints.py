@@ -2364,3 +2364,195 @@ async def get_user_daily_activity_aggregated(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {str(e)}"},
         )
+
+
+@router.post(
+    "/user/block", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def block_user(
+    data: BlockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Blocks all calls from keys associated with this user.
+
+    Parameters:
+    - user_id: str - Required. The unique identifier of the user to block.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/user/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated user record with blocked=True
+
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    # First check if user exists and get their role
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+    
+    # Check if user is a proxy admin (handles NULL user_role correctly)
+    if target_user.user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot block users with proxy admin role"},
+        )
+    
+    # Update user to blocked status
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id},
+        data={"blocked": True},  # type: ignore
+    )
+
+    # Invalidate user cache entry (local and Redis)
+    await user_api_key_cache.async_delete_cache(key=data.user_id)
+
+    # Invalidate cache for all keys associated with this user
+    # Use pagination to avoid unbounded query for users with many keys
+    skip = 0
+    batch_size = 100
+    
+    while True:
+        user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            skip=skip,
+            take=batch_size,
+        )
+        
+        if not user_keys:
+            break
+        
+        for key in user_keys:
+            await _delete_cache_key_object(
+                hashed_token=key.token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        
+        skip += batch_size
+
+    return record
+
+
+@router.post(
+    "/user/unblock", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def unblock_user(
+    data: BlockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Unblocks a user, restoring access for their API keys.
+
+    Parameters:
+    - user_id: str - Required. The unique identifier of the user to unblock.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/user/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated user record with blocked=False
+
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    # First check if user exists and get their role
+    target_user = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    
+    if target_user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User {data.user_id} not found"},
+        )
+    
+    # Check if user is a proxy admin (handles NULL user_role correctly)
+    if target_user.user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cannot unblock users with proxy admin role"},
+        )
+    
+    # Update user to unblocked status
+    record = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": data.user_id},
+        data={"blocked": False},  # type: ignore
+    )
+
+    # Invalidate user cache entry (local and Redis)
+    await user_api_key_cache.async_delete_cache(key=data.user_id)
+
+    # Invalidate cache for all keys associated with this user
+    # Use pagination to avoid unbounded query for users with many keys
+    skip = 0
+    batch_size = 100
+    
+    while True:
+        user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            skip=skip,
+            take=batch_size,
+        )
+        
+        if not user_keys:
+            break
+        
+        for key in user_keys:
+            await _delete_cache_key_object(
+                hashed_token=key.token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        
+        skip += batch_size
+
+    return record
