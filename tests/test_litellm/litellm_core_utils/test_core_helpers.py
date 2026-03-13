@@ -1,6 +1,8 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
-from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+import pytest
+
+from litellm.litellm_core_utils.core_helpers import map_finish_reason, reconstruct_model_name
 
 
 def test_reconstruct_model_name_prefers_deployment_value():
@@ -43,3 +45,19 @@ def test_reconstruct_model_name_returns_original_for_other_providers():
     )
 
     assert result == "claude-3-sonnet"
+
+
+@pytest.mark.parametrize(
+    "finish_reason, expected",
+    [
+        ("stop_sequence", "stop"),
+        ("content_filtered", "content_filter"),
+        ("ERROR_TOXIC", "content_filter"),
+        ("max_tokens", "length"),
+        ("tool_use", "tool_calls"),
+    ],
+)
+def test_map_finish_reason_maps_provider_values(finish_reason: str, expected: str) -> None:
+    """Ensure provider-specific finish reasons are normalized to OpenAI-compatible values."""
+
+    assert map_finish_reason(finish_reason) == expected
