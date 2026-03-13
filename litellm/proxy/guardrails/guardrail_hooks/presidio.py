@@ -1229,12 +1229,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in remaining_chunks:
                 yield chunk
 
-    async def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:  # type: ignore[override]
+    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
         """
         Process streaming response chunks to unmask PII tokens when needed.
 
