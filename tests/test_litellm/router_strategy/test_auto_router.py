@@ -232,6 +232,6 @@ class TestAutoRouter:
         )
         
         # Assert: only dict blocks contribute; "text" defaults to "" when missing
-        mock_routelayer.assert_called_once_with(text="What is the weather today? In Paris. ")
+        mock_routelayer.assert_called_once_with(text="What is the weather today? In Paris.")
         assert result is not None
         assert result.messages == messages

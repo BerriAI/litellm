@@ -123,7 +123,7 @@ class AutoRouter(CustomLogger):
         raw_content = user_message.get("content", "")
         # Handle Anthropic-style content blocks: [{"type": "text", "text": "..."}]
         if isinstance(raw_content, list):
-            message_content = " ".join(block.get("text", "") for block in raw_content if isinstance(block, dict))
+            message_content = " ".join(block.get("text", "") for block in raw_content if isinstance(block, dict) and block.get("text", ""))
         else:
             message_content = str(raw_content)
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
