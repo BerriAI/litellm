@@ -140,6 +140,18 @@ describe("cookieUtils", () => {
 
       global.document = originalDocument;
     });
+
+    it("should not throw when window is undefined (server-side rendering)", () => {
+      const originalWindow = global.window;
+      const originalDocument = global.document;
+      delete (global as any).window;
+      delete (global as any).document;
+
+      expect(() => setTokenCookie("token")).not.toThrow();
+
+      global.window = originalWindow;
+      global.document = originalDocument;
+    });
   });
 
   describe("getCookie", () => {

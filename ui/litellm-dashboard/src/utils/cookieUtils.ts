@@ -51,7 +51,7 @@ export function clearTokenCookies() {
  * This ensures the token is JS-accessible even when a reverse proxy adds HttpOnly to server-set cookies.
  */
 export function setTokenCookie(token: string) {
-  if (typeof document === "undefined") return;
+  if (typeof window === "undefined" || typeof document === "undefined") return;
   const isSecure = window.location.protocol === "https:";
   document.cookie = `token=${token}; Path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
 }
