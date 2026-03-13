@@ -145,6 +145,48 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         return transformed_messages
 
+    def _deduplicate_tool_use_in_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Remove tool_use blocks from assistant message content when tool_calls is present.
+
+        This prevents "tool_use ids must be unique" errors when OpenRouter converts
+        OpenAI format to Anthropic format. If an assistant message has both:
+        1. content list with tool_use blocks (Anthropic style)
+        2. tool_calls field (OpenAI style)
+
+        The tool_use blocks in content will be removed to avoid duplicates after
+        OpenRouter's conversion.
+
+        Returns:
+            List[AllMessageValues]: Cleaned messages with no duplicate tool_use sources.
+        """
+        cleaned_messages: List[AllMessageValues] = []
+        for message in messages:
+            message_dict = dict(message)
+
+            # Only process assistant messages with tool_calls
+            if message_dict.get("role") == "assistant" and message_dict.get("tool_calls"):
+                content = message_dict.get("content")
+
+                if isinstance(content, list):
+                    # Filter out tool_use blocks from content to prevent duplicates
+                    # when OpenRouter converts to Anthropic format
+                    filtered_content = [
+                        block
+                        for block in content
+                        if not (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_use"
+                        )
+                    ]
+                    message_dict["content"] = filtered_content
+
+            cleaned_messages.append(cast(AllMessageValues, message_dict))
+
+        return cleaned_messages
+
     def transform_request(
         self,
         model: str,
@@ -161,6 +203,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
+
+        # Deduplicate tool_use blocks to prevent "tool_use ids must be unique" errors
+        # when OpenRouter converts to Anthropic format
+        messages = self._deduplicate_tool_use_in_messages(messages)
 
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(
