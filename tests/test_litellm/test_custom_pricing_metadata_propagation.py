@@ -19,7 +19,6 @@ import asyncio
 import json
 import os
 import sys
-import time
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -35,9 +34,6 @@ from litellm.litellm_core_utils.litellm_logging import (
     use_custom_pricing_for_model,
 )
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-    AnthropicPassthroughLoggingHandler,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -785,57 +781,7 @@ class TestAnthropicMessagesCustomPricingCost:
         finally:
             litellm.callbacks = []
 
-
 class TestAnthropicPassthroughLoggingPayload:
-    def test_metadata_merge_does_not_overwrite_existing_litellm_params(self):
-        logging_obj = MagicMock()
-        logging_obj.model_call_details = {
-            "custom_llm_provider": "anthropic",
-            "litellm_params": {
-                "metadata": {
-                    "model_info": {
-                        "id": DEPLOYMENT_MODEL_ID,
-                        "input_cost_per_token": CUSTOM_INPUT_COST,
-                        "output_cost_per_token": CUSTOM_OUTPUT_COST,
-                    },
-                    "new_field": "from-logging-obj",
-                    "shared_field": "from-logging-obj",
-                },
-                "stream_response": {"should": "not-overwrite"},
-            },
-        }
-        logging_obj.litellm_call_id = "call-test"
-
-        model_response = litellm.ModelResponse()
-        model_response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)  # type: ignore
-
-        with patch("litellm.completion_cost", return_value=123.0):
-            kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
-                litellm_model_response=model_response,
-                model="claude-sonnet-4-20250514",
-                kwargs={
-                    "litellm_params": {
-                        "metadata": {
-                            "existing_field": "preserved",
-                            "shared_field": "from-existing",
-                        },
-                        "stream_response": {"keep": "existing"},
-                    }
-                },
-                start_time=time.time(),  # type: ignore[arg-type]
-                end_time=time.time(),  # type: ignore[arg-type]
-                logging_obj=logging_obj,
-            )
-
-        assert kwargs["litellm_params"]["metadata"]["existing_field"] == "preserved"
-        assert kwargs["litellm_params"]["metadata"]["new_field"] == "from-logging-obj"
-        assert kwargs["litellm_params"]["metadata"]["shared_field"] == "from-existing"
-        assert (
-            kwargs["litellm_params"]["metadata"]["model_info"]["id"]
-            == DEPLOYMENT_MODEL_ID
-        )
-        assert kwargs["litellm_params"]["stream_response"] == {"keep": "existing"}
-
     @pytest.mark.asyncio
     async def test_streaming_messages_uses_custom_pricing(self):
         """Streaming /v1/messages should use custom pricing for cost."""

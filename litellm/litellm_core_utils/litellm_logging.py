@@ -4472,12 +4472,20 @@ def _get_model_info_from_litellm_params(
         return {}
 
     metadata = litellm_params.get("metadata", {}) or {}
-    result = (
-        metadata.get("model_info")
-        or litellm_params.get("model_info")
-        or (litellm_params.get("litellm_metadata", {}) or {}).get("model_info")
-        or {}
-    )
+    _missing = object()
+
+    metadata_model_info = metadata.get("model_info", _missing)
+    if metadata_model_info is not _missing:
+        result = metadata_model_info
+    else:
+        litellm_model_info = litellm_params.get("model_info", _missing)
+        if litellm_model_info is not _missing:
+            result = litellm_model_info
+        else:
+            result = (litellm_params.get("litellm_metadata", {}) or {}).get(
+                "model_info", {}
+            )
+
     return result if isinstance(result, dict) else {}
 
 

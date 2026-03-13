@@ -11,6 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -243,6 +244,61 @@ class TestAzureAnthropicCostCalculation:
         call_kwargs = mock_completion_cost.call_args[1]
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
+
+    @patch("litellm.completion_cost")
+    def test_metadata_merge_does_not_overwrite_existing_litellm_params(
+        self, mock_completion_cost
+    ):
+        mock_completion_cost.return_value = 123.0
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {
+                "metadata": {
+                    "model_info": {
+                        "id": "deployment-custom-pricing-test",
+                        "input_cost_per_token": 0.5,
+                        "output_cost_per_token": 1.0,
+                    },
+                    "new_field": "from-logging-obj",
+                    "shared_field": "from-logging-obj",
+                },
+                "stream_response": {"should": "not-overwrite"},
+            },
+        }
+        logging_obj.litellm_call_id = "call-test"
+
+        model_response = litellm.ModelResponse()
+        model_response.usage = litellm.Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )  # type: ignore
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=model_response,
+            model="claude-sonnet-4-20250514",
+            kwargs={
+                "litellm_params": {
+                    "metadata": {
+                        "existing_field": "preserved",
+                        "shared_field": "from-existing",
+                    },
+                    "stream_response": {"keep": "existing"},
+                }
+            },
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert kwargs["litellm_params"]["metadata"]["existing_field"] == "preserved"
+        assert kwargs["litellm_params"]["metadata"]["new_field"] == "from-logging-obj"
+        assert kwargs["litellm_params"]["metadata"]["shared_field"] == "from-existing"
+        assert (
+            kwargs["litellm_params"]["metadata"]["model_info"]["id"]
+            == "deployment-custom-pricing-test"
+        )
+        assert kwargs["litellm_params"]["stream_response"] == {"keep": "existing"}
 
     @patch("litellm.completion_cost")
     def test_cost_calculation_without_custom_llm_provider(self, mock_completion_cost):
