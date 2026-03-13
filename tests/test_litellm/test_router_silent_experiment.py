@@ -20,8 +20,9 @@ def test_get_silent_experiment_kwargs():
         },
     ]
     router = Router(model_list=model_list)
+    mock_span = MagicMock()
     kwargs = {
-        "metadata": {"foo": "bar"},
+        "metadata": {"foo": "bar", "litellm_parent_otel_span": mock_span},
         "litellm_call_id": "call-123",
         "stream": True,
         "proxy_server_request": {"body": {"model": "test"}},
@@ -34,6 +35,11 @@ def test_get_silent_experiment_kwargs():
     assert result["stream"] is False
     # proxy_server_request must be preserved for spend log metadata
     assert "proxy_server_request" in result
+    # parent OTEL span must be removed — it's thread-bound and invalid in the
+    # background thread's new event loop
+    assert "litellm_parent_otel_span" not in result["metadata"]
+    # CRITICAL: original kwargs must NOT be mutated (race condition with primary callbacks)
+    assert kwargs["metadata"]["litellm_parent_otel_span"] is mock_span
 
 
 def test_silent_experiment_completion_direct():
