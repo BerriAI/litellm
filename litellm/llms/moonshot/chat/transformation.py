@@ -2,9 +2,10 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -168,6 +169,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 messages=messages,
                 optional_params=optional_params,
             )
+        messages = self._ensure_reasoning_content_for_assistant_tool_calls(messages)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
@@ -194,3 +196,43 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         )
         optional_params.pop("tool_choice")
         return messages
+
+    def _ensure_reasoning_content_for_assistant_tool_calls(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Moonshot Kimi models require `reasoning_content` to be present on assistant
+        tool-call messages in multi-turn flows. Preserve existing values and
+        recover from provider_specific_fields when available.
+        """
+        transformed_messages: List[AllMessageValues] = []
+        for message in messages:
+            message_dict = cast(dict, message)
+            if (
+                message_dict.get("role") == "assistant"
+                and isinstance(message_dict.get("tool_calls"), list)
+            ):
+                reasoning_content = message_dict.get("reasoning_content")
+                if reasoning_content in (None, ""):
+                    provider_specific_fields = message_dict.get(
+                        "provider_specific_fields"
+                    )
+                    if isinstance(provider_specific_fields, dict):
+                        provider_reasoning = provider_specific_fields.get(
+                            "reasoning_content"
+                        )
+                        if isinstance(provider_reasoning, str):
+                            reasoning_content = provider_reasoning
+
+                if reasoning_content in (None, ""):
+                    extracted_reasoning, _ = _extract_reasoning_content(message_dict)
+                    if isinstance(extracted_reasoning, str) and extracted_reasoning:
+                        reasoning_content = extracted_reasoning
+
+                if reasoning_content in (None, ""):
+                    # Moonshot validates field presence, so include a minimal placeholder.
+                    reasoning_content = " "
+
+                message_dict["reasoning_content"] = reasoning_content
+            transformed_messages.append(cast(AllMessageValues, message_dict))
+        return transformed_messages

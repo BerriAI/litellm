@@ -405,3 +405,105 @@ class TestMoonshotConfig:
         # Content should be flattened to a plain string
         assert isinstance(result["messages"][0]["content"], str)
         assert result["messages"][0]["content"] == "Hello, how are you?"
+
+    def test_transform_request_injects_reasoning_content_for_tool_calls(self):
+        """Moonshot requires reasoning_content on assistant tool-call messages."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\": \"SF\"}",
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "{\"temp\":72}"},
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["reasoning_content"] == " "
+
+    def test_transform_request_preserves_existing_reasoning_content_for_tool_calls(self):
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "Need to fetch weather via tool.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\": \"SF\"}",
+                        },
+                    }
+                ],
+            },
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert (
+            result["messages"][1]["reasoning_content"]
+            == "Need to fetch weather via tool."
+        )
+
+    def test_transform_request_uses_provider_specific_reasoning_content(self):
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {
+                    "reasoning_content": "Provider reasoning details."
+                },
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\": \"SF\"}",
+                        },
+                    }
+                ],
+            },
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["reasoning_content"] == "Provider reasoning details."
