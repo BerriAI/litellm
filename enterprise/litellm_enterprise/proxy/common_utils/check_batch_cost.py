@@ -97,7 +97,11 @@ class CheckBatchCost:
 
         await self._cleanup_stale_managed_objects()
 
-        # Look for all batches that have not yet been processed by CheckBatchCost
+        # Look for all batches that have not yet been processed by CheckBatchCost.
+        # _has_batch_processed_column tracks whether the column exists so the
+        # completion update can omit it on older schemas (avoiding a silent failure
+        # that would cause infinite reprocessing and duplicate cost logging).
+        _has_batch_processed_column = True
         try:
             jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
                 where={
@@ -110,6 +114,7 @@ class CheckBatchCost:
             )
         except Exception:
             # Fallback: batch_processed column may not exist on older schemas
+            _has_batch_processed_column = False
             verbose_proxy_logger.warning(
                 "CheckBatchCost: batch_processed column not found, querying without it"
             )
@@ -288,13 +293,15 @@ class CheckBatchCost:
 
                 # mark the job as complete
                 try:
+                    update_data: dict = {
+                        "status": "complete",
+                        "file_object": response.model_dump_json(),
+                    }
+                    if _has_batch_processed_column:
+                        update_data["batch_processed"] = True
                     await self.prisma_client.db.litellm_managedobjecttable.update(
                         where={"id": job.id},
-                        data={
-                            "batch_processed": True,
-                            "status": "complete",
-                            "file_object": response.model_dump_json(),
-                        },
+                        data=update_data,
                     )
                 except Exception as db_err:
                     verbose_proxy_logger.error(

@@ -110,3 +110,49 @@ class TestCheckBatchCost:
         assert "stale_expired" in fallback_where["status"]["not_in"]
         # Fallback must still paginate
         assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
+
+    @pytest.mark.asyncio
+    async def test_fallback_completion_update_omits_batch_processed(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """When batch_processed column is absent, completion update must not include it.
+
+        If it did, the update would fail silently, the job would never be marked done,
+        and every subsequent poll cycle would re-log the cost (duplicate billing).
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-fallback-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="  # base64-looking value
+        mock_job.created_by = "user-1"
+
+        # Primary query fails → fallback path
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            side_effect=[Exception("column batch_processed does not exist"), [mock_job]]
+        )
+
+        # Stub out the heavy per-job processing so we reach the update()
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                return_value=None,  # causes "not a valid unified object id" early-continue
+            ),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        # Even though the job was skipped (invalid ID), confirm the fallback path was taken
+        # by checking the find_many calls
+        find_calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
+        assert len(find_calls) == 2
+        fallback_where = find_calls[1][1]["where"]
+        assert "batch_processed" not in fallback_where
+
+        # If a completion update were issued, it must not contain batch_processed
+        for call in mock_prisma_client.db.litellm_managedobjecttable.update.call_args_list:
+            assert "batch_processed" not in call[1].get("data", {})
