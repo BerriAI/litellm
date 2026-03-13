@@ -7,6 +7,7 @@ Moonshot AI is an OpenAI-compatible provider with minor customizations.
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -406,7 +407,10 @@ class TestMoonshotConfig:
         assert isinstance(result["messages"][0]["content"], str)
         assert result["messages"][0]["content"] == "Hello, how are you?"
 
-    def test_transform_request_injects_reasoning_content_for_tool_calls(self):
+    @patch("litellm.llms.moonshot.chat.transformation.supports_reasoning", return_value=True)
+    def test_transform_request_injects_reasoning_content_for_tool_calls(
+        self, _mock_supports_reasoning
+    ):
         """Moonshot requires reasoning_content on assistant tool-call messages."""
         config = MoonshotChatConfig()
 
@@ -439,7 +443,10 @@ class TestMoonshotConfig:
 
         assert result["messages"][1]["reasoning_content"] == " "
 
-    def test_transform_request_preserves_existing_reasoning_content_for_tool_calls(self):
+    @patch("litellm.llms.moonshot.chat.transformation.supports_reasoning", return_value=True)
+    def test_transform_request_preserves_existing_reasoning_content_for_tool_calls(
+        self, _mock_supports_reasoning
+    ):
         config = MoonshotChatConfig()
 
         messages = [
@@ -474,7 +481,10 @@ class TestMoonshotConfig:
             == "Need to fetch weather via tool."
         )
 
-    def test_transform_request_uses_provider_specific_reasoning_content(self):
+    @patch("litellm.llms.moonshot.chat.transformation.supports_reasoning", return_value=True)
+    def test_transform_request_uses_provider_specific_reasoning_content(
+        self, _mock_supports_reasoning
+    ):
         config = MoonshotChatConfig()
 
         messages = [
@@ -507,3 +517,38 @@ class TestMoonshotConfig:
         )
 
         assert result["messages"][1]["reasoning_content"] == "Provider reasoning details."
+
+    @patch("litellm.llms.moonshot.chat.transformation.supports_reasoning", return_value=False)
+    def test_transform_request_skips_reasoning_content_for_non_reasoning_models(
+        self, _mock_supports_reasoning
+    ):
+        """Non-reasoning Moonshot models (e.g. moonshot-v1-8k) must not get reasoning_content."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\": \"SF\"}",
+                        },
+                    }
+                ],
+            },
+        ]
+
+        result = config.transform_request(
+            model="moonshot-v1-8k",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "reasoning_content" not in result["messages"][1]

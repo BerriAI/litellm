@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -169,7 +170,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 messages=messages,
                 optional_params=optional_params,
             )
-        messages = self._ensure_reasoning_content_for_assistant_tool_calls(messages)
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            messages = self._ensure_reasoning_content_for_assistant_tool_calls(messages)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
@@ -207,7 +209,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         """
         transformed_messages: List[AllMessageValues] = []
         for message in messages:
-            message_dict = cast(dict, message)
+            message_dict = dict(cast(dict, message))
             if (
                 message_dict.get("role") == "assistant"
                 and isinstance(message_dict.get("tool_calls"), list)
@@ -224,13 +226,12 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                         if isinstance(provider_reasoning, str):
                             reasoning_content = provider_reasoning
 
-                if reasoning_content in (None, ""):
+                if reasoning_content in (None, "") and "reasoning_content" not in message_dict:
                     extracted_reasoning, _ = _extract_reasoning_content(message_dict)
                     if isinstance(extracted_reasoning, str) and extracted_reasoning:
                         reasoning_content = extracted_reasoning
 
                 if reasoning_content in (None, ""):
-                    # Moonshot validates field presence, so include a minimal placeholder.
                     reasoning_content = " "
 
                 message_dict["reasoning_content"] = reasoning_content
