@@ -531,31 +531,38 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(5)  # sleep for cache write to propagate
-        response2 = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=40,
-            temperature=0.2,
-            stream=True,
-            caching=True,
-        )
-        response_2_content = ""
+        # Retry with backoff to handle async cache write propagation delay
+        max_retries = 3
+        sleep_times = [5, 7, 8]  # total max wait: 20s
         response_2_id = None
-        for chunk in response2:
-            response_2_id = chunk.id
-            print(chunk)
-            response_2_content += chunk.choices[0].delta.content or ""
-        print(
-            f"\nresponse 1: {response_1_content}",
-        )
-        print(f"\nresponse 2: {response_2_content}")
-        assert (
-            response_1_id == response_2_id
-        ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-        # assert (
-        #     response_1_content == response_2_content
-        # ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        response_2_content = ""
+        for attempt in range(max_retries):
+            time.sleep(sleep_times[attempt])
+            response2 = completion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=40,
+                temperature=0.2,
+                stream=True,
+                caching=True,
+            )
+            response_2_content = ""
+            response_2_id = None
+            for chunk in response2:
+                response_2_id = chunk.id
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+            print(f"\nresponse 1: {response_1_content}")
+            print(f"\nresponse 2: {response_2_content}")
+            if response_1_id == response_2_id:
+                print(f"Cache hit on attempt {attempt + 1}")
+                break
+            print(f"Cache miss on attempt {attempt + 1}, retrying...")
+        else:
+            raise AssertionError(
+                f"Response 1 != Response 2 after {max_retries} retries. "
+                f"Same params, Response 1: {response_1_content} != Response 2: {response_2_content}"
+            )
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None
