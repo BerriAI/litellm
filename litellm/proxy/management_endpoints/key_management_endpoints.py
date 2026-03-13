@@ -905,6 +905,9 @@ async def _check_team_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"team_id": team_table.team_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits
+    if isinstance(data, UpdateKeyRequest):
+        keys = [key for key in keys if key.token != data.key]
     check_team_key_model_specific_limits(
         keys=keys,
         team_table=team_table,
@@ -1059,6 +1062,9 @@ async def _check_org_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"organization_id": org_table.organization_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits
+    if isinstance(data, UpdateKeyRequest):
+        keys = [key for key in keys if key.token != data.key]
     check_org_key_model_specific_limits(
         keys=keys,
         org_table=org_table,
