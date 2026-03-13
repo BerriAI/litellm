@@ -2366,6 +2366,22 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    async def _send_error_response(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        status_code: int,
+        content: dict,
+        headers: Optional[dict] = None,
+    ) -> None:
+        """Send a JSON error response. Shared by handle_streamable_http_mcp and handle_sse_mcp."""
+        response = JSONResponse(
+            status_code=status_code,
+            content=content,
+            headers=headers or {},
+        )
+        await response(scope, receive, send)
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2460,17 +2476,15 @@ if MCP_AVAILABLE:
         except HTTPException as e:
             try:
                 detail = e.detail
-                if isinstance(detail, dict):
-                    content = {"error": detail}
-                else:
-                    content = {"error": {"message": str(detail)}}
-                headers = dict(e.headers) if e.headers else {}
-                error_response = JSONResponse(
-                    status_code=e.status_code,
-                    content=content,
-                    headers=headers,
+                content = (
+                    {"error": detail}
+                    if isinstance(detail, dict)
+                    else {"error": {"message": str(detail)}}
                 )
-                await error_response(scope, receive, send)
+                headers = dict(e.headers) if e.headers else {}
+                await _send_error_response(
+                    scope, receive, send, e.status_code, content, headers
+                )
             except Exception:
                 raise e
         except ProxyException as e:
@@ -2484,21 +2498,25 @@ if MCP_AVAILABLE:
                 "MCP auth error (status=%s): %s", status_code, e.message
             )
             try:
-                error_response = JSONResponse(
-                    status_code=status_code,
-                    content={"error": {"message": e.message, "type": e.type}},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code,
+                    {"error": {"message": e.message, "type": e.type}},
                 )
-                await error_response(scope, receive, send)
             except Exception:
                 raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             try:
-                error_response = JSONResponse(
-                    status_code=500,
-                    content={"error": "MCP request failed", "details": str(e)},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    500,
+                    {"error": "MCP request failed", "details": str(e)},
                 )
-                await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
                     f"Failed to send error response: {response_error}"
@@ -2571,17 +2589,15 @@ if MCP_AVAILABLE:
         except HTTPException as e:
             try:
                 detail = e.detail
-                if isinstance(detail, dict):
-                    content = {"error": detail}
-                else:
-                    content = {"error": {"message": str(detail)}}
-                headers = dict(e.headers) if e.headers else {}
-                error_response = JSONResponse(
-                    status_code=e.status_code,
-                    content=content,
-                    headers=headers,
+                content = (
+                    {"error": detail}
+                    if isinstance(detail, dict)
+                    else {"error": {"message": str(detail)}}
                 )
-                await error_response(scope, receive, send)
+                headers = dict(e.headers) if e.headers else {}
+                await _send_error_response(
+                    scope, receive, send, e.status_code, content, headers
+                )
             except Exception:
                 raise e
         except ProxyException as e:
@@ -2595,21 +2611,25 @@ if MCP_AVAILABLE:
                 "MCP SSE auth error (status=%s): %s", status_code, e.message
             )
             try:
-                error_response = JSONResponse(
-                    status_code=status_code,
-                    content={"error": {"message": e.message, "type": e.type}},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code,
+                    {"error": {"message": e.message, "type": e.type}},
                 )
-                await error_response(scope, receive, send)
             except Exception:
                 raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             try:
-                error_response = JSONResponse(
-                    status_code=500,
-                    content={"error": "MCP request failed", "details": str(e)},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    500,
+                    {"error": "MCP request failed", "details": str(e)},
                 )
-                await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
                     f"Failed to send error response: {response_error}"

@@ -276,3 +276,78 @@ class TestHandleSseMcpErrorHandling:
         message = start_call[0][0]
         assert message["type"] == "http.response.start"
         assert message["status"] == 401
+
+    @pytest.mark.asyncio
+    async def test_should_return_404_for_nonexistent_mcp_server(self):
+        """Non-existent MCP server names in SSE handler should return 404, not 200."""
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                handle_sse_mcp,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/sse",
+            "headers": [(b"accept", b"text/event-stream")],
+            "query_string": b"",
+            "server": ("localhost", 8000),
+            "scheme": "http",
+        }
+        receive = AsyncMock()
+        send = AsyncMock()
+
+        mock_auth = MagicMock()
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(mock_auth, None, ["undefined"], {}, None, {}),
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        ) as mock_mgr:
+            mock_mgr.get_mcp_server_by_name.return_value = None
+
+            await handle_sse_mcp(scope, receive, send)
+
+        assert send.called
+        start_call = send.call_args_list[0]
+        message = start_call[0][0]
+        assert message["type"] == "http.response.start"
+        assert message["status"] == 404
+
+    @pytest.mark.asyncio
+    async def test_should_still_500_on_unexpected_exceptions(self):
+        """Non-ProxyException errors in SSE handler should still result in a 500 response."""
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                handle_sse_mcp,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/sse",
+            "headers": [(b"accept", b"text/event-stream")],
+            "query_string": b"",
+            "server": ("localhost", 8000),
+            "scheme": "http",
+        }
+        receive = AsyncMock()
+        send = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected crash"),
+        ):
+            await handle_sse_mcp(scope, receive, send)
+
+        assert send.called
+        start_call = send.call_args_list[0]
+        message = start_call[0][0]
+        assert message["type"] == "http.response.start"
+        assert message["status"] == 500
