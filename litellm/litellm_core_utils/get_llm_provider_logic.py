@@ -153,6 +153,23 @@ def get_llm_provider(  # noqa: PLR0915
             model, custom_llm_provider
         )
 
+        if custom_llm_provider == "zai_coding":
+            custom_llm_provider = "zai"
+            api_base = (
+                api_base
+                or get_secret_str("ZAI_CODING_API_BASE")
+                or "https://api.z.ai/api/coding/paas/v4"
+            )
+
+        if model.startswith("zai_coding/"):
+            model_name = model.split("/", 1)[1]
+            model = f"zai/{model_name}"
+            api_base = (
+                api_base
+                or get_secret_str("ZAI_CODING_API_BASE")
+                or "https://api.z.ai/api/coding/paas/v4"
+            )
+
         if custom_llm_provider and (
             model.split("/")[0] != custom_llm_provider
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"

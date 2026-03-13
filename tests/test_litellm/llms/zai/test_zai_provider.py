@@ -42,6 +42,29 @@ def test_get_llm_provider_zai():
     assert api_base == "https://api.z.ai/api/paas/v4"
 
 
+def test_get_llm_provider_zai_coding_alias():
+    """Test that zai_coding model prefix routes to zai provider."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    model, provider, api_key, api_base = get_llm_provider("zai_coding/glm-4.6")
+    assert model == "glm-4.6"
+    assert provider == "zai"
+    assert api_base == "https://api.z.ai/api/coding/paas/v4"
+
+
+def test_get_llm_provider_zai_coding_alias_respects_custom_api_base():
+    """Test zai_coding alias respects explicit api_base value."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    custom_api_base = "https://custom.zai-proxy.example/v4"
+    model, provider, api_key, api_base = get_llm_provider(
+        "zai_coding/glm-4.6", api_base=custom_api_base
+    )
+    assert model == "glm-4.6"
+    assert provider == "zai"
+    assert api_base == custom_api_base
+
+
 def test_zai_in_provider_lists():
     """Test that zai is registered in all necessary provider lists"""
     assert "zai" in litellm.openai_compatible_providers
@@ -161,6 +184,32 @@ async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     assert request.method == "POST"
     assert "api.z.ai" in str(request.url)
     assert "Authorization" in request.headers
+    assert request.headers["Authorization"] == "Bearer test-api-key"
+
+
+@pytest.mark.asyncio
+async def test_zai_coding_completion_call(respx_mock, zai_response, monkeypatch):
+    """Test completion call with zai_coding alias hitting coding endpoint."""
+    monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
+    litellm.disable_aiohttp_transport = True
+
+    respx_mock.post("https://api.z.ai/api/coding/paas/v4/chat/completions").respond(
+        json=zai_response
+    )
+
+    response = await litellm.acompletion(
+        model="zai_coding/glm-4.6",
+        messages=[{"role": "user", "content": "Hello"}],
+        max_tokens=20,
+    )
+
+    assert response.choices[0].message.content == "Hello! How can I help you today?"
+    assert response.usage.total_tokens == 25
+
+    assert len(respx_mock.calls) == 1
+    request = respx_mock.calls[0].request
+    assert request.method == "POST"
+    assert str(request.url).startswith("https://api.z.ai/api/coding/paas/v4")
     assert request.headers["Authorization"] == "Bearer test-api-key"
 
 
