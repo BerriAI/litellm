@@ -1356,6 +1356,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
+        ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        responses_api_model_info, model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
+        )
+
         if not _should_allow_input_examples(
             custom_llm_provider=custom_llm_provider, model=model
         ):
@@ -1591,14 +1598,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
 
-        if model_info.get("mode") == "responses":
+        if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
             return responses_api_bridge.completion(
