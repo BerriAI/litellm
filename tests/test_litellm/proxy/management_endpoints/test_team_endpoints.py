@@ -1385,6 +1385,65 @@ async def test_update_team_team_member_budget_not_passed_to_db():
         )
 
 
+def test_should_create_budget_with_none_values():
+    """Test that should_create_budget returns False when all values are None."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    assert TeamMemberBudgetHandler.should_create_budget() is False
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(
+            team_member_budget=None,
+            team_member_rpm_limit=None,
+            team_member_tpm_limit=None,
+            team_member_budget_duration=None,
+        )
+        is False
+    )
+
+
+def test_should_create_budget_with_zero_budget():
+    """Test that should_create_budget returns True for explicit 0 budget.
+
+    0 is a valid explicit budget (zero dollars allowed). The UI bug was
+    sending 0 when the user didn't set a value — that's fixed in the UI
+    by using sanitizeNumeric. The backend correctly treats 0 as intentional.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    assert TeamMemberBudgetHandler.should_create_budget(team_member_budget=0) is True
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(team_member_budget=0.0) is True
+    )
+
+
+def test_should_create_budget_with_valid_values():
+    """Test that should_create_budget returns True when any value is provided."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(team_member_budget=100.0) is True
+    )
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(team_member_rpm_limit=50) is True
+    )
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(team_member_tpm_limit=1000)
+        is True
+    )
+    assert (
+        TeamMemberBudgetHandler.should_create_budget(
+            team_member_budget_duration="30d"
+        )
+        is True
+    )
+
+
 def test_clean_team_member_fields():
     """
     Test that _clean_team_member_fields removes all team member fields from a dictionary.

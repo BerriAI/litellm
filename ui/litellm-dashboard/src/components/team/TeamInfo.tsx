@@ -497,7 +497,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
       if (values.team_member_budget !== undefined) {
-        updateData.team_member_budget = Number(values.team_member_budget);
+        updateData.team_member_budget = sanitizeNumeric(values.team_member_budget);
       }
 
       if (values.team_member_key_duration !== undefined) {
