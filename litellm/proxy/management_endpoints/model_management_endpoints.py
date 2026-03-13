@@ -1256,9 +1256,8 @@ async def update_useful_links(
                 },
             )
 
-        litellm.public_model_groups_links = request.useful_links
-
-        # Load existing config
+        # Load existing config first (this may overwrite in-memory litellm settings
+        # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config = await proxy_config.get_config()
 
         # Update config with new settings
@@ -1269,6 +1268,10 @@ async def update_useful_links(
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
+
+        # Set in-memory value AFTER get_config() and save_config() to avoid
+        # get_config() overwriting with stale DB value
+        litellm.public_model_groups_links = request.useful_links
 
         verbose_proxy_logger.debug(
             f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
