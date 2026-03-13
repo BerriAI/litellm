@@ -1,7 +1,7 @@
 """Abstraction function for OpenAI's realtime API"""
 
 import os
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional, Union, cast
 
 import litellm
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
@@ -9,7 +9,12 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.realtime import RealtimeClientSecretRequest, RealtimeQueryParams
+from litellm.types.realtime import (
+    RealtimeClientSecretRequest,
+    RealtimeExpiresAfter,
+    RealtimeQueryParams,
+    RealtimeSessionConfig,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -93,8 +98,8 @@ def _get_realtime_http_provider_config(
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: Optional[str] = None,
-    session: Optional[Dict[str, Any]] = None,
-    expires_after: Optional[Dict[str, Any]] = None,
+    session: Optional[Union[Dict[str, Any], RealtimeSessionConfig]] = None,
+    expires_after: Optional[Union[Dict[str, Any], RealtimeExpiresAfter]] = None,
     timeout: Optional[float] = None,
     **kwargs,
 ):

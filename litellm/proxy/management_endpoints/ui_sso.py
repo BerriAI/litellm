@@ -17,6 +17,9 @@ import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
+if TYPE_CHECKING:
+    import httpx
+
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -2984,7 +2987,6 @@ class SSOAuthenticationHandler:
                         **additional_headers,
                         "Authorization": f"Bearer {access_token}",  # must not be overridden
                     },
-                    timeout=30.0,
                 )
                 if resp.status_code == 200:
                     try:
