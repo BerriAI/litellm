@@ -594,9 +594,7 @@ Expected Response
 
 :::tip gpt-5.4: reasoning_effort + function tools
 
-LiteLLM drops `reasoning_effort` from `gpt-5.4` requests to `litellm.completion()` that include tools, since that combination is supported in the Responses API.
-
-If you need reasoning **and** tools together, use `openai/responses/gpt-5.4` to route through the Responses API instead. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+OpenAI does not support `reasoning_effort` with function tools for `gpt-5.4` in `/v1/chat/completions`. Use `openai/responses/gpt-5.4` to route through the Responses API instead. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
 
 :::
 
