@@ -78,6 +78,7 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
+from litellm.router_strategy.sticky_least_busy import StickyLeastBusyLoggingHandler
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -293,6 +294,7 @@ class Router:
         routing_strategy: Literal[
             "simple-shuffle",
             "least-busy",
+            "sticky-least-busy",
             "usage-based-routing",
             "latency-based-routing",
             "cost-based-routing",
@@ -832,6 +834,36 @@ class Router:
                 litellm.input_callback = [self.leastbusy_logger]  # type: ignore
             if isinstance(litellm.callbacks, list):
                 litellm.logging_callback_manager.add_litellm_callback(self.leastbusy_logger)  # type: ignore
+        elif (
+            routing_strategy == RoutingStrategy.STICKY_LEAST_BUSY.value
+            or routing_strategy == RoutingStrategy.STICKY_LEAST_BUSY
+        ):
+            # StickyLeastBusyLoggingHandler uses a class-level singleton (__new__).
+            # Even if routing_strategy_init is called per-request or on config reload,
+            # the same handler instance is returned, preserving _seen_call_ids dedup
+            # state and hash ring cache. Only router_cache is updated (may change
+            # across Router instances).
+            sticky_args = routing_strategy_args or {}
+            self.sticky_leastbusy_logger = StickyLeastBusyLoggingHandler(
+                router_cache=self.cache,
+                imbalance_threshold=sticky_args.get("imbalance_threshold", 1.5),
+                virtual_nodes=sticky_args.get("virtual_nodes", 150),
+                cache_ttl=sticky_args.get("cache_ttl", 600),
+            )
+
+            # Clean stale references from input_callback, then re-add the
+            # singleton. This prevents duplicate handlers while preserving state.
+            if isinstance(litellm.input_callback, list):
+                litellm.input_callback = [
+                    cb for cb in litellm.input_callback
+                    if not isinstance(cb, StickyLeastBusyLoggingHandler)
+                ]
+                litellm.input_callback.append(self.sticky_leastbusy_logger)  # type: ignore
+            else:
+                litellm.input_callback = [self.sticky_leastbusy_logger]  # type: ignore
+            # add_litellm_callback already deduplicates by class, safe to call repeatedly
+            if isinstance(litellm.callbacks, list):
+                litellm.logging_callback_manager.add_litellm_callback(self.sticky_leastbusy_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
@@ -9285,6 +9317,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
+            and self.routing_strategy != "sticky-least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -9382,6 +9415,17 @@ class Router:
                     await self.leastbusy_logger.async_get_available_deployments(
                         model_group=model,
                         healthy_deployments=healthy_deployments,  # type: ignore
+                    )
+                )
+            elif (
+                self.routing_strategy == "sticky-least-busy"
+                and self.sticky_leastbusy_logger is not None
+            ):
+                deployment = (
+                    await self.sticky_leastbusy_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=healthy_deployments,  # type: ignore
+                        messages=messages,
                     )
                 )
             else:
@@ -9532,6 +9576,17 @@ class Router:
                     await self.leastbusy_logger.async_get_available_deployments(
                         model_group=model,
                         healthy_deployments=pass_through_deployments,  # type: ignore
+                    )
+                )
+            elif (
+                self.routing_strategy == "sticky-least-busy"
+                and self.sticky_leastbusy_logger is not None
+            ):
+                deployment = (
+                    await self.sticky_leastbusy_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=pass_through_deployments,  # type: ignore
+                        messages=messages,
                     )
                 )
             else:
@@ -9702,6 +9757,12 @@ class Router:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
+        elif self.routing_strategy == "sticky-least-busy" and self.sticky_leastbusy_logger is not None:
+            deployment = self.sticky_leastbusy_logger.get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
+                messages=messages,
+            )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
@@ -9869,6 +9930,12 @@ class Router:
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=pass_through_deployments  # type: ignore
+            )
+        elif self.routing_strategy == "sticky-least-busy" and self.sticky_leastbusy_logger is not None:
+            deployment = self.sticky_leastbusy_logger.get_available_deployments(
+                model_group=model,
+                healthy_deployments=pass_through_deployments,  # type: ignore
+                messages=messages,
             )
         elif self.routing_strategy == "simple-shuffle":
             return simple_shuffle(
