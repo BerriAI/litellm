@@ -747,7 +747,10 @@ class BaseAWSLLM:
         with open(web_identity_token_file, "r") as f:
             web_identity_token = f.read().strip()
 
-        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        irsa_sts_kwargs: dict = {
+            "region_name": region,
+            "verify": self._get_ssl_verify(ssl_verify),
+        }
         if aws_sts_endpoint is not None:
             irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
 
@@ -814,7 +817,10 @@ class BaseAWSLLM:
         """Handle same-account role assumption for IRSA."""
         import boto3
 
-        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        irsa_sts_kwargs: dict = {
+            "region_name": region,
+            "verify": self._get_ssl_verify(ssl_verify),
+        }
         if aws_sts_endpoint is not None:
             irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
 
@@ -889,7 +895,11 @@ class BaseAWSLLM:
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
         irsa_role_arn = os.getenv("AWS_ROLE_ARN")
 
-        region = aws_region_name or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+        region = (
+            aws_region_name
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
 
         # If we have IRSA environment variables and no explicit credentials,
         # we need to use the web identity token flow

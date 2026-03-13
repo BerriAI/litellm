@@ -23,7 +23,6 @@ from litellm.types.utils import LlmProviders
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-
     def get_supported_openai_params(self, model: str) -> list:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
@@ -55,7 +54,11 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         return headers
 
     def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
+        api_base = (
+            api_base
+            or get_secret_str("PERPLEXITY_API_BASE")
+            or "https://api.perplexity.ai"
+        )
         return f"{api_base.rstrip('/')}/v1/responses"
 
     def _ensure_message_type(
@@ -86,7 +89,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         if model.startswith("preset/"):
             input = self._validate_input_param(input)
             data: Dict = {
-                "preset": model[len("preset/"):],
+                "preset": model[len("preset/") :],
                 "input": input,
             }
             data.update(response_api_optional_request_params)

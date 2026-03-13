@@ -44,7 +44,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         return [
             param for param in all_openai_params if param not in non_supported_params
         ]
-    
+
     def _get_o_series_only_params(self, model: str) -> list:
         """
         Helper function to get the o-series only params for the model
@@ -52,7 +52,6 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         - reasoning_effort
         """
         o_series_only_param = []
-        
 
         #########################################################
         # Case 1: If the model is recognized and in litellm model cost map
@@ -63,12 +62,12 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 o_series_only_param.append("reasoning_effort")
         #########################################################
         # Case 2: If the model is not recognized, then we assume it supports reasoning
-        # This is critical because several users tend to use custom deployment names 
+        # This is critical because several users tend to use custom deployment names
         # for azure o-series models.
         #########################################################
         else:
             o_series_only_param.append("reasoning_effort")
-        
+
         return o_series_only_param
 
     def should_fake_stream(

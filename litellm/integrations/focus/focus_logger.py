@@ -56,7 +56,9 @@ class FocusLogger(CustomLogger):
         self.interval_seconds = int(raw_interval) if raw_interval is not None else None
         env_prefix = os.getenv("FOCUS_PREFIX")
         self.prefix: str = (
-            prefix if prefix is not None else (env_prefix if env_prefix else "focus_exports")
+            prefix
+            if prefix is not None
+            else (env_prefix if env_prefix else "focus_exports")
         )
 
         self._destination_config = destination_config
@@ -207,5 +209,6 @@ class FocusLogger(CustomLogger):
             end_time=end_time,
             frequency=self.frequency,
         )
+
 
 __all__ = ["FocusLogger"]
