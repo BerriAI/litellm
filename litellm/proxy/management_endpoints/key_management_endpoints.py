@@ -1203,6 +1203,17 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+        # Auto-assign caller's user_id for non-admin callers when not provided
+        # This prevents budget bypass by ensuring keys are attributed to their creator
+        if data.user_id is None and data.team_id is None:
+            if (
+                user_api_key_dict.user_role is None
+                or user_api_key_dict.user_role
+                != LitellmUserRoles.PROXY_ADMIN.value
+            ):
+                if user_api_key_dict.user_id is not None:
+                    data.user_id = user_api_key_dict.user_id
+
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:
             try:
