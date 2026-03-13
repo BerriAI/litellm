@@ -181,3 +181,57 @@ class TestAutoRouter:
         # Assert
         assert result is None
 
+    @pytest.mark.asyncio
+    @patch("semantic_router.routers.SemanticRouter")
+    @patch("litellm.router_strategy.auto_router.litellm_encoder.LiteLLMRouterEncoder")
+    async def test_async_pre_routing_hook_with_anthropic_content_blocks(
+        self,
+        mock_encoder_class,
+        mock_semantic_router_class,
+        mock_router_instance,
+        mock_route_choice,
+    ):
+        """Test that Anthropic-style list content blocks are joined into a plain string (line 127).
+
+        When a message's content is a list of typed dicts (e.g. Anthropic format),
+        only dict blocks are considered and their "text" values are joined with a space.
+        Non-dict entries in the list must be skipped.
+        """
+        # Arrange
+        mock_loaded_router = MagicMock()
+        mock_loaded_router.routes = ["route1", "route2"]
+        mock_semantic_router_class.from_json.return_value = mock_loaded_router
+
+        mock_routelayer = MagicMock()
+        mock_routelayer.return_value = mock_route_choice
+        mock_semantic_router_class.return_value = mock_routelayer
+
+        auto_router = AutoRouter(
+            model_name="test-auto-router",
+            auto_router_config_path="test/path/router.json",
+            default_model="gpt-4o-mini",
+            embedding_model="text-embedding-model",
+            litellm_router_instance=mock_router_instance,
+        )
+
+        # Anthropic-style content blocks: list of dicts with a "type" and "text" key.
+        # Also includes a non-dict entry to verify it is skipped by isinstance(block, dict).
+        anthropic_content = [
+            {"type": "text", "text": "What is the weather today?"},
+            {"type": "text", "text": "In Paris."},
+            {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},  # no "text" key
+            "unexpected string block",  # non-dict — must be ignored
+        ]
+        messages = [{"role": "user", "content": anthropic_content}]
+
+        # Act
+        result = await auto_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        
+        # Assert: only dict blocks contribute; "text" defaults to "" when missing
+        mock_routelayer.assert_called_once_with(text="What is the weather today? In Paris. ")
+        assert result is not None
+        assert result.messages == messages

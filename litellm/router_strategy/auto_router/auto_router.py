@@ -119,11 +119,14 @@ class AutoRouter(CustomLogger):
                 auto_sync=self.auto_sync_value,
             )
 
-        user_message: Dict[str, str] = messages[-1]
-        message_content: str = user_message.get("content", "")
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
-            text=message_content
-        )
+        user_message: Dict[str, Any] = messages[-1]
+        raw_content = user_message.get("content", "")
+        # Handle Anthropic-style content blocks: [{"type": "text", "text": "..."}]
+        if isinstance(raw_content, list):
+            message_content = " ".join(block.get("text", "") for block in raw_content if isinstance(block, dict))
+        else:
+            message_content = str(raw_content)
+        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model
