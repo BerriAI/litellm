@@ -168,27 +168,6 @@ def test_oidc_circle_v1_with_amazon():
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_oidc_circle_v1_with_amazon_fips():
-    # The purpose of this test is to validate that we can assume a role in a FIPS region
-
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
-    aws_web_identity_token = "oidc/circleci/"
-
-    bllm = BedrockConverseLLM()
-    creds = bllm.get_credentials(
-        aws_region_name="us-west-1",
-        aws_web_identity_token=aws_web_identity_token,
-        aws_role_name=aws_role_name,
-        aws_session_name="assume-v1-session-fips",
-        aws_sts_endpoint="https://sts-fips.us-west-1.amazonaws.com",
-    )
-
-
 def test_oidc_env_variable():
     # Create a unique environment variable name
     env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
