@@ -101,13 +101,17 @@ class FocusExportEngine:
         await self._destination.deliver(
             content=payload,
             time_window=window,
-            filename=self._build_filename(),
+            filename=self._build_filename(window),
         )
 
-    def _build_filename(self) -> str:
+    def _build_filename(self, window: FocusTimeWindow) -> str:
         if not self._serializer.extension:
             raise ValueError("Serializer must declare a file extension")
-        return f"usage.{self._serializer.extension}"
+        # Include time window in filename so Vantage (which deduplicates
+        # by filename) doesn't overwrite previous uploads.
+        start_str = window.start_time.strftime("%Y%m%dT%H%M%SZ")
+        end_str = window.end_time.strftime("%Y%m%dT%H%M%SZ")
+        return f"usage_{start_str}_{end_str}.{self._serializer.extension}"
 
     @staticmethod
     def _sum_column(frame: pl.DataFrame, column: str) -> float:
