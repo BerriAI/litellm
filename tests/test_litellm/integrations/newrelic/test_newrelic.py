@@ -163,6 +163,20 @@ class TestNewRelicLoggerInit:
                 logger = NewRelicLogger(turn_off_message_logging=False)
         assert logger.record_content is False
 
+    def test_constructor_kwargs_take_priority_over_global_params(self):
+        """Constructor turn_off_message_logging=True must not be overwritten by
+        litellm.newrelic_params which defaults turn_off_message_logging to False."""
+        from litellm.types.integrations.newrelic import NewRelicInitParams
+
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(os.environ, NR_ENV):
+                with patch(
+                    "litellm.newrelic_params",
+                    NewRelicInitParams(turn_off_message_logging=False),
+                ):
+                    logger = NewRelicLogger(turn_off_message_logging=True)
+        assert logger.record_content is False
+
 
 # ---------------------------------------------------------------------------
 # 2. _parse_bool_env

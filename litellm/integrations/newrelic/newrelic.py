@@ -51,7 +51,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.utils import ModelResponse, Message
 
-
 # Global state for supportability metric emission
 # Protected by _metric_lock to ensure thread-safe access
 _last_metric_emission_time: float = 0.0
@@ -72,7 +71,12 @@ class NewRelicLogger(CustomLogger):
         # Handle newrelic_params set as litellm.newrelic_params
         #########################################################
         dict_newrelic_params = self._get_newrelic_params()
-        kwargs.update(dict_newrelic_params)
+
+        # Use setdefault so constructor kwargs take priority over global params.
+        # model_dump() always returns all fields (including defaults), so update()
+        # would silently overwrite explicit constructor args like turn_off_message_logging=True.
+        for k, v in dict_newrelic_params.items():
+            kwargs.setdefault(k, v)
 
         # CustomLogger.__init__ will set self.turn_off_message_logging from kwargs
         super().__init__(**kwargs)
