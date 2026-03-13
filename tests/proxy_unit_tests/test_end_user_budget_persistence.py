@@ -55,6 +55,7 @@ import litellm
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.management_endpoints.customer_endpoints import new_end_user
+
 # from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 # from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy._types import UserAPIKeyAuth, NewCustomerRequest
@@ -141,8 +142,6 @@ async def test_update_end_user_spend_persistence():
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = "default_budget_123"
     litellm.max_end_user_budget_id = default_budget_id
-
-
 
     # Mock for prisma_client.db.tx() context manager
     mock_tx_context = MagicMock()

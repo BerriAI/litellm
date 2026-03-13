@@ -1,9 +1,9 @@
 """
 CUSTOMER MANAGEMENT
 
-All /customer management endpoints 
+All /customer management endpoints
 
-/customer/new   
+/customer/new
 /customer/info
 /customer/update
 /customer/delete
@@ -631,9 +631,9 @@ async def update_end_user(
                     )
                 )
 
-                update_end_user_table_data[
-                    "budget_id"
-                ] = budget_table_data_record.budget_id
+                update_end_user_table_data["budget_id"] = (
+                    budget_table_data_record.budget_id
+                )
             else:
                 ## Update existing budget ##
                 budget_table_data_record = (
