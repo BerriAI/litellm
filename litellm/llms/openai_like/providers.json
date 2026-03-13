@@ -103,7 +103,7 @@
     }
   },
   "crusoe": {
-    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1/",
+    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
     "api_key_env": "CRUSOE_API_KEY",
     "api_base_env": "CRUSOE_API_BASE"
   }
