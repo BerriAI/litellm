@@ -1007,6 +1007,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    organization_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":

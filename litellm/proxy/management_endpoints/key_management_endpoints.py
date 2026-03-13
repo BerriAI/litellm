@@ -908,6 +908,11 @@ async def _check_team_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"team_id": team_table.team_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    if isinstance(data, UpdateKeyRequest):
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
         keys=keys,
         team_table=team_table,
@@ -1062,6 +1067,11 @@ async def _check_org_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"organization_id": org_table.organization_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    if isinstance(data, UpdateKeyRequest):
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
         keys=keys,
         org_table=org_table,
@@ -1811,6 +1821,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
@@ -1930,11 +1941,14 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        # Only check team limits if key has a team_id
+        # Check team limits if key has a team_id (from request or existing key)
         team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
-        if data.team_id is not None:
+        _team_id_to_check = data.team_id or getattr(
+            existing_key_row, "team_id", None
+        )
+        if _team_id_to_check is not None:
             team_obj = await get_team_object(
-                team_id=data.team_id,
+                team_id=_team_id_to_check,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 check_db_only=True,
@@ -1959,6 +1973,34 @@ async def update_key_fn(
                 data=data,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+            )
+
+        # Check org key limits only when throughput-related fields or organization_id change
+        _org_id_to_check = data.organization_id or getattr(
+            existing_key_row, "organization_id", None
+        )
+        _throughput_fields_changed = (
+            data.organization_id is not None
+            or data.tpm_limit is not None
+            or data.rpm_limit is not None
+            or data.tpm_limit_type is not None
+            or data.rpm_limit_type is not None
+        )
+        if _org_id_to_check is not None and _throughput_fields_changed:
+            org_table = await get_org_object(
+                org_id=_org_id_to_check,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+            if org_table is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Organization not found for organization_id={_org_id_to_check}",
+                )
+            await _check_org_key_limits(
+                org_table=org_table,
+                data=data,
+                prisma_client=prisma_client,
             )
 
         # if team change - check if this is possible
