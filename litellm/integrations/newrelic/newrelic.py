@@ -117,6 +117,12 @@ class NewRelicLogger(CustomLogger):
                     "Integration will be disabled."
                 )
                 self.enabled = False
+            except Exception as e:
+                verbose_logger.error(
+                    f"Failed to initialize New Relic agent: {e}. "
+                    "Integration will be disabled."
+                )
+                self.enabled = False
 
     def _get_newrelic_params(self) -> Dict:
         """
