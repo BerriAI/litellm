@@ -289,6 +289,9 @@ async def cli_get_key(
     device_id = store.data.get("key_metadata", {}).get("device_id")
     device_name = store.data.get("key_metadata", {}).get("device_name", "unknown")
 
+    if device_id is None:
+        raise HTTPException(status_code=400, detail=f"请使用最新版本 llm-config-client")
+
     # 准备 key_metadata，包含 device_id 和 device_name
     key_metadata = store.data.get("key_metadata", {}).copy()
     if device_id:
@@ -297,6 +300,7 @@ async def cli_get_key(
 
     if type is not None and type.strip().startswith("assistant-"):
         type = type.strip()
+        raise HTTPException(status_code=400, detail=f"不支持创建key type[{type}]")
     else:
         type = "default"
     key_metadata["key_type"] = type

@@ -28,16 +28,20 @@ class MyCustomHandler(
         data: dict,
         call_type: CallTypesLiteral,
     ):
-        is_llm = "completion" in call_type or "responses" in call_type
+        is_llm = "completion" in call_type or "responses" in call_type or '_messages' in call_type
         if (
             is_llm
             and user_api_key_dict.key_alias is not None
             and "@" in user_api_key_dict.key_alias
+            and ("--" not in user_api_key_dict.key_alias or "--default--" in user_api_key_dict.key_alias)
         ):
             text = None
             system_msg = data.get("system", [])
             if system_msg and len(system_msg) > 0:
-                text = system_msg[0].get("text")
+                if isinstance(system_msg, str):
+                    text = system_msg
+                else:
+                    text = system_msg[0].get("text")
             if text is None:
                 input_msg = data.get("input", [])
                 if input_msg and len(input_msg) > 0:
