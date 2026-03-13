@@ -146,22 +146,28 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
-            # One deepcopy shared by all 6 daily spend helpers (was 5, fixes agent bug)
-            payload_copy = copy.deepcopy(payload)
-
-            # Deepcopy request_tags for _update_tag_db
-            request_tags = copy.deepcopy(payload.get("request_tags"))
-
-            # Keep _insert_spend_log_to_db awaited inline (not a task, preserve current behavior)
+            # --- Memory optimization: reduce deepcopy from 3x to 1x per request ---
+            # The spend log queue (_insert_spend_log_to_db) needs its own copy
+            # because it's consumed asynchronously by a background job.
+            # The daily spend helpers in _batch_database_updates only READ
+            # from the payload (extracting numeric fields), so they can share
+            # the original dict without a copy.
             if disable_spend_logs is False:
+                spend_log_payload = copy.deepcopy(payload)
                 await self._insert_spend_log_to_db(
-                    payload=copy.deepcopy(payload),
+                    payload=spend_log_payload,
                     prisma_client=prisma_client,
                 )
             else:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
+
+            # Daily spend helpers only read from the payload (no mutation),
+            # so no deepcopy is needed. Shallow-copy request_tags (list of strings).
+            request_tags = payload.get("request_tags")
+            if isinstance(request_tags, list):
+                request_tags = list(request_tags)
 
             # Single task replaces 11 create_task() calls
             asyncio.create_task(
@@ -175,7 +181,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    payload_copy=payload_copy,
+                    payload_copy=payload,
                     request_tags=request_tags,
                 )
             )
