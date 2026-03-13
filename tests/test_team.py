@@ -802,16 +802,17 @@ async def test_users_in_team_budget():
         # Wait for spend to be committed to database before checking budget
         # Spend updates are queued asynchronously and committed periodically (every minute),
         # so we need to wait for the spend from Call 1 to be persisted
-        # Note: Even if cost is 0 (model has no pricing), we wait to ensure the update queue is processed
         print("\n[DEBUG] ===== Waiting for spend to be committed =====")
         print("Waiting for team member spend to be committed to database...")
-        print("Note: Spend updates are flushed periodically, this may take up to 60 seconds...")
+        print("Note: Spend updates are flushed periodically, this may take up to 90 seconds...")
         spend_updated = await wait_for_team_member_spend_update(
-            session, get_user, team["team_id"], 0.0000001, max_wait=65
+            session, get_user, team["team_id"], 0.0000001, max_wait=90
         )
         if not spend_updated:
-            print("[WARNING] Team member spend not updated in time, but continuing test...")
-            print("This may indicate the spend update queue hasn't been flushed yet.")
+            pytest.fail(
+                "Team member spend was not updated within 90s. "
+                "The spend update queue may not have flushed, or the model may have 0 cost."
+            )
 
         # Check user info BEFORE Call 2
         user_info_before_call2 = await get_user_info(session, get_user, call_user="sk-1234")
