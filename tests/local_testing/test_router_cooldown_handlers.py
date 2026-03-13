@@ -796,7 +796,7 @@ def test_router_fallbacks_with_cooldowns_and_model_id():
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 2},
                 "model_info": {
                     "id": "123",
                 },
