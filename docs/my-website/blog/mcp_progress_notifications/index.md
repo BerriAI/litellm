@@ -46,7 +46,7 @@ LiteLLM now routes requests based on the `mcp-session-id` header and request met
 | Request with `mcp-session-id` | Stateful | Progress notifications work |
 | Other (no session) | Stateless | curl, Inspector work as before |
 
-No configuration required—routing is automatic.
+No configuration required-routing is automatic.
 
 ## Progress Flow
 
