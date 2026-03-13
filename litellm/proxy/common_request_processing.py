@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
@@ -384,22 +385,29 @@ def _get_cost_breakdown_from_logging_obj(
     return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
-def _has_attribute_error_in_chain(exc: Exception, _depth: int = 0) -> bool:
+def _has_attribute_error_in_chain(exc: Exception) -> bool:
     """Walk the exception chain to find an AttributeError at any depth.
 
     Checks __cause__, __context__, and the litellm-specific original_exception
-    attribute recursively. Depth is capped to avoid infinite loops from
-    circular exception references.
+    attribute iteratively. Depth is capped at DEFAULT_MAX_RECURSE_DEPTH to
+    avoid infinite loops from circular exception references.
     """
-    if _depth > 10:
-        return False
-    if isinstance(exc, AttributeError):
-        return True
-    for attr in ("__cause__", "__context__", "original_exception"):
-        inner = getattr(exc, attr, None)
-        if inner is not None and isinstance(inner, BaseException):
-            if _has_attribute_error_in_chain(inner, _depth + 1):
-                return True
+    stack: list[BaseException] = [exc]
+    seen: set[int] = set()
+    depth = 0
+    while stack and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        current = stack.pop()
+        exc_id = id(current)
+        if exc_id in seen:
+            continue
+        seen.add(exc_id)
+        if isinstance(current, AttributeError):
+            return True
+        for attr in ("__cause__", "__context__", "original_exception"):
+            inner = getattr(current, attr, None)
+            if inner is not None and isinstance(inner, BaseException):
+                stack.append(inner)
+        depth += 1
     return False
 
 
