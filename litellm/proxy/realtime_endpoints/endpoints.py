@@ -2,7 +2,7 @@
 
 import json
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -89,7 +89,7 @@ async def create_realtime_client_secret(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Union[RealtimeClientSecretResponse, Response]:
+) -> RealtimeClientSecretResponse:
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -181,7 +181,7 @@ async def create_realtime_client_secret(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(
+        return Response(  # type: ignore[return-value]
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",
