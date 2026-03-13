@@ -6135,6 +6135,28 @@ class ProxyStartupEvent:
                 )
                 pass
 
+        # Periodic memory cleanup: gc.collect() + malloc_trim(0) to return freed
+        # heap pages to the OS.  Without this, RSS never shrinks after traffic spikes.
+        from litellm.proxy.common_utils.memory_utils import _periodic_memory_cleanup
+
+        memory_cleanup_interval = int(
+            os.getenv("LITELLM_MEMORY_CLEANUP_INTERVAL", "60")
+        )
+        scheduler.add_job(
+            _periodic_memory_cleanup,
+            "interval",
+            seconds=memory_cleanup_interval,
+            id="memory_cleanup_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            coalesce=APSCHEDULER_COALESCE,
+            max_instances=APSCHEDULER_MAX_INSTANCES,
+        )
+        verbose_proxy_logger.info(
+            "Periodic memory cleanup job scheduled every %ds",
+            memory_cleanup_interval,
+        )
+
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
         # The misfire_grace_time and coalesce settings will handle any missed runs properly
