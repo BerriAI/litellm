@@ -1898,10 +1898,10 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_params=dict(anthropic_messages_optional_request_params),
             litellm_params={
-                "metadata": merged_metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **anthropic_messages_optional_request_params,
+                "metadata": merged_metadata,
             },
             custom_llm_provider=custom_llm_provider,
         )

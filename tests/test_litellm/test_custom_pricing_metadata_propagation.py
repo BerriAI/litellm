@@ -734,6 +734,57 @@ class TestAnthropicMessagesCustomPricingCost:
         finally:
             litellm.callbacks = []
 
+    @pytest.mark.asyncio
+    async def test_nonstreaming_messages_with_user_metadata_uses_custom_pricing(self):
+        """Non-streaming /v1/messages should preserve custom pricing when metadata is also passed."""
+        cost_callback = CostCapturingCallback()
+        litellm.callbacks = [cost_callback]
+
+        try:
+            router = _make_router_with_custom_pricing(
+                "anthropic/claude-sonnet-4-20250514"
+            )
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_post:
+                mock_post.return_value = MockHTTPResponse(
+                    ANTHROPIC_MESSAGES_MOCK,
+                    headers={
+                        "content-type": "application/json",
+                        "request-id": "req_test",
+                    },
+                )
+
+                response = await router.aanthropic_messages(
+                    model="test-custom-pricing",
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    max_tokens=100,
+                    metadata={"user_field": "present"},
+                )
+
+                assert response is not None
+
+                try:
+                    await asyncio.wait_for(cost_callback.event.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    pass
+
+            assert cost_callback.response_cost is not None, (
+                "response_cost should be set in the callback"
+            )
+
+            expected_custom_cost = 100 * CUSTOM_INPUT_COST + 50 * CUSTOM_OUTPUT_COST
+            assert cost_callback.response_cost == pytest.approx(
+                expected_custom_cost, rel=0.01
+            ), (
+                f"Cost should use custom pricing ({expected_custom_cost}), "
+                f"got {cost_callback.response_cost}"
+            )
+        finally:
+            litellm.callbacks = []
+
 
 class TestAnthropicPassthroughLoggingPayload:
     def test_metadata_merge_does_not_overwrite_existing_litellm_params(self):
