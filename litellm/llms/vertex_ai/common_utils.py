@@ -263,6 +263,11 @@ def _get_embedding_url(
     except Exception:
         uses_embed_content = False
 
+    # Fallback: all gemini-embedding-* models require the
+    # embedContent endpoint, not the legacy :predict endpoint.
+    if not uses_embed_content and model.startswith("gemini-embedding"):
+        uses_embed_content = True
+
     endpoint = "embedContent" if uses_embed_content else "predict"
 
     base_url = get_vertex_base_url(vertex_location)

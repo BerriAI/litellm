@@ -5204,6 +5204,11 @@ def embedding(  # noqa: PLR0915
             except Exception:
                 uses_embed_content = False
 
+            # Fallback: all gemini-embedding-* models require the
+            # embedContent endpoint, not the legacy :predict endpoint.
+            if not uses_embed_content and model.startswith("gemini-embedding"):
+                uses_embed_content = True
+
             if uses_embed_content:
                 response = google_batch_embeddings.batch_embeddings(  # type: ignore
                     model=model,
