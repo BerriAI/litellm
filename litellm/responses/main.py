@@ -744,7 +744,7 @@ def responses(
         user_metadata = dict(metadata or {})
         deployment_model_info = metadata_for_callbacks.pop("model_info", None)
         metadata_for_callbacks.update(user_metadata)
-        if deployment_model_info:
+        if deployment_model_info is not None:
             metadata_for_callbacks["model_info"] = deployment_model_info
         if "model_info" not in metadata_for_callbacks and kwargs.get("model_info"):
             metadata_for_callbacks["model_info"] = kwargs["model_info"]

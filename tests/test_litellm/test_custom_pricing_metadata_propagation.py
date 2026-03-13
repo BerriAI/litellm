@@ -31,6 +31,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
+    _get_model_info_from_litellm_params,
     use_custom_pricing_for_model,
 )
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
@@ -103,7 +104,7 @@ def _merge_metadata_preserving_deployment_model_info(
     merged_metadata = dict(litellm_metadata or {})
     deployment_model_info = merged_metadata.pop("model_info", None)
     merged_metadata.update(user_metadata or {})
-    if deployment_model_info:
+    if deployment_model_info is not None:
         merged_metadata["model_info"] = deployment_model_info
     return merged_metadata
 
@@ -384,6 +385,34 @@ class TestRouterMetadataPropagation:
         assert model_info.get("output_cost_per_token") == CUSTOM_OUTPUT_COST
         assert metadata_from_handler["user_field"] == "present"
         assert use_custom_pricing_for_model(litellm_params) is True
+
+    def test_empty_deployment_model_info_still_overrides_user_metadata(self):
+        """
+        An explicitly empty deployment model_info should remain explicit during
+        merge rather than being treated like a missing value.
+        """
+        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+            {"model_info": {}},
+            {
+                "user_field": "present",
+                "model_info": {"id": "user-supplied", "input_cost_per_token": 0.0},
+            },
+        )
+
+        assert metadata_for_callbacks["model_info"] == {}
+        assert metadata_for_callbacks["user_field"] == "present"
+
+    def test_get_model_info_preserves_explicit_empty_metadata_model_info(self):
+        """Explicit empty metadata.model_info should win over fallback locations."""
+        model_info = _get_model_info_from_litellm_params(
+            {
+                "metadata": {"model_info": {}},
+                "model_info": {"id": "top-level"},
+                "litellm_metadata": {"model_info": {"id": "litellm-metadata"}},
+            }
+        )
+
+        assert model_info == {}
 
     def test_use_custom_pricing_detects_top_level_model_info(self):
         """Custom pricing detection should work when model_info is top-level."""

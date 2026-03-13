@@ -1888,7 +1888,7 @@ class BaseLLMHTTPHandler:
         user_metadata = dict(kwargs.get("metadata") or {})
         deployment_model_info = merged_metadata.pop("model_info", None)
         merged_metadata.update(user_metadata)
-        if deployment_model_info:
+        if deployment_model_info is not None:
             merged_metadata["model_info"] = deployment_model_info
         # Direct llm_http_handler callers may pass model_info top-level without Router metadata.
         if "model_info" not in merged_metadata and kwargs.get("model_info"):

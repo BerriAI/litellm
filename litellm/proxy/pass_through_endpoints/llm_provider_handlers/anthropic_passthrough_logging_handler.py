@@ -142,8 +142,9 @@ class AnthropicPassthroughLoggingHandler:
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             kwargs.setdefault("litellm_params", {})
-            if litellm_params.get("metadata") is not None:
-                logging_metadata = litellm_params.get("metadata") or {}
+            raw_logging_metadata = litellm_params.get("metadata")
+            if raw_logging_metadata is not None:
+                logging_metadata = raw_logging_metadata or {}
                 existing_metadata = kwargs["litellm_params"].get("metadata", {}) or {}
                 # Start from logging_obj metadata, let existing pipeline metadata win
                 # for other keys, then restore deployment model_info.
