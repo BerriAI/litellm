@@ -88,3 +88,34 @@ class TestOpenRouterNativeModelRouting:
         result_model, provider, _, _ = litellm.get_llm_provider(model=input_model)
         assert provider == "openrouter"
         assert result_model == expected_model
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            ("anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            ("anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
+            ("meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+        ],
+    )
+    def test_bridge_strips_prefix_for_non_native_models(
+        self, input_model, expected_model
+    ):
+        """Simulates the /v1/messages adapter bridge path for non-native models.
+
+        When the anthropic_messages adapter resolves an OpenRouter model, it
+        calls get_llm_provider a second time with the already-resolved model
+        and custom_llm_provider="openrouter".  The prepend logic adds the
+        "openrouter/" prefix back, creating e.g.
+        "openrouter/anthropic/claude-sonnet-4.5".  This prefix MUST be
+        stripped before the early return, otherwise the OpenRouter API receives
+        an invalid model ID and returns 400.
+
+        This is the regression introduced by PR #20516 and reported in #16353.
+        """
+        # Second call in the bridge chain: model already stripped, provider known
+        result_model, provider, _, _ = litellm.get_llm_provider(
+            model=input_model,
+            custom_llm_provider="openrouter",
+        )
+        assert provider == "openrouter"
+        assert result_model == expected_model
