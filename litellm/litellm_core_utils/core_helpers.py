@@ -189,6 +189,28 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     return {}
 
 
+def merge_metadata_preserving_deployment_model_info(
+    litellm_metadata: Optional[dict],
+    user_metadata: Optional[dict],
+    model_info: Optional[dict] = None,
+) -> dict:
+    """
+    Merge user metadata into LiteLLM metadata while preserving deployment model_info.
+
+    Router-provided deployment model_info should win over any user-supplied
+    metadata.model_info, but direct callers may still pass model_info top-level.
+    """
+    merged_metadata = dict(litellm_metadata or {})
+    deployment_model_info = merged_metadata.pop("model_info", None)
+    merged_metadata.update(user_metadata or {})
+    if deployment_model_info is not None:
+        merged_metadata["model_info"] = deployment_model_info
+    elif "model_info" not in merged_metadata and model_info is not None:
+        merged_metadata["model_info"] = model_info
+
+    return merged_metadata
+
+
 def reconstruct_model_name(
     model_name: str,
     custom_llm_provider: Optional[str],

@@ -29,6 +29,9 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.core_helpers import (
+    merge_metadata_preserving_deployment_model_info,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
     _get_model_info_from_litellm_params,
@@ -92,22 +95,6 @@ def _make_router_with_custom_pricing(backend_model: str, api_key: str = "fake-ke
             },
         ],
     )
-
-
-def _merge_metadata_preserving_deployment_model_info(
-    litellm_metadata: Optional[dict], user_metadata: Optional[dict]
-) -> dict:
-    """
-    Match the fixed merge behavior used by /v1/responses and /v1/messages:
-    user metadata is merged in, but deployment model_info keeps precedence.
-    """
-    merged_metadata = dict(litellm_metadata or {})
-    deployment_model_info = merged_metadata.pop("model_info", None)
-    merged_metadata.update(user_metadata or {})
-    if deployment_model_info is not None:
-        merged_metadata["model_info"] = deployment_model_info
-    return merged_metadata
-
 
 @pytest.fixture(autouse=True)
 def cleanup_model_cost():
@@ -314,7 +301,7 @@ class TestRouterMetadataPropagation:
         )
 
         metadata = {"user_field": "present"}
-        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+        metadata_for_callbacks = merge_metadata_preserving_deployment_model_info(
             kwargs.get("litellm_metadata"), metadata
         )
 
@@ -347,7 +334,7 @@ class TestRouterMetadataPropagation:
             "user_field": "present",
             "model_info": {"id": "user-supplied", "input_cost_per_token": 0.0},
         }
-        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+        metadata_for_callbacks = merge_metadata_preserving_deployment_model_info(
             kwargs.get("litellm_metadata"), user_metadata
         )
 
@@ -375,7 +362,7 @@ class TestRouterMetadataPropagation:
             "user_field": "present",
             "model_info": {"id": "user-supplied", "output_cost_per_token": 0.0},
         }
-        metadata_from_handler = _merge_metadata_preserving_deployment_model_info(
+        metadata_from_handler = merge_metadata_preserving_deployment_model_info(
             kwargs.get("litellm_metadata"), kwargs.get("metadata")
         )
         litellm_params = {"metadata": metadata_from_handler}
@@ -391,7 +378,7 @@ class TestRouterMetadataPropagation:
         An explicitly empty deployment model_info should remain explicit during
         merge rather than being treated like a missing value.
         """
-        metadata_for_callbacks = _merge_metadata_preserving_deployment_model_info(
+        metadata_for_callbacks = merge_metadata_preserving_deployment_model_info(
             {"model_info": {}},
             {
                 "user_field": "present",

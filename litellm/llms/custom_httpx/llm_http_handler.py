@@ -26,6 +26,9 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.core_helpers import (
+    merge_metadata_preserving_deployment_model_info,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -1884,15 +1887,11 @@ class BaseLLMHTTPHandler:
             headers=headers, provider=custom_llm_provider
         )
 
-        merged_metadata = dict(kwargs.get("litellm_metadata") or {})
-        user_metadata = dict(kwargs.get("metadata") or {})
-        deployment_model_info = merged_metadata.pop("model_info", None)
-        merged_metadata.update(user_metadata)
-        if deployment_model_info is not None:
-            merged_metadata["model_info"] = deployment_model_info
-        # Direct llm_http_handler callers may pass model_info top-level without Router metadata.
-        if "model_info" not in merged_metadata and kwargs.get("model_info"):
-            merged_metadata["model_info"] = kwargs["model_info"]
+        merged_metadata = merge_metadata_preserving_deployment_model_info(
+            litellm_metadata=kwargs.get("litellm_metadata"),
+            user_metadata=kwargs.get("metadata"),
+            model_info=kwargs.get("model_info"),
+        )
 
         logging_obj.update_environment_variables(
             model=model,

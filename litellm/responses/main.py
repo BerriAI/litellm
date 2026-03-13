@@ -25,6 +25,9 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import (
+    merge_metadata_preserving_deployment_model_info,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -740,14 +743,11 @@ def responses(
 
         # Pre Call logging - preserve metadata for custom callbacks
         # When called from completion bridge (codex models), metadata is in litellm_metadata
-        metadata_for_callbacks = dict(kwargs.get("litellm_metadata") or {})
-        user_metadata = dict(metadata or {})
-        deployment_model_info = metadata_for_callbacks.pop("model_info", None)
-        metadata_for_callbacks.update(user_metadata)
-        if deployment_model_info is not None:
-            metadata_for_callbacks["model_info"] = deployment_model_info
-        if "model_info" not in metadata_for_callbacks and kwargs.get("model_info"):
-            metadata_for_callbacks["model_info"] = kwargs["model_info"]
+        metadata_for_callbacks = merge_metadata_preserving_deployment_model_info(
+            litellm_metadata=kwargs.get("litellm_metadata"),
+            user_metadata=metadata,
+            model_info=kwargs.get("model_info"),
+        )
 
         litellm_logging_obj.update_environment_variables(
             model=model,

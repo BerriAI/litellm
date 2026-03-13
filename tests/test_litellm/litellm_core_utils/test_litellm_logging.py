@@ -163,6 +163,22 @@ def test_get_model_info_from_litellm_params_preserves_explicit_empty_metadata():
     assert _get_model_info_from_litellm_params(litellm_params) == {}
 
 
+def test_merge_metadata_preserving_deployment_model_info_keeps_router_model_info():
+    from litellm.litellm_core_utils.core_helpers import (
+        merge_metadata_preserving_deployment_model_info,
+    )
+
+    merged_metadata = merge_metadata_preserving_deployment_model_info(
+        litellm_metadata={"model_info": {"id": "router"}, "deployment": "test"},
+        user_metadata={"model_info": {"id": "user"}, "user_field": "present"},
+        model_info={"id": "top-level"},
+    )
+
+    assert merged_metadata["model_info"] == {"id": "router"}
+    assert merged_metadata["deployment"] == "test"
+    assert merged_metadata["user_field"] == "present"
+
+
 def test_logging_prevent_double_logging(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
