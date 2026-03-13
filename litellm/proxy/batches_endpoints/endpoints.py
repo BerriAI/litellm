@@ -412,6 +412,16 @@ async def retrieve_batch(  # noqa: PLR0915
             "cancelled",
             "expired",
         ]:
+            # Populate _hidden_params.model_id so managed_files hook can
+            # encode output_file_id / error_file_id into unified IDs.
+            if unified_batch_id:
+                response._hidden_params["unified_batch_id"] = unified_batch_id
+                model_id_from_batch = get_model_id_from_unified_batch_id(
+                    unified_batch_id
+                )
+                if model_id_from_batch:
+                    response._hidden_params["model_id"] = model_id_from_batch
+
             # Call hooks and return
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
