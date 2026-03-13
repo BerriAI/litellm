@@ -410,11 +410,12 @@ class LiteLLMCompletionResponsesConfig:
                                     else getattr(new_msg, "role", None)
                                 )
                                 if new_role == "assistant":
-                                    new_tcs: list = (
+                                    _raw_tcs = (
                                         new_msg.get("tool_calls")
                                         if isinstance(new_msg, dict)
                                         else getattr(new_msg, "tool_calls", None)
-                                    ) or []
+                                    )
+                                    new_tcs: list = _raw_tcs if isinstance(_raw_tcs, list) else []
                                     for tc in new_tcs:
                                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                                             last_msg, tc

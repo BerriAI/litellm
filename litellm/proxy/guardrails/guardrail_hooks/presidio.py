@@ -1242,7 +1242,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async for chunk in self._stream_apply_output_masking(
                 response, request_data
             ):
-                yield chunk
+                yield cast(ModelResponseStream, chunk)
             return
 
         metadata = (request_data.get("metadata") or {}) if request_data else {}
@@ -1257,7 +1257,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         async for chunk in self._stream_pii_unmasking(response, request_data):
-            yield chunk
+            yield cast(ModelResponseStream, chunk)
 
     @staticmethod
     def _preserve_usage_from_last_chunk(

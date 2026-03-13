@@ -201,7 +201,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         ### TRANSFORMATION (sync path) ###
-        request_data: Dict[str, Any]
+        request_data: Any
         if use_embed_content:
             resolved_files = {}
             if api_key:
