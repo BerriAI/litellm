@@ -738,10 +738,10 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
     text = "The quick brown fox jumps over the lazy dog."
     input_tokens = litellm.token_counter(
-        model="vertex_ai/text-embedding-004", text=text
+        model="vertex_ai/textembedding-gecko", text=text
     )
 
-    model_info = litellm.get_model_info(model="vertex_ai/text-embedding-004")
+    model_info = litellm.get_model_info(model="vertex_ai/textembedding-gecko")
 
     print("\nExpected model info:\n{}\n\n".format(model_info))
 
@@ -749,7 +749,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
     ## CALCULATED COST
     calculated_input_cost, calculated_output_cost = cost_per_token(
-        model="text-embedding-004",
+        model="textembedding-gecko",
         custom_llm_provider="vertex_ai",
         prompt_tokens=input_tokens,
         call_type="aembedding",
@@ -824,7 +824,7 @@ async def test_completion_cost_hidden_params(sync_mode):
 
 
 def test_vertex_ai_gemini_predict_cost():
-    model = "gemini-2.0-flash"
+    model = "gemini-1.5-flash"
     messages = [{"role": "user", "content": "Hey, hows it going???"}]
     predictive_cost = completion_cost(model=model, messages=messages)
 
