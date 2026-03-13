@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { clearTokenCookies, getCookie, setTokenCookie } from "./cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "./cookieUtils";
 
 describe("cookieUtils", () => {
   beforeEach(() => {
     document.cookie.split(";").forEach((c) => {
       document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
     });
+    sessionStorage.clear();
 
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
@@ -116,41 +117,35 @@ describe("cookieUtils", () => {
 
       vi.restoreAllMocks();
     });
+
+    it("should clear sessionStorage token", () => {
+      sessionStorage.setItem("token", "stored-token");
+      clearTokenCookies();
+      expect(sessionStorage.getItem("token")).toBeNull();
+    });
   });
 
-  describe("setTokenCookie", () => {
-    it("should set a token cookie readable by getCookie", () => {
-      setTokenCookie("my-jwt-token");
-      expect(getCookie("token")).toBe("my-jwt-token");
+  describe("storeLoginToken", () => {
+    it("should store the token in sessionStorage", () => {
+      storeLoginToken("my-jwt-token");
+      expect(sessionStorage.getItem("token")).toBe("my-jwt-token");
     });
 
-    it("should overwrite an existing token cookie", () => {
-      setTokenCookie("old-token");
-      expect(getCookie("token")).toBe("old-token");
+    it("should overwrite an existing token in sessionStorage", () => {
+      storeLoginToken("old-token");
+      expect(sessionStorage.getItem("token")).toBe("old-token");
 
-      setTokenCookie("new-token");
-      expect(getCookie("token")).toBe("new-token");
-    });
-
-    it("should not throw when document is undefined (server-side rendering)", () => {
-      const originalDocument = global.document;
-      delete (global as any).document;
-
-      expect(() => setTokenCookie("token")).not.toThrow();
-
-      global.document = originalDocument;
+      storeLoginToken("new-token");
+      expect(sessionStorage.getItem("token")).toBe("new-token");
     });
 
     it("should not throw when window is undefined (server-side rendering)", () => {
       const originalWindow = global.window;
-      const originalDocument = global.document;
       delete (global as any).window;
-      delete (global as any).document;
 
-      expect(() => setTokenCookie("token")).not.toThrow();
+      expect(() => storeLoginToken("token")).not.toThrow();
 
       global.window = originalWindow;
-      global.document = originalDocument;
     });
   });
 
@@ -176,6 +171,22 @@ describe("cookieUtils", () => {
 
       expect(getCookie("token")).toBe("token-value");
       expect(getCookie("other")).toBe("other-value");
+    });
+
+    it("should handle values containing '=' characters", () => {
+      document.cookie = "token=abc=def=ghi; path=/";
+      expect(getCookie("token")).toBe("abc=def=ghi");
+    });
+
+    it("should fall back to sessionStorage when cookie is not found", () => {
+      sessionStorage.setItem("token", "session-stored-jwt");
+      expect(getCookie("token")).toBe("session-stored-jwt");
+    });
+
+    it("should prefer cookie over sessionStorage", () => {
+      document.cookie = "token=cookie-value; path=/";
+      sessionStorage.setItem("token", "session-value");
+      expect(getCookie("token")).toBe("cookie-value");
     });
   });
 });

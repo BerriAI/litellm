@@ -43,17 +43,27 @@ export function clearTokenCookies() {
     });
   });
 
+  try {
+    sessionStorage.removeItem("token");
+  } catch {
+    // sessionStorage may be unavailable
+  }
+
   console.log("After clearing cookies:", document.cookie);
 }
 
 /**
- * Sets the token cookie from a login response body.
- * This ensures the token is JS-accessible even when a reverse proxy adds HttpOnly to server-set cookies.
+ * Stores the login token in sessionStorage.
+ * This ensures the token is available even when a reverse proxy adds HttpOnly
+ * to server-set cookies, making them invisible to JavaScript.
  */
-export function setTokenCookie(token: string) {
-  if (typeof window === "undefined" || typeof document === "undefined") return;
-  const isSecure = window.location.protocol === "https:";
-  document.cookie = `token=${encodeURIComponent(token)}; Path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
+export function storeLoginToken(token: string) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem("token", token);
+  } catch {
+    // sessionStorage may be unavailable (e.g. private browsing quota exceeded)
+  }
 }
 
 /**
@@ -63,13 +73,23 @@ export function setTokenCookie(token: string) {
  */
 export function getCookie(name: string) {
   if (typeof document === "undefined") return null;
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  if (!cookieValue) return null;
-  const rawValue = cookieValue.split("=")[1];
-  try {
-    return decodeURIComponent(rawValue);
-  } catch {
-    return rawValue;
+  const row = document.cookie.split("; ").find((r) => r.startsWith(name + "="));
+  if (row) {
+    const raw = row.split("=").slice(1).join("=");
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
   }
-}
+  // Fallback to sessionStorage — covers the case where a reverse proxy
+  // added HttpOnly to the server-set cookie, making it invisible to JS.
+  if (typeof window !== "undefined") {
+    try {
+      return sessionStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }

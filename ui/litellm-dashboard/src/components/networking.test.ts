@@ -5,7 +5,7 @@ import * as Networking from "./networking";
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
-  setTokenCookie: vi.fn(),
+  storeLoginToken: vi.fn(),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -80,7 +80,7 @@ describe("networking - expired session handling", () => {
   });
 });
 
-describe("loginCall - setTokenCookie integration", () => {
+describe("loginCall - storeLoginToken integration", () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -91,24 +91,24 @@ describe("loginCall - setTokenCookie integration", () => {
     global.fetch = originalFetch;
   });
 
-  it("calls setTokenCookie when response includes token", async () => {
+  it("calls storeLoginToken when response includes token", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt" }),
     }) as any;
-    const { setTokenCookie } = await import("@/utils/cookieUtils");
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
     await Networking.loginCall("admin", "pass");
-    expect(setTokenCookie).toHaveBeenCalledWith("my-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("my-jwt");
   });
 
-  it("does not call setTokenCookie when response has no token", async () => {
+  it("does not call storeLoginToken when response has no token", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ redirect_url: "/ui/?login=success" }),
     }) as any;
-    const { setTokenCookie } = await import("@/utils/cookieUtils");
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
     await Networking.loginCall("admin", "pass");
-    expect(setTokenCookie).not.toHaveBeenCalled();
+    expect(storeLoginToken).not.toHaveBeenCalled();
   });
 });
 
