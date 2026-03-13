@@ -510,6 +510,53 @@ class TestUpdatePublicModelGroups:
         finally:
             litellm.public_model_groups = original_value
 
+    @pytest.mark.asyncio
+    async def test_useful_links_set_after_get_config(self):
+        """
+        Regression test: same stale-overwrite bug as public_model_groups applies
+        to update_useful_links / public_model_groups_links.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_useful_links,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            UpdateUsefulLinksRequest,
+        )
+
+        old_links = {"Old Doc": "https://old.example.com"}
+        new_links = {"New Doc": "https://new.example.com", "API Ref": "https://api.example.com"}
+
+        async def mock_get_config(*args, **kwargs):
+            litellm.public_model_groups_links = old_links
+            return {"litellm_settings": {"public_model_groups_links": old_links}}
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = mock_get_config
+        mock_proxy_config.save_config = AsyncMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        request = UpdateUsefulLinksRequest(useful_links=new_links)
+
+        original_value = getattr(litellm, "public_model_groups_links", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ):
+                result = await update_useful_links(
+                    request=request,
+                    user_api_key_dict=admin_user,
+                )
+
+            assert litellm.public_model_groups_links == new_links
+            assert result["useful_links"] == new_links
+        finally:
+            litellm.public_model_groups_links = original_value
+
 
 class TestTeamModelUpdate:
     """Test team model update handles team_id consistently with model creation"""
