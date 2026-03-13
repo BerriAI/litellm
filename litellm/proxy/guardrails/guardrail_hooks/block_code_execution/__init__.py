@@ -41,9 +41,7 @@ def initialize_guardrail(
 
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
-        raise ValueError(
-            "Block Code Execution guardrail requires a guardrail_name"
-        )
+        raise ValueError("Block Code Execution guardrail requires a guardrail_name")
 
     blocked_languages: Optional[List[str]] = cast(
         Optional[List[str]],

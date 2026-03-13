@@ -17,6 +17,7 @@ import {
   FolderOutlined,
   KeyOutlined,
   LineChartOutlined,
+  MessageOutlined,
   PlayCircleOutlined,
   RobotOutlined,
   SafetyOutlined,
@@ -442,8 +443,8 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         children: item.children ? filterItemsByRole(item.children) : undefined,
       }))
       .filter((item) => {
-        // Special handling for organizations menu item - allow org_admins
-        if (item.key === "organizations") {
+        // Special handling for organizations and users menu items - allow org_admins
+        if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
 

@@ -123,7 +123,7 @@ class LangFuseLogger:
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
-        
+
         if should_use_langfuse_mock():
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
@@ -607,9 +607,7 @@ class LangFuseLogger:
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
             if trace_id is None and standard_logging_object is not None:
-                trace_id = cast(
-                    Optional[str], standard_logging_object.get("trace_id")
-                )
+                trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
             # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
                 trace_id = litellm_call_id

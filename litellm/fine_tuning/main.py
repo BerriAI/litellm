@@ -41,34 +41,34 @@ def _prepare_azure_extra_body(
 ) -> Dict[str, Any]:
     """
     Prepare extra_body for Azure fine-tuning API by combining Azure-specific parameters.
-    
+
     Azure fine-tuning API accepts additional parameters beyond the standard OpenAI spec:
     - trainingType: Type of training (e.g., 1 for supervised fine-tuning)
     - prompt_loss_weight: Weight for prompt loss in training
-    
+
     These parameters must be passed in the extra_body field when calling the Azure OpenAI SDK.
-    
+
     Args:
         extra_body: Optional existing extra_body dict
         kwargs: Request kwargs that may contain Azure-specific parameters
         azure_specific_hyperparams: Dict of Azure-specific hyperparameters already extracted
-        
+
     Returns:
         Dict containing all Azure-specific parameters to be passed in extra_body
     """
     if extra_body is None:
         extra_body = {}
-    
+
     # Azure-specific root-level parameters
     azure_specific_params = ["trainingType"]
     for param in azure_specific_params:
         if param in kwargs:
             extra_body[param] = kwargs[param]
-    
+
     # Add Azure-specific hyperparameters
     if azure_specific_hyperparams:
         extra_body.update(azure_specific_hyperparams)
-    
+
     return extra_body
 
 
@@ -126,6 +126,20 @@ async def acreate_fine_tuning_job(
         raise e
 
 
+def _build_fine_tuning_job_data(
+    model, training_file, hyperparameters, suffix, validation_file, integrations, seed
+):
+    return FineTuningJobCreate(
+        model=model,
+        training_file=training_file,
+        hyperparameters=hyperparameters,
+        suffix=suffix,
+        validation_file=validation_file,
+        integrations=integrations,
+        seed=seed,
+    )
+
+
 def _resolve_fine_tuning_timeout(
     timeout: Any,
     custom_llm_provider: str,
@@ -165,7 +179,7 @@ def create_fine_tuning_job(
 
         # handle hyperparameters
         hyperparameters = hyperparameters or {}  # original hyperparameters
-        
+
         # For Azure, extract Azure-specific hyperparameters before creating OpenAI-spec hyperparameters
         azure_specific_hyperparams = {}
         if custom_llm_provider == "azure":
@@ -173,7 +187,7 @@ def create_fine_tuning_job(
             for key in azure_hyperparameter_keys:
                 if key in hyperparameters:
                     azure_specific_hyperparams[key] = hyperparameters.pop(key)
-        
+
         _oai_hyperparameters: Hyperparameters = Hyperparameters(
             **hyperparameters
         )  # Typed Hyperparameters for OpenAI Spec
@@ -206,19 +220,15 @@ def create_fine_tuning_job(
                 or os.getenv("OPENAI_API_KEY")
             )
 
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
-
-            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
-                exclude_none=True
-            )
+            create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
+                model,
+                training_file,
+                _oai_hyperparameters,
+                suffix,
+                validation_file,
+                integrations,
+                seed,
+            ).model_dump(exclude_none=True)
 
             response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
@@ -256,24 +266,22 @@ def create_fine_tuning_job(
                 extra_body.pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-            
+
             # Prepare Azure-specific parameters for extra_body
-            extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
-            
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
+            extra_body = _prepare_azure_extra_body(
+                extra_body, kwargs, azure_specific_hyperparams
             )
 
-            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
-                exclude_none=True
-            )
-            
+            create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
+                model,
+                training_file,
+                _oai_hyperparameters,
+                suffix,
+                validation_file,
+                integrations,
+                seed,
+            ).model_dump(exclude_none=True)
+
             # Add extra_body if it has Azure-specific parameters
             if extra_body:
                 create_fine_tuning_job_data_dict["extra_body"] = extra_body
@@ -303,18 +311,17 @@ def create_fine_tuning_job(
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
-            create_fine_tuning_job_data = FineTuningJobCreate(
-                model=model,
-                training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
-                validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
             response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
                 _is_async=_is_async,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                create_fine_tuning_job_data=_build_fine_tuning_job_data(
+                    model,
+                    training_file,
+                    _oai_hyperparameters,
+                    suffix,
+                    validation_file,
+                    integrations,
+                    seed,
+                ),
                 vertex_credentials=vertex_credentials,
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,

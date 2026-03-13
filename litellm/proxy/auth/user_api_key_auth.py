@@ -64,7 +64,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, normalize_route_for_root_path
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -402,9 +402,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     api_key: str,
 ) -> Union[UserAPIKeyAuth, str]:
     is_mapped_pass_through_route: bool = False
-    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-        if route.startswith(mapped_route):
-            is_mapped_pass_through_route = True
+    normalized_route = normalize_route_for_root_path(route)
+    if normalized_route is not None:
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
+            if normalized_route.startswith(mapped_route):
+                is_mapped_pass_through_route = True
+                break
     if is_mapped_pass_through_route:
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""
@@ -632,20 +635,33 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # Only apply OAuth2 M2M authentication to LLM API routes, not UI/management routes
+            # Only apply OAuth2 M2M authentication to LLM API routes and info routes, not UI/management routes
             # This allows UI SSO to work separately from API M2M authentication
-            if RouteChecks.is_llm_api_route(route=route):
-                # return UserAPIKeyAuth object
-                # helper to check if the api_key is a valid oauth2 token
-                from litellm.proxy.proxy_server import premium_user
+            # Note: Info routes are already scoped to the user
+            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(
+                route=route
+            ):
+                # When both OAuth2 and JWT auth are enabled, use token format to decide:
+                # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
+                # - Opaque tokens -> use OAuth2 handler
+                # This allows JWT for users and OAuth2 for M2M on the same instance
+                is_jwt_token = (
+                    jwt_handler.is_jwt(token=api_key)
+                    if general_settings.get("enable_jwt_auth", False) is True
+                    else False
+                )
+                if not is_jwt_token:
+                    # return UserAPIKeyAuth object
+                    # helper to check if the api_key is a valid oauth2 token
+                    from litellm.proxy.proxy_server import premium_user
 
-                if premium_user is not True:
-                    raise ValueError(
-                        "Oauth2 token validation is only available for premium users"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                    if premium_user is not True:
+                        raise ValueError(
+                            "Oauth2 token validation is only available for premium users"
+                            + CommonProxyErrors.not_premium_user.value
+                        )
 
-                return await Oauth2Handler.check_oauth2_token(token=api_key)
+                    return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
@@ -729,9 +745,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 if team_object is not None
                                 else None
                             ),
-                            team_metadata=team_object.metadata
-                            if team_object is not None
-                            else None,
+                            team_metadata=(
+                                team_object.metadata
+                                if team_object is not None
+                                else None
+                            ),
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
@@ -749,9 +767,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_rpm_limit=(
                             team_object.rpm_limit if team_object is not None else None
                         ),
-                        team_models=team_object.models
-                        if team_object is not None
-                        else [],
+                        team_models=(
+                            team_object.models if team_object is not None else []
+                        ),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
                             if user_object is not None
@@ -778,9 +796,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             if team_membership is not None
                             else None
                         ),
-                        team_metadata=team_object.metadata
-                        if team_object is not None
-                        else None,
+                        team_metadata=(
+                            team_object.metadata if team_object is not None else None
+                        ),
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks
@@ -1718,12 +1736,12 @@ async def _run_post_custom_auth_checks(
     parent_otel_span: Optional[Span],
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
-        prisma_client,
-        user_api_key_cache,
-        proxy_logging_obj,
         general_settings,
         llm_router,
         model_max_budget_limiter,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     # 1. Look up end_user object from DB if end_user_id is set
@@ -1755,9 +1773,11 @@ async def _run_post_custom_auth_checks(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                 type=ProxyErrorTypes.expired_key,
                 code=400,
-                param=abbreviate_api_key(api_key=valid_token.token)
-                if valid_token.token
-                else "",
+                param=(
+                    abbreviate_api_key(api_key=valid_token.token)
+                    if valid_token.token
+                    else ""
+                ),
             )
 
     current_model = request_data.get("model", None)
