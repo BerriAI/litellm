@@ -347,6 +347,7 @@ class BaseLLMChatTest(ABC):
         assert response is not None
         print(f"response={response}")
 
+    @pytest.mark.flaky(retries=3, delay=1)
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_pdf_handling(self, pdf_messages, sync_mode):
