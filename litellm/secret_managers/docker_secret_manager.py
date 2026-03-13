@@ -91,6 +91,14 @@ class DockerSecretManager(BaseSecretManager):
         Raises ``ValueError`` if the resolved path escapes the secrets directory
         (path traversal attempt).
         """
+        # Reject names containing path separators — Docker secret names never
+        # include '/' and allowing them would silently enable subdirectory reads.
+        if "/" in secret_name or os.sep in secret_name:
+            raise ValueError(
+                f"DockerSecretManager: secret name {secret_name!r} contains a "
+                f"path separator and is not a valid Docker secret name."
+            )
+
         for candidate in _name_candidates(secret_name):
             path = os.path.realpath(os.path.join(self.secrets_path, candidate))
             # Security: ensure the resolved path stays inside the secrets dir
@@ -109,9 +117,22 @@ class DockerSecretManager(BaseSecretManager):
 
         Stripping trailing whitespace / newlines prevents the common footgun
         where ``echo "value" | docker secret create name -`` adds a ``\\n``.
+
+        Tries UTF-8 first; falls back to Latin-1 for secrets whose bytes are
+        encoded in ISO-8859-1 or Windows-1252 (e.g. passwords with é, ñ, ü, ß).
+        Latin-1 maps bytes 0–255 directly so it never raises ``UnicodeDecodeError``.
         """
-        with open(path, "r", encoding="utf-8") as fh:
-            return fh.read().rstrip()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read().rstrip()
+        except UnicodeDecodeError:
+            verbose_logger.debug(
+                "DockerSecretManager: secret at %r is not valid UTF-8; "
+                "retrying with Latin-1 (ISO-8859-1)",
+                path,
+            )
+            with open(path, "r", encoding="latin-1") as fh:
+                return fh.read().rstrip()
 
     # ------------------------------------------------------------------
     # BaseSecretManager interface
@@ -168,13 +189,6 @@ class DockerSecretManager(BaseSecretManager):
                 secret_name,
                 path,
                 exc,
-            )
-            return None
-        except UnicodeDecodeError:
-            verbose_logger.error(
-                "DockerSecretManager: secret %r contains non-UTF-8 binary data "
-                "and cannot be decoded as a string.",
-                secret_name,
             )
             return None
 

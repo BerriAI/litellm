@@ -157,8 +157,12 @@ def get_secret_from_manager(  # noqa: PLR0915
         from litellm.secret_managers.docker_secret_manager import DockerSecretManager
 
         if isinstance(client, DockerSecretManager):
-            secret = client.sync_read_secret(secret_name=secret_name)
-            # None is valid — caller falls back to env vars
+            try:
+                secret = client.sync_read_secret(secret_name=secret_name)
+                # None is valid — secret not found, caller falls back to env vars
+            except Exception as e:
+                print_verbose(f"An error occurred - {str(e)}")
+                raise e
         else:
             raise ValueError(
                 f"Docker secret manager client must be an instance of DockerSecretManager, got {type(client).__name__}"

@@ -177,15 +177,22 @@ async def test_delete_raises(manager):
 
 
 def test_path_traversal_via_dotdot_raises(manager):
-    with pytest.raises(ValueError, match="path traversal"):
+    # '../../etc/passwd' contains '/' so the path-separator check fires first
+    with pytest.raises(ValueError, match="path separator|path traversal"):
         manager.sync_read_secret("../../etc/passwd")
+
+
+def test_path_separator_in_name_raises(manager):
+    """Names with '/' are rejected before realpath resolution."""
+    with pytest.raises(ValueError, match="path separator"):
+        manager.sync_read_secret("subdir/MY_SECRET")
 
 
 def test_path_traversal_via_absolute_path_raises(manager, tmp_path):
     # An absolute path as secret name should be caught
     outside_file = tmp_path.parent / "outside_secret"
     outside_file.write_text("sensitive")
-    with pytest.raises(ValueError, match="path traversal"):
+    with pytest.raises(ValueError, match="path traversal|path separator"):
         manager.sync_read_secret(str(outside_file))
 
 
@@ -215,11 +222,12 @@ def test_unreadable_file_returns_none(manager, populated_secrets_dir):
         secret_file.chmod(original_mode)
 
 
-def test_binary_file_returns_none(manager, populated_secrets_dir):
-    binary_file = populated_secrets_dir / "binary_secret"
-    binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01")
-    result = manager.sync_read_secret("binary_secret")
-    assert result is None
+def test_latin1_secret_decoded_correctly(manager, populated_secrets_dir):
+    """Passwords with Latin-1 chars (é, ñ, ü) must be returned, not dropped."""
+    latin1_file = populated_secrets_dir / "latin1_secret"
+    latin1_file.write_bytes("pässwörd".encode("latin-1"))
+    result = manager.sync_read_secret("latin1_secret")
+    assert result == "pässwörd"
 
 
 # ---------------------------------------------------------------------------
