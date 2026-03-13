@@ -698,7 +698,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _encode_anthropic_chunk_to_sse(chunk_dict: Dict[str, Any]) -> bytes:
         """Encode an Anthropic dict chunk back to SSE byte format."""
         json_str = json.dumps(chunk_dict, separators=(",", ":"))
-        return f"event: {chunk_dict.get('type', '')}\ndata: {json_str}\n\n".encode()
+        safe_type = chunk_dict.get("type", "").replace("\r", "").replace("\n", "")
+        return f"event: {safe_type}\ndata: {json_str}\n\n".encode()
 
     @staticmethod
     def _decode_all_anthropic_sse_events(raw_chunk: bytes) -> List[Dict[str, Any]]:
@@ -786,7 +787,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _anthropic_response_to_openai_dict(self, response: Any) -> Dict[str, Any]:
         """Convert raw Anthropic /v1/messages response to OpenAI format for the blocking service."""
         anthropic_completion = {
-            "content": response["content"],
+            "content": response.get("content", []),
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }
 
