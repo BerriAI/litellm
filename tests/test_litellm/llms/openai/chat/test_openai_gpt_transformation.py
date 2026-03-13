@@ -460,8 +460,11 @@ class TestGPT5ReasoningEffortPreservation:
 
         assert "reasoning_effort" not in non_default_params
 
-    def test_reasoning_effort_dict_none_dropped_for_gpt5_4_with_tools(self):
-        """none-dict with tools on gpt-5.4: reasoning_effort is dropped."""
+    def test_reasoning_effort_dict_none_treated_as_none_for_tools(self):
+        """none-dict: {"effort": "none", "summary": "detailed"} is treated as effort=none.
+        
+        Tool-drop guard should NOT fire; reasoning_effort should be kept.
+        """
         tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
         non_default_params = {"reasoning_effort": {"effort": "none", "summary": "detailed"}, "tools": tools}
         optional_params = {}
@@ -473,7 +476,7 @@ class TestGPT5ReasoningEffortPreservation:
             drop_params=False,
         )
 
-        assert "reasoning_effort" not in non_default_params
+        assert non_default_params.get("reasoning_effort") == {"effort": "none", "summary": "detailed"}
         assert non_default_params.get("tools") == tools
 
     def test_reasoning_effort_dict_none_treated_as_none_for_sampling(self):
