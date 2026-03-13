@@ -50,7 +50,6 @@ export function clearTokenCookies() {
   }
 
 }
-}
 
 /**
  * Stores the login token in sessionStorage.
