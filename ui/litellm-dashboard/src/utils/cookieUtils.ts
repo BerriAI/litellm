@@ -62,6 +62,7 @@ export function clearTokenCookies() {
  */
 export function storeLoginToken(token: string) {
   if (typeof window === "undefined") return;
+  if (!token || !token.trim()) return;
   try {
     sessionStorage.setItem("token", token);
   } catch {
