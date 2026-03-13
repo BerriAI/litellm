@@ -7,8 +7,9 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 2. For DELETE requests: idempotent behavior returns success even if session doesn't exist
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 class TestHandleStaleMcpSession:
@@ -326,7 +327,7 @@ async def test_valid_mcp_session_id_is_preserved():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateful,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -352,7 +353,7 @@ async def test_valid_mcp_session_id_is_preserved():
     async def mock_handle_request(s, r, se):
         captured_scope.update(s)
 
-    # Session manager HAS this session
+    # Stateful session manager HAS this session (requests with mcp-session-id route there)
     mock_instances = {valid_session_id: MagicMock()}
 
     with patch(
@@ -365,11 +366,11 @@ async def test_valid_mcp_session_id_is_preserved():
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch.object(
-        session_manager,
+        session_manager_stateful,
         "handle_request",
         side_effect=mock_handle_request,
     ), patch.object(
-        session_manager,
+        session_manager_stateful,
         "_server_instances",
         mock_instances,
     ):
