@@ -7155,6 +7155,7 @@ async def ahealth_check(
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
+        model_params["model"] = model  # update model to use the provider-stripped name (e.g. "ollama/llama2" -> "llama2")
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
