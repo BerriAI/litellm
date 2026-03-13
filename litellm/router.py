@@ -85,6 +85,7 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
+from litellm.router_strategy.sticky_least_busy import StickyLeastBusyLoggingHandler
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
@@ -246,6 +247,7 @@ class Router:
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
+    sticky_leastbusy_logger: Optional[StickyLeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
     optional_callbacks: Optional[List[Union[CustomLogger, Callable, str]]] = None
 
@@ -298,6 +300,7 @@ class Router:
         routing_strategy: Literal[
             "simple-shuffle",
             "least-busy",
+            "sticky-least-busy",
             "usage-based-routing",
             "latency-based-routing",
             "cost-based-routing",
@@ -774,6 +777,7 @@ class Router:
     # double as `CustomLogger` callbacks, hence the legacy `*_logger` attrs.)
     _DEFAULT_SELECTOR_ATTR_BY_STRATEGY: Dict[str, str] = {
         "least-busy": "leastbusy_logger",
+        "sticky-least-busy": "sticky_leastbusy_logger",
         "usage-based-routing": "lowesttpm_logger",
         "usage-based-routing-v2": "lowesttpm_logger_v2",
         "latency-based-routing": "lowestlatency_logger",
@@ -822,6 +826,24 @@ class Router:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
                 if register_callbacks:
                     if isinstance(litellm.input_callback, list):
+                        litellm.input_callback.append(selector)  # type: ignore
+                    else:
+                        litellm.input_callback = [selector]  # type: ignore
+            case RoutingStrategy.STICKY_LEAST_BUSY.value:
+                sticky_args = routing_strategy_args or {}
+                selector = StickyLeastBusyLoggingHandler(
+                    router_cache=self.cache,
+                    imbalance_threshold=sticky_args.get("imbalance_threshold", 1.5),
+                    virtual_nodes=sticky_args.get("virtual_nodes", 150),
+                    cache_ttl=sticky_args.get("cache_ttl", 600),
+                )
+                if register_callbacks:
+                    if isinstance(litellm.input_callback, list):
+                        litellm.input_callback = [
+                            cb
+                            for cb in litellm.input_callback
+                            if not isinstance(cb, StickyLeastBusyLoggingHandler)
+                        ]
                         litellm.input_callback.append(selector)  # type: ignore
                     else:
                         litellm.input_callback = [selector]  # type: ignore
@@ -876,6 +898,7 @@ class Router:
         )
 
         self.leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
+        self.sticky_leastbusy_logger: Optional[StickyLeastBusyLoggingHandler] = None
         self.lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
         self.lowesttpm_logger_v2: Optional[LowestTPMLoggingHandler_v2] = None
         self.lowestlatency_logger: Optional[LowestLatencyLoggingHandler] = None
@@ -1014,6 +1037,12 @@ class Router:
                     model_group=model,
                     healthy_deployments=healthy_deployments,
                 )
+            case "sticky-least-busy":
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                )
             case "usage-based-routing":
                 # `LowestTPMLoggingHandler` (v1) only exposes the sync
                 # `get_available_deployments`. Mirror the pre-routing-groups
@@ -1069,6 +1098,12 @@ class Router:
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
+                )
+            case "sticky-least-busy":
+                return selector.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
                 )
             case "usage-based-routing" | "usage-based-routing-v2":
                 return selector.get_available_deployments(
@@ -10286,6 +10321,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
+            and self.routing_strategy != "sticky-least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
