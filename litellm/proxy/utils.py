@@ -3942,6 +3942,11 @@ class PrismaClient:
             return False
 
         # Escalate to heavy reconnect after consecutive lightweight failures.
+        # Capture before the escalation block can flip _engine_confirmed_dead
+        engine_was_dead = self._engine_confirmed_dead or (
+            self._engine_pid > 0 and not self._is_engine_alive()
+        )
+
         # When the Prisma engine process is alive but not accepting connections
         # (e.g., startup race condition), lightweight reconnects (disconnect +
         # connect) will never succeed. Force a full Prisma client recreation
@@ -3956,10 +3961,6 @@ class PrismaClient:
 
         verbose_proxy_logger.warning(
             "Attempting Prisma DB reconnect. reason=%s", reason
-        )
-
-        engine_was_dead = self._engine_confirmed_dead or (
-            self._engine_pid > 0 and not self._is_engine_alive()
         )
         reconnect_succeeded = False
         try:
