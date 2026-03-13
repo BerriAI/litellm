@@ -4,14 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Version bump type"
-        required: true
+        description: "Version bump type (ignored when 'version' is set)"
+        required: false
         default: "patch"
         type: choice
         options:
           - patch
           - minor
           - major
+      version:
+        description: "Exact version to publish (e.g. 0.1.34.dev1). Overrides bump."
+        required: false
+        default: ""
 
 jobs:
   publish:
@@ -38,52 +42,17 @@ jobs:
         id: bump
         run: |
           OLD=$(poetry version -s)
-          poetry version ${{ github.event.inputs.bump }}
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            poetry version "${{ github.event.inputs.version }}"
+          else
+            poetry version ${{ github.event.inputs.bump }}
+          fi
           NEW=$(poetry version -s)
           echo "old=$OLD" >> $GITHUB_OUTPUT
           echo "new=$NEW" >> $GITHUB_OUTPUT
 
-      - name: Update version refs in root pyproject.toml and requirements.txt
-        run: |
-          OLD=${{ steps.bump.outputs.old }}
-          NEW=${{ steps.bump.outputs.new }}
-          sed -i "s/litellm-enterprise = {version = \"${OLD}\"/litellm-enterprise = {version = \"${NEW}\"/" ../pyproject.toml
-          sed -i "s/litellm-enterprise==${OLD}/litellm-enterprise==${NEW}/" ../requirements.txt
-
-      - name: Update poetry.lock
-        working-directory: .
-        run: poetry lock
-
       - name: Build
         run: poetry build
-
-      - name: Commit version bump and create PR
-        id: create-pr
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          cd ..
-          BRANCH="bump/enterprise-${{ steps.bump.outputs.new }}"
-          git checkout -b "$BRANCH"
-          git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
-          git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
-          git push origin "$BRANCH" --force
-          gh pr create \
-            --title "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}" \
-            --body "Version bump for litellm-enterprise. Merge to update main." \
-            --head "$BRANCH" \
-            --base main \
-          || true
-          PR_URL=$(gh pr list --head "$BRANCH" --json url -q '.[0].url')
-          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Enable auto-merge
-        run: |
-          gh pr merge "${{ steps.create-pr.outputs.pr_url }}" --auto --squash
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Publish to PyPI
         env:
