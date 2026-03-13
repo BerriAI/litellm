@@ -1336,12 +1336,8 @@ def _make_sse_stream(events: list) -> Mock:
 def _make_background_streaming_kwargs(
     polling_id: str,
     polling_handler: ResponsePollingHandler,
-    mock_response: Mock,
 ) -> dict:
     """Build kwargs for background_streaming_task with all required mocks."""
-    mock_processor = AsyncMock()
-    mock_processor.base_process_llm_request = AsyncMock(return_value=mock_response)
-
     return dict(
         polling_id=polling_id,
         data={"model": "gpt-4o", "stream": False, "background": True},
@@ -1398,7 +1394,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_1", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_1", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1436,7 +1432,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_2", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_2", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1472,7 +1468,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_3", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_3", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1507,7 +1503,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_4", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_4", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1545,7 +1541,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_5", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_5", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1571,7 +1567,7 @@ class TestBackgroundStreamingTerminalEvents:
         ]
         mock_response = _make_sse_stream(events)
         handler = AsyncMock(spec=ResponsePollingHandler)
-        kwargs = _make_background_streaming_kwargs("poll_6", handler, mock_response)
+        kwargs = _make_background_streaming_kwargs("poll_6", handler)
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
