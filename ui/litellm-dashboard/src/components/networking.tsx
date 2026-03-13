@@ -1199,6 +1199,65 @@ export const userListCall = async (
   }
 };
 
+/**
+ * Response type for /v2/user/info — lightweight endpoint that returns only the user object.
+ */
+export interface UserInfoV2Response {
+  user_id: string;
+  user_email: string | null;
+  user_alias: string | null;
+  user_role: string | null;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  budget_duration: string | null;
+  budget_reset_at: string | null;
+  metadata: Record<string, any> | null;
+  created_at: string | null;
+  updated_at: string | null;
+  sso_user_id: string | null;
+  teams: string[];
+}
+
+/**
+ * Lightweight user info fetch from /v2/user/info.
+ * Returns only the user object — no keys, no teams objects.
+ *
+ * @param accessToken - Bearer token for auth
+ * @param userId - Optional user ID to look up. If omitted, returns the caller's own info.
+ */
+export const userGetInfoV2 = async (
+  accessToken: string,
+  userId?: string,
+): Promise<UserInfoV2Response> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/user/info` : `/v2/user/info`;
+    if (userId) {
+      url += `?user_id=${encodeURIComponent(userId)}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch user info v2:", error);
+    throw error;
+  }
+};
+
 export const userInfoCall = async (
   accessToken: string,
   userID: string | null,
