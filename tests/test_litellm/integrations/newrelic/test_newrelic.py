@@ -415,25 +415,37 @@ class TestProcessSuccess:
 
 
 class TestRecordErrorMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+
     def test_calls_record_custom_metric(self):
-        logger = make_logger()
         mock_app = MagicMock()
         mock_app.enabled = True
 
-        with patch("newrelic.agent.application", return_value=mock_app):
-            logger._record_error_metric()
+        with patch.object(self.logger, "_check_and_emit_periodic_metric"):
+            with patch("newrelic.agent.application", return_value=mock_app):
+                self.logger._record_error_metric()
 
         mock_app.record_custom_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
 
     def test_skips_when_app_disabled(self):
-        logger = make_logger()
         mock_app = MagicMock()
         mock_app.enabled = False
 
-        with patch("newrelic.agent.application", return_value=mock_app):
-            logger._record_error_metric()
+        with patch.object(self.logger, "_check_and_emit_periodic_metric"):
+            with patch("newrelic.agent.application", return_value=mock_app):
+                self.logger._record_error_metric()
 
         mock_app.record_custom_metric.assert_not_called()
+
+    def test_calls_check_and_emit_periodic_metric(self):
+        with patch.object(
+            self.logger, "_check_and_emit_periodic_metric"
+        ) as mock_periodic:
+            with patch("newrelic.agent.application", return_value=MagicMock()):
+                self.logger._record_error_metric()
+
+        mock_periodic.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

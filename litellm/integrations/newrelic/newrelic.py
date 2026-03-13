@@ -595,6 +595,11 @@ class NewRelicLogger(CustomLogger):
     def _record_error_metric(self):
         """Record error metric to New Relic."""
         try:
+            if not self.enabled:
+                return
+
+            self._check_and_emit_periodic_metric()
+
             import newrelic.agent
 
             app = newrelic.agent.application()
