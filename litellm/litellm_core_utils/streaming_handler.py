@@ -1130,6 +1130,14 @@ class CustomStreamWrapper:
                     completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
 
                 if (
+                    "reasoning_content" in anthropic_response_obj
+                    and anthropic_response_obj["reasoning_content"] is not None
+                ):
+                    completion_obj["reasoning_content"] = anthropic_response_obj[
+                        "reasoning_content"
+                    ]
+
+                if (
                     "provider_specific_fields" in anthropic_response_obj
                     and anthropic_response_obj["provider_specific_fields"] is not None
                 ):
@@ -2330,16 +2338,22 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
+    delta_kwargs: Dict[str, Any] = {
+        "content": chunk["text"],
+        "tool_calls": chunk.get("tool_use", None),
+    }
+
+    reasoning_content = chunk.get("reasoning_content", None)
+    if reasoning_content is not None:
+        delta_kwargs["reasoning_content"] = reasoning_content
+
     model_response_stream = ModelResponseStream(
         id=str(uuid.uuid4()),
         model="",
         choices=[
             StreamingChoices(
                 index=chunk.get("index", 0),
-                delta=Delta(
-                    content=chunk["text"],
-                    tool_calls=chunk.get("tool_use", None),
-                ),
+                delta=Delta(**delta_kwargs),
             )
         ],
         finish_reason=chunk["finish_reason"] if chunk["is_finished"] else None,

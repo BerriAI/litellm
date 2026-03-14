@@ -461,7 +461,12 @@ class TestOllamaTextCompletionResponseIterator:
         assert getattr(result.choices[0].delta, "reasoning_content", None) is None
         
     def test_chunk_parser_empty_response_without_thinking(self):
-        """Test that empty response chunks without thinking still work."""
+        """Test that empty response chunks without thinking are handled as content.
+
+        Ollama sends {"response": "", "done": false} during streaming initialization.
+        This must not raise or be misclassified as reasoning content.
+        Regression test for https://github.com/BerriAI/litellm/issues/23155
+        """
         iterator = OllamaTextCompletionResponseIterator(
             streaming_response=iter([]), sync_stream=True, json_mode=False
         )
@@ -476,11 +481,11 @@ class TestOllamaTextCompletionResponseIterator:
 
         result = iterator.chunk_parser(empty_response_chunk)
 
-        # Updated to handle ModelResponseStream return type
+        # Empty response string should be treated as a valid content chunk
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
-        assert result.choices[0].delta.content == None
-        assert getattr(result.choices[0].delta, "reasoning_content", None) is ""
+        assert result.choices[0].delta.content == ""
+        assert getattr(result.choices[0].delta, "reasoning_content", None) is None
 
     def test_chunk_parser_done_chunk(self):
         """Test that done chunks work correctly."""

@@ -545,10 +545,27 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     finish_reason=finish_reason,
                     usage=usage,
                 )
-            elif chunk["response"]:
+            elif "thinking" in chunk and not chunk.get("response"):
+                # Return reasoning content as ModelResponseStream so UIs can render it
+                thinking_content = chunk.get("thinking") or ""
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=thinking_content),
+                        )
+                    ]
+                )
+            elif chunk.get("response") is not None:
                 text = chunk["response"]
                 reasoning_content: Optional[str] = None
                 content: Optional[str] = None
+
+                # When both "thinking" and "response" keys are present,
+                # capture the native thinking content directly.
+                if "thinking" in chunk and chunk.get("thinking"):
+                    reasoning_content = chunk["thinking"]
+
                 if text is not None:
                     if "<think>" in text:
                         text = text.replace("<think>", "")
@@ -565,48 +582,41 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     else:
                         content = text
 
+                delta_kwargs: dict = {}
+                if reasoning_content is not None:
+                    delta_kwargs["reasoning_content"] = reasoning_content
+                if content is not None:
+                    delta_kwargs["content"] = content
+
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(
-                                reasoning_content=reasoning_content, content=content
+                                **delta_kwargs
                             ),
                         )
                     ],
                     finish_reason=finish_reason,
                     usage=None,
                 )
-                # return GenericStreamingChunk(
-                #     text=text,
-                #     is_finished=is_finished,
-                #     finish_reason="stop",
-                #     usage=None,
-                # )
-            elif "thinking" in chunk and not chunk["response"]:
-                # Return reasoning content as ModelResponseStream so UIs can render it
-                thinking_content = chunk.get("thinking") or ""
-                return ModelResponseStream(
-                    choices=[
-                        StreamingChoices(
-                            index=0,
-                            delta=Delta(reasoning_content=thinking_content),
-                        )
-                    ]
-                )
             else:
                 # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
                 # and chunk["response"] is falsy (None or empty string),
                 # but Ollama is just starting to stream, so it should be processed as a normal dict
+                verbose_logger.warning(
+                    "Unexpected ollama chunk structure (no response/thinking key), "
+                    "skipping: %s",
+                    chunk,
+                )
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(reasoning_content=""),
+                            delta=Delta(),
                         )
                     ]
                 )
-                # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
             verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
             raise e
