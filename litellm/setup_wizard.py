@@ -11,8 +11,10 @@ import importlib.metadata
 import os
 import secrets
 import sys
+import termios
+import tty
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 # ---------------------------------------------------------------------------
 # Provider definitions
@@ -22,7 +24,7 @@ PROVIDERS = [
     {
         "id": "openai",
         "name": "OpenAI",
-        "description": "GPT-4o, GPT-4o-mini, o1",
+        "description": "GPT-4o, GPT-4o-mini, o3-mini",
         "env_key": "OPENAI_API_KEY",
         "key_hint": "sk-...",
         "models": ["gpt-4o", "gpt-4o-mini"],
@@ -30,10 +32,18 @@ PROVIDERS = [
     {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Claude Opus, Sonnet, Haiku",
+        "description": "Claude Opus 4.6, Sonnet 4.6, Haiku 4.5",
         "env_key": "ANTHROPIC_API_KEY",
         "key_hint": "sk-ant-...",
-        "models": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5-20251001"],
+        "models": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+    },
+    {
+        "id": "gemini",
+        "name": "Google Gemini",
+        "description": "Gemini 2.0 Flash, Gemini 2.5 Pro",
+        "env_key": "GEMINI_API_KEY",
+        "key_hint": "AIza...",
+        "models": ["gemini/gemini-2.0-flash", "gemini/gemini-2.5-pro"],
     },
     {
         "id": "azure",
@@ -47,17 +57,9 @@ PROVIDERS = [
         "api_version": "2024-07-01-preview",
     },
     {
-        "id": "gemini",
-        "name": "Google Gemini",
-        "description": "Gemini 2.0 Flash, Gemini 1.5 Pro",
-        "env_key": "GEMINI_API_KEY",
-        "key_hint": "AIza...",
-        "models": ["gemini/gemini-2.0-flash", "gemini/gemini-1.5-pro"],
-    },
-    {
         "id": "bedrock",
         "name": "AWS Bedrock",
-        "description": "Claude, Llama via AWS",
+        "description": "Claude 3.5, Llama 3 via AWS",
         "env_key": "AWS_ACCESS_KEY_ID",
         "key_hint": "AKIA...",
         "models": ["bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"],
@@ -68,7 +70,7 @@ PROVIDERS = [
     {
         "id": "ollama",
         "name": "Ollama",
-        "description": "Local models (llama3, mistral, etc.)",
+        "description": "Local models (llama3.2, mistral, etc.)",
         "env_key": None,
         "key_hint": None,
         "models": ["ollama/llama3.2", "ollama/mistral"],
@@ -89,6 +91,10 @@ _BLUE = "\033[38;2;177;185;249m"
 _GREY = "\033[38;2;153;153;153m"
 _RESET = "\033[0m"
 _CHECK = "✔"
+
+_CURSOR_HIDE = "\033[?25l"
+_CURSOR_SHOW = "\033[?25h"
+_MOVE_UP = "\033[{}A"
 
 
 def _supports_color() -> bool:
@@ -156,26 +162,112 @@ def _print_welcome() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Provider selection
+# Arrow-key provider selector
 # ---------------------------------------------------------------------------
 
-def _print_provider_menu(selected: List[int]) -> None:
-    print()
-    print(f"  {bold('Choose your LLM providers')}")
-    print(grey("  Enter numbers separated by commas (e.g. 1,2). Press Enter to confirm."))
-    print()
-    for i, p in enumerate(PROVIDERS, 1):
-        bullet = green(f"◉ {i}.") if (i in selected) else grey(f"○ {i}.")
-        name = bold(p["name"])
-        desc = grey(p["description"])
-        print(f"  {bullet} {name}  {desc}")
-    print()
+def _read_key() -> str:
+    """Read one keypress from /dev/tty in raw mode."""
+    with open("/dev/tty", "rb") as tty_fh:
+        fd = tty_fh.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = tty_fh.read(1)
+            if ch == b"\x1b":
+                ch2 = tty_fh.read(1)
+                if ch2 == b"[":
+                    ch3 = tty_fh.read(1)
+                    return "\x1b[" + ch3.decode("utf-8", errors="replace")
+                return "\x1b" + ch2.decode("utf-8", errors="replace")
+            return ch.decode("utf-8", errors="replace")
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _render_selector(cursor: int, selected: Set[int], first_render: bool) -> int:
+    """Draw (or redraw) the provider list. Returns number of lines printed."""
+    lines = []
+    lines.append(f"\n  {bold('Add your first model')}\n")
+    lines.append(grey("  ↑↓ to navigate · Space to select · Enter to confirm") + "\n")
+    lines.append("\n")
+
+    for i, p in enumerate(PROVIDERS):
+        arrow = blue("❯") if i == cursor else " "
+        bullet = green("◉") if i in selected else grey("○")
+        name_str = bold(p["name"]) if i == cursor else p["name"]
+        desc_str = grey(p["description"])
+        lines.append(f"  {arrow} {bullet} {name_str}  {desc_str}\n")
+
+    lines.append("\n")
+    content = "".join(lines)
+    line_count = content.count("\n")
+
+    if not first_render and _supports_color():
+        sys.stdout.write(_MOVE_UP.format(line_count))
+
+    sys.stdout.write(content)
+    sys.stdout.flush()
+    return line_count
 
 
 def _select_providers() -> List[Dict]:
-    selected_nums: List[int] = []
-    _print_provider_menu(selected_nums)
+    """Arrow-key multi-select. Falls back to number input if /dev/tty unavailable."""
+    try:
+        return _select_providers_interactive()
+    except (OSError, termios.error):
+        return _select_providers_fallback()
 
+
+def _select_providers_interactive() -> List[Dict]:
+    cursor = 0
+    selected: Set[int] = set()
+
+    if _supports_color():
+        sys.stdout.write(_CURSOR_HIDE)
+        sys.stdout.flush()
+
+    try:
+        _render_selector(cursor, selected, first_render=True)
+
+        while True:
+            key = _read_key()
+
+            if key == "\x1b[A":  # Up
+                cursor = (cursor - 1) % len(PROVIDERS)
+            elif key == "\x1b[B":  # Down
+                cursor = (cursor + 1) % len(PROVIDERS)
+            elif key == " ":  # Space — toggle
+                if cursor in selected:
+                    selected.discard(cursor)
+                else:
+                    selected.add(cursor)
+            elif key in ("\r", "\n"):  # Enter — confirm
+                if not selected:
+                    selected.add(cursor)  # select highlighted item if nothing chosen
+                break
+            elif key in ("\x03", "\x04"):  # Ctrl+C / Ctrl+D
+                raise KeyboardInterrupt
+
+            _render_selector(cursor, selected, first_render=False)
+    finally:
+        if _supports_color():
+            sys.stdout.write(_CURSOR_SHOW)
+            sys.stdout.flush()
+
+    return [PROVIDERS[i] for i in sorted(selected)]
+
+
+def _select_providers_fallback() -> List[Dict]:
+    """Number-based fallback when raw terminal input is unavailable."""
+    print()
+    print(f"  {bold('Add your first model')}")
+    print(grey("  Enter numbers separated by commas (e.g. 1,2). Press Enter to confirm."))
+    print()
+    for i, p in enumerate(PROVIDERS, 1):
+        print(f"  {grey(str(i) + '.')} {bold(p['name'])}  {grey(p['description'])}")
+    print()
+
+    selected_nums: List[int] = []
     while True:
         raw = input(f"  {blue('❯')} Provider(s): ").strip()
         if not raw:
@@ -190,7 +282,7 @@ def _select_providers() -> List[Dict]:
                 print(grey(f"  Enter numbers between 1 and {len(PROVIDERS)}."))
                 continue
             selected_nums = sorted(set(valid))
-            _print_provider_menu(selected_nums)
+            break
         except ValueError:
             print(grey("  Enter numbers separated by commas, e.g. 1,3"))
 
@@ -317,7 +409,7 @@ def _proxy_settings() -> tuple[int, str]:
     print()
 
     port_raw = input(f"  {blue('❯')} Port {grey('[4000]')}: ").strip()
-    port = int(port_raw) if port_raw.isdigit() else 4000
+    port: int = int(port_raw) if port_raw.isdigit() else 4000
 
     key_raw = input(
         f"  {blue('❯')} Master key {grey('[auto-generate]')}: "
