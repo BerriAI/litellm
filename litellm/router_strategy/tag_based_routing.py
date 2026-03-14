@@ -35,9 +35,7 @@ def _is_valid_deployment_tag_regex(
         try:
             compiled = re.compile(pattern)
         except re.error:
-            verbose_logger.warning(
-                "tag_regex: invalid pattern %r — skipping", pattern
-            )
+            verbose_logger.warning("tag_regex: invalid pattern %r — skipping", pattern)
             continue
         for header_str in header_strings:
             if compiled.search(header_str):
@@ -109,12 +107,12 @@ def _match_deployment(
     # the regex to fire only when the deployment has NO plain tags, so we never
     # use regex as a backdoor around the operator's strict-tag policy.
     strict_tag_check_failed = (
-        not match_any
-        and bool(deployment_tags)
-        and bool(request_tags)
+        not match_any and bool(deployment_tags) and bool(request_tags)
     )
     if deployment_tag_regex and header_strings and not strict_tag_check_failed:
-        regex_match = _is_valid_deployment_tag_regex(deployment_tag_regex, header_strings)
+        regex_match = _is_valid_deployment_tag_regex(
+            deployment_tag_regex, header_strings
+        )
         if regex_match is not None:
             return {"matched_via": "tag_regex", "matched_value": regex_match}
 
@@ -160,9 +158,7 @@ async def get_deployments_for_tag(
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
         user_agent = metadata.get("user_agent", "")
-        header_strings: List[str] = (
-            [f"User-Agent: {user_agent}"] if user_agent else []
-        )
+        header_strings: List[str] = [f"User-Agent: {user_agent}"] if user_agent else []
 
         new_healthy_deployments: List[Any] = []
         default_deployments: List[Any] = []
@@ -173,8 +169,7 @@ async def get_deployments_for_tag(
         # User-Agent (all proxy requests do) but targets deployments with no
         # tag_regex will continue to use the original tag-only code path.
         has_regex_deployments = any(
-            d.get("litellm_params", {}).get("tag_regex")
-            for d in healthy_deployments
+            d.get("litellm_params", {}).get("tag_regex") for d in healthy_deployments
         )
         has_tag_filter = bool(request_tags) or (
             bool(header_strings) and has_regex_deployments
