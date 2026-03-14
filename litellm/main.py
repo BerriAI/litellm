@@ -1613,7 +1613,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
+        responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
