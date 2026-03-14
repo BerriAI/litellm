@@ -10,7 +10,7 @@ export interface PaginationProgress {
 const PAGE_FETCH_DELAY_MS = 300;
 
 /** Number of pages to accumulate before flushing to React state (reduces re-renders). */
-const RENDER_BATCH_SIZE = 5;
+const RENDER_BATCH_SIZE = 3;
 
 /** The metadata fields returned by the daily activity API that should be summed across pages. */
 const SUMMABLE_METADATA_KEYS = [
@@ -80,8 +80,8 @@ function sumMetadata(
 }
 
 /**
- * Hook that auto-paginates daily activity endpoints, updating state after each
- * page so charts render progressively. Cancels on unmount, param changes, or
+ * Hook that auto-paginates daily activity endpoints, updating state in batches
+ * so charts render progressively. Cancels on unmount, param changes, or
  * manual cancel().
  *
  * The `args` array should contain every argument the fetchFn expects EXCEPT
@@ -204,11 +204,10 @@ export function usePaginatedDailyActivity({
           accumulatedMetadata.has_more = page < totalPages;
           accumulatedMetadata.page = page;
 
-          // Always update progress so the banner stays responsive.
-          setProgress({ currentPage: page, totalPages });
-
-          // Flush accumulated data to React state every RENDER_BATCH_SIZE pages
-          // (or on the final page) to avoid expensive per-page re-renders.
+          // Flush accumulated data and progress to React state every
+          // RENDER_BATCH_SIZE pages (or on the final page) to avoid
+          // expensive per-page re-renders. Progress and data are updated
+          // together so the counter never appears to decrement.
           const isLastPage = page === totalPages;
           const isBatchBoundary = (page - 1) % RENDER_BATCH_SIZE === 0;
           if (isLastPage || isBatchBoundary) {
@@ -216,6 +215,7 @@ export function usePaginatedDailyActivity({
               results: accumulatedResults,
               metadata: accumulatedMetadata,
             });
+            setProgress({ currentPage: page, totalPages });
           }
         }
 

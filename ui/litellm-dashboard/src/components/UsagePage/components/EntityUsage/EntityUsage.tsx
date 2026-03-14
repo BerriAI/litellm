@@ -22,7 +22,7 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { ExportOutlined } from "@ant-design/icons";
+import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
@@ -404,6 +404,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           message={
             <div className="flex items-center justify-between">
               <span>
+                <LoadingOutlined spin className="mr-2" />
                 Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
                 update periodically as data loads. Moving off of this page will stop and reset this. To continue using
                 the UI in the meantime,{" "}
@@ -439,6 +440,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           message={
             <div className="flex items-center justify-between">
               <span>
+                <LoadingOutlined spin className="mr-2" />
                 Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
                 Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
                 continue using the UI in the meantime,{" "}

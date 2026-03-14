@@ -448,6 +448,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               message={
                 <div className="flex items-center justify-between">
                   <span>
+                    <LoadingOutlined spin className="mr-2" />
                     Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
                     {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving
                     off of this page will stop and reset this. To continue using the UI in the meantime,{" "}
