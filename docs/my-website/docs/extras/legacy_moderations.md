@@ -7,4 +7,4 @@ hide_table_of_contents: true
 
 # Moderations
 
-See [OpenAI Provider Docs](/docs/providers/openai).
+See [Moderations docs](/docs/moderation).

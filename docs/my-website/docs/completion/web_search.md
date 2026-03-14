@@ -3,36 +3,64 @@ import TabItem from '@theme/TabItem';
 
 # Web Search
 
-LiteLLM supports two complementary approaches to web search — choose the one that fits your use case:
+Use web search with litellm
 
-| | **Native Provider Search** | **Web Search Interception** |
-|---|---|---|
-| **How it works** | Pass `web_search_options` or `web_search_preview` tool; the provider searches the web natively | LiteLLM intercepts `litellm_web_search` tool calls and executes them via a third-party search provider |
-| **Providers** | OpenAI, xAI, Anthropic, Gemini, Perplexity (native search models only) | Any provider — OpenAI, Anthropic, Mistral, Groq, Bedrock, Azure, and 20+ more |
-| **Search engine** | Provider's own (OpenAI Search, Google, Anthropic, xAI/X) | Perplexity, Tavily, Exa AI, Google PSE, Firecrawl, SearXNG, Linkup, and more |
-| **LiteLLM version** | `v1.71.0+` | `v1.71.0+` |
+| Feature | Details |
+|---------|---------|
+| Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
+| Supported Providers | `openai`, `xai`, `vertex_ai`, `anthropic`, `gemini`, `perplexity` |
+| LiteLLM Cost Tracking | ✅ Supported |
+| LiteLLM Version | `v1.71.0+` |
 
----
+## Which Search Engine is Used?
 
-## Approach 1: Native Provider Web Search
+Each provider uses their own search backend:
 
-Use a provider's built-in search capability. Supported via `/chat/completions` (with `web_search_options`) and `/responses` (with `web_search_preview` tool).
+| Provider | Search Engine | Notes |
+|----------|---------------|-------|
+| **OpenAI** (`gpt-5-search-api`, `gpt-4o-search-preview`, `gpt-4o-mini-search-preview`) | OpenAI's internal search | Real-time web data |
+| **xAI** (`grok-3`) | xAI's search + X/Twitter | Real-time social media data |
+| **Google AI/Vertex** (`gemini-2.0-flash`) | **Google Search** | Uses actual Google search results |
+| **Anthropic** (`claude-3-5-sonnet`) | Anthropic's web search | Real-time web data |
+| **Perplexity** | Perplexity's search engine | AI-powered search and reasoning |
 
-### Supported Providers
+:::warning Important: Only Search Models Support `web_search_options`
+For OpenAI, only dedicated search models support the `web_search_options` parameter:
+- `gpt-4o-search-preview`
+- `gpt-4o-mini-search-preview`
+- `gpt-5-search-api`
 
-| Provider | Search Engine | Models |
-|----------|--------------|--------|
-| **OpenAI** | OpenAI Search | `gpt-5-search-api`, `gpt-4o-search-preview`, `gpt-4o-mini-search-preview` |
-| **xAI** | xAI Search + X/Twitter | `grok-3` |
-| **Google AI / Vertex AI** | Google Search | `gemini-2.0-flash` |
-| **Anthropic** | Anthropic Web Search | `claude-3-5-sonnet-latest`, `claude-3-5-haiku-latest`, `claude-3-7-sonnet-20250219` |
-| **Perplexity** | Perplexity Search | Perplexity models |
-
-:::warning Only search models support `web_search_options` on OpenAI
-For OpenAI, only `gpt-4o-search-preview`, `gpt-4o-mini-search-preview`, and `gpt-5-search-api` support `web_search_options`. Regular models (`gpt-5`, `gpt-4.1`, `gpt-4o`) use the `/responses` endpoint with the `web_search_preview` tool instead.
+**Regular models like `gpt-5`, `gpt-4.1`, `gpt-4o` do not support `web_search_options`**
 :::
 
-### `/chat/completions`
+:::tip The `web_search_options` parameter is optional
+Search models (like `gpt-4o-search-preview`) **automatically search the web** even without the `web_search_options` parameter.
+
+Use `web_search_options` when you need to:
+- Adjust `search_context_size` (`"low"`, `"medium"`, `"high"`)
+- Specify `user_location` for localized results
+:::
+
+:::info
+**Anthropic Web Search Models**: Claude models that support web search: `claude-3-5-sonnet-latest`, `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`, `claude-3-7-sonnet-20250219`
+:::
+
+## OpenAI Web Search: Two Approaches
+
+OpenAI offers two distinct ways to use web search depending on the endpoint and model:
+
+| Approach | Endpoint | Models | How to enable |
+|----------|----------|--------|---------------|
+| **Search Models** | `/chat/completions` | `gpt-5-search-api`, `gpt-4o-search-preview`, `gpt-4o-mini-search-preview` | Pass `web_search_options` parameter |
+| **Web Search Tool** | `/responses` | `gpt-5`, `gpt-4.1`, `gpt-4o`, and other regular models | Pass `web_search_preview` tool |
+
+:::tip Search models search automatically
+Search models like `gpt-5-search-api` **automatically search the web** even without the `web_search_options` parameter. Use `web_search_options` to set `search_context_size` (`"low"`, `"medium"`, `"high"`) or specify `user_location` for localized results.
+:::
+
+## `/chat/completions` (litellm.completion)
+
+### Quick Start
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -42,40 +70,60 @@ from litellm import completion
 
 response = completion(
     model="openai/gpt-5-search-api",
-    messages=[{"role": "user", "content": "What was a positive news story from today?"}],
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
     web_search_options={
-        "search_context_size": "medium"  # "low" | "medium" | "high"
+        "search_context_size": "medium"  # Options: "low", "medium", "high"
     }
 )
 ```
 
 </TabItem>
-<TabItem value="proxy" label="Proxy">
+<TabItem value="proxy" label="PROXY">
 
-1. Setup `config.yaml`
+1. Setup config.yaml
 
 ```yaml
 model_list:
+  # OpenAI search models
   - model_name: gpt-5-search-api
     litellm_params:
       model: openai/gpt-5-search-api
       api_key: os.environ/OPENAI_API_KEY
 
+  - model_name: gpt-4o-search-preview
+    litellm_params:
+      model: openai/gpt-4o-search-preview
+      api_key: os.environ/OPENAI_API_KEY
+
+  # xAI
   - model_name: grok-3
     litellm_params:
       model: xai/grok-3
       api_key: os.environ/XAI_API_KEY
 
+  # Anthropic
   - model_name: claude-3-5-sonnet-latest
     litellm_params:
       model: anthropic/claude-3-5-sonnet-latest
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # VertexAI
   - model_name: gemini-2-flash
     litellm_params:
       model: gemini-2.0-flash
       vertex_project: your-project-id
       vertex_location: us-central1
+
+  # Google AI Studio
+  - model_name: gemini-2-flash-studio
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
 ```
 
 2. Start the proxy
@@ -84,70 +132,161 @@ model_list:
 litellm --config /path/to/config.yaml
 ```
 
-3. Call it
+3. Test it!
 
 ```python showLineNumbers
 from openai import OpenAI
 
-client = OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
 
 response = client.chat.completions.create(
-    model="gpt-5-search-api",
-    messages=[{"role": "user", "content": "What was a positive news story from today?"}],
-    extra_body={"web_search_options": {"search_context_size": "medium"}}
+    model="gpt-5-search-api",  # or any other web search enabled model
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?"
+        }
+    ],
+    extra_body={
+        "web_search_options": {
+            "search_context_size": "medium"
+        }
+    }
 )
 ```
-
 </TabItem>
 </Tabs>
 
-#### Search context size
+### Search context size
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+**OpenAI (using web_search_options)**
 ```python showLineNumbers
-# OpenAI
-response = completion(model="openai/gpt-5-search-api", messages=[...],
-    web_search_options={"search_context_size": "low"})
+from litellm import completion
 
-# xAI
-response = completion(model="xai/grok-3", messages=[...],
-    web_search_options={"search_context_size": "high"})
-
-# Anthropic (also supports user_location)
-response = completion(model="anthropic/claude-3-5-sonnet-latest", messages=[...],
+# Customize search context size
+response = completion(
+    model="openai/gpt-5-search-api",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
     web_search_options={
-        "search_context_size": "medium",
-        "user_location": {"type": "approximate", "approximate": {"city": "San Francisco"}}
-    })
-
-# Gemini
-response = completion(model="gemini-2.0-flash", messages=[...],
-    web_search_options={"search_context_size": "low"})
-```
-
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-```python showLineNumbers
-response = client.chat.completions.create(
-    model="grok-3",
-    messages=[{"role": "user", "content": "What was a positive news story from today?"}],
-    web_search_options={"search_context_size": "low"}
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }
 )
 ```
 
+**xAI (using web_search_options)**
+```python showLineNumbers
+from litellm import completion
+
+# Customize search context size for xAI
+response = completion(
+    model="xai/grok-3",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
+    web_search_options={
+        "search_context_size": "high"  # Options: "low", "medium" (default), "high"
+    }
+)
+```
+
+**Anthropic (using web_search_options)**
+```python showLineNumbers
+from litellm import completion
+
+# Customize search context size for Anthropic
+response = completion(
+    model="anthropic/claude-3-5-sonnet-latest",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
+    web_search_options={
+        "search_context_size": "medium",  # Options: "low", "medium" (default), "high"
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
+)
+```
+
+**VertexAI/Gemini (using web_search_options)**
+```python showLineNumbers
+from litellm import completion
+
+# Customize search context size for Gemini
+response = completion(
+    model="gemini-2.0-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
+    web_search_options={
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```python showLineNumbers
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Customize search context size
+response = client.chat.completions.create(
+    model="grok-3",  # works with any web search enabled model
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?"
+        }
+    ],
+    web_search_options={
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }
+)
+```
 </TabItem>
 </Tabs>
 
-### `/responses`
 
-Use the `web_search_preview` tool with general-purpose models like `gpt-5`, `gpt-4.1`, `gpt-4o`.
+
+## `/responses` (litellm.responses)
+
+Use the `web_search_preview` tool with models like `gpt-5`, `gpt-4.1`, `gpt-4o`, etc.
 
 :::info
-Search-dedicated models (`gpt-5-search-api`, `gpt-4o-search-preview`) do **not** support `/responses`. Use them with `/chat/completions` + `web_search_options` instead.
+Search-dedicated models like `gpt-5-search-api` and `gpt-4o-search-preview` do **not** support the `/responses` endpoint. Use them with `/chat/completions` + `web_search_options` instead (see above).
 :::
+
+### Quick Start
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -158,14 +297,16 @@ from litellm import responses
 response = responses(
     model="openai/gpt-5",
     input="What is the capital of France?",
-    tools=[{"type": "web_search_preview"}]
+    tools=[{
+        "type": "web_search_preview"  # enables web search with default medium context size
+    }]
 )
 ```
 
 </TabItem>
-<TabItem value="proxy" label="Proxy">
+<TabItem value="proxy" label="PROXY">
 
-1. Setup `config.yaml`
+1. Setup config.yaml
 
 ```yaml
 model_list:
@@ -173,77 +314,108 @@ model_list:
     litellm_params:
       model: openai/gpt-5
       api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
 ```
 
-2. Start the proxy and call it
+2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
 
 ```python showLineNumbers
 from openai import OpenAI
 
-client = OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
 
 response = client.responses.create(
     model="gpt-5",
-    tools=[{"type": "web_search_preview"}],
+    tools=[{
+        "type": "web_search_preview"
+    }],
     input="What is the capital of France?",
 )
+
 print(response.output_text)
 ```
-
 </TabItem>
 </Tabs>
 
-#### Search context size (responses)
+### Search context size
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python showLineNumbers
+from litellm import responses
+
+# Customize search context size
 response = responses(
     model="openai/gpt-5",
     input="What is the capital of France?",
-    tools=[{"type": "web_search_preview", "search_context_size": "low"}]
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }]
 )
 ```
-
-### Configuring defaults in config.yaml
-
-<Tabs>
-<TabItem value="default" label="Default">
-
-```yaml
-model_list:
-  - model_name: grok-3
-    litellm_params:
-      model: xai/grok-3
-      api_key: os.environ/XAI_API_KEY
-      web_search_options: {}  # enables web search with default settings
-```
-
 </TabItem>
-<TabItem value="custom" label="Custom Context">
+<TabItem value="proxy" label="PROXY">
 
-```yaml
-model_list:
-  - model_name: grok-3
-    litellm_params:
-      model: xai/grok-3
-      api_key: os.environ/XAI_API_KEY
-      web_search_options:
-        search_context_size: "high"
+```python showLineNumbers
+from openai import OpenAI
 
-  - model_name: gpt-5-search-api
-    litellm_params:
-      model: openai/gpt-5-search-api
-      api_key: os.environ/OPENAI_API_KEY
-      web_search_options:
-        search_context_size: "low"
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Customize search context size
+response = client.responses.create(
+    model="gpt-5",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"  # Options: "low", "medium" (default), "high"
+    }],
+    input="What is the capital of France?",
+)
+
+print(response.output_text)
 ```
-
 </TabItem>
 </Tabs>
 
-You can also configure the router to skip deployments that don't support web search:
+## Configuring Web Search in config.yaml
+
+You can set default web search options directly in your proxy config file:
+
+<Tabs>
+<TabItem value="default" label="Default Web Search">
 
 ```yaml
 model_list:
+  # Enable web search by default for all requests to this model
+  - model_name: grok-3
+    litellm_params:
+      model: xai/grok-3
+      api_key: os.environ/XAI_API_KEY
+      web_search_options: {}  # Enables web search with default settings
+```
+
+### Advanced
+You can configure LiteLLM's router to optionally drop models that do not support WebSearch, for example
+```yaml
   - model_name: gpt-4.1
     litellm_params:
       model: openai/gpt-4.1
@@ -253,201 +425,174 @@ model_list:
       api_base: "x.openai.azure.com/"
       api_version: 2025-03-01-preview
     model_info:
-      supports_web_search: false  # LiteLLM will skip this deployment for web search requests
+      supports_web_search: False <---- KEY CHANGE!
 ```
-
-### Checking if a model supports web search
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python showLineNumbers
-import litellm
-
-litellm.supports_web_search(model="openai/gpt-5-search-api")    # True
-litellm.supports_web_search(model="xai/grok-3")                  # True
-litellm.supports_web_search(model="anthropic/claude-3-5-sonnet-latest")  # True
-litellm.supports_web_search(model="gemini-2.0-flash")            # True
-```
+In this example, LiteLLM will still route LLM requests to both deployments, but for WebSearch, will solely route to OpenAI.
 
 </TabItem>
-<TabItem value="proxy" label="Proxy">
-
-```bash
-curl -X GET 'http://localhost:4000/model_group/info' \
-  -H 'x-api-key: sk-1234'
-```
-
-Look for `"supports_web_search": true` in the response.
-
-</TabItem>
-</Tabs>
-
----
-
-## Approach 2: Web Search Interception
-
-Enable web search for **any provider** — including those without native search support. LiteLLM intercepts `litellm_web_search` tool calls and executes them using your configured search provider, then returns the final answer automatically.
-
-### How it works
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant LiteLLM
-    participant LLM as LLM Provider
-    participant Search as Search Provider
-
-    User->>LiteLLM: Request with litellm_web_search tool
-    LiteLLM->>LLM: Forward request
-    LLM-->>LiteLLM: Response with tool_call
-    Note over LiteLLM: Detect web search tool call
-    LiteLLM->>Search: Execute search query
-    Search-->>LiteLLM: Search results
-    LiteLLM->>LLM: Follow-up with results
-    LLM-->>LiteLLM: Final answer
-    LiteLLM-->>User: Final answer
-```
-
-One API call in → complete answer with search results out.
-
-### Supported Search Providers
-
-| Provider | `search_provider` value | Environment Variable |
-|----------|------------------------|----------------------|
-| **Perplexity AI** | `perplexity` | `PERPLEXITYAI_API_KEY` |
-| **Tavily** | `tavily` | `TAVILY_API_KEY` |
-| **Exa AI** | `exa_ai` | `EXA_API_KEY` |
-| **Parallel AI** | `parallel_ai` | `PARALLEL_AI_API_KEY` |
-| **Google PSE** | `google_pse` | `GOOGLE_PSE_API_KEY`, `GOOGLE_PSE_ENGINE_ID` |
-| **DataForSEO** | `dataforseo` | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
-| **Firecrawl** | `firecrawl` | `FIRECRAWL_API_KEY` |
-| **SearXNG** | `searxng` | `SEARXNG_API_BASE` |
-| **Linkup** | `linkup` | `LINKUP_API_KEY` |
-
-### Quick Start
-
-**1. Configure `config.yaml`**
+<TabItem value="custom" label="Custom Search Context">
 
 ```yaml
 model_list:
-  - model_name: gpt-4o
+  # Set custom web search context size
+  - model_name: grok-3
     litellm_params:
-      model: openai/gpt-4o
+      model: xai/grok-3
+      api_key: os.environ/XAI_API_KEY
+      web_search_options:
+        search_context_size: "high"  # Options: "low", "medium", "high"
+  
+  # OpenAI search model with custom context size
+  - model_name: gpt-5-search-api
+    litellm_params:
+      model: openai/gpt-5-search-api
       api_key: os.environ/OPENAI_API_KEY
+      web_search_options:
+        search_context_size: "low"
 
-litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers:
-          - openai
-          - anthropic
-          - mistral
-        search_tool_name: perplexity-search  # optional — uses first tool if not set
-
-search_tools:
-  - search_tool_name: perplexity-search
+  # Gemini with medium context (default)
+  - model_name: gemini-2-flash
     litellm_params:
-      search_provider: perplexity
-      api_key: os.environ/PERPLEXITY_API_KEY
-
-  - search_tool_name: tavily-search
-    litellm_params:
-      search_provider: tavily
-      api_key: os.environ/TAVILY_API_KEY
-```
-
-**2. Call with the `litellm_web_search` tool**
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python showLineNumbers
-import litellm
-
-response = await litellm.acompletion(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "What are the latest AI news?"}],
-    tools=[
-        {
-            "type": "function",
-            "function": {
-                "name": "litellm_web_search",
-                "description": "Search the web for current information",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"]
-                }
-            }
-        }
-    ]
-)
-print(response.choices[0].message.content)
-```
-
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LITELLM_API_KEY" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
-    "tools": [
-      {
-        "type": "function",
-        "function": {
-          "name": "litellm_web_search",
-          "description": "Search the web",
-          "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"]
-          }
-        }
-      }
-    ]
-  }'
+      model: gemini-2.0-flash
+      vertex_project: your-project-id
+      vertex_location: us-central1
+      web_search_options:
+        search_context_size: "medium"
 ```
 
 </TabItem>
 </Tabs>
 
-### Supported LLM Providers
+**Note:** When `web_search_options` is set in the config, it applies to all requests to that model. Users can still override these settings by passing `web_search_options` in their API requests.
 
-Works with any provider that uses LiteLLM's Base HTTP Handler or OpenAI Handler:
+## Checking if a model supports web search
 
-| Provider | Provider | Provider |
-|----------|----------|----------|
-| OpenAI | Anthropic | Azure OpenAI |
-| MiniMax | Mistral | Cohere |
-| Fireworks AI | Together AI | Groq |
-| Perplexity | DeepSeek | xAI |
-| Hugging Face | Vertex AI | Bedrock |
-| Sagemaker | Databricks | DataRobot |
-| VLLM | Heroku | RAGFlow |
+<Tabs>
+<TabItem label="SDK" value="sdk">
 
-### `enabled_providers` values
+Use `litellm.supports_web_search(model="model_name")` -> returns `True` if model can perform web searches
 
-| Provider | Value | Provider | Value |
-|----------|-------|----------|-------|
-| OpenAI | `openai` | Anthropic | `anthropic` |
-| MiniMax | `minimax` | Mistral | `mistral` |
-| Cohere | `cohere` | Fireworks AI | `fireworks_ai` |
-| Together AI | `together_ai` | Groq | `groq` |
-| Perplexity | `perplexity` | DeepSeek | `deepseek` |
-| xAI | `xai` | Azure | `azure` |
-| Vertex AI | `vertex_ai` | Bedrock | `bedrock` |
-| Sagemaker | `sagemaker_chat` | Databricks | `databricks` |
+```python showLineNumbers
+# Check OpenAI models
+assert litellm.supports_web_search(model="openai/gpt-5-search-api") == True
+assert litellm.supports_web_search(model="openai/gpt-4o-search-preview") == True
 
----
+# Check xAI models
+assert litellm.supports_web_search(model="xai/grok-3") == True
 
-## Related
+# Check Anthropic models
+assert litellm.supports_web_search(model="anthropic/claude-3-5-sonnet-latest") == True
 
-- [Claude Code WebSearch](../tutorials/claude_code_websearch.md) — Web search with Claude Code
-- [Tool Calling](./function_call.md) — General tool calling documentation
-- [Search Providers](../search/index.md) — Detailed search provider setup
-- [Callbacks](../observability/custom_callback.md) — Custom callback documentation
+# Check VertexAI models
+assert litellm.supports_web_search(model="gemini-2.0-flash") == True
+
+# Check Google AI Studio models
+assert litellm.supports_web_search(model="gemini/gemini-2.0-flash") == True
+```
+</TabItem>
+
+<TabItem label="PROXY" value="proxy">
+
+1. Define models in config.yaml
+
+```yaml
+model_list:
+  # OpenAI
+  - model_name: gpt-5-search-api
+    litellm_params:
+      model: openai/gpt-5-search-api
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      supports_web_search: True
+
+  - model_name: gpt-4o-search-preview
+    litellm_params:
+      model: openai/gpt-4o-search-preview
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      supports_web_search: True
+
+  # xAI
+  - model_name: grok-3
+    litellm_params:
+      model: xai/grok-3
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      supports_web_search: True
+  
+  # Anthropic
+  - model_name: claude-3-5-sonnet-latest
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-latest
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      supports_web_search: True
+  
+  # VertexAI
+  - model_name: gemini-2-flash
+    litellm_params:
+      model: gemini-2.0-flash
+      vertex_project: your-project-id
+      vertex_location: us-central1
+    model_info:
+      supports_web_search: True
+  
+  # Google AI Studio
+  - model_name: gemini-2-flash-studio
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
+    model_info:
+      supports_web_search: True
+```
+
+2. Run proxy server
+
+```bash
+litellm --config config.yaml
+```
+
+3. Call `/model_group/info` to check if a model supports web search
+
+```shell
+curl -X 'GET' \
+  'http://localhost:4000/model_group/info' \
+  -H 'accept: application/json' \
+  -H 'x-api-key: sk-1234'
+```
+
+Expected Response 
+
+```json showLineNumbers
+{
+  "data": [
+    {
+      "model_group": "gpt-5-search-api",
+      "providers": ["openai"],
+      "max_tokens": 128000,
+      "supports_web_search": true
+    },
+    {
+      "model_group": "gpt-4o-search-preview",
+      "providers": ["openai"],
+      "max_tokens": 128000,
+      "supports_web_search": true
+    },
+    {
+      "model_group": "grok-3",
+      "providers": ["xai"],
+      "max_tokens": 131072,
+      "supports_web_search": true
+    },
+    {
+      "model_group": "gemini-2-flash",
+      "providers": ["vertex_ai"],
+      "max_tokens": 8192,
+      "supports_web_search": true
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>

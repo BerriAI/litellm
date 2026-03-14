@@ -17,6 +17,7 @@ const sidebars = {
   integrationsSidebar: [
     { type: "doc", id: "integrations/index" },
     { type: "doc", id: "integrations/community" },
+    { type: "doc", id: "integrations/websearch_interception", label: "Web Search Interception" },
     {
       type: "category",
       label: "Observability",
@@ -243,6 +244,7 @@ const sidebars = {
           items: [
             "completion/output",
             "completion/usage",
+            "completion/token_usage",
             "exception_mapping",
           ],
         },
@@ -261,6 +263,35 @@ const sidebars = {
           collapsed: true,
           items: [
             { type: "doc", id: "routing", label: "Load Balancing & Fallbacks" },
+          ],
+        },
+        {
+          type: "category",
+          label: "OpenAI-Compatible APIs",
+          collapsed: true,
+          items: [
+            "assistants",
+            "fine_tuning",
+            "files_endpoints",
+            "evals_api",
+            "generateContent",
+            "image_edits",
+            "image_variations",
+            "interactions",
+            "skills",
+            "videos",
+            {
+              type: "category",
+              label: "Code Interpreter",
+              collapsed: true,
+              items: ["containers", "container_files"],
+            },
+            {
+              type: "category",
+              label: "Vector Stores",
+              collapsed: true,
+              items: ["vector_stores/create", "vector_stores/search", "vector_store_files"],
+            },
           ],
         },
         { type: "doc", id: "budget_manager", label: "Budgets & Rate Limits" },
@@ -351,6 +382,7 @@ const sidebars = {
                 "proxy/model_management",
                 "proxy/master_key_rotations",
                 "proxy/release_cycle",
+                "proxy/worker_startup_hooks",
               ],
             },
             {
@@ -578,10 +610,16 @@ const sidebars = {
             "proxy/pass_through_guardrails",
           ],
         },
-        { type: "doc", id: "realtime", label: "Realtime API (WebSocket)" },
-        { type: "doc", id: "rerank", label: "Rerank" },
-        { type: "doc", id: "response_api_compact", label: "Responses API (Compact)" },
-
+        {
+          type: "category",
+          label: "Managed Files & Fine-tuning",
+          collapsed: true,
+          items: [
+            "proxy/litellm_managed_files",
+            "proxy/managed_finetuning",
+            "proxy/managed_batches",
+          ],
+        },
         // ── 5. Admin & Advanced ────────────────────────────────────────
         {
           type: "category",
@@ -604,7 +642,7 @@ const sidebars = {
                   type: "category",
                   label: "Models",
                   collapsed: true,
-                  items: ["proxy/ui_credentials", "proxy/ai_hub", "proxy/model_compare_ui", "proxy/ui_store_model_db_setting"],
+                  items: ["proxy/ui_credentials", "proxy/ai_hub", "proxy/model_compare_ui", "proxy/ui_store_model_db_setting", "proxy/ui/ui_edit_logo"],
                 },
                 {
                   type: "category",
@@ -675,7 +713,15 @@ const sidebars = {
             "providers/openai_compatible",
             "providers/text_completion_openai",
             "providers/amazon_nova",
-            "providers/anthropic",
+            {
+              type: "category",
+              label: "Anthropic",
+              collapsed: true,
+              items: [
+                "providers/anthropic",
+                "providers/anthropic_programmatic_tool_calling",
+              ],
+            },
             "providers/aws_sagemaker",
             {
               type: "category",

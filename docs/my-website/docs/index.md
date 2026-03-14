@@ -148,6 +148,53 @@ print(response.choices[0].message.content)
 
 Every response follows the OpenAI Chat Completions format, regardless of provider. ✅
 
+### Response Format
+
+Non-streaming responses return a `ModelResponse` object:
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1677858242,
+  "model": "gpt-4o",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Hello! I'm doing well, thanks for asking."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 13,
+    "completion_tokens": 12,
+    "total_tokens": 25
+  }
+}
+```
+
+Streaming responses (`stream=True`) yield `ModelResponseStream` chunks:
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion.chunk",
+  "created": 1677858242,
+  "model": "gpt-4o",
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "role": "assistant",
+      "content": "Hello"
+    },
+    "finish_reason": null
+  }]
+}
+```
+
+📖 [Full output format reference →](./completion/output)
+
 :::tip Open in Colab
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
 <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -274,6 +321,8 @@ litellm.completion(
 )
 ```
 
+📖 [Custom callback docs →](./observability/custom_callback)
+
 ---
 
 ## LiteLLM Proxy Server (LLM Gateway)
@@ -333,6 +382,12 @@ print(response.choices[0].message.content)
 ```
 
 👉 [Full proxy quickstart with Docker →](./proxy/docker_quick_start)
+
+:::tip Debugging tool
+Use [**`/utils/transform_request`**](./utils/transform_request) to inspect exactly what LiteLLM sends to any provider — useful for debugging prompt formatting, header issues, and provider-specific parameters.
+:::
+
+🔗 [Interactive API explorer (Swagger) →](https://litellm-api.up.railway.app/)
 
 ---
 

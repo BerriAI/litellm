@@ -7,4 +7,4 @@ hide_table_of_contents: true
 
 # TwelveLabs
 
-This legacy route is no longer used. Start from the [LiteLLM docs home](/docs).
+See [Bedrock Embedding docs](/docs/providers/bedrock_embedding) for TwelveLabs Marengo models on AWS Bedrock.

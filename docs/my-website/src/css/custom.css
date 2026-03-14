@@ -513,6 +513,12 @@ video {
   border-radius: var(--ifm-border-radius);
 }
 
+/* Prevent video iframes (Loom, YouTube, etc.) from overflowing the
+   content column and overlapping the right-hand TOC sidebar. */
+.theme-doc-markdown iframe {
+  max-width: 100%;
+}
+
 /* =========================================
    FOOTER
    ========================================= */

@@ -7,4 +7,4 @@ hide_table_of_contents: true
 
 # Management Endpoints
 
-See [LiteLLM Proxy CLI](/docs/proxy/management_cli).
+See [Virtual Keys & Management Endpoints](/docs/proxy/virtual_keys).
