@@ -59,8 +59,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5-codex" in model
 
     @classmethod
+    def is_model_gpt_5_1_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.1+ variant (5.1, 5.2, 5.4 including codex/pro)."""
+        model_name = model.split("/")[-1]
+        return (
+            model_name.startswith("gpt-5.1")
+            or model_name.startswith("gpt-5.2")
+            or model_name.startswith("gpt-5.4")
+        )
+
+    @classmethod
     def is_model_gpt_5_2_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.2 variant (including pro)."""
+        """Check if the model is a gpt-5.2+ variant (5.2, 5.4 including pro)."""
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.2") or model_name.startswith("gpt-5.4")
 

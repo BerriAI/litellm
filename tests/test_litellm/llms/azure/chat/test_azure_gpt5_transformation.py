@@ -274,3 +274,42 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
 
+
+# --- Method resolution and GPT-5.4 model detection (fixes #23031) ---
+
+
+def test_azure_gpt5_has_is_model_gpt_5_1_model():
+    """AzureOpenAIGPT5Config must expose is_model_gpt_5_1_model via MRO."""
+    assert hasattr(AzureOpenAIGPT5Config, "is_model_gpt_5_1_model")
+    assert callable(AzureOpenAIGPT5Config.is_model_gpt_5_1_model)
+
+
+def test_azure_gpt5_has_is_model_gpt_5_2_model():
+    """AzureOpenAIGPT5Config must expose is_model_gpt_5_2_model via MRO."""
+    assert hasattr(AzureOpenAIGPT5Config, "is_model_gpt_5_2_model")
+    assert callable(AzureOpenAIGPT5Config.is_model_gpt_5_2_model)
+
+
+def test_azure_gpt5_is_model_gpt_5_1_detection(config: AzureOpenAIGPT5Config):
+    """is_model_gpt_5_1_model should match gpt-5.1, 5.2, and 5.4 variants."""
+    assert config.is_model_gpt_5_1_model("gpt-5.1")
+    assert config.is_model_gpt_5_1_model("gpt-5.1-codex")
+    assert config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
+    assert config.is_model_gpt_5_1_model("gpt-5.2")
+    assert config.is_model_gpt_5_1_model("gpt-5.4")
+    assert config.is_model_gpt_5_1_model("azure/gpt-5.1")
+    assert config.is_model_gpt_5_1_model("gpt5_series/gpt-5.4")
+    # Base gpt-5 and chat models should NOT match
+    assert not config.is_model_gpt_5_1_model("gpt-5")
+    assert not config.is_model_gpt_5_1_model("gpt-5-chat")
+
+
+def test_azure_gpt5_5_4_detected_by_variant_methods(config: AzureOpenAIGPT5Config):
+    """GPT-5.4 must be recognized by is_model_gpt_5_2_model and is_model_gpt_5_4_model."""
+    assert config.is_model_gpt_5_4_model("gpt-5.4")
+    assert config.is_model_gpt_5_2_model("gpt-5.4")
+    assert config.is_model_gpt_5_1_model("gpt-5.4")
+    assert config.is_model_gpt_5_model("gpt-5.4")
+    assert config.is_model_gpt_5_4_model("azure/gpt-5.4")
+    assert config.is_model_gpt_5_4_model("gpt5_series/gpt-5.4")
+
