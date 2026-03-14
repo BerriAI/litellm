@@ -8,10 +8,20 @@ import litellm
 from litellm.router import Router
 
 
+class _NonCopyableSpan:
+    """Mimics an OTel Span which raises on deepcopy, forcing safe_deep_copy
+    to fall back to the original reference."""
+
+    def __deepcopy__(self, memo):
+        raise TypeError("OTel spans cannot be deepcopied")
+
+
 def test_get_silent_experiment_kwargs():
     """
     Test _get_silent_experiment_kwargs returns isolated kwargs with silent experiment metadata.
-    Direct call for router code coverage.
+
+    Uses a non-copyable span object so that safe_deep_copy falls back to the
+    original metadata reference — exercising the identity-check fix path.
     """
     model_list = [
         {
@@ -20,7 +30,7 @@ def test_get_silent_experiment_kwargs():
         },
     ]
     router = Router(model_list=model_list)
-    mock_span = MagicMock()
+    mock_span = _NonCopyableSpan()
     kwargs = {
         "metadata": {"foo": "bar", "litellm_parent_otel_span": mock_span},
         "litellm_call_id": "call-123",
