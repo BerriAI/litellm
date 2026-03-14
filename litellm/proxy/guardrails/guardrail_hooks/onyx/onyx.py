@@ -109,7 +109,7 @@ class OnyxGuardrail(CustomGuardrail):
             result.pop("api_key", None)
             return result
         if isinstance(body_snapshot, dict):
-            return copy.deepcopy(body_snapshot)
+            return copy.copy(body_snapshot)
         if isinstance(body_keys, (list, tuple)):
             reconstructed = {
                 k: request_data.get(k)
