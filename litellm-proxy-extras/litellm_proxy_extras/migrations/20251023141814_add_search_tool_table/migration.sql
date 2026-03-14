@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_SearchToolsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SearchToolsTable" (
     "search_tool_id" TEXT NOT NULL,
     "search_tool_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,

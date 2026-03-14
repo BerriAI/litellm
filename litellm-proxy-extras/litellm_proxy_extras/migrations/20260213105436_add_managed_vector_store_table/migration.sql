@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedVectorStoreTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedVectorStoreTable" (
     "id" TEXT NOT NULL,
     "unified_resource_id" TEXT NOT NULL,
     "resource_object" JSONB,

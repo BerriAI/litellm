@@ -11,7 +11,7 @@ ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT
 ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- CreateTable
-CREATE TABLE "LiteLLM_AccessGroupTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AccessGroupTable" (
     "access_group_id" TEXT NOT NULL,
     "access_group_name" TEXT NOT NULL,
     "description" TEXT,

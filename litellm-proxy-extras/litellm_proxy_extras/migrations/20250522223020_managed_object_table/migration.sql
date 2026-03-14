@@ -4,7 +4,7 @@ ADD COLUMN IF NOT EXISTS "flat_model_file_ids" TEXT[] DEFAULT ARRAY[]::TEXT[],
 ADD COLUMN IF NOT EXISTS "updated_by" TEXT;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedObjectTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedObjectTable" (
     "id" TEXT NOT NULL,
     "unified_object_id" TEXT NOT NULL,
     "model_object_id" TEXT NOT NULL,

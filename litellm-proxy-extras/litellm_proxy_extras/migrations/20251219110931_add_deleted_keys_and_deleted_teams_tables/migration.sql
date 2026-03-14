@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DeletedTeamTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DeletedTeamTable" (
     "id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "team_alias" TEXT,
@@ -33,7 +33,7 @@ CREATE TABLE "LiteLLM_DeletedTeamTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DeletedVerificationToken" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DeletedVerificationToken" (
     "id" TEXT NOT NULL,
     "token" TEXT NOT NULL,
     "key_name" TEXT,

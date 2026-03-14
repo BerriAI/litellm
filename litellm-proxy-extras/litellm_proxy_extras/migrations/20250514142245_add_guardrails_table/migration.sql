@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_GuardrailsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_GuardrailsTable" (
     "guardrail_id" TEXT NOT NULL,
     "guardrail_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,

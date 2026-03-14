@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_TagTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_TagTable" (
     "tag_name" TEXT NOT NULL,
     "description" TEXT,
     "models" TEXT[],

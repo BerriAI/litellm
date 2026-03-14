@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ProjectTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ProjectTable" (
     "project_id" TEXT NOT NULL,
     "project_alias" TEXT,
     "team_id" TEXT,

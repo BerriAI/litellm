@@ -8,7 +8,7 @@ ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN IF EXISTS "spec_path";
 ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "agent_id" TEXT;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ToolTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ToolTable" (
     "tool_id" TEXT NOT NULL,
     "tool_name" TEXT NOT NULL,
     "origin" TEXT,

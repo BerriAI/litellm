@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_BudgetTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_BudgetTable" (
     "budget_id" TEXT NOT NULL,
     "max_budget" DOUBLE PRECISION,
     "soft_budget" DOUBLE PRECISION,
@@ -18,7 +18,7 @@ CREATE TABLE "LiteLLM_BudgetTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_CredentialsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_CredentialsTable" (
     "credential_id" TEXT NOT NULL,
     "credential_name" TEXT NOT NULL,
     "credential_values" JSONB NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE "LiteLLM_CredentialsTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ProxyModelTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ProxyModelTable" (
     "model_id" TEXT NOT NULL,
     "model_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE "LiteLLM_ProxyModelTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_OrganizationTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_OrganizationTable" (
     "organization_id" TEXT NOT NULL,
     "organization_alias" TEXT NOT NULL,
     "budget_id" TEXT NOT NULL,
@@ -63,7 +63,7 @@ CREATE TABLE "LiteLLM_OrganizationTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ModelTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ModelTable" (
     "id" SERIAL NOT NULL,
     "aliases" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +75,7 @@ CREATE TABLE "LiteLLM_ModelTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_TeamTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_TeamTable" (
     "team_id" TEXT NOT NULL,
     "team_alias" TEXT,
     "organization_id" TEXT,
@@ -102,7 +102,7 @@ CREATE TABLE "LiteLLM_TeamTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_UserTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_UserTable" (
     "user_id" TEXT NOT NULL,
     "user_alias" TEXT,
     "team_id" TEXT,
@@ -131,7 +131,7 @@ CREATE TABLE "LiteLLM_UserTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_VerificationToken" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_VerificationToken" (
     "token" TEXT NOT NULL,
     "key_name" TEXT,
     "key_alias" TEXT,
@@ -166,7 +166,7 @@ CREATE TABLE "LiteLLM_VerificationToken" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_EndUserTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_EndUserTable" (
     "user_id" TEXT NOT NULL,
     "alias" TEXT,
     "spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -179,7 +179,7 @@ CREATE TABLE "LiteLLM_EndUserTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_Config" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_Config" (
     "param_name" TEXT NOT NULL,
     "param_value" JSONB,
 
@@ -187,7 +187,7 @@ CREATE TABLE "LiteLLM_Config" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_SpendLogs" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogs" (
     "request_id" TEXT NOT NULL,
     "call_type" TEXT NOT NULL,
     "api_key" TEXT NOT NULL DEFAULT '',
@@ -218,7 +218,7 @@ CREATE TABLE "LiteLLM_SpendLogs" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ErrorLogs" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ErrorLogs" (
     "request_id" TEXT NOT NULL,
     "startTime" TIMESTAMP(3) NOT NULL,
     "endTime" TIMESTAMP(3) NOT NULL,
@@ -235,7 +235,7 @@ CREATE TABLE "LiteLLM_ErrorLogs" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_UserNotifications" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_UserNotifications" (
     "request_id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "models" TEXT[],
@@ -246,7 +246,7 @@ CREATE TABLE "LiteLLM_UserNotifications" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_TeamMembership" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_TeamMembership" (
     "user_id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -256,7 +256,7 @@ CREATE TABLE "LiteLLM_TeamMembership" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_OrganizationMembership" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_OrganizationMembership" (
     "user_id" TEXT NOT NULL,
     "organization_id" TEXT NOT NULL,
     "user_role" TEXT,
@@ -269,7 +269,7 @@ CREATE TABLE "LiteLLM_OrganizationMembership" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_InvitationLink" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_InvitationLink" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "is_accepted" BOOLEAN NOT NULL DEFAULT false,
@@ -284,7 +284,7 @@ CREATE TABLE "LiteLLM_InvitationLink" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_AuditLog" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AuditLog" (
     "id" TEXT NOT NULL,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "changed_by" TEXT NOT NULL DEFAULT '',

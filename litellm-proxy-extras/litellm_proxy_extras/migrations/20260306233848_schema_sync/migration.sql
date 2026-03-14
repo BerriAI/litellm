@@ -6,7 +6,7 @@ ADD COLUMN IF NOT EXISTS "tool_name_to_description" JSONB DEFAULT '{}',
 ADD COLUMN IF NOT EXISTS "tool_name_to_display_name" JSONB DEFAULT '{}';
 
 -- CreateTable
-CREATE TABLE "LiteLLM_MCPUserCredentials" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_MCPUserCredentials" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "server_id" TEXT NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE "LiteLLM_MCPUserCredentials" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_JWTKeyMapping" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_JWTKeyMapping" (
     "id" TEXT NOT NULL,
     "jwt_claim_name" TEXT NOT NULL,
     "jwt_claim_value" TEXT NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE "LiteLLM_JWTKeyMapping" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ConfigOverrides" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ConfigOverrides" (
     "config_type" TEXT NOT NULL,
     "config_value" JSONB NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

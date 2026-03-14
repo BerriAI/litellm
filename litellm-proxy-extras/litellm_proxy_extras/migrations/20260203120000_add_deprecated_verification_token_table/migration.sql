@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DeprecatedVerificationToken" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DeprecatedVerificationToken" (
     "id" TEXT NOT NULL,
     "token" TEXT NOT NULL,
     "active_token_id" TEXT NOT NULL,

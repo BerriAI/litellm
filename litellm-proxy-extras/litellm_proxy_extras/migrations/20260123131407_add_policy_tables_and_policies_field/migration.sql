@@ -14,7 +14,7 @@ ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAU
 ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "policies" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- CreateTable
-CREATE TABLE "LiteLLM_PolicyTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PolicyTable" (
     "policy_id" TEXT NOT NULL,
     "policy_name" TEXT NOT NULL,
     "inherit" TEXT,
@@ -31,7 +31,7 @@ CREATE TABLE "LiteLLM_PolicyTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_PolicyAttachmentTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PolicyAttachmentTable" (
     "attachment_id" TEXT NOT NULL,
     "policy_name" TEXT NOT NULL,
     "scope" TEXT,

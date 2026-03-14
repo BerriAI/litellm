@@ -557,11 +557,11 @@ class ProxyInitializationHelpers:
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 @click.option(
-    "--require_db_migration",
+    "--skip_db_migration_check",
     is_flag=True,
     default=False,
-    help="Exit with error if database migration fails. By default the proxy will warn and continue.",
-    envvar="REQUIRE_DB_MIGRATION",
+    help="Warn and continue instead of exiting when database migration fails.",
+    envvar="SKIP_DB_MIGRATION_CHECK",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -602,7 +602,7 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
     max_requests_before_restart,
-    require_db_migration: bool,
+    skip_db_migration_check: bool,
 ):
     args = locals()
     if local:
@@ -865,17 +865,17 @@ def run_server(  # noqa: PLR0915
                     if not PrismaManager.setup_database(
                         use_migrate=not use_prisma_db_push
                     ):
-                        if require_db_migration:
+                        if skip_db_migration_check:
+                            print(  # noqa
+                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
+                                "Pass --skip_db_migration_check to allow this.\033[0m"
+                            )
+                        else:
                             print(  # noqa
                                 "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
                                 "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
                             )
                             sys.exit(1)
-                        else:
-                            print(  # noqa
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Use --require_db_migration to exit on migration failure.\033[0m"
-                            )
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

@@ -3,7 +3,7 @@ ALTER TABLE "LiteLLM_DailyTeamSpend" ADD COLUMN IF NOT EXISTS "cache_creation_in
 ADD COLUMN IF NOT EXISTS "cache_read_input_tokens" INTEGER NOT NULL DEFAULT 0;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyTagSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyTagSpend" (
     "id" TEXT NOT NULL,
     "tag" TEXT NOT NULL,
     "date" TEXT NOT NULL,

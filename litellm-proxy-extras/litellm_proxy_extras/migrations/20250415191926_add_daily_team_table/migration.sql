@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyTeamSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyTeamSpend" (
     "id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "date" TEXT NOT NULL,

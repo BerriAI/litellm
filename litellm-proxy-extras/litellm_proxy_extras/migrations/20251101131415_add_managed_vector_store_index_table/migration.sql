@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedVectorStoreIndexTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedVectorStoreIndexTable" (
     "id" TEXT NOT NULL,
     "index_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,

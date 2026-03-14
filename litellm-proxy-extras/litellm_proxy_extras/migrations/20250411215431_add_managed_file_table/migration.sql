@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedFileTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedFileTable" (
     "id" TEXT NOT NULL,
     "unified_file_id" TEXT NOT NULL,
     "file_object" JSONB NOT NULL,

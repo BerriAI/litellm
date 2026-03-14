@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_AgentsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AgentsTable" (
     "agent_id" TEXT NOT NULL,
     "agent_name" TEXT NOT NULL,
     "litellm_params" JSONB,

@@ -2,7 +2,7 @@
 ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "agent_id" TEXT;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyAgentSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyAgentSpend" (
     "id" TEXT NOT NULL,
     "agent_id" TEXT,
     "date" TEXT NOT NULL,

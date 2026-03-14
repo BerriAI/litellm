@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ClaudeCodePluginTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ClaudeCodePluginTable" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "version" TEXT,

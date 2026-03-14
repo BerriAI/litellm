@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_HealthCheckTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_HealthCheckTable" (
     "health_check_id" TEXT NOT NULL,
     "model_name" TEXT NOT NULL,
     "model_id" TEXT,

@@ -180,6 +180,20 @@ class TestMigrationSQLIdempotency:
         )
         return migrations
 
+    def test_create_table_uses_if_not_exists(self, all_migrations):
+        """CREATE TABLE statements must use IF NOT EXISTS"""
+        violations = []
+        for migration_name, sql in all_migrations:
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(r"CREATE\s+TABLE\s+", line, re.IGNORECASE) and not re.search(
+                    r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "CREATE TABLE without IF NOT EXISTS found in migrations:\n"
+            + "\n".join(violations)
+        )
+
     def test_add_column_uses_if_not_exists(self, all_migrations):
         """ADD COLUMN statements must use IF NOT EXISTS"""
         violations = []

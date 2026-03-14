@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyGuardrailMetrics" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyGuardrailMetrics" (
     "guardrail_id" TEXT NOT NULL,
     "date" TEXT NOT NULL,
     "requests_evaluated" BIGINT NOT NULL DEFAULT 0,
@@ -15,7 +15,7 @@ CREATE TABLE "LiteLLM_DailyGuardrailMetrics" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyPolicyMetrics" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyPolicyMetrics" (
     "policy_id" TEXT NOT NULL,
     "date" TEXT NOT NULL,
     "requests_evaluated" BIGINT NOT NULL DEFAULT 0,
@@ -31,7 +31,7 @@ CREATE TABLE "LiteLLM_DailyPolicyMetrics" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_SpendLogGuardrailIndex" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogGuardrailIndex" (
     "request_id" TEXT NOT NULL,
     "guardrail_id" TEXT NOT NULL,
     "policy_id" TEXT,

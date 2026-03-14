@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_SpendLogToolIndex" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogToolIndex" (
     "request_id" TEXT NOT NULL,
     "tool_name" TEXT NOT NULL,
     "start_time" TIMESTAMP(3) NOT NULL,

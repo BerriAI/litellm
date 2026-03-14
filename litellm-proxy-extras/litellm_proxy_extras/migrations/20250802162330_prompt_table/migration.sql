@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_PromptTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PromptTable" (
     "id" TEXT NOT NULL,
     "prompt_id" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,

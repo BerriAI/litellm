@@ -11,7 +11,7 @@ ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "object_permission_id" 
 ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ObjectPermissionTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ObjectPermissionTable" (
     "object_permission_id" TEXT NOT NULL,
     "mcp_servers" TEXT[] DEFAULT ARRAY[]::TEXT[],
 
