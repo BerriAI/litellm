@@ -1069,7 +1069,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif oci_status == 409:
-                elif oci_status == 409:
+                    # if ConflictError not available, fall back to BadRequestError
+                    raise ConflictError(
+                        message=f"{exception_provider}: Conflict - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
                     # if ConflictError not available, fall back to BadRequestError
                     raise ConflictError(
                         message=f"{exception_provider}: Conflict - {oci_message}",
