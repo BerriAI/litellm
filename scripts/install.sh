@@ -125,7 +125,12 @@ fi
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
-  exec "$LITELLM_BIN" --setup </dev/tty
+  # Use /dev/tty for interactive input when available (stdin is a pipe from curl)
+  if [ -r /dev/tty ]; then
+    exec "$LITELLM_BIN" --setup </dev/tty
+  else
+    exec "$LITELLM_BIN" --setup
+  fi
 else
   echo ""
   header "Quick start:"

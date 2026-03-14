@@ -574,7 +574,7 @@ class SetupWizard:
         print()
         print(f"  {bold('To start your proxy:')}")
         print()
-        print(f"    {grey('$')} litellm --config {config_path}")
+        print(f"    {grey('$')} litellm --config {config_path} --port {port}")
         print()
         print(f"  {bold('Then set your client:')}")
         print()
