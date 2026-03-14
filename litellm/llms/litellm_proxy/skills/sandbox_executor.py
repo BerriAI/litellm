@@ -6,10 +6,14 @@ Supports Docker, Podman, and Kubernetes backends.
 """
 
 import base64
+import json
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+
+_VALID_PACKAGE_SPEC = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._\-]*(\[.*\])?\s*([<>=!~]+\s*[A-Za-z0-9.*_\-]+(\s*,\s*[<>=!~]+\s*[A-Za-z0-9.*_\-]+)*)?$")
 
 
 class SkillsSandboxExecutor:
@@ -110,23 +114,24 @@ class SkillsSandboxExecutor:
                 )
 
                 # 2. Install requirements if present
-                req_packages = None
+                req_source = None
                 if requirements:
-                    req_packages = requirements.strip().replace("\n", " ")
+                    req_source = requirements
                 elif "requirements.txt" in skill_files:
-                    req_content = skill_files["requirements.txt"].decode("utf-8")
-                    req_packages = req_content.strip().replace("\n", " ")
+                    req_source = skill_files["requirements.txt"].decode("utf-8")
 
-                if req_packages:
-                    # Run pip install as code
-                    pip_code = f"""
-import subprocess
-subprocess.run(['pip', 'install'] + '{req_packages}'.split(), check=True)
-"""
-                    result = session.run(pip_code)
-                    verbose_logger.debug(
-                        "SkillsSandboxExecutor: Installed requirements"
-                    )
+                if req_source:
+                    package_list = self._parse_requirements(req_source)
+                    if package_list:
+                        safe_list = json.dumps(package_list)
+                        pip_code = (
+                            "import subprocess, json\n"
+                            f"subprocess.run(['pip', 'install'] + json.loads({safe_list!r}), check=True)\n"
+                        )
+                        result = session.run(pip_code)
+                        verbose_logger.debug(
+                            "SkillsSandboxExecutor: Installed requirements"
+                        )
 
                 # 3. Execute the code
                 # Wrap code to run from /sandbox directory
@@ -270,6 +275,28 @@ print(json.dumps(files))
             )
 
         return generated_files
+
+    @staticmethod
+    def _parse_requirements(raw: str) -> List[str]:
+        """
+        Parse a requirements.txt string into a validated list of package specs.
+
+        Filters out comments, blank lines, and any line that does not look like
+        a valid PEP 508 package specifier to prevent code-injection via crafted
+        requirement strings.
+        """
+        packages: List[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+            if not _VALID_PACKAGE_SPEC.match(line):
+                verbose_logger.warning(
+                    "SkillsSandboxExecutor: Skipping invalid package spec: %r", line
+                )
+                continue
+            packages.append(line)
+        return packages
 
     def _get_mime_type(self, filename: str) -> str:
         """Get MIME type for a file based on extension."""
