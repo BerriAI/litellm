@@ -322,19 +322,24 @@ class SetupWizard:
             SetupWizard._render_selector(cursor, selected, first_render=True)
             while True:
                 key = SetupWizard._read_key()
+                dirty = False
                 if key == "\x1b[A":
                     cursor = (cursor - 1) % len(PROVIDERS)
+                    dirty = True
                 elif key == "\x1b[B":
                     cursor = (cursor + 1) % len(PROVIDERS)
+                    dirty = True
                 elif key == " ":
                     selected.symmetric_difference_update({cursor})
+                    dirty = True
                 elif key in ("\r", "\n"):
                     if not selected:
                         selected.add(cursor)
                     break
                 elif key in ("\x03", "\x04"):
                     raise KeyboardInterrupt
-                SetupWizard._render_selector(cursor, selected, first_render=False)
+                if dirty:
+                    SetupWizard._render_selector(cursor, selected, first_render=False)
         finally:
             if _supports_color():
                 sys.stdout.write(_CURSOR_SHOW)
@@ -521,8 +526,10 @@ class SetupWizard:
 
             if p["id"] == "azure":
                 deployment = env_copy.pop(
-                    f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}", "gpt-4o"
+                    f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}", ""
                 )
+                if not deployment:
+                    continue  # skip Azure entirely if no deployment name was provided
                 models = [f"azure/{deployment}"]
             else:
                 models = p["models"]
@@ -539,11 +546,15 @@ class SetupWizard:
                 if p["env_key"] and p["env_key"] in env_copy:
                     lines.append(f"      api_key: os.environ/{p['env_key']}")
                 if p.get("api_base"):
-                    lines.append(f"      api_base: {p['api_base']}")
+                    lines.append(
+                        f'      api_base: "{_yaml_escape(str(p["api_base"]))}"'
+                    )
                 elif p.get("needs_api_base"):
                     azure_base_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
                     if azure_base_key in env_copy:
-                        lines.append(f"      api_base: {env_copy.pop(azure_base_key)}")
+                        lines.append(
+                            f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'
+                        )
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")
 

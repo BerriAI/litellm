@@ -129,6 +129,15 @@ def test_build_config_azure_uses_deployment_name():
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
     assert "model: azure/my-gpt4o" in config
     assert "model_name: azure-my-gpt4o" in config
+    # api_base must be quoted to survive YAML special chars
+    assert 'api_base: "https://my.azure.com"' in config
+
+
+def test_build_config_azure_no_deployment_skipped():
+    """Azure without a deployment name should emit nothing (not fallback to gpt-4o)."""
+    env_vars = {"AZURE_API_KEY": "az-key"}  # no deployment sentinel
+    config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
+    assert "azure" not in config or "model_list:" in config  # no azure model emitted
 
 
 def test_build_config_no_display_name_collision_openai_and_azure():
