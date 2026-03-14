@@ -757,7 +757,7 @@ def get_end_user_id_from_request_body(
                     
         elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
-                if header_name.lower() == custom_header_name_to_check:
+                if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_str = (
                         str(header_value)
                         if header_value is not None
