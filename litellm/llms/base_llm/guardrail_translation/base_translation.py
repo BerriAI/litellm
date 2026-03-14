@@ -73,6 +73,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -82,6 +83,11 @@ class BaseTranslation(ABC):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
+            original_request_data: The original request data dict from the proxy.
+                When provided, guardrail logging information (e.g. StandardLoggingGuardrailInformation)
+                is written to this dict so it appears in spend logs. Without this, post_call
+                guardrail entries are lost because process_output_response creates a
+                throwaway request_data dict internally.
         """
         pass
 
@@ -91,6 +97,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
