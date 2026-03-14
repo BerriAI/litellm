@@ -79,7 +79,7 @@ fi
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
 header "Installing litellm[proxy]…"
-info "This clones from GitHub and may take 2–3 minutes on first install."
+printf "  \033[38;2;177;185;249m  ℹ This clones from GitHub and may take 2–3 minutes on first install.\033[0m\n"
 echo ""
 
 "$PYTHON_BIN" -m pip install --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
