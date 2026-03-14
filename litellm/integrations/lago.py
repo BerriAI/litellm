@@ -81,8 +81,10 @@ class LagoLogger(CustomLogger):
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        body = proxy_server_request.get("body") or {}
-        end_user_id = body.get("user") if isinstance(body, dict) else None
+        end_user_id = None
+        body = proxy_server_request.get("body")
+        if isinstance(body, dict):
+            end_user_id = body.get("user")
         if end_user_id is None:
             metadata = litellm_params.get("metadata") or {}
             end_user_id = metadata.get("user_api_key_end_user_id")
