@@ -5265,6 +5265,7 @@ def embedding(  # noqa: PLR0915
                     api_key=api_key,
                     api_base=api_base,
                     client=client,
+                    extra_headers=headers,
                 )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(

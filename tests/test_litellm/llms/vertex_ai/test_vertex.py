@@ -1456,6 +1456,31 @@ def test_aaavertex_embeddings_distances(
         text_embedding = text_response.data[0].embedding
 
 
+def test_vertex_embedding_passes_extra_headers():
+    """
+    Test that extra_headers are forwarded to the vertex embedding handler.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/21020
+    """
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+
+    with patch.object(
+        litellm.main.vertex_embedding, "embedding", return_value=mock_response
+    ) as mock_embedding:
+        litellm.embedding(
+            model="vertex_ai/textembedding-gecko",
+            input=["hello"],
+            extra_headers={"X-Custom-Header": "test-value"},
+        )
+
+        mock_embedding.assert_called_once()
+        call_kwargs = mock_embedding.call_args.kwargs
+        assert "extra_headers" in call_kwargs
+        assert call_kwargs["extra_headers"]["X-Custom-Header"] == "test-value"
+
+
 def test_vertex_parallel_tool_calls_true():
     """
     Test that parallel_tool_calls = True sets the correct tool_config.
