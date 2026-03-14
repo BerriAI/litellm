@@ -291,6 +291,53 @@ def _select_providers_fallback() -> List[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Credential validation
+# ---------------------------------------------------------------------------
+
+def _test_provider_key(provider: Dict, env_vars: Dict[str, str]) -> Optional[str]:
+    """
+    Make a minimal test completion to validate credentials.
+    Returns None on success, or an error string on failure.
+    Skipped for providers without models (Azure) or local providers (Ollama).
+    """
+    models = provider.get("models", [])
+    if not models or provider["id"] in ("azure", "ollama"):
+        return None
+
+    import litellm  # noqa: PLC0415
+
+    litellm.suppress_debug_info = True
+    litellm.set_verbose = False
+
+    # Temporarily inject the keys so litellm can pick them up
+    saved: Dict[str, Optional[str]] = {}
+    for k, v in env_vars.items():
+        saved[k] = os.environ.get(k)
+        os.environ[k] = v
+
+    try:
+        litellm.completion(
+            model=models[0],
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+        )
+        return None
+    except Exception as exc:
+        # Surface a short, readable reason
+        msg = str(exc)
+        for fragment in ("AuthenticationError", "InvalidAPIKey", "Unauthorized", "401", "403"):
+            if fragment in msg:
+                return "invalid API key"
+        return msg[:120]
+    finally:
+        for k, old_v in saved.items():
+            if old_v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old_v
+
+
+# ---------------------------------------------------------------------------
 # API key collection
 # ---------------------------------------------------------------------------
 
@@ -319,11 +366,13 @@ def _collect_keys(providers: List[Dict]) -> Dict[str, str]:
                 if skip == "y":
                     break
 
-        if key:
-            env_vars[p["env_key"]] = key
+        if not key:
+            continue
+
+        env_vars[p["env_key"]] = key
 
         # Extra keys (e.g. AWS secret + region)
-        if p.get("needs_extra") and key:
+        if p.get("needs_extra"):
             for extra_key, extra_hint in zip(
                 p.get("extra_keys", []), p.get("extra_hints", [])
             ):
@@ -334,12 +383,35 @@ def _collect_keys(providers: List[Dict]) -> Dict[str, str]:
                     env_vars[extra_key] = val
 
         # API base for Azure
-        if p.get("needs_api_base") and key:
+        if p.get("needs_api_base"):
             api_base = input(
                 f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: "
             ).strip()
             if api_base:
                 env_vars[f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"] = api_base
+
+        # Validate credentials
+        print(f"  {grey('Testing credentials…')}", end="", flush=True)
+        error = _test_provider_key(p, env_vars)
+        if error is None:
+            print(f"\r  {green(_CHECK + ' ' + p['name'])} credentials valid        ")
+        else:
+            print(f"\r  {_c(_BOLD, '✘')} {bold(p['name'])} {grey(error)}")
+            retry = input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").strip().lower()
+            if retry == "y":
+                del env_vars[p["env_key"]]
+                # Re-prompt by looping — restart key collection for this provider
+                while True:
+                    key = input(f"  {blue('❯')} {bold(p['name'])} API key {hint}: ").strip()
+                    if not key:
+                        break
+                    env_vars[p["env_key"]] = key
+                    print(f"  {grey('Testing credentials…')}", end="", flush=True)
+                    error = _test_provider_key(p, env_vars)
+                    if error is None:
+                        print(f"\r  {green(_CHECK + ' ' + p['name'])} credentials valid        ")
+                        break
+                    print(f"\r  {_c(_BOLD, '✘')} {bold(p['name'])} {grey(error)}")
 
     return env_vars
 
@@ -481,7 +553,26 @@ def _run_wizard() -> None:
     start = input(f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: ").strip().lower()
     if start in ("", "y", "yes"):
         print()
-        print(f"  {green(_CHECK)} Starting LiteLLM proxy on port {bold(str(port))}…")
+        print(DIVIDER)
+        print()
+        print(f"  {bold('Proxy is starting on')} http://localhost:{port}")
+        print()
+        print(grey("  Your proxy is OpenAI-compatible. Point any OpenAI SDK at it:"))
+        print()
+        print(f"    export OPENAI_BASE_URL=http://localhost:{port}")
+        print(f"    export OPENAI_API_KEY={master_key}")
+        print()
+        print(grey("  Quick test (in another terminal):"))
+        print()
+        print(f"    curl http://localhost:{port}/health")
+        print()
+        print(grey("  Dashboard:"))
+        print()
+        print(f"    http://localhost:{port}/ui  {grey('(login with your master key)')}")
+        print()
+        print(DIVIDER)
+        print()
+        print(f"  {green(_CHECK)} Starting…  {grey('(Ctrl+C to stop)')}")
         print()
         # exec replaces this process with the proxy server.
         # Use the litellm console script (same bin dir as the running Python)
@@ -498,7 +589,7 @@ def _run_wizard() -> None:
         )
     else:
         print()
-        print(
-            f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready."
-        )
+        print(f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready.")
+        print()
+        print(grey(f"  Quick test once running:  curl http://localhost:{port}/health"))
         print()
