@@ -1195,7 +1195,7 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_oauth2_with_client_creds(self):
         """Test that requires_per_user_auth returns False for OAuth2 with client credentials"""
-        # OAuth2 with client credentials
+        # M2M must be opted in explicitly with oauth2_flow="client_credentials"
         server = MCPServer(
             server_id="oauth-server",
             name="oauth-server",
@@ -1205,6 +1205,7 @@ class TestMCPServerManager:
             client_id="client-id",
             client_secret="client-secret",
             token_url="http://oauth-server.com/token",
+            oauth2_flow="client_credentials",
         )
         assert server.requires_per_user_auth is False
         assert server.has_client_credentials is True
@@ -2391,6 +2392,95 @@ class TestMCPServerTimestamps:
 
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
+
+
+class TestHasClientCredentialsOAuth2Flow:
+    """
+    Regression tests for the M2M auto-detection bug.
+
+    Before the fix, has_client_credentials returned True whenever
+    client_id + client_secret + token_url were all set, even for
+    interactive OAuth setups (e.g. GitHub Enterprise). This silently
+    dropped user tokens and fetched M2M tokens instead.
+
+    The fix: M2M must be opted in explicitly via oauth2_flow="client_credentials".
+    """
+
+    def _make_server(self, **kwargs) -> MCPServer:
+        return MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url="https://github.example.com/mcp",
+            **kwargs,
+        )
+
+    def test_all_three_fields_set_without_oauth2_flow_is_not_m2m(self):
+        """
+        GitHub Enterprise regression: client_id + client_secret + token_url
+        should NOT trigger M2M flow unless oauth2_flow is explicitly set.
+        """
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+        )
+        assert server.has_client_credentials is False
+
+    def test_explicit_client_credentials_flow_enables_m2m(self):
+        """oauth2_flow='client_credentials' opts in to M2M."""
+        server = self._make_server(
+            client_id="svc-client-id",
+            client_secret="svc-client-secret",
+            token_url="https://idp.example.com/token",
+            oauth2_flow="client_credentials",
+        )
+        assert server.has_client_credentials is True
+
+    def test_explicit_authorization_code_flow_disables_m2m(self):
+        """oauth2_flow='authorization_code' always returns False."""
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+            oauth2_flow="authorization_code",
+        )
+        assert server.has_client_credentials is False
+
+    def test_no_fields_no_flow_is_not_m2m(self):
+        """No credentials configured — not M2M."""
+        server = self._make_server()
+        assert server.has_client_credentials is False
+
+    def test_partial_fields_without_flow_is_not_m2m(self):
+        """Partial credential fields without explicit flow — not M2M."""
+        server = self._make_server(
+            client_id="only-client-id",
+        )
+        assert server.has_client_credentials is False
+
+    def test_needs_user_oauth_token_true_without_explicit_m2m(self):
+        """
+        Without oauth2_flow='client_credentials', an oauth2 server with
+        client fields set still needs a user OAuth token (interactive flow).
+        """
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+        )
+        assert server.needs_user_oauth_token is True
+
+    def test_needs_user_oauth_token_false_with_explicit_m2m(self):
+        """With oauth2_flow='client_credentials', no per-user token needed."""
+        server = self._make_server(
+            client_id="svc-client-id",
+            client_secret="svc-client-secret",
+            token_url="https://idp.example.com/token",
+            oauth2_flow="client_credentials",
+        )
+        assert server.needs_user_oauth_token is False
 
 
 if __name__ == "__main__":

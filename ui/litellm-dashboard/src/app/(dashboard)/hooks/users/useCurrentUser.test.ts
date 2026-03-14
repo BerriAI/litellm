@@ -3,12 +3,12 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useCurrentUser } from "./useCurrentUser";
-import { userInfoCall } from "@/components/networking";
-import type { UserInfo } from "@/components/view_users/types";
+import { userGetInfoV2 } from "@/components/networking";
+import type { UserInfoV2Response } from "@/components/networking";
 
 // Mock the networking function
 vi.mock("@/components/networking", () => ({
-  userInfoCall: vi.fn(),
+  userGetInfoV2: vi.fn(),
 }));
 
 // Mock the queryKeysFactory - we'll mock the specific return value
@@ -28,21 +28,22 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
 }));
 
-// Mock data - response from userInfoCall should have user_info property
-const mockUserInfoResponse = {
-  user_info: {
-    user_id: "test-user-id",
-    user_email: "test@example.com",
-    user_alias: "Test User",
-    user_role: "Admin",
-    spend: 150.75,
-    max_budget: 1000.0,
-    key_count: 5,
-    created_at: "2024-01-01T00:00:00Z",
-    updated_at: "2024-01-01T00:00:00Z",
-    sso_user_id: null,
-    budget_duration: "monthly",
-  } as UserInfo,
+// Mock data - response from userGetInfoV2 is the user object directly
+const mockUserInfoV2Response: UserInfoV2Response = {
+  user_id: "test-user-id",
+  user_email: "test@example.com",
+  user_alias: "Test User",
+  user_role: "internal_user",
+  spend: 150.75,
+  max_budget: 1000.0,
+  models: ["gpt-4"],
+  budget_duration: "monthly",
+  budget_reset_at: null,
+  metadata: null,
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-01T00:00:00Z",
+  sso_user_id: null,
+  teams: ["team-1"],
 };
 
 describe("useCurrentUser", () => {
@@ -77,8 +78,8 @@ describe("useCurrentUser", () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("should return user info data when query is successful", async () => {
-    // Mock successful API call
-    (userInfoCall as any).mockResolvedValue(mockUserInfoResponse);
+    // Mock successful API call - v2 returns user object directly
+    (userGetInfoV2 as any).mockResolvedValue(mockUserInfoV2Response);
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
 
@@ -92,18 +93,19 @@ describe("useCurrentUser", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockUserInfoResponse.user_info);
+    expect(result.current.data).toEqual(mockUserInfoV2Response);
     expect(result.current.error).toBeNull();
-    expect(userInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", false, null, null);
-    expect(userInfoCall).toHaveBeenCalledTimes(1);
+    // v2 call only needs accessToken (no userId for self-lookup)
+    expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token");
+    expect(userGetInfoV2).toHaveBeenCalledTimes(1);
   });
 
-  it("should handle error when userInfoCall fails", async () => {
+  it("should handle error when userGetInfoV2 fails", async () => {
     const errorMessage = "Failed to fetch user info";
     const testError = new Error(errorMessage);
 
     // Mock failed API call
-    (userInfoCall as any).mockRejectedValue(testError);
+    (userGetInfoV2 as any).mockRejectedValue(testError);
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
 
@@ -118,8 +120,8 @@ describe("useCurrentUser", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(userInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", false, null, null);
-    expect(userInfoCall).toHaveBeenCalledTimes(1);
+    expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token");
+    expect(userGetInfoV2).toHaveBeenCalledTimes(1);
   });
 
   it("should not execute query when accessToken is missing", async () => {
@@ -143,7 +145,7 @@ describe("useCurrentUser", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(userInfoCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 
   it("should not execute query when userId is missing", async () => {
@@ -167,31 +169,7 @@ describe("useCurrentUser", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(userInfoCall).not.toHaveBeenCalled();
-  });
-
-  it("should not execute query when userRole is missing", async () => {
-    // Mock missing userRole
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "test-access-token",
-      userId: "test-user-id",
-      userRole: null,
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
-    });
-
-    const { result } = renderHook(() => useCurrentUser(), { wrapper });
-
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
-    expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(userInfoCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 
   it("should not execute query when all auth values are missing", async () => {
@@ -215,12 +193,12 @@ describe("useCurrentUser", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(userInfoCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 
   it("should execute query when all auth values are present", async () => {
     // Mock successful API call
-    (userInfoCall as any).mockResolvedValue(mockUserInfoResponse);
+    (userGetInfoV2 as any).mockResolvedValue(mockUserInfoV2Response);
 
     // Ensure all auth values are present (already set in beforeEach)
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
@@ -230,15 +208,15 @@ describe("useCurrentUser", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(userInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", false, null, null);
-    expect(userInfoCall).toHaveBeenCalledTimes(1);
+    expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token");
+    expect(userGetInfoV2).toHaveBeenCalledTimes(1);
   });
 
   it("should handle network timeout error", async () => {
     const timeoutError = new Error("Network timeout");
 
     // Mock network timeout
-    (userInfoCall as any).mockRejectedValue(timeoutError);
+    (userGetInfoV2 as any).mockRejectedValue(timeoutError);
 
     const { result } = renderHook(() => useCurrentUser(), { wrapper });
 

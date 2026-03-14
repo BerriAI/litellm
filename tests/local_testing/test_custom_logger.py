@@ -531,7 +531,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(1)  # sleep for 0.1 seconds allow set cache to occur
+        time.sleep(5)  # sleep for cache write to propagate
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,

@@ -1,3 +1,4 @@
+import re
 import traceback
 from datetime import datetime
 from typing import (
@@ -43,6 +44,13 @@ ToolParam = Any
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
+# Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
+# (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
+# A false-positive match (e.g. an external URL that happens to end with /mcp/<name>) results
+# in a "server not found" error from the internal gateway, not a silent failure or data leak,
+# so this broad pattern is intentional and preferred over anchoring to localhost only.
+_PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
+
 
 class LiteLLM_Proxy_MCP_Handler:
     """
@@ -54,7 +62,8 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
-        Returns True if the user passed a MCP tool with server_url="litellm_proxy"
+        Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
+        This includes tools with server_url="litellm_proxy" as well as URLs ending in /mcp/<name>.
         """
         if tools:
             for tool in tools:
@@ -62,6 +71,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     server_url = tool.get("server_url", "")
                     if isinstance(server_url, str) and server_url.startswith(
                         LITELLM_PROXY_MCP_SERVER_URL
+                    ):
+                        return True
+                    if isinstance(server_url, str) and _PROXY_MCP_PATH_RE.match(
+                        server_url
                     ):
                         return True
         return False
@@ -87,6 +100,18 @@ class LiteLLM_Proxy_MCP_Handler:
                         LITELLM_PROXY_MCP_SERVER_URL
                     ):
                         mcp_tools_with_litellm_proxy.append(tool)
+                    elif isinstance(server_url, str):
+                        # Also intercept URLs like http://localhost:4000/mcp/atlassian_test
+                        # by rewriting them to the internal litellm_proxy format.
+                        m = _PROXY_MCP_PATH_RE.match(server_url)
+                        if m:
+                            rewritten = {
+                                **tool,
+                                "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{m.group(1)}",
+                            }
+                            mcp_tools_with_litellm_proxy.append(rewritten)
+                        else:
+                            other_tools.append(tool)
                     else:
                         other_tools.append(tool)
                 else:

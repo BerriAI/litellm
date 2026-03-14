@@ -254,9 +254,7 @@ class MCPDebug:
         return debug
 
     @staticmethod
-    def wrap_send_with_debug_headers(
-        send: Send, debug_headers: Dict[str, str]
-    ) -> Send:
+    def wrap_send_with_debug_headers(send: Send, debug_headers: Dict[str, str]) -> Send:
         """
         Return a new ASGI ``send`` callable that injects *debug_headers*
         into the ``http.response.start`` message.
@@ -315,9 +313,7 @@ class MCPDebug:
                 break
 
         scope_headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
-        litellm_key = MCPRequestHandler.get_litellm_api_key_from_headers(
-            scope_headers
-        )
+        litellm_key = MCPRequestHandler.get_litellm_api_key_from_headers(scope_headers)
 
         return MCPDebug.build_debug_headers(
             inbound_headers=raw_headers,

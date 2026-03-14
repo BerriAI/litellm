@@ -319,18 +319,20 @@ class DualCache(BaseCache):
                             previous_access_times
                         )
                         raise
-                    
+
                     # Short-circuit if redis_result is None or contains only None values
-                    if redis_result is None or all(v is None for v in redis_result.values()):
+                    if redis_result is None or all(
+                        v is None for v in redis_result.values()
+                    ):
                         return result
 
                     # Pre-compute key-to-index mapping for O(1) lookup
                     key_to_index = {key: i for i, key in enumerate(keys)}
-                    
+
                     # Update both result and in-memory cache in a single loop
                     for key, value in redis_result.items():
                         result[key_to_index[key]] = value
-                        
+
                         if value is not None and self.in_memory_cache is not None:
                             await self.in_memory_cache.async_set_cache(
                                 key, value, **kwargs
@@ -346,6 +348,8 @@ class DualCache(BaseCache):
         )
         try:
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache(key, value, **kwargs)
 
             if self.redis_cache is not None and local_only is False:
@@ -367,6 +371,8 @@ class DualCache(BaseCache):
         )
         try:
             if self.in_memory_cache is not None:
+                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+                    kwargs["ttl"] = self.default_in_memory_ttl
                 await self.in_memory_cache.async_set_cache_pipeline(
                     cache_list=cache_list, **kwargs
                 )

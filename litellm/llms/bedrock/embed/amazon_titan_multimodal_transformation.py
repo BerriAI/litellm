@@ -13,7 +13,12 @@ from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingRequest,
     AmazonTitanMultimodalEmbeddingResponse,
 )
-from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    Embedding,
+    EmbeddingResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import get_base64_str, is_base64_encoded
 
 

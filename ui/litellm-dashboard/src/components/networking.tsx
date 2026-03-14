@@ -78,7 +78,12 @@ import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
-const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+// In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
+// to the backend — use relative URLs (null) so rewrites can intercept them.
+const defaultProxyBaseUrl =
+  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+    ? "http://localhost:4000"
+    : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
@@ -98,7 +103,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = isLocal ? "http://localhost:4000" : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl =
+    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+      ? "http://localhost:4000"
+      : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
@@ -899,6 +907,7 @@ export const keyCreateForAgentCall = async (
   keyAlias: string,
   models: string[],
   metadata?: Record<string, any>,
+  teamId?: string | null,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
   const body: Record<string, any> = {
@@ -906,6 +915,9 @@ export const keyCreateForAgentCall = async (
     key_alias: keyAlias,
     models: models.length > 0 ? models : [],
   };
+  if (teamId) {
+    body.team_id = teamId;
+  }
   if (metadata && Object.keys(metadata).length > 0) {
     body.metadata = metadata;
   }
@@ -1187,6 +1199,65 @@ export const userListCall = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+/**
+ * Response type for /v2/user/info — lightweight endpoint that returns only the user object.
+ */
+export interface UserInfoV2Response {
+  user_id: string;
+  user_email: string | null;
+  user_alias: string | null;
+  user_role: string | null;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  budget_duration: string | null;
+  budget_reset_at: string | null;
+  metadata: Record<string, any> | null;
+  created_at: string | null;
+  updated_at: string | null;
+  sso_user_id: string | null;
+  teams: string[];
+}
+
+/**
+ * Lightweight user info fetch from /v2/user/info.
+ * Returns only the user object — no keys, no teams objects.
+ *
+ * @param accessToken - Bearer token for auth
+ * @param userId - Optional user ID to look up. If omitted, returns the caller's own info.
+ */
+export const userGetInfoV2 = async (
+  accessToken: string,
+  userId?: string,
+): Promise<UserInfoV2Response> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/user/info` : `/v2/user/info`;
+    if (userId) {
+      url += `?user_id=${encodeURIComponent(userId)}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch user info v2:", error);
     throw error;
   }
 };
@@ -6258,6 +6329,32 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
   }
 };
 
+export const fetchOpenAPIRegistry = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/openapi-registry`
+      : `/v1/mcp/openapi-registry`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch OpenAPI registry:", error);
+    throw error;
+  }
+};
+
 export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl
@@ -6286,10 +6383,15 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
-export const fetchMCPServers = async (accessToken: string) => {
+export const fetchMCPServers = async (accessToken: string, teamId?: string | null) => {
   try {
-    // Construct base URL
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    // Construct base URL with optional team_id filter
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
+    if (teamId) {
+      const params = new URLSearchParams();
+      params.append("team_id", teamId);
+      url = `${url}?${params.toString()}`;
+    }
 
     console.log("Fetching MCP servers from:", url);
 
@@ -6493,6 +6595,99 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
     }
   } catch (error) {
     console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const registerMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/register`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to register MCP server:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPSubmissions = async (accessToken: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/submissions`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to fetch MCP submissions:", error);
+    throw error;
+  }
+};
+
+export const approveMCPServer = async (accessToken: string, serverId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/approve`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to approve MCP server:", error);
+    throw error;
+  }
+};
+
+export const rejectMCPServer = async (accessToken: string, serverId: string, reviewNotes?: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/reject`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ review_notes: reviewNotes ?? null }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to reject MCP server:", error);
     throw error;
   }
 };
@@ -8819,11 +9014,16 @@ export const perUserAnalyticsCall = async (
 };
 
 export const deriveErrorMessage = (errorData: any): string => {
+  const detail = errorData?.detail;
+  const detailStr = Array.isArray(detail)
+    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
+    : typeof detail === "string"
+      ? detail
+      : undefined;
   return (
-    (errorData?.error && (errorData.error.message || errorData.error)) ||
+    (errorData?.error && (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
     errorData?.message ||
-    errorData?.detail ||
-    errorData?.error ||
+    detailStr ||
     JSON.stringify(errorData)
   );
 };
@@ -8901,9 +9101,7 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
 };
 
 
-// ============================================================
 // Claude Code Marketplace Networking Functions
-// ============================================================
 
 /**
  * Get public marketplace catalog (no authentication required)
@@ -9249,7 +9447,7 @@ export interface ToolPolicyOption {
   description: string;
 }
 
-interface ToolPolicyOptionsResponse {
+export interface ToolPolicyOptionsResponse {
   input_policies: ToolPolicyOption[];
   output_policies: ToolPolicyOption[];
 }
@@ -9302,12 +9500,12 @@ export interface ToolPolicyOverrideRow {
   updated_at?: string;
 }
 
-interface ToolDetailResponse {
+export interface ToolDetailResponse {
   tool: ToolRow;
   overrides: ToolPolicyOverrideRow[];
 }
 
-interface ToolUsageLogEntry {
+export interface ToolUsageLogEntry {
   id: string;
   timestamp: string;
   model?: string | null;
@@ -9316,7 +9514,7 @@ interface ToolUsageLogEntry {
   input_snippet?: string | null;
 }
 
-interface ToolUsageLogsResponse {
+export interface ToolUsageLogsResponse {
   logs: ToolUsageLogEntry[];
   total: number;
   page: number;
@@ -9427,5 +9625,117 @@ export const deleteToolPolicyOverride = async (
     const errorData = await response.text();
     throw new Error(errorData);
   }
+  return response.json();
+};
+
+// ── MCP OAuth user-credential helpers ────────────────────────────────────────
+
+export interface MCPOAuthUserCredentialStatus {
+  server_id: string;
+  has_credential: boolean;
+  expires_at?: string | null;
+  is_expired: boolean;
+  connected_at?: string | null;
+}
+
+export interface MCPUserCredentialListItem {
+  server_id: string;
+  server_name?: string | null;
+  alias?: string | null;
+  credential_type: string;
+  has_credential: boolean;
+  expires_at?: string | null;
+  connected_at?: string | null;
+}
+
+export const storeMCPOAuthUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  tokenResponse: { access_token: string; refresh_token?: string; expires_in?: number; scopes?: string[] },
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(tokenResponse),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to store OAuth credential");
+  }
+  return response.json();
+};
+
+export const deleteMCPOAuthUserCredential = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to revoke OAuth credential");
+  }
+  return response.json();
+};
+
+export const getMCPOAuthUserCredentialStatus = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPOAuthUserCredentialStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/oauth-user-credential/status`
+    : `/v1/mcp/server/${serverId}/oauth-user-credential/status`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    return { server_id: serverId, has_credential: false, is_expired: false };
+  }
+  return response.json();
+};
+
+export const listMCPUserCredentials = async (
+  accessToken: string,
+): Promise<MCPUserCredentialListItem[]> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/user-credentials`
+    : `/v1/mcp/user-credentials`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
   return response.json();
 };

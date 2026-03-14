@@ -470,9 +470,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             response = getattr(e, "response", None)
             if isinstance(response, httpx.Response):
                 try:
-                    status_code, detail_message = (
-                        self._parse_bedrock_guardrail_error_response(response)
-                    )
+                    (
+                        status_code,
+                        detail_message,
+                    ) = self._parse_bedrock_guardrail_error_response(response)
                     self.add_standard_logging_guardrail_information_to_request_data(
                         guardrail_provider=self.guardrail_provider,
                         guardrail_json_response={"error": detail_message},
@@ -795,9 +796,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -867,9 +868,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
