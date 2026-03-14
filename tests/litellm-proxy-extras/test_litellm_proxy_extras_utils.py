@@ -275,3 +275,21 @@ class TestMigrationSQLIdempotency:
             "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n"
             + "\n".join(violations)
         )
+
+    def test_drop_constraint_is_guarded(self, all_migrations):
+        """DROP CONSTRAINT must be inside a DO $$ IF EXISTS block"""
+        violations = []
+        for migration_name, sql in all_migrations:
+            lines = sql.splitlines()
+            in_do_block = False
+            for line_num, line in enumerate(lines, 1):
+                if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = True
+                if re.search(r"END\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = False
+                if re.search(r"DROP\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
+            + "\n".join(violations)
+        )

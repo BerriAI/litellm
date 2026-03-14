@@ -1,5 +1,10 @@
 -- DropForeignKey
-ALTER TABLE "LiteLLM_TeamMembership" DROP CONSTRAINT "LiteLLM_TeamMembership_budget_id_fkey";
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_TeamMembership_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_TeamMembership" DROP CONSTRAINT "LiteLLM_TeamMembership_budget_id_fkey";
+    END IF;
+END $$;
 
 -- AddForeignKey
 DO $$

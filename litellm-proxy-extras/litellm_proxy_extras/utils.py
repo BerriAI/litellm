@@ -422,9 +422,8 @@ class ProxyExtrasDBManager:
                                         failed_migration
                                     )
                                     logger.info(
-                                        f"✅ Migration {failed_migration} resolved."
+                                        f"✅ Migration {failed_migration} resolved, retrying to apply remaining migrations"
                                     )
-                                    return True
                                 else:
                                     logger.info(
                                         f"Found failed migration: {failed_migration}, marking as rolled back"
@@ -534,8 +533,10 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._resolve_specific_migration(
                                             migration_name
                                         )
-                                        logger.info("✅ Migration resolved.")
-                                        return True
+                                        logger.info(
+                                            f"✅ Migration {migration_name} resolved, "
+                                            f"retrying to apply remaining migrations"
+                                        )
                                     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
                                         logger.warning(
                                             f"Failed to resolve migration {migration_name}: {resolve_err}"
