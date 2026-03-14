@@ -219,13 +219,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         self._extract_reasoning_input_items_from_thinking_blocks(msg)
                     )
                 # Regular user/assistant message
-                input_items.append(
-                    {
-                        "type": "message",
-                        "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
-                    }
-                )
+                msg_item: Dict[str, Any] = {
+                    "type": "message",
+                    "role": role,
+                    "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
+                }
+                if role == "assistant":
+                    msg_item["status"] = "completed"
+                    # Restore message id from thinking_blocks for round-trip
+                    response_msg_id = self._get_response_message_id_from_thinking_blocks(msg)
+                    if response_msg_id:
+                        msg_item["id"] = response_msg_id
+                input_items.append(msg_item)
             elif role == "assistant" and content is None and not tool_calls:
                 # Handle assistant messages that only carry thinking_blocks (no content or tool_calls)
                 reasoning_items = self._extract_reasoning_input_items_from_thinking_blocks(msg)
@@ -259,12 +264,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 item: Dict[str, Any] = {
                     "type": "reasoning",
                     "encrypted_content": encrypted,
+                    "summary": [],
                 }
                 block_id = block.get("id")
                 if block_id:
                     item["id"] = block_id
                 reasoning_items.append(item)
         return reasoning_items
+
+    @staticmethod
+    def _get_response_message_id_from_thinking_blocks(
+        msg: Dict[str, Any],
+    ) -> Optional[str]:
+        """Extract the Responses API message id stored by thinking_blocks round-trip."""
+        thinking_blocks = msg.get("thinking_blocks")
+        if not thinking_blocks or not isinstance(thinking_blocks, list):
+            return None
+        for block in thinking_blocks:
+            if isinstance(block, dict):
+                msg_id = block.get("_response_message_id")
+                if msg_id:
+                    return msg_id
+        return None
 
     def _map_optional_params_to_responses_api_request(
         self,
@@ -493,6 +514,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if not item.content:
                     # Content-less assistant message: still emit thinking_blocks
                     if thinking_blocks or reasoning_content:
+                        # Tag thinking_blocks with the message id for round-trip
+                        if thinking_blocks and getattr(item, "id", None):
+                            for tb in thinking_blocks:
+                                tb["_response_message_id"] = item.id
                         msg = Message(
                             role=item.role,
                             content="",
@@ -517,6 +542,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                         raw_annotations
                     )
+                    # Tag thinking_blocks with the message id for round-trip
+                    if thinking_blocks and getattr(item, "id", None):
+                        for tb in thinking_blocks:
+                            tb["_response_message_id"] = item.id
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",

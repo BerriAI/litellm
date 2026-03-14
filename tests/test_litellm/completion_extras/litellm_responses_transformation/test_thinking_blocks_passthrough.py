@@ -53,6 +53,7 @@ class TestExtractReasoningInputItems:
         assert result[0]["type"] == "reasoning"
         assert result[0]["encrypted_content"] == "opaque_blob_123"
         assert result[0]["id"] == "rs_abc"
+        assert result[0]["summary"] == []
 
     def test_multiple_thinking_blocks(self) -> None:
         msg: Dict[str, Any] = {
@@ -447,6 +448,7 @@ class TestRoundTrip:
 
         resp_output = MagicMock(spec=ResponseOutputMessage)
         resp_output.role = "assistant"
+        resp_output.id = "msg_rt2"
         content = MagicMock()
         content.text = "New response"
         content.annotations = None
@@ -460,7 +462,139 @@ class TestRoundTrip:
         assert msg.thinking_blocks is not None
         assert msg.thinking_blocks[0]["encrypted_content"] == "new_enc_blob"
         assert msg.thinking_blocks[0]["id"] == "rs_rt2"
+        assert msg.thinking_blocks[0]["_response_message_id"] == "msg_rt2"
         assert msg.reasoning_content == "New reasoning"
 
 
+class TestReasoningItemSummaryField:
+    """Tests for the required 'summary' field on reasoning input items."""
 
+    def test_reasoning_items_include_summary_field(self) -> None:
+        """OpenAI requires 'summary: []' on reasoning input items."""
+        msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": "42",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "", "encrypted_content": "enc", "id": "rs_1"},
+            ],
+        }
+        result = LiteLLMResponsesTransformationHandler._extract_reasoning_input_items_from_thinking_blocks(msg)
+        assert result[0]["summary"] == []
+
+
+class TestAssistantMessageStatusAndId:
+    """Tests for status and id on assistant messages in responses API input."""
+
+    @pytest.fixture()
+    def handler(self) -> LiteLLMResponsesTransformationHandler:
+        return LiteLLMResponsesTransformationHandler()
+
+    def test_assistant_message_has_status_completed(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """Assistant messages must include status: 'completed' for Responses API."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+        ]
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+        assistant_items = [i for i in items if i.get("role") == "assistant"]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["status"] == "completed"
+
+    def test_user_message_has_no_status(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """User messages must NOT include a status field."""
+        messages = [{"role": "user", "content": "Hi"}]
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+        assert "status" not in items[0]
+
+    def test_assistant_message_gets_id_from_thinking_blocks(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """When thinking_blocks carry _response_message_id, it goes on the assistant message."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": "Hello",
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "",
+                        "encrypted_content": "enc",
+                        "id": "rs_1",
+                        "_response_message_id": "msg_42",
+                    },
+                ],
+            },
+            {"role": "user", "content": "Follow-up"},
+        ]
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+        assistant_items = [i for i in items if i.get("role") == "assistant"]
+        assert assistant_items[0]["id"] == "msg_42"
+
+    def test_assistant_message_no_id_without_thinking_blocks(
+        self, handler: LiteLLMResponsesTransformationHandler
+    ) -> None:
+        """Without thinking_blocks, assistant message should not have an id field."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+        ]
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+        assistant_items = [i for i in items if i.get("role") == "assistant"]
+        assert "id" not in assistant_items[0]
+
+
+class TestResponseMessageIdTagging:
+    """Tests for _response_message_id tagging on thinking_blocks from response output."""
+
+    def test_thinking_blocks_tagged_with_message_id(self) -> None:
+        """thinking_blocks from response should carry _response_message_id."""
+        from openai.types.responses import ResponseOutputMessage, ResponseReasoningItem
+
+        reasoning = MagicMock(spec=ResponseReasoningItem)
+        reasoning.summary = []
+        reasoning.encrypted_content = "enc_abc"
+        reasoning.id = "rs_x1"
+
+        output_msg = MagicMock(spec=ResponseOutputMessage)
+        output_msg.role = "assistant"
+        output_msg.id = "msg_x1"
+        content = MagicMock()
+        content.text = "answer"
+        content.annotations = None
+        output_msg.content = [content]
+
+        choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+            [reasoning, output_msg]
+        )
+        tb = choices[0].message.thinking_blocks
+        assert tb is not None
+        assert tb[0]["_response_message_id"] == "msg_x1"
+
+    def test_thinking_blocks_no_tag_without_message_id(self) -> None:
+        """If output message has no id, no _response_message_id should be set."""
+        from openai.types.responses import ResponseOutputMessage, ResponseReasoningItem
+
+        reasoning = MagicMock(spec=ResponseReasoningItem)
+        reasoning.summary = []
+        reasoning.encrypted_content = "enc_abc"
+        reasoning.id = "rs_x2"
+
+        output_msg = MagicMock(spec=ResponseOutputMessage)
+        output_msg.role = "assistant"
+        output_msg.id = None
+        content = MagicMock()
+        content.text = "answer"
+        content.annotations = None
+        output_msg.content = [content]
+
+        choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+            [reasoning, output_msg]
+        )
+        tb = choices[0].message.thinking_blocks
+        assert tb is not None
+        assert "_response_message_id" not in tb[0]
