@@ -162,11 +162,24 @@ async def get_deployments_for_tag(
                         )
 
                 # 2. Regex match against request headers (new)
+                # NOTE: tag_regex always uses OR semantics (any pattern match suffices).
+                # match_any=False applies only to exact tag matching above; it has no
+                # "all patterns must match" equivalent for regex and is intentionally
+                # ignored here.  Operators who need strict isolation should enforce
+                # that via API key / team scoping rather than routing patterns alone,
+                # since User-Agent is fully client-controlled and can be spoofed.
                 if matched_via is None and deployment_tag_regex and header_strings:
                     regex_match = _is_valid_deployment_tag_regex(
                         deployment_tag_regex, header_strings
                     )
                     if regex_match is not None:
+                        if not match_any:
+                            verbose_logger.debug(
+                                "tag_regex match fired on deployment=%s while "
+                                "tag_filtering_match_any=False; regex routing always "
+                                "uses OR semantics — match_any is ignored for tag_regex",
+                                deployment.get("model_name"),
+                            )
                         matched_via = "tag_regex"
                         matched_value = regex_match
 

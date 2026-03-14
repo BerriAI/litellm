@@ -1018,7 +1018,6 @@ const sidebars = {
         "proxy/reliability",
         "proxy/fallback_management",
         "proxy/tag_routing",
-        "proxy/tag_regex_routing",
         "proxy/timeout",
         "wildcard_routing"
       ],
