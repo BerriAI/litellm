@@ -88,7 +88,7 @@ echo ""
 echo ""
 success "LiteLLM installed"
 
-installed_ver="$("$PYTHON_BIN" -m litellm --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+installed_ver="$("$PYTHON_BIN" -m litellm.proxy.proxy_cli --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ -n "$installed_ver" ] && info "Version: $installed_ver"
 
 # ── PATH hint ──────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ read -r answer </dev/tty
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
-  exec "$PYTHON_BIN" -m litellm --setup
+  exec "$PYTHON_BIN" -m litellm.proxy.proxy_cli --setup
 else
   echo ""
   header "Quick start:"
