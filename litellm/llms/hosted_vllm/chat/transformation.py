@@ -160,8 +160,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                                 new_content.append(
                                     {"type": "text", "text": thinking_text}
                                 )
-                        # Drop redacted_thinking blocks — opaque data,
-                        # no value for non-Anthropic providers
+                        elif block.get("type") == "redacted_thinking":
+                            # Drop redacted_thinking blocks — opaque data,
+                            # no value for non-Anthropic providers
+                            pass
+                        else:
+                            # Pass through unknown block types so future
+                            # additions are not silently dropped
+                            new_content.append(block)
                     existing_content = message.get("content")
                     if isinstance(existing_content, str):
                         new_content.append(
