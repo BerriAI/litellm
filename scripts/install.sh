@@ -84,23 +84,17 @@ echo ""
 "$PYTHON_BIN" -m pip install --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
-# ── find litellm binary ────────────────────────────────────────────────────
-LITELLM_BIN="$(command -v litellm 2>/dev/null || true)"
-if [ -z "$LITELLM_BIN" ]; then
-  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
-  if [ -x "$USER_BIN/litellm" ]; then
-    LITELLM_BIN="$USER_BIN/litellm"
-    info "Note: $LITELLM_BIN is not in your PATH yet."
-    info "Add this to your shell profile:  export PATH=\"\$PATH:$USER_BIN\""
-  fi
-fi
-
+# ── version check (use the Python we installed into, not any PATH binary) ──
 echo ""
 success "LiteLLM installed"
 
-if [ -n "$LITELLM_BIN" ]; then
-  installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-  [ -n "$installed_ver" ] && info "Version: $installed_ver"
+installed_ver="$("$PYTHON_BIN" -m litellm --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+[ -n "$installed_ver" ] && info "Version: $installed_ver"
+
+# ── PATH hint ──────────────────────────────────────────────────────────────
+if ! command -v litellm >/dev/null 2>&1; then
+  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
+  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:$USER_BIN\""
 fi
 
 # ── launch setup wizard ────────────────────────────────────────────────────
@@ -110,11 +104,7 @@ read -r answer </dev/tty
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
-  if [ -n "$LITELLM_BIN" ]; then
-    exec "$LITELLM_BIN" --setup
-  else
-    exec "$PYTHON_BIN" -m litellm --setup
-  fi
+  exec "$PYTHON_BIN" -m litellm --setup
 else
   echo ""
   header "Quick start:"
