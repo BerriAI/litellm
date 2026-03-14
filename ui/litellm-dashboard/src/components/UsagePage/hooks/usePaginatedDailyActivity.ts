@@ -7,7 +7,10 @@ export interface PaginationProgress {
 }
 
 /** Delay between sequential page fetches (ms) to avoid overloading the backend. */
-const PAGE_FETCH_DELAY_MS = 500;
+const PAGE_FETCH_DELAY_MS = 300;
+
+/** Number of pages to accumulate before flushing to React state (reduces re-renders). */
+const RENDER_BATCH_SIZE = 5;
 
 /** The metadata fields returned by the daily activity API that should be summed across pages. */
 const SUMMABLE_METADATA_KEYS = [
@@ -201,11 +204,19 @@ export function usePaginatedDailyActivity({
           accumulatedMetadata.has_more = page < totalPages;
           accumulatedMetadata.page = page;
 
-          setData({
-            results: accumulatedResults,
-            metadata: accumulatedMetadata,
-          });
+          // Always update progress so the banner stays responsive.
           setProgress({ currentPage: page, totalPages });
+
+          // Flush accumulated data to React state every RENDER_BATCH_SIZE pages
+          // (or on the final page) to avoid expensive per-page re-renders.
+          const isLastPage = page === totalPages;
+          const isBatchBoundary = (page - 1) % RENDER_BATCH_SIZE === 0;
+          if (isLastPage || isBatchBoundary) {
+            setData({
+              results: accumulatedResults,
+              metadata: accumulatedMetadata,
+            });
+          }
         }
 
         setIsFetchingMore(false);

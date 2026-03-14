@@ -22,7 +22,8 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { LoadingOutlined } from "@ant-design/icons";
+import { ExportOutlined } from "@ant-design/icons";
+import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
@@ -105,8 +106,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
 
-  const startTime = useMemo(() => dateValue.from ? new Date(dateValue.from) : null, [dateValue.from]);
-  const endTime = useMemo(() => dateValue.to ? new Date(dateValue.to) : null, [dateValue.to]);
+  const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
+  const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
 
   const entityFilterArg = useMemo(() => {
     if (entityType === "user") return selectedTags.length > 0 ? selectedTags[0] : null;
@@ -395,33 +396,75 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   return (
     <div style={{ width: "100%" }} className="relative">
-      {(isFetchingMore || cancelled || agentIsFetchingMore || agentCancelled) && (
-        <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
-          {isFetchingMore && (
-            <>
-              <LoadingOutlined spin className="text-xs" />
-              <span>Loading spend data... (page {progress.currentPage}/{progress.totalPages})</span>
-              <button onClick={cancel} className="text-blue-600 hover:text-blue-800 underline text-xs">Stop</button>
-            </>
-          )}
-          {cancelled && (
-            <span className="text-yellow-600 text-xs">
+      {isFetchingMore && (
+        <Alert
+          banner
+          type="warning"
+          className="mb-2"
+          message={
+            <div className="flex items-center justify-between">
+              <span>
+                Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
+                update periodically as data loads. Moving off of this page will stop and reset this. To continue using
+                the UI in the meantime,{" "}
+                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                  open a new tab <ExportOutlined />
+                </a>
+                .
+              </span>
+              <Button type="primary" danger onClick={cancel}>
+                Stop
+              </Button>
+            </div>
+          }
+        />
+      )}
+      {cancelled && (
+        <Alert
+          banner
+          type="info"
+          className="mb-2"
+          message={
+            <span>
               Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
             </span>
-          )}
-          {agentIsFetchingMore && entityType === "team" && (
-            <>
-              <LoadingOutlined spin className="text-xs" />
-              <span>Loading agent data... (page {agentProgress.currentPage}/{agentProgress.totalPages})</span>
-              <button onClick={agentCancel} className="text-blue-600 hover:text-blue-800 underline text-xs">Stop</button>
-            </>
-          )}
-          {agentCancelled && entityType === "team" && (
-            <span className="text-yellow-600 text-xs">
+          }
+        />
+      )}
+      {agentIsFetchingMore && entityType === "team" && (
+        <Alert
+          banner
+          type="warning"
+          className="mb-2"
+          message={
+            <div className="flex items-center justify-between">
+              <span>
+                Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
+                Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
+                continue using the UI in the meantime,{" "}
+                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                  open a new tab <ExportOutlined />
+                </a>
+                .
+              </span>
+              <Button type="primary" danger onClick={agentCancel}>
+                Stop
+              </Button>
+            </div>
+          }
+        />
+      )}
+      {agentCancelled && entityType === "team" && (
+        <Alert
+          banner
+          type="info"
+          className="mb-2"
+          message={
+            <span>
               Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
             </span>
-          )}
-        </div>
+          }
+        />
       )}
       <UsageExportHeader
         dateValue={dateValue}
@@ -747,7 +790,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
             <TabPanel>
               <ActivityMetrics modelMetrics={agentMetrics} />
             </TabPanel>
-          ) : <></>}
+          ) : (
+            <></>
+          )}
           <TabPanel>
             <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
