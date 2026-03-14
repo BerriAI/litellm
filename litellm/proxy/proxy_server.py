@@ -5609,8 +5609,8 @@ async def async_data_generator(
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
-        # Post-guardrail log: only for successful stream completion, not when we got an SSE error
-        if error_message is None:
+        # Post-guardrail log: only for successful stream completion with chunks to process
+        if error_message is None and _streaming_chunks_for_log:
             def _discard_task(t: asyncio.Task[None]) -> None:
                 _post_guardrail_log_tasks.discard(t)
 

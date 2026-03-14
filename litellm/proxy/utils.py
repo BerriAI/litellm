@@ -1994,7 +1994,12 @@ class ProxyLogging:
             if logging_obj is not None and getattr(
                 logging_obj, "model_call_details", None
             ):
+                # Merge so request data wins overall, but model_call_details wins for
+                # LLM-lifecycle timing fields so callbacks get accurate start/end times.
                 kwargs = {**logging_obj.model_call_details, **kwargs}
+                for key in ("start_time", "end_time"):
+                    if key in logging_obj.model_call_details:
+                        kwargs[key] = logging_obj.model_call_details[key]
             kwargs["user_api_key_dict"] = user_api_key_dict
             start_time = None
             if logging_obj is not None:
