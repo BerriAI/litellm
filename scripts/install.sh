@@ -1,31 +1,38 @@
 #!/usr/bin/env bash
 # LiteLLM Installer
-# Usage: curl -fsSL https://litellm.ai/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+# Branch QA: LITELLM_BRANCH=worktree-dynamic-tickling-journal curl -fsSL .../install.sh | sh
 set -euo pipefail
 
-LITELLM_PACKAGE="litellm[proxy]"
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=9
 
+# If LITELLM_BRANCH is set, install from that git branch instead of PyPI.
+# Used for testing PRs before they ship a release.
+LITELLM_BRANCH="${LITELLM_BRANCH:-}"
+if [ -n "$LITELLM_BRANCH" ]; then
+  LITELLM_PACKAGE="git+https://github.com/BerriAI/litellm.git@${LITELLM_BRANCH}#egg=litellm[proxy]"
+else
+  LITELLM_PACKAGE="litellm[proxy]"
+fi
+
 # ── colours ────────────────────────────────────────────────────────────────
-if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
-  ORANGE='\033[38;2;215;119;87m'
+if [ -t 1 ]; then
   BOLD='\033[1m'
   GREEN='\033[38;2;78;186;101m'
   GREY='\033[38;2;153;153;153m'
   RESET='\033[0m'
 else
-  ORANGE='' BOLD='' GREEN='' GREY='' RESET=''
+  BOLD='' GREEN='' GREY='' RESET=''
 fi
 
 info()    { printf "${GREY}  %s${RESET}\n" "$*"; }
 success() { printf "${GREEN}  ✔ %s${RESET}\n" "$*"; }
-header()  { printf "${ORANGE}  %s${RESET}\n" "$*"; }
+header()  { printf "${BOLD}  %s${RESET}\n" "$*"; }
 die()     { printf "\n  Error: %s\n\n" "$*" >&2; exit 1; }
 
 # ── banner ─────────────────────────────────────────────────────────────────
 echo ""
-printf "${ORANGE}"
 cat << 'EOF'
   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
@@ -34,7 +41,6 @@ cat << 'EOF'
   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
 EOF
-printf "${RESET}"
 printf "  ${BOLD}LiteLLM Installer${RESET}  ${GREY}— unified gateway for 100+ LLM providers${RESET}\n\n"
 
 # ── OS detection ───────────────────────────────────────────────────────────
@@ -53,7 +59,6 @@ info "Platform: $PLATFORM"
 PYTHON_BIN=""
 for candidate in python3 python; do
   if command -v "$candidate" >/dev/null 2>&1; then
-    py_ver="$("$candidate" -c 'import sys; print(sys.version_info[:2])'  2>/dev/null || true)"
     major="$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || true)"
     minor="$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || true)"
     if [ "${major:-0}" -ge "$MIN_PYTHON_MAJOR" ] && [ "${minor:-0}" -ge "$MIN_PYTHON_MINOR" ]; then
@@ -74,37 +79,35 @@ fi
 # ── pip detection ──────────────────────────────────────────────────────────
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
   die "pip is not available. Install it with:
-    $PYTHON_BIN -m ensurepip --upgrade
-  or:
-    curl https://bootstrap.pypa.io/get-pip.py | $PYTHON_BIN"
+    $PYTHON_BIN -m ensurepip --upgrade"
 fi
 
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
-header "Installing ${LITELLM_PACKAGE}…"
+if [ -n "$LITELLM_BRANCH" ]; then
+  header "Installing litellm from branch '${LITELLM_BRANCH}'…"
+else
+  header "Installing litellm[proxy]…"
+fi
 echo ""
 
-# Use --quiet to avoid wall of pip output; keep --progress-bar off for cleaner CI
 "$PYTHON_BIN" -m pip install --quiet --progress-bar off "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
-# Verify litellm is on PATH (or accessible as python -m litellm)
+# ── find litellm binary ────────────────────────────────────────────────────
 LITELLM_BIN="$(command -v litellm 2>/dev/null || true)"
 if [ -z "$LITELLM_BIN" ]; then
-  # Might be installed in a user PATH that isn't active yet
-  USER_BIN="$("$PYTHON_BIN" -c 'import site,os; print(site.getuserbase())')/bin"
+  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
   if [ -x "$USER_BIN/litellm" ]; then
     LITELLM_BIN="$USER_BIN/litellm"
     info "Note: $LITELLM_BIN is not in your PATH yet."
-    info "Add this to your shell profile:"
-    info "  export PATH=\"\$PATH:$USER_BIN\""
+    info "Add this to your shell profile:  export PATH=\"\$PATH:$USER_BIN\""
   fi
 fi
 
 echo ""
 success "LiteLLM installed"
 
-# ── version check ──────────────────────────────────────────────────────────
 if [ -n "$LITELLM_BIN" ]; then
   installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   [ -n "$installed_ver" ] && info "Version: $installed_ver"
