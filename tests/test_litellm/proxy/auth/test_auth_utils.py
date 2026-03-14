@@ -209,3 +209,113 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
 def test_get_model_from_request_vertex_passthrough_still_works():
     route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
+
+
+def test_get_customer_user_header_returns_none_when_no_customer_role():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result is None
+
+
+def test_get_customer_user_header_returns_none_for_single_non_customer_mapping():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mapping = {"header_name": "X-Only-Internal", "litellm_user_role": "internal_user"}
+    result = get_customer_user_header_from_mapping(mapping)
+    assert result is None
+
+def test_get_customer_user_header_from_mapping_returns_customer_header():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result == ["x-openwebui-user-email"]
+
+
+def test_get_customer_user_header_returns_customers_header_when_multiple_exist():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+        {"header_name": "X-User-Id", "litellm_user_role": "customer"},
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result == ['x-openwebui-user-email', 'x-user-id']
+    
+def test_get_customer_user_header_returns_sorted_customers_header_when_multiple_exist():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-User-Id", "litellm_user_role": "customer"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result == ['x-user-id', 'x-openwebui-user-email']
+
+
+####################################
+
+
+def test_get_end_user_id_returns_id_from_user_header_mappings():
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
+    mappings = [
+        {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
+        {"header_name": "x-openwebui-user-email", "litellm_user_role": "customer"},
+    ]
+    general_settings = {"user_header_mappings": mappings}
+    headers = {"x-openwebui-user-email": "1234"}
+
+    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
+         patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+
+    assert result == "1234"
+
+
+def test_get_end_user_id_returns_first_customer_header_when_multiple_mappings_exist():
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
+    mappings = [
+        {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
+        {"header_name": "x-user-id", "litellm_user_role": "customer"},
+        {"header_name": "x-openwebui-user-email", "litellm_user_role": "customer"},
+    ]
+    general_settings = {"user_header_mappings": mappings}
+    headers = {
+        "x-user-id": "user-456",
+        "x-openwebui-user-email": "user@example.com",
+    }
+
+    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
+         patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+
+    assert result == "user-456"
+
+
+def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
+    mappings = [
+        {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
+    ]
+    general_settings = {"user_header_mappings": mappings}
+    headers = {"x-openwebui-user-id": "user-789"}
+
+    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
+         patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+
+    assert result is None
+
+
