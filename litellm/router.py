@@ -1173,6 +1173,7 @@ class Router:
                         provider_budget_config=self.provider_budget_config,
                         model_list=self.model_list,
                     )
+                    self.router_budget_logger = _callback
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
                 if _callback is not None:
@@ -6030,7 +6031,48 @@ class Router:
             model=_deployment, model_id=deployment.model_info.id
         )
         self.model_names.add(deployment.model_name)
+
+        # register deployment budget if configured
+        self._register_deployment_budget(deployment)
+
         return deployment
+
+    def _register_deployment_budget(self, deployment: Deployment) -> None:
+        """Register deployment budget in RouterBudgetLimiting if max_budget and budget_duration are set."""
+        _max_budget = deployment.litellm_params.get("max_budget")
+        _budget_duration = deployment.litellm_params.get("budget_duration")
+        _model_id = deployment.model_info.id
+        if _max_budget is None or _budget_duration is None or _model_id is None:
+            return
+
+        # Lazy-init RouterBudgetLimiting if not yet created
+        # This handles the case where no YAML models had budget config at Router init time,
+        # but DB models added later do have max_budget/budget_duration.
+        if self.router_budget_logger is None:
+            self._lazy_init_router_budget_limiter()
+
+        if self.router_budget_logger is not None:
+            self.router_budget_logger.register_deployment_budget(
+                model_id=_model_id,
+                max_budget=float(_max_budget),
+                budget_duration=str(_budget_duration),
+            )
+
+    def _lazy_init_router_budget_limiter(self) -> None:
+        """
+        Lazily initialize RouterBudgetLimiting when a deployment with budget config is added
+        but RouterBudgetLimiting was not created at Router init time.
+        """
+        _callback = RouterBudgetLimiting(
+            dual_cache=self.cache,
+            provider_budget_config=self.provider_budget_config,
+            model_list=self.model_list,
+        )
+        self.router_budget_logger = _callback
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        self.optional_callbacks.append(_callback)
+        litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def _update_deployment_indices_after_removal(
         self, model_id: str, removal_idx: int
@@ -6132,6 +6174,9 @@ class Router:
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
                         )
+                        # remove old deployment budget before re-adding
+                        if self.router_budget_logger is not None and deployment_id is not None:
+                            self.router_budget_logger.remove_deployment_budget(deployment_id)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -6165,6 +6210,9 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                # remove deployment budget if tracked
+                if self.router_budget_logger is not None:
+                    self.router_budget_logger.remove_deployment_budget(id)
                 return item
             else:
                 return None
