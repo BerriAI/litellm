@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -11,6 +11,7 @@ sys.path.insert(
 )
 
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
 
 def test_ui_discovery_endpoints_with_defaults():
@@ -245,9 +246,9 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
          patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
          patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
          patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
-        
+
         response = client.get("/.well-known/litellm-ui-config")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/"
@@ -256,3 +257,48 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
         assert data["admin_ui_disabled"] is False
         assert data["sso_configured"] is False
 
+
+def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_config = MagicMock()
+    mock_config.worker_registry = [
+        WorkerRegistryEntry(
+            worker_id="team-a", name="Team A", url="https://worker-1:4001"
+        ),
+    ]
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch("litellm.proxy.proxy_server.proxy_config", mock_config), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_control_plane"] is True
+
+
+def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch("litellm.proxy.proxy_server.proxy_config", mock_config), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_control_plane"] is False
