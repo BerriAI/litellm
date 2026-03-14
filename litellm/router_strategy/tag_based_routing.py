@@ -73,6 +73,54 @@ def is_valid_deployment_tag(
     return False
 
 
+def _match_deployment(
+    deployment: Any,
+    request_tags: Optional[List[str]],
+    header_strings: List[str],
+    match_any: bool,
+) -> Optional[Dict[str, str]]:
+    """
+    Determine whether *deployment* matches the current request.
+
+    Returns {"matched_via": ..., "matched_value": ...} if the deployment
+    should be included, or None if it should be excluded.
+
+    Priority:
+      1. Exact tag match (respects match_any semantics).
+      2. Regex match — skipped when match_any=False and the tag check already
+         ran and failed, so the regex cannot override strict-tag policy.
+    """
+    litellm_params = deployment.get("litellm_params", {})
+    deployment_tags: Optional[List[str]] = litellm_params.get("tags")
+    deployment_tag_regex: Optional[List[str]] = litellm_params.get("tag_regex")
+
+    # 1. Exact tag match (existing behaviour).
+    if deployment_tags and request_tags:
+        if is_valid_deployment_tag(deployment_tags, request_tags, match_any):
+            matched_value = next(
+                (t for t in deployment_tags if t in set(request_tags)),
+                deployment_tags[0],
+            )
+            return {"matched_via": "tags", "matched_value": matched_value}
+
+    # 2. Regex match against request headers.
+    # When match_any=False and the deployment has both plain tags and tag_regex,
+    # the strict tag check has already failed (step 1 returned None).  Allow
+    # the regex to fire only when the deployment has NO plain tags, so we never
+    # use regex as a backdoor around the operator's strict-tag policy.
+    strict_tag_check_failed = (
+        not match_any
+        and bool(deployment_tags)
+        and bool(request_tags)
+    )
+    if deployment_tag_regex and header_strings and not strict_tag_check_failed:
+        regex_match = _is_valid_deployment_tag_regex(deployment_tag_regex, header_strings)
+        if regex_match is not None:
+            return {"matched_via": "tag_regex", "matched_value": regex_match}
+
+    return None
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -138,57 +186,21 @@ async def get_deployments_for_tag(
                 user_agent,
             )
             for deployment in healthy_deployments:
-                deployment_litellm_params = deployment.get("litellm_params")
-                deployment_tags = deployment_litellm_params.get("tags")
-                deployment_tag_regex = deployment_litellm_params.get("tag_regex")
+                deployment_tags = deployment.get("litellm_params", {}).get("tags")
 
-                verbose_logger.debug(
-                    "deployment: %s  tags: %s  tag_regex: %s",
-                    deployment.get("model_name"),
-                    deployment_tags,
-                    deployment_tag_regex,
+                match_result = _match_deployment(
+                    deployment=deployment,
+                    request_tags=request_tags,
+                    header_strings=header_strings,
+                    match_any=match_any,
                 )
 
-                matched_via: Optional[str] = None
-                matched_value: Optional[str] = None
-
-                # 1. Exact tag match (existing behaviour)
-                if deployment_tags and request_tags:
-                    if is_valid_deployment_tag(deployment_tags, request_tags, match_any):
-                        matched_via = "tags"
-                        matched_value = next(
-                            (t for t in deployment_tags if t in set(request_tags)),
-                            deployment_tags[0],
-                        )
-
-                # 2. Regex match against request headers (new)
-                # NOTE: tag_regex always uses OR semantics (any pattern match suffices).
-                # match_any=False applies only to exact tag matching above; it has no
-                # "all patterns must match" equivalent for regex and is intentionally
-                # ignored here.  Operators who need strict isolation should enforce
-                # that via API key / team scoping rather than routing patterns alone,
-                # since User-Agent is fully client-controlled and can be spoofed.
-                if matched_via is None and deployment_tag_regex and header_strings:
-                    regex_match = _is_valid_deployment_tag_regex(
-                        deployment_tag_regex, header_strings
-                    )
-                    if regex_match is not None:
-                        if not match_any:
-                            verbose_logger.debug(
-                                "tag_regex match fired on deployment=%s while "
-                                "tag_filtering_match_any=False; regex routing always "
-                                "uses OR semantics — match_any is ignored for tag_regex",
-                                deployment.get("model_name"),
-                            )
-                        matched_via = "tag_regex"
-                        matched_value = regex_match
-
-                if matched_via is not None:
+                if match_result is not None:
                     verbose_logger.debug(
                         "tag routing match: deployment=%s matched_via=%s matched_value=%s",
                         deployment.get("model_name"),
-                        matched_via,
-                        matched_value,
+                        match_result["matched_via"],
+                        match_result["matched_value"],
                     )
                     # Record provenance in metadata so it flows to SpendLogs.
                     # Written only for the first match — load balancer selects one
@@ -197,8 +209,8 @@ async def get_deployments_for_tag(
                     if "tag_routing" not in metadata:
                         metadata["tag_routing"] = {
                             "matched_deployment": deployment.get("model_name"),
-                            "matched_via": matched_via,
-                            "matched_value": matched_value,
+                            "matched_via": match_result["matched_via"],
+                            "matched_value": match_result["matched_value"],
                             "request_tags": request_tags or [],
                             "user_agent": user_agent,
                         }

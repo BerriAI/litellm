@@ -6527,10 +6527,8 @@ class Router:
                 )
                 return None
 
-            deployment = self._add_deployment(deployment=deployment)
-
-            # Validate tag_regex patterns early so a bad regex fails at startup
-            # rather than silently misbehaving on the first matching request.
+            # Validate tag_regex patterns BEFORE adding the deployment so we never
+            # have partially-initialised router state if a pattern is invalid.
             _tag_regex = deployment.litellm_params.get("tag_regex") or []
             for pattern in _tag_regex:
                 try:
@@ -6540,6 +6538,8 @@ class Router:
                         f"Invalid regex in tag_regex for model '{deployment.model_name}': "
                         f"{pattern!r} — {exc}"
                     ) from exc
+
+            deployment = self._add_deployment(deployment=deployment)
 
             model = deployment.to_json(exclude_none=True)
 

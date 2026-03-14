@@ -294,3 +294,82 @@ async def test_tag_routing_metadata_not_overwritten_for_multiple_matches():
     tr = metadata.get("tag_routing", {})
     assert tr.get("matched_deployment") == "claude-sonnet"
     assert tr.get("matched_via") == "tag_regex"
+
+
+@pytest.mark.asyncio
+async def test_match_any_false_strict_tag_check_blocks_regex_fallback():
+    """
+    When match_any=False and a deployment has both tags and tag_regex:
+    if the strict tag check fails (request has a tag NOT present on the
+    deployment, so req_set is NOT a subset of dep_set), the regex fallback
+    must NOT fire — that would violate the operator's strict-filtering intent.
+
+    Semantics of match_any=False: req_set.issubset(dep_set), i.e. every
+    request tag must appear on the deployment.  A request with tags ["vip"]
+    against a deployment with tags ["premium"] fails because "vip" ∉ dep_set.
+    """
+    deployment_strict = {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "openai/strict-deployment",
+            "api_key": "fake",
+            "tags": ["premium"],
+            "tag_regex": [r"^User-Agent: claude-code\/"],
+        },
+        "model_info": {"id": "strict-deployment"},
+    }
+    default_deployment = {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "openai/default-deployment",
+            "api_key": "fake",
+            "tags": ["default"],
+        },
+        "model_info": {"id": "default-deployment"},
+    }
+    # match_any=False: req_set must be a subset of dep_set.
+    # Request has "vip" which is NOT in ["premium"], so tag check fails.
+    # Even though UA matches tag_regex, the deployment must NOT be selected.
+    router = _make_router_mock(enable_tag_filtering=True, match_any=False)
+    metadata: dict = {
+        "tags": ["vip"],  # "vip" not in deployment tags → strict check fails
+        "user_agent": "claude-code/1.0",
+    }
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="claude-sonnet",
+        healthy_deployments=[deployment_strict, default_deployment],
+        request_kwargs={"metadata": metadata},
+    )
+    ids = [d["model_info"]["id"] for d in result]
+    assert "strict-deployment" not in ids, (
+        "strict-deployment should not be selected: strict tag check failed "
+        "and regex must not override the strict policy"
+    )
+
+
+@pytest.mark.asyncio
+async def test_match_any_false_regex_only_deployment_still_matches():
+    """
+    When match_any=False and a deployment has ONLY tag_regex (no plain tags),
+    there is no strict tag policy to violate, so the regex check must still fire.
+    """
+    regex_only_deployment = {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "openai/regex-only-deployment",
+            "api_key": "fake",
+            "tag_regex": [r"^User-Agent: claude-code\/"],
+            # no "tags" key at all
+        },
+        "model_info": {"id": "regex-only-deployment"},
+    }
+    router = _make_router_mock(enable_tag_filtering=True, match_any=False)
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="claude-sonnet",
+        healthy_deployments=[regex_only_deployment],
+        request_kwargs={"metadata": {"user_agent": "claude-code/1.0"}},
+    )
+    assert len(result) == 1
+    assert result[0]["model_info"]["id"] == "regex-only-deployment"

@@ -300,11 +300,12 @@ When a regex matches, `tag_routing` is written into request metadata and flows t
 
 :::caution
 
-`User-Agent` is set by the client and **can be spoofed**. `tag_regex` is designed for **routing convenience** — directing traffic from a known tool to the right backend — not for security isolation or access control.
+**`User-Agent` is a client-supplied header and can be set to any value.** Any API consumer can send `User-Agent: claude-code/1.0` regardless of whether they are actually using Claude Code.
 
-If you need to restrict which users or teams can reach a deployment, use [API key / team scoping](./users) rather than (or in addition to) regex routing.
+Do not rely on `tag_regex` routing to enforce access controls or spend limits — use [team/key-based routing](./users) for that. `tag_regex` is a **traffic classification hint** (useful for billing visibility, capacity planning, and routing convenience), not a security boundary.
 
 :::
+
 
 ---
 
