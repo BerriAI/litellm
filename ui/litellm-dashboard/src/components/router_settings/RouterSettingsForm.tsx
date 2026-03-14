@@ -7,7 +7,7 @@ import TagFilteringToggle from "./TagFilteringToggle";
 export interface RouterSettingsFormValue {
   routerSettings: { [key: string]: any };
   selectedStrategy: string | null;
-  enableTagFiltering: boolean;
+  enableTagFiltering: boolean | null;
 }
 
 interface RouterSettingsFormProps {

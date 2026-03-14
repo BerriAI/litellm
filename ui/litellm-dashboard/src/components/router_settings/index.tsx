@@ -20,7 +20,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
     routerSettings: {},
     selectedStrategy: null,
-    enableTagFiltering: false,
+    enableTagFiltering: null,
   });
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
@@ -82,7 +82,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     });
   }, [accessToken, userRole, userID]);
 
-  const handleSaveChanges = () => {
+  const handleSaveChanges = async () => {
     if (!accessToken) {
       return;
     }
@@ -120,10 +120,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       return v;
     };
 
-    // Add enable_tag_filtering to router_settings before processing
+    // Only include enable_tag_filtering if the user explicitly toggled it
+    // (null = untouched, preserves the server's None/auto default)
     const settingsToUpdate = {
       ...router_settings,
-      enable_tag_filtering: formValue.enableTagFiltering,
+      ...(formValue.enableTagFiltering !== null && { enable_tag_filtering: formValue.enableTagFiltering }),
     };
 
     const updatedVariables = Object.fromEntries(
@@ -136,6 +137,8 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
           } else if (key === "routing_strategy") {
             return [key, formValue.selectedStrategy];
           } else if (key === "enable_tag_filtering") {
+            // Skip if user hasn't explicitly toggled (null = preserve server default)
+            if (formValue.enableTagFiltering === null) return null;
             return [key, formValue.enableTagFiltering];
           } else if (key === "routing_strategy_args" && formValue.selectedStrategy === "latency-based-routing") {
             let setRoutingStrategyArgs: routingStrategyArgs = {};
@@ -167,12 +170,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     };
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
+      NotificationsManager.success("router settings updated successfully");
     } catch (error) {
       NotificationsManager.fromBackend("Failed to update router settings: " + error);
     }
-
-    NotificationsManager.success("router settings updated successfully");
   };
 
   if (!accessToken) {

@@ -2,7 +2,7 @@ import React from "react";
 import { Switch } from "@tremor/react";
 
 interface TagFilteringToggleProps {
-  enabled: boolean;
+  enabled: boolean | null;
   routerFieldsMetadata: { [key: string]: any };
   onToggle: (enabled: boolean) => void;
 }
@@ -37,7 +37,7 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
           </p>
         </div>
         <Switch
-          checked={enabled}
+          checked={enabled === true}
           onChange={onToggle}
           className="ml-4"
         />
