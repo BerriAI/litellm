@@ -2525,10 +2525,19 @@ def _unknown_model_default_capability(
     if custom_llm_provider == "text-completion-openai":
         return False
 
+    # Proxy models need configuration context to resolve the underlying model
+    if custom_llm_provider == "litellm_proxy":
+        return False
+
     if custom_llm_provider in ("openai", "custom_openai", "ollama") or (
         custom_llm_provider is not None
         and custom_llm_provider in litellm.openai_compatible_providers
     ):
+        # Known remote providers with explicit model entries — defer to
+        # those entries rather than assuming capability support.
+        _known_remote_providers = {"perplexity", "github"}
+        if custom_llm_provider in _known_remote_providers:
+            return None
         return True
 
     return None

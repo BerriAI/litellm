@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.utils import (
+    _cached_get_model_info_helper,
     _get_model_info_helper,
     get_model_info,
     supports_function_calling,
@@ -28,10 +29,12 @@ from litellm.utils import (
 
 @pytest.fixture(autouse=True)
 def clear_model_info_cache():
-    """Clear the LRU cache on get_model_info between tests."""
+    """Clear all LRU caches that depend on model data between tests."""
     get_model_info.cache_clear()
+    _cached_get_model_info_helper.cache_clear()
     yield
     get_model_info.cache_clear()
+    _cached_get_model_info_helper.cache_clear()
 
 
 @pytest.fixture(autouse=True)
