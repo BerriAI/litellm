@@ -431,6 +431,137 @@ async def test_ui_view_users_flag_on_non_admin_no_team_id_403(mocker):
     assert "scope_user_search_to_org is enabled" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_ui_view_users_flag_on_team_admin_org_member_no_team_id(mocker):
+    """
+    Flag ON, team admin who is an org member (not org admin), no team_id param:
+    should succeed and filter by the user's org membership.
+    """
+    mock_prisma_client = mocker.MagicMock()
+    org_id = "org-member-org"
+
+    async def mock_find_many(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        assert "organization_memberships" in where
+        assert where["organization_memberships"] == {
+            "some": {"organization_id": {"in": [org_id]}}
+        }
+        return []
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
+
+    # Caller is org member (internal_user role, not org admin)
+    membership = mocker.MagicMock()
+    membership.organization_id = org_id
+    membership.user_role = "internal_user"
+
+    caller_user = mocker.MagicMock()
+    caller_user.organization_memberships = [membership]
+
+    async def mock_get_user_object(*args, **kwargs):
+        return caller_user
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
+        side_effect=mock_get_user_object,
+    )
+
+    response = await ui_view_users(
+        user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-in-org", user_role=None),
+        user_id=None,
+        user_email="u",
+        team_id=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert response == []
+
+
+@pytest.mark.asyncio
+async def test_ui_view_users_flag_on_team_admin_not_in_org_resolves_via_key_team(
+    mocker,
+):
+    """
+    Flag ON, team admin NOT in any org, no team_id query param but
+    user_api_key_dict.team_id is set: resolves org via the key's team.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    mock_prisma_client = mocker.MagicMock()
+    org_id = "org-from-team"
+    tid = "key-team-id"
+
+    async def mock_find_many(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        assert "organization_memberships" in where
+        assert where["organization_memberships"] == {
+            "some": {"organization_id": {"in": [org_id]}}
+        }
+        return []
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=tid,
+        team_alias="key-team",
+        organization_id=org_id,
+        members_with_roles=[{"user_id": "team-admin-no-org", "role": "admin"}],
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_obj
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        side_effect=mock_get_team_object,
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
+
+    # Caller has no org memberships
+    caller_user = mocker.MagicMock()
+    caller_user.organization_memberships = []
+
+    async def mock_get_user_object(*args, **kwargs):
+        return caller_user
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
+        side_effect=mock_get_user_object,
+    )
+
+    # No team_id query param, but team_id on the API key
+    response = await ui_view_users(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="team-admin-no-org", user_role=None, team_id=tid
+        ),
+        user_id=None,
+        user_email="u",
+        team_id=None,
+        page=1,
+        page_size=50,
+    )
+
+    assert response == []
+
+
 def test_user_daily_activity_types():
     """
     Assert all fiels in SpendMetrics are reported in DailySpendMetadata as "total_"
