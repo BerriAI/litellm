@@ -757,6 +757,11 @@ def get_end_user_id_from_request_body(
                     )
                     if user_id_str.strip():
                         return user_id_str
+        elif isinstance(custom_header_name_to_check, str):
+            user_id_from_header = request_headers.get(custom_header_name_to_check)
+            user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+            if user_id_str.strip():
+                return user_id_str
 
     # Check 3: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:

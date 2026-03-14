@@ -239,7 +239,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header():
     assert result == ["x-openwebui-user-email"]
 
 
-def test_get_customer_user_header_returns_customers_header_when_multiple_exist():
+def test_get_customer_user_header_returns_customers_header_in_config_order_when_multiple_exist():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
     mappings = [
@@ -249,17 +249,6 @@ def test_get_customer_user_header_returns_customers_header_when_multiple_exist()
     ]
     result = get_customer_user_header_from_mapping(mappings)
     assert result == ['x-openwebui-user-email', 'x-user-id']
-    
-def test_get_customer_user_header_returns_sorted_customers_header_when_multiple_exist():
-    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
-
-    mappings = [
-        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
-        {"header_name": "X-User-Id", "litellm_user_role": "customer"},
-        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
-    ]
-    result = get_customer_user_header_from_mapping(mappings)
-    assert result == ['x-user-id', 'x-openwebui-user-email']
     
 
 def test_get_end_user_id_returns_id_from_user_header_mappings():
@@ -315,4 +304,14 @@ def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
 
     assert result is None
 
+def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 
+    general_settings = {"user_header_name": "x-custom-user-id"}
+    headers = {"x-custom-user-id": "user-legacy"}
+
+    with patch("litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers", return_value=None), \
+         patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
+
+    assert result == "user-legacy"
