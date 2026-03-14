@@ -514,25 +514,23 @@ class TestAssistantMessageStatusAndId:
     def handler(self) -> LiteLLMResponsesTransformationHandler:
         return LiteLLMResponsesTransformationHandler()
 
-    def test_assistant_content_none_normalized_to_empty_string(
+    def test_assistant_content_none_no_spurious_empty_message(
         self, handler: LiteLLMResponsesTransformationHandler
     ) -> None:
-        """Explicit content=None and missing content key produce same output for assistant."""
-        msg_missing = [
-            {"role": "user", "content": "Hi"},
-            {"role": "assistant", "thinking_blocks": [
-                {"type": "thinking", "thinking": "", "encrypted_content": "enc", "id": "rs_1"},
-            ]},
-        ]
+        """content=None assistant with thinking_blocks must NOT emit an empty message item."""
         msg_explicit_none = [
             {"role": "user", "content": "Hi"},
             {"role": "assistant", "content": None, "thinking_blocks": [
                 {"type": "thinking", "thinking": "", "encrypted_content": "enc", "id": "rs_1"},
             ]},
         ]
-        items_missing, _ = handler.convert_chat_completion_messages_to_responses_api(msg_missing)
-        items_none, _ = handler.convert_chat_completion_messages_to_responses_api(msg_explicit_none)
-        assert items_missing == items_none
+        items, _ = handler.convert_chat_completion_messages_to_responses_api(msg_explicit_none)
+        assistant_msgs = [i for i in items if i.get("type") == "message" and i.get("role") == "assistant"]
+        assert len(assistant_msgs) == 0, (
+            "content=None assistant should not produce a spurious empty message item"
+        )
+        reasoning_items = [i for i in items if i.get("type") == "reasoning"]
+        assert len(reasoning_items) == 1
 
     def test_thinking_blocks_preserved_when_content_none_no_tool_calls(
         self, handler: LiteLLMResponsesTransformationHandler
