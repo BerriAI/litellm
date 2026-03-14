@@ -56,7 +56,7 @@ for candidate in python3 python; do
     major="$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || true)"
     minor="$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || true)"
     if [ "${major:-0}" -ge "$MIN_PYTHON_MAJOR" ] && [ "${minor:-0}" -ge "$MIN_PYTHON_MINOR" ]; then
-      PYTHON_BIN="$candidate"
+      PYTHON_BIN="$(command -v "$candidate")"
       info "Python: $("$candidate" --version 2>&1)"
       break
     fi
@@ -81,20 +81,35 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
+"$PYTHON_BIN" -m pip install --upgrade --force-reinstall --no-cache-dir "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
-# ── version check (use the Python we installed into, not any PATH binary) ──
+# ── find the litellm binary installed alongside this Python ────────────────
+# Use the bin dir of the resolved Python executable — not PATH — so we always
+# run the version we just installed, even if the user is inside a repo checkout.
+PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
+LITELLM_BIN="${PYTHON_BIN_DIR}/litellm"
+
+if [ ! -x "$LITELLM_BIN" ]; then
+  # Fall back to user-base bin (pip install --user)
+  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
+  LITELLM_BIN="${USER_BIN}/litellm"
+fi
+
+if [ ! -x "$LITELLM_BIN" ]; then
+  die "litellm binary not found after install. Try: $PYTHON_BIN -m pip install --user '${LITELLM_PACKAGE}'"
+fi
+
+# ── success banner ─────────────────────────────────────────────────────────
 echo ""
 success "LiteLLM installed"
 
-installed_ver="$("$PYTHON_BIN" -W ignore::RuntimeWarning -m litellm.proxy.proxy_cli --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ -n "$installed_ver" ] && info "Version: $installed_ver"
 
 # ── PATH hint ──────────────────────────────────────────────────────────────
 if ! command -v litellm >/dev/null 2>&1; then
-  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
-  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:$USER_BIN\""
+  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${PYTHON_BIN_DIR}\""
 fi
 
 # ── launch setup wizard ────────────────────────────────────────────────────
@@ -104,7 +119,7 @@ read -r answer </dev/tty
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
-  exec "$PYTHON_BIN" -W ignore::RuntimeWarning -m litellm.proxy.proxy_cli --setup
+  exec "$LITELLM_BIN" --setup
 else
   echo ""
   header "Quick start:"
