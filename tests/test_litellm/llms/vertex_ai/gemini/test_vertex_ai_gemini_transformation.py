@@ -3,12 +3,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
+    _pop_and_merge_extra_body,
     _transform_request_body,
     check_if_part_exists_in_parts,
     _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.vertex_ai import BlobType, RequestBody
 from litellm.types.utils import Message
 
 
@@ -1812,3 +1813,58 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_extra_body_cache_not_forwarded_to_vertex_ai():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/22970
+
+    extra_body={"cache": ...} is consumed by LiteLLM's proxy caching layer
+    and must NOT be forwarded to Vertex AI, which rejects unknown fields.
+    """
+    data: RequestBody = RequestBody(contents=[{"role": "user", "parts": [{"text": "hi"}]}])
+    optional_params = {
+        "extra_body": {
+            "cache": {"use-cache": True, "ttl": 86400},
+            "customProviderField": "should-pass-through",
+        }
+    }
+    _pop_and_merge_extra_body(data, optional_params)
+
+    assert "cache" not in data, "LiteLLM-internal 'cache' key must not reach Vertex AI"
+    assert data["customProviderField"] == "should-pass-through"
+
+
+def test_extra_body_tags_not_forwarded_to_vertex_ai():
+    """
+    extra_body={"tags": ...} is consumed by LiteLLM's logging/tracking
+    and must NOT be forwarded to Vertex AI.
+    """
+    data: RequestBody = RequestBody(contents=[{"role": "user", "parts": [{"text": "hi"}]}])
+    optional_params = {
+        "extra_body": {
+            "tags": ["tag1", "tag2"],
+            "generationConfig": {"temperature": 0.5},
+        }
+    }
+    _pop_and_merge_extra_body(data, optional_params)
+
+    assert "tags" not in data, "LiteLLM-internal 'tags' key must not reach Vertex AI"
+    assert data["generationConfig"] == {"temperature": 0.5}
+
+
+def test_extra_body_deep_merge_still_works():
+    """Ensure deep-merge of dict values in extra_body still works after the filter."""
+    data: RequestBody = RequestBody(
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        generationConfig={"maxOutputTokens": 100},
+    )
+    optional_params = {
+        "extra_body": {
+            "generationConfig": {"temperature": 0.7},
+        }
+    }
+    _pop_and_merge_extra_body(data, optional_params)
+
+    assert data["generationConfig"]["maxOutputTokens"] == 100
+    assert data["generationConfig"]["temperature"] == 0.7

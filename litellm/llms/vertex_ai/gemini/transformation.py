@@ -594,6 +594,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
 
 # Keys that LiteLLM consumes internally and must never be forwarded to the
+# Vertex AI / Gemini API, which enforce a strict request schema.
 _LITELLM_INTERNAL_EXTRA_BODY_KEYS: frozenset = frozenset({"cache", "tags"})
 
 
