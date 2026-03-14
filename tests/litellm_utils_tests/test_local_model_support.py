@@ -2,7 +2,7 @@
 Tests for local model support fixes (Issue #23054).
 
 Verifies that:
-1. get_model_info() returns sensible defaults for unknown/local models
+1. get_model_info() preserves the public raise-on-unknown contract while internal helpers return sensible defaults
 2. supports_function_calling() returns True for unknown models on OpenAI-compatible providers
 3. ContentPolicyViolationError doesn't trigger deployment cooldowns
 4. Error classification patterns are tightened to avoid false positives
@@ -49,20 +49,15 @@ def restore_global_state():
 
 
 class TestGetModelInfoUnknownModels:
-    """Unknown models should return provider-aware defaults instead of raising."""
+    """Public API keeps explicit unknown-model signaling while internal helpers can fallback."""
 
-    def test_unknown_local_model_returns_provider_aware_defaults(self):
-        """A model not in the static map should return safe OpenAI-compatible defaults."""
-        info = get_model_info(
-            model="openai/qwen3-coder-30b-a3b-instruct",
-            custom_llm_provider="openai",
-        )
-
-        assert info["input_cost_per_token"] == 0
-        assert info["output_cost_per_token"] == 0
-        assert info["mode"] == "chat"
-        assert info["supports_function_calling"] is True
-        assert info["supports_tool_choice"] is True
+    def test_unknown_local_model_public_api_still_raises(self):
+        """get_model_info() should keep the historical raise-on-unknown behavior."""
+        with pytest.raises((ValueError, KeyError)):
+            get_model_info(
+                model="openai/qwen3-coder-30b-a3b-instruct",
+                custom_llm_provider="openai",
+            )
 
     def test_known_model_still_works(self):
         """Known models should still return their actual info."""
@@ -73,10 +68,11 @@ class TestGetModelInfoUnknownModels:
         assert info["input_cost_per_token"] > 0
 
     def test_helper_returns_defaults_for_unmapped_openai_model(self):
-        """_get_model_info_helper should return defaults for unmapped OpenAI-compatible models."""
+        """Internal helper should return defaults when the caller opts into fallback behavior."""
         info = _get_model_info_helper(
             model="llama-3.2-local",
             custom_llm_provider="openai",
+            fallback_on_unmapped=True,
         )
 
         assert info["supports_function_calling"] is True
@@ -89,6 +85,7 @@ class TestGetModelInfoUnknownModels:
         info = _get_model_info_helper(
             model="davinci-002-local",
             custom_llm_provider="text-completion-openai",
+            fallback_on_unmapped=True,
         )
 
         assert info["supports_function_calling"] is False

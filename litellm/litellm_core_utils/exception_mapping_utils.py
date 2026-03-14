@@ -467,7 +467,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif (
                     "invalid_request_error" in error_str.lower()
-                    and "Incorrect API key provided" not in error_str
+                    and "incorrect api key provided" not in error_str.lower()
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(

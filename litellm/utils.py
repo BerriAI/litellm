@@ -2395,7 +2395,9 @@ def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) ->
         )
 
         model_info = _get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            fallback_on_unmapped=True,
         )
         supports_native_streaming = model_info.get("supports_native_streaming", True)
         if supports_native_streaming is None:
@@ -5459,6 +5461,7 @@ def _cached_get_model_info_helper(
     model: str,
     custom_llm_provider: Optional[str],
     api_base: Optional[str] = None,
+    fallback_on_unmapped: bool = False,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
@@ -5466,7 +5469,10 @@ def _cached_get_model_info_helper(
     Speed Optimization to hit high RPS
     """
     return _get_model_info_helper(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        fallback_on_unmapped=fallback_on_unmapped,
     )
 
 
@@ -5506,6 +5512,7 @@ def _get_model_info_helper(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
+    fallback_on_unmapped: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -5810,6 +5817,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
             )
     except (ValueError, KeyError) as e:
+        if not fallback_on_unmapped:
+            raise
         verbose_logger.debug(
             "Model not mapped, returning conservative defaults. "
             "model={}, custom_llm_provider={}, error={}".format(

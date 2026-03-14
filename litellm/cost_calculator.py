@@ -526,7 +526,9 @@ def cost_per_token(  # noqa: PLR0915
         )
     else:
         model_info = _cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            fallback_on_unmapped=True,
         )
 
         if (
@@ -2250,4 +2252,3 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-
