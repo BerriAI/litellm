@@ -1995,11 +1995,11 @@ class ProxyLogging:
                 logging_obj, "model_call_details", None
             ):
                 # Merge so request data wins overall, but model_call_details wins for
-                # LLM-lifecycle timing fields so callbacks get accurate start/end times.
+                # start_time so callbacks get accurate LLM start. end_time in kwargs is
+                # left to match the end_time argument (hook run time); use llm_end_time for LLM-only end.
                 kwargs = {**logging_obj.model_call_details, **kwargs}
-                for key in ("start_time", "end_time"):
-                    if key in logging_obj.model_call_details:
-                        kwargs[key] = logging_obj.model_call_details[key]
+                if "start_time" in logging_obj.model_call_details:
+                    kwargs["start_time"] = logging_obj.model_call_details["start_time"]
             kwargs["user_api_key_dict"] = user_api_key_dict
             start_time = None
             if logging_obj is not None:

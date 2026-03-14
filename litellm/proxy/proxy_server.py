@@ -5614,12 +5614,14 @@ async def async_data_generator(
             def _discard_task(t: asyncio.Task[None]) -> None:
                 _post_guardrail_log_tasks.discard(t)
 
+            logging_obj_for_log = request_data.get("litellm_logging_obj")
+            request_data_snapshot = dict(request_data)
             _task = asyncio.create_task(
                 _async_data_generator_fire_post_guardrail_log(
-                    request_data=request_data,
+                    request_data=request_data_snapshot,
                     user_api_key_dict=user_api_key_dict,
                     chunks_for_log=_streaming_chunks_for_log,
-                    logging_obj=request_data.get("litellm_logging_obj"),
+                    logging_obj=logging_obj_for_log,
                 )
             )
             _post_guardrail_log_tasks.add(_task)
