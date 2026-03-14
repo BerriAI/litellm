@@ -295,7 +295,7 @@ def test_get_internal_user_header_from_mapping_returns_internal_header():
     ]
 
     result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
-    assert result == "X-OpenWebUI-User"
+    assert result == "X-OpenWebUI-User-Id"
 
 
 def test_get_internal_user_header_from_mapping_no_internal_returns_none():
