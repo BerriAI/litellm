@@ -7514,8 +7514,15 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(annotation_chunks) > 0:
-            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
-            response["choices"][0]["message"]["annotations"] = annotations
+            # Merge annotations from ALL chunks — providers may spread
+            # them across multiple streaming chunks or send them only in
+            # the final chunk.
+            all_annotations: list = []
+            for ac in annotation_chunks:
+                all_annotations.extend(
+                    ac["choices"][0]["delta"]["annotations"]
+                )
+            response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [
             chunk
