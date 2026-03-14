@@ -31,7 +31,10 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
@@ -714,6 +717,166 @@ async def user_info(
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        raise handle_exception_on_proxy(e)
+
+
+async def _check_user_info_v2_access(
+    user_api_key_dict: UserAPIKeyAuth,
+    target_user_id: str,
+) -> Optional["LiteLLM_UserTable"]:
+    """
+    Check if the caller is allowed to access the target user's info.
+
+    Returns the target user's DB row if access is allowed, None otherwise.
+    Returning the row avoids a redundant DB fetch in the caller.
+
+    Access rules:
+    1. Proxy admins / proxy admin viewers can access any user
+    2. User can access their own info
+    3. Team admins can access info of users in their teams
+
+    Raises on unexpected DB errors so they surface as 500s, not silent 404s.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return None
+
+    # Helper: fetch the target user row (reused across branches)
+    async def _fetch_target_user():
+        return await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": target_user_id}
+        )
+
+    # Rule 1: Proxy admins — fetch and return the target row directly
+    if _user_has_admin_view(user_api_key_dict):
+        return await _fetch_target_user()
+
+    # Rule 2: Self-lookup
+    if user_api_key_dict.user_id == target_user_id:
+        return await _fetch_target_user()
+
+    # Rule 3: Team admins can look up users in their teams
+    if user_api_key_dict.user_id is not None:
+        # Get caller's teams
+        caller_user = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if caller_user is not None and caller_user.teams:
+            # Fetch the target user ONCE, before the loop
+            target_user = await _fetch_target_user()
+            if target_user is None:
+                return None
+
+            # Get all teams the caller belongs to
+            teams = await prisma_client.db.litellm_teamtable.find_many(
+                where={"team_id": {"in": caller_user.teams}}
+            )
+            for team in teams:
+                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                if _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
+                ):
+                    # Check if target user is in this team
+                    if team.team_id in (target_user.teams or []):
+                        return target_user
+
+    return None
+
+
+@router.get(
+    "/v2/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UserInfoV2Response,
+)
+@management_endpoint_wrapper
+async def user_info_v2(
+    request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="User ID in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Lightweight endpoint to get user info. Returns only the user object — no keys, no teams objects.
+
+    This is the v2 replacement for /user/info, designed to avoid the "god endpoint" problem
+    where the old endpoint loaded all keys and teams into memory.
+
+    Access control:
+    - Proxy admins can query any user
+    - Team admins can query users within their teams
+    - Internal users can only query themselves (omit user_id or pass own)
+    - Returns 404 for non-existent users or unauthorized access
+
+    Example request:
+    ```
+    curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \\
+    --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail=CommonProxyErrors.db_not_connected_error.value,
+            )
+
+        # Handle URL encoding for + characters
+        if user_id is not None and " " in user_id:
+            user_id = get_user_id_from_request(request=request)
+
+        # Default to self-lookup if no user_id provided
+        if user_id is None:
+            user_id = user_api_key_dict.user_id
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id is required. Either pass it as a query parameter or authenticate with a user-bound key.",
+            )
+
+        # Check access — returns the user row if allowed, None otherwise.
+        # This avoids a redundant DB fetch since the access check already
+        # loads the target user for team-admin verification.
+        user_row = await _check_user_info_v2_access(
+            user_api_key_dict=user_api_key_dict,
+            target_user_id=user_id,
+        )
+
+        if user_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User not found: {user_id}",
+            )
+
+        user_data = user_row.model_dump()
+
+        return UserInfoV2Response(
+            user_id=user_data.get("user_id", user_id),
+            user_email=user_data.get("user_email"),
+            user_alias=user_data.get("user_alias"),
+            user_role=user_data.get("user_role"),
+            spend=user_data.get("spend", 0.0),
+            max_budget=user_data.get("max_budget"),
+            models=user_data.get("models") or [],
+            budget_duration=user_data.get("budget_duration"),
+            budget_reset_at=user_data.get("budget_reset_at"),
+            metadata=user_data.get("metadata"),
+            created_at=user_data.get("created_at"),
+            updated_at=user_data.get("updated_at"),
+            sso_user_id=user_data.get("sso_user_id"),
+            teams=user_data.get("teams") or [],
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_info_v2(): Exception occured - {}".format(
                 str(e)
             )
         )
