@@ -416,6 +416,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               <button onClick={agentCancel} className="text-blue-600 hover:text-blue-800 underline text-xs">Stop</button>
             </>
           )}
+          {agentCancelled && entityType === "team" && (
+            <span className="text-yellow-600 text-xs">
+              Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+            </span>
+          )}
         </div>
       )}
       <UsageExportHeader

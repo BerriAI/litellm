@@ -102,11 +102,24 @@ export function usePaginatedDailyActivity({
 
   const fetchIdRef = useRef(0);
   const cancelledRef = useRef(false);
+  const delayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep args in a ref so the effect can always read the latest values
+  // without needing them in the dependency array.
+  const argsRef = useRef(args);
+  argsRef.current = args;
+
+  // Stable serialised key so the effect only re-runs when the arg *values* change.
+  const argsKey = JSON.stringify(args);
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
     setCancelled(true);
     setIsFetchingMore(false);
+    if (delayTimerRef.current !== null) {
+      clearTimeout(delayTimerRef.current);
+      delayTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -126,14 +139,24 @@ export function usePaginatedDailyActivity({
     const isStale = () =>
       fetchIdRef.current !== currentFetchId || cancelledRef.current;
 
+    /** Cancellable delay that clears itself on cleanup. */
+    const delay = (ms: number) =>
+      new Promise<void>((resolve) => {
+        delayTimerRef.current = setTimeout(() => {
+          delayTimerRef.current = null;
+          resolve();
+        }, ms);
+      });
+
     const run = async () => {
+      const currentArgs = argsRef.current;
       setLoading(true);
       setIsFetchingMore(false);
       setProgress({ currentPage: 1, totalPages: 1 });
 
       try {
         // Inject page=1 as the 4th argument.
-        const argsWithPage = [...args.slice(0, 3), 1, ...args.slice(3)];
+        const argsWithPage = [...currentArgs.slice(0, 3), 1, ...currentArgs.slice(3)];
         const firstPage = await fetchFn(...argsWithPage);
 
         if (isStale()) return;
@@ -160,13 +183,11 @@ export function usePaginatedDailyActivity({
           if (isStale()) return;
 
           // Small delay to avoid overwhelming the backend.
-          await new Promise((resolve) =>
-            setTimeout(resolve, PAGE_FETCH_DELAY_MS),
-          );
+          await delay(PAGE_FETCH_DELAY_MS);
 
           if (isStale()) return;
 
-          const argsForPage = [...args.slice(0, 3), page, ...args.slice(3)];
+          const argsForPage = [...currentArgs.slice(0, 3), page, ...currentArgs.slice(3)];
           const pageData = await fetchFn(...argsForPage);
 
           if (isStale()) return;
@@ -201,9 +222,14 @@ export function usePaginatedDailyActivity({
 
     return () => {
       fetchIdRef.current++;
+      if (delayTimerRef.current !== null) {
+        clearTimeout(delayTimerRef.current);
+        delayTimerRef.current = null;
+      }
     };
+    // argsKey is a stable JSON string so the effect only re-fires when arg values change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, fetchFn, ...args]);
+  }, [enabled, fetchFn, argsKey]);
 
   return { data, loading, isFetchingMore, progress, cancelled, cancel };
 }
