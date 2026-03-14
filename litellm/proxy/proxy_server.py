@@ -5609,20 +5609,21 @@ async def async_data_generator(
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
-        # Post-guardrail log: run in background so we don't block yielding [DONE]
-        def _discard_task(t: asyncio.Task[None]) -> None:
-            _post_guardrail_log_tasks.discard(t)
+        # Post-guardrail log: only for successful stream completion, not when we got an SSE error
+        if error_message is None:
+            def _discard_task(t: asyncio.Task[None]) -> None:
+                _post_guardrail_log_tasks.discard(t)
 
-        _task = asyncio.create_task(
-            _async_data_generator_fire_post_guardrail_log(
-                request_data=request_data,
-                user_api_key_dict=user_api_key_dict,
-                chunks_for_log=_streaming_chunks_for_log,
-                logging_obj=request_data.get("litellm_logging_obj"),
+            _task = asyncio.create_task(
+                _async_data_generator_fire_post_guardrail_log(
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    chunks_for_log=_streaming_chunks_for_log,
+                    logging_obj=request_data.get("litellm_logging_obj"),
+                )
             )
-        )
-        _post_guardrail_log_tasks.add(_task)
-        _task.add_done_callback(_discard_task)
+            _post_guardrail_log_tasks.add(_task)
+            _task.add_done_callback(_discard_task)
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
