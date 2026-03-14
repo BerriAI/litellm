@@ -138,7 +138,6 @@ class FocusVantageDestination(FocusDestination):
 
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback,
-            params={"timeout": 60.0},
         )
 
         # Check both size and row-count limits before single-shot upload
