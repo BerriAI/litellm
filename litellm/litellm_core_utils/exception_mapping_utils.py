@@ -1092,7 +1092,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=_response,
-                elif oci_status == 500:
+                        litellm_debug_info=extra_information,
+                    )
                     raise InternalServerError(
                         message=f"{exception_provider} - {oci_message}",
                         llm_provider=custom_llm_provider,
