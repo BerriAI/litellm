@@ -54,7 +54,10 @@ def _is_cooldown_required(
         bool: True if a cooldown is required, False otherwise.
     """
     try:
-        ignored_strings = ["APIConnectionError"]
+        ignored_strings = [
+            "APIConnectionError",
+            "ContentPolicyViolationError",  # Content policy errors are per-request, not deployment-level
+        ]
         if (
             exception_str is not None
         ):  # don't cooldown on litellm api connection errors errors

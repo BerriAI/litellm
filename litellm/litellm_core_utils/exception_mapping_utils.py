@@ -431,7 +431,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         and "violating our usage policy" in error_str
                     )
                     or (
-                        "request was rejected as a result of the safety system"
+                        "invalid_request_error" in error_str
+                        and "request was rejected as a result of the safety system"
                         in error_str.lower()
                     )
                 ):
