@@ -8,4 +8,4 @@ CREATE TABLE "LiteLLM_SpendLogToolIndex" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");

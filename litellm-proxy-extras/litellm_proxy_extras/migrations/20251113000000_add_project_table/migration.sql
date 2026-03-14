@@ -28,7 +28,7 @@ ALTER TABLE "LiteLLM_ProjectTable" ADD CONSTRAINT "LiteLLM_ProjectTable_budget_i
 ALTER TABLE "LiteLLM_ProjectTable" ADD CONSTRAINT "LiteLLM_ProjectTable_object_permission_id_fkey" FOREIGN KEY ("object_permission_id") REFERENCES "LiteLLM_ObjectPermissionTable"("object_permission_id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AlterTable: Add project_id to LiteLLM_VerificationToken
-ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "project_id" TEXT;
+ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "project_id" TEXT;
 
 -- AddForeignKey
 ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "LiteLLM_VerificationToken_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "LiteLLM_ProjectTable"("project_id") ON DELETE SET NULL ON UPDATE CASCADE;

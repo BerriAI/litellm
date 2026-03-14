@@ -1,9 +1,9 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "byok_api_key_help_url" TEXT,
-ADD COLUMN     "byok_description" TEXT[] DEFAULT ARRAY[]::TEXT[],
-ADD COLUMN     "is_byok" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "tool_name_to_description" JSONB DEFAULT '{}',
-ADD COLUMN     "tool_name_to_display_name" JSONB DEFAULT '{}';
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "byok_api_key_help_url" TEXT,
+ADD COLUMN IF NOT EXISTS "byok_description" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN IF NOT EXISTS "is_byok" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "tool_name_to_description" JSONB DEFAULT '{}',
+ADD COLUMN IF NOT EXISTS "tool_name_to_display_name" JSONB DEFAULT '{}';
 
 -- CreateTable
 CREATE TABLE "LiteLLM_MCPUserCredentials" (
@@ -44,13 +44,13 @@ CREATE TABLE "LiteLLM_ConfigOverrides" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_MCPUserCredentials_user_id_server_id_key" ON "LiteLLM_MCPUserCredentials"("user_id", "server_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MCPUserCredentials_user_id_server_id_key" ON "LiteLLM_MCPUserCredentials"("user_id", "server_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_is_act_idx" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value", "is_active");
+CREATE INDEX IF NOT EXISTS "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_is_act_idx" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value", "is_active");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_key" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_key" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value");
 
 -- AddForeignKey
 ALTER TABLE "LiteLLM_JWTKeyMapping" ADD CONSTRAINT "LiteLLM_JWTKeyMapping_token_fkey" FOREIGN KEY ("token") REFERENCES "LiteLLM_VerificationToken"("token") ON DELETE RESTRICT ON UPDATE CASCADE;

@@ -41,20 +41,20 @@ CREATE TABLE "LiteLLM_SpendLogGuardrailIndex" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyGuardrailMetrics_date_idx" ON "LiteLLM_DailyGuardrailMetrics"("date");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyGuardrailMetrics_date_idx" ON "LiteLLM_DailyGuardrailMetrics"("date");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyGuardrailMetrics_guardrail_id_idx" ON "LiteLLM_DailyGuardrailMetrics"("guardrail_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyGuardrailMetrics_guardrail_id_idx" ON "LiteLLM_DailyGuardrailMetrics"("guardrail_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyPolicyMetrics_date_idx" ON "LiteLLM_DailyPolicyMetrics"("date");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyPolicyMetrics_date_idx" ON "LiteLLM_DailyPolicyMetrics"("date");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyPolicyMetrics_policy_id_idx" ON "LiteLLM_DailyPolicyMetrics"("policy_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyPolicyMetrics_policy_id_idx" ON "LiteLLM_DailyPolicyMetrics"("policy_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SpendLogGuardrailIndex_guardrail_id_start_time_idx" ON "LiteLLM_SpendLogGuardrailIndex"("guardrail_id", "start_time");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogGuardrailIndex_guardrail_id_start_time_idx" ON "LiteLLM_SpendLogGuardrailIndex"("guardrail_id", "start_time");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SpendLogGuardrailIndex_policy_id_start_time_idx" ON "LiteLLM_SpendLogGuardrailIndex"("policy_id", "start_time");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogGuardrailIndex_policy_id_start_time_idx" ON "LiteLLM_SpendLogGuardrailIndex"("policy_id", "start_time");
 

@@ -15,4 +15,4 @@ CREATE TABLE "LiteLLM_ClaudeCodePluginTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_ClaudeCodePluginTable_name_key" ON "LiteLLM_ClaudeCodePluginTable"("name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ClaudeCodePluginTable_name_key" ON "LiteLLM_ClaudeCodePluginTable"("name");

@@ -1,14 +1,14 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_OrganizationTable" ADD COLUMN     "object_permission_id" TEXT;
+ALTER TABLE "LiteLLM_OrganizationTable" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN     "object_permission_id" TEXT;
+ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_UserTable" ADD COLUMN     "object_permission_id" TEXT;
+ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN     "object_permission_id" TEXT;
+ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- CreateTable
 CREATE TABLE "LiteLLM_ObjectPermissionTable" (

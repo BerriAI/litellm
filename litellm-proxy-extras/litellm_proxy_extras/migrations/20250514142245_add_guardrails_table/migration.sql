@@ -11,5 +11,5 @@ CREATE TABLE "LiteLLM_GuardrailsTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_GuardrailsTable_guardrail_name_key" ON "LiteLLM_GuardrailsTable"("guardrail_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_GuardrailsTable_guardrail_name_key" ON "LiteLLM_GuardrailsTable"("guardrail_name");
 

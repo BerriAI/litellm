@@ -16,7 +16,7 @@ CREATE TABLE "LiteLLM_ManagedVectorStoreTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_ManagedVectorStoreTable_unified_resource_id_key" ON "LiteLLM_ManagedVectorStoreTable"("unified_resource_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoreTable_unified_resource_id_key" ON "LiteLLM_ManagedVectorStoreTable"("unified_resource_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_ManagedVectorStoreTable_unified_resource_id_idx" ON "LiteLLM_ManagedVectorStoreTable"("unified_resource_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoreTable_unified_resource_id_idx" ON "LiteLLM_ManagedVectorStoreTable"("unified_resource_id");

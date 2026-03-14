@@ -13,5 +13,5 @@ CREATE TABLE "LiteLLM_ManagedVectorStoreIndexTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_ManagedVectorStoreIndexTable_index_name_key" ON "LiteLLM_ManagedVectorStoreIndexTable"("index_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoreIndexTable_index_name_key" ON "LiteLLM_ManagedVectorStoreIndexTable"("index_name");
 

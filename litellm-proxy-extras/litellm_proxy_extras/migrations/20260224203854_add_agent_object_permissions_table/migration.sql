@@ -1,11 +1,11 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN     "object_permission_id" TEXT;
+ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN IF NOT EXISTS "object_permission_id" TEXT;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN "spec_path";
+ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN IF EXISTS "spec_path";
 
 -- AlterTable
-ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN     "agent_id" TEXT;
+ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "agent_id" TEXT;
 
 -- CreateTable
 CREATE TABLE "LiteLLM_ToolTable" (
@@ -27,13 +27,13 @@ CREATE TABLE "LiteLLM_ToolTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_ToolTable_tool_name_key" ON "LiteLLM_ToolTable"("tool_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ToolTable_tool_name_key" ON "LiteLLM_ToolTable"("tool_name");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_ToolTable_call_policy_idx" ON "LiteLLM_ToolTable"("call_policy");
+CREATE INDEX IF NOT EXISTS "LiteLLM_ToolTable_call_policy_idx" ON "LiteLLM_ToolTable"("call_policy");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_ToolTable_team_id_idx" ON "LiteLLM_ToolTable"("team_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_ToolTable_team_id_idx" ON "LiteLLM_ToolTable"("team_id");
 
 -- AddForeignKey
 ALTER TABLE "LiteLLM_AgentsTable" ADD CONSTRAINT "LiteLLM_AgentsTable_object_permission_id_fkey" FOREIGN KEY ("object_permission_id") REFERENCES "LiteLLM_ObjectPermissionTable"("object_permission_id") ON DELETE SET NULL ON UPDATE CASCADE;
