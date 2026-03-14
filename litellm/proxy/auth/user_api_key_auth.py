@@ -1175,7 +1175,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             ## base case ## key is disabled
             if valid_token.blocked is True:
                 raise Exception(
-                    "Key is blocked. Update via `/key/unblock` if you're admin."
+                    "Key is blocked. Update via `/key/unblock` if you're an admin."
                 )
             config = valid_token.config
 
