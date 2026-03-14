@@ -278,7 +278,16 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
 
             new_choices = []
             for choice in chunk["choices"]:
-                choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
+                delta = choice["delta"]
+                delta["reasoning_content"] = delta.get("reasoning")
+
+                # Promote annotations (url_citation) from choice level to
+                # delta so they flow through the streaming handler.
+                # Some providers put them in delta, others at choice level.
+                annotations = delta.get("annotations") or choice.pop("annotations", None)
+                if annotations is not None:
+                    delta["annotations"] = annotations
+
                 new_choices.append(choice)
             return ModelResponseStream(
                 id=chunk["id"],
