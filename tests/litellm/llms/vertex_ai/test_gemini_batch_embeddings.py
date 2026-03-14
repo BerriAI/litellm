@@ -524,3 +524,81 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
         assert data["content"]["parts"][0]["text"] == "Hello, world!"
         assert len(response.data) == 1
 
+
+def test_vertex_ai_gemini_embedding_2_routes_to_batch_handler_not_predict():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/23508
+
+    Verifies that vertex_ai/gemini-embedding-2-preview is routed through
+    GoogleBatchEmbeddings (embedContent endpoint) in main.py, and does NOT
+    fall through to the legacy vertex_embedding handler that uses :predict.
+
+    The :predict endpoint returns 400 FAILED_PRECONDITION for this model
+    because Google dropped :predict support for gemini-embedding-2-preview.
+    """
+    from unittest.mock import MagicMock, patch
+
+    client = HTTPHandler()
+
+    def mock_auth_token(*args, **kwargs):
+        return "Bearer test-token", "test-project"
+
+    # Patch GoogleBatchEmbeddings internals (the correct handler)
+    with patch.object(client, "post") as mock_post, patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._ensure_access_token",
+        side_effect=mock_auth_token,
+    ), patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._get_token_and_url"
+    ) as mock_get_token, patch(
+        # Patch the WRONG handler to detect if routing falls through
+        "litellm.main.vertex_embedding.embedding"
+    ) as mock_wrong_handler:
+        embed_content_url = (
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project"
+            "/locations/us-central1/publishers/google/models/"
+            "gemini-embedding-2-preview:embedContent"
+        )
+        mock_get_token.return_value = (
+            {"Authorization": "Bearer test-token"},
+            embed_content_url,
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "embedding": {"values": [0.1, 0.2, 0.3]}
+        }
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="vertex_ai/gemini-embedding-2-preview",
+            input=["test input"],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            client=client,
+        )
+
+        # The correct handler (GoogleBatchEmbeddings) should have been called
+        mock_post.assert_called_once()
+        call_url = mock_post.call_args.kwargs.get(
+            "url", mock_post.call_args.args[0] if mock_post.call_args.args else ""
+        )
+        assert ":embedContent" in str(call_url), (
+            f"Expected :embedContent endpoint but got: {call_url}"
+        )
+        assert ":predict" not in str(call_url), (
+            f"Should NOT use :predict endpoint but got: {call_url}"
+        )
+
+        # The legacy vertex_embedding handler should NOT have been called
+        mock_wrong_handler.assert_not_called()
+
+        # Verify the request body uses embedContent format (not predict format)
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        assert "content" in data, (
+            "Request body should use embedContent format with 'content' key, "
+            f"got keys: {list(data.keys())}"
+        )
+        assert "instances" not in data, (
+            "Request body should NOT use predict format with 'instances' key"
+        )
+
