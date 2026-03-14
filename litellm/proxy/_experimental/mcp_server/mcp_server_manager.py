@@ -1074,6 +1074,14 @@ class MCPServerManager:
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 
+            # Filter tools based on allowed_tools / disallowed_tools config
+            if server.allowed_tools or server.disallowed_tools:
+                tools = [
+                    tool
+                    for tool in tools
+                    if self.check_allowed_or_banned_tools(tool.name, server)
+                ]
+
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
             )
