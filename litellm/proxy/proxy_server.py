@@ -4234,9 +4234,12 @@ class ProxyConfig:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
             from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                _should_store_prompts_and_responses_in_spend_logs,
                 _should_use_lazy_proxy_request_body,
             )
+
             _should_use_lazy_proxy_request_body.cache_clear()
+            _should_store_prompts_and_responses_in_spend_logs.cache_clear()
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:

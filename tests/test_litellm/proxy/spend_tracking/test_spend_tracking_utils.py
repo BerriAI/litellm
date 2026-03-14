@@ -1078,6 +1078,55 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     assert parsed_response["choices"][0]["message"]["role"] == "assistant"
 
 
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_proxy_server_request_for_spend_logs_payload_returns_empty_when_body_absent(
+    mock_should_store,
+):
+    """
+    Regression: when proxy_server_request has no body (lazy mode), return "{}" safely.
+    """
+    mock_should_store.return_value = True
+
+    litellm_params = {
+        "proxy_server_request": {
+            "url": "/v1/chat/completions",
+            "method": "POST",
+            "body_keys": ["messages", "model"],
+            "body_snapshot": None,
+        }
+    }
+
+    result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs={}
+    )
+
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_proxy_server_request_for_spend_logs_payload_returns_empty_when_store_prompts_false(
+    mock_should_store,
+):
+    """When store_prompts is False, return "{}" regardless of body presence."""
+    mock_should_store.return_value = False
+
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": "hello"}], "model": "gpt-4"},
+        }
+    }
+
+    result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs={}
+    )
+
+    assert result == "{}"
+
+
 @patch("litellm.secret_managers.main.get_secret_bool")
 def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
     mock_get_secret_bool,

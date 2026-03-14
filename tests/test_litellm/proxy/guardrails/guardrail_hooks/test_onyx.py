@@ -369,6 +369,90 @@ class TestOnyxGuardrail:
         assert call_args.kwargs["json"]["conversation_id"] == "test-call-id"
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_reconstructs_from_body_snapshot_when_body_absent(self):
+        """When lazy mode omits body, Onyx reconstructs payload from body_snapshot."""
+        os.environ["ONYX_API_KEY"] = "test-api-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True
+        )
+
+        inputs = GenericGuardrailAPIInputs()
+        # body absent (lazy mode); body_snapshot has the original request content
+        request_data = {
+            "proxy_server_request": {
+                "body_snapshot": {
+                    "messages": [{"role": "user", "content": "reconstructed"}],
+                    "model": "gpt-4",
+                },
+                "body_keys": ["messages", "model"],
+            }
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        assert result == inputs
+        call_args = mock_post.call_args
+        assert call_args.kwargs["json"]["payload"] == {
+            "messages": [{"role": "user", "content": "reconstructed"}],
+            "model": "gpt-4",
+        }
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_reconstructs_from_body_keys_when_body_and_snapshot_absent(
+        self,
+    ):
+        """When body and body_snapshot are absent, Onyx falls back to body_keys + request_data."""
+        os.environ["ONYX_API_KEY"] = "test-api-key"
+
+        guardrail = OnyxGuardrail(
+            guardrail_name="test-guard", event_hook="pre_call", default_on=True
+        )
+
+        inputs = GenericGuardrailAPIInputs()
+        # body and body_snapshot absent; body_keys + top-level keys in request_data
+        request_data = {
+            "messages": [{"role": "user", "content": "from request_data"}],
+            "model": "gpt-4",
+            "proxy_server_request": {
+                "body_keys": ["messages", "model"],
+            },
+        }
+
+        mock_response = MagicMock(spec=Response)
+        mock_response.json.return_value = {"allowed": True, "message": "Safe"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=None,
+            )
+
+        assert result == inputs
+        call_args = mock_post.call_args
+        assert call_args.kwargs["json"]["payload"] == {
+            "messages": [{"role": "user", "content": "from request_data"}],
+            "model": "gpt-4",
+        }
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_request_with_violations(self):
         """Test apply_guardrail for request with violations detected."""
         # Set required API key
