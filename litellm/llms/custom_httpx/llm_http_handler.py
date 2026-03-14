@@ -15,8 +15,17 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import orjson
 from openai.types.file_deleted import FileDeleted
+
+try:
+    import orjson
+
+    def _fast_json_encode(obj: Any) -> str:
+        return orjson.dumps(obj).decode()
+except ImportError:
+
+    def _fast_json_encode(obj: Any) -> str:  # type: ignore[misc]
+        return json.dumps(obj)
 
 import litellm
 import litellm.litellm_core_utils
@@ -179,7 +188,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data).decode()
+                        else _fast_json_encode(data)
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -239,7 +248,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data).decode()
+                        else _fast_json_encode(data)
                     ),
                     timeout=timeout,
                     stream=stream,
