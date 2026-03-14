@@ -1,12 +1,15 @@
 import logging
+import sys
 from io import StringIO
 from unittest.mock import patch
 
 import pytest
 
 from litellm._logging import (
+    JsonFormatter,
     _redact_string,
     _secret_filter,
+    _setup_json_exception_handlers,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -146,3 +149,67 @@ def test_disable_redaction_passes_secrets_through():
         )
         _secret_filter.filter(record)
         assert "sk-proj-" in record.msg
+
+
+def test_x_api_key_regex_does_not_consume_json_delimiters():
+    """x-api-key pattern must stop before closing quotes/braces so JSON stays valid."""
+    # Simulates a JSON log line containing an x-api-key header value
+    json_line = '{"headers": {"x-api-key": "secret123"}, "status": 200}'
+    result = _redact_string(json_line)
+    # The secret value should be redacted
+    assert "secret123" not in result
+    assert "REDACTED" in result
+    # Closing delimiter must survive so the line is still valid-ish JSON
+    assert '"status": 200' in result
+    assert "}" in result
+
+
+def test_json_excepthook_redacts_secrets():
+    """Unhandled exceptions in JSON mode must have secrets redacted."""
+    buf = StringIO()
+    h = logging.StreamHandler(buf)
+    h.setFormatter(JsonFormatter())
+    h.addFilter(_secret_filter)
+
+    # Capture what the excepthook would emit
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg=f"Connection failed with key {SECRET}",
+        args=(),
+        exc_info=None,
+    )
+    # Simulate the filter + formatter pipeline
+    _secret_filter.filter(record)
+    output = h.formatter.format(record)
+    assert SECRET not in output
+    assert "REDACTED" in output
+
+
+def test_json_excepthook_redacts_traceback_secrets():
+    """Unhandled exception tracebacks in JSON mode must have secrets redacted."""
+    buf = StringIO()
+    h = logging.StreamHandler(buf)
+    h.setFormatter(JsonFormatter())
+    h.addFilter(_secret_filter)
+
+    try:
+        raise RuntimeError(f"Failed to auth with {SECRET}")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg=str(exc_info[1]),
+        args=(),
+        exc_info=exc_info,
+    )
+    _secret_filter.filter(record)
+    output = h.formatter.format(record)
+    assert SECRET not in output
+    assert "REDACTED" in output
