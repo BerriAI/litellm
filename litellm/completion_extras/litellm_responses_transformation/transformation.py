@@ -431,7 +431,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return request_data
 
     @staticmethod
-    def _convert_response_output_to_choices(
+    def _convert_response_output_to_choices(  # noqa: PLR0915
         output_items: List[Any],
         handle_raw_dict_callback: Optional[Callable] = None,
     ) -> List[Any]:
@@ -465,12 +465,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
-                reasoning_content = (reasoning_content or "") + "".join(
+            if isinstance(item, ResponseReasoningItem):
+                item_text = "".join(
                     getattr(s, "text", "") for s in item.summary
                 )
-                reasoning_content = (reasoning_content or "") + item_reasoning
+                if reasoning_content is None:
                     reasoning_content = item_text
-                    "thinking": reasoning_content or "",
+                else:
+                    reasoning_content += item_text
 
                 # Capture encrypted_content for thinking_blocks passthrough
                 encrypted = getattr(item, "encrypted_content", None)
