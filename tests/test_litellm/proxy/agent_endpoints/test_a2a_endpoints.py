@@ -42,11 +42,12 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 
     # Mock agent
     mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent"
     mock_agent.agent_card_params = {
         "url": "http://backend-agent:10001",
         "name": "Test Agent",
     }
-    mock_agent.litellm_params = None
+    mock_agent.litellm_params = {}
 
     # Mock request
     mock_request = MagicMock()
