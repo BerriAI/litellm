@@ -6,7 +6,7 @@ import csv
 import io
 from typing import Any, Optional
 
-import httpx
+import httpx  # noqa: F401 - used at runtime (AsyncClient, HTTPStatusError)
 
 from litellm._logging import verbose_logger
 
