@@ -9,7 +9,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 """
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Request, Response
 
@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+from litellm.types.llms.openai import ResponsesAPIStatus
 
 
 async def background_streaming_task(  # noqa: PLR0915
@@ -114,14 +115,22 @@ async def background_streaming_task(  # noqa: PLR0915
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: ResponsesAPIStatus | None = None
         terminal_error = None
-        _event_to_status = {
+        _event_to_status: dict[str, ResponsesAPIStatus] = {
             "response.completed": "completed",
             "response.failed": "failed",
             "response.incomplete": "incomplete",
             "response.cancelled": "cancelled",
         }
+        _valid_response_statuses: tuple[ResponsesAPIStatus, ...] = (
+            "completed",
+            "failed",
+            "in_progress",
+            "cancelled",
+            "queued",
+            "incomplete",
+        )
 
         async def flush_state_if_needed(force: bool = False) -> None:
             """Flush accumulated state to Redis if interval elapsed or forced"""
@@ -249,10 +258,18 @@ async def background_streaming_task(  # noqa: PLR0915
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
-                            terminal_status = response_data.get(
-                                "status",
-                                _event_to_status.get(event_type, "completed"),
-                            )
+                            terminal_status_value = response_data.get("status")
+                            if (
+                                isinstance(terminal_status_value, str)
+                                and terminal_status_value in _valid_response_statuses
+                            ):
+                                terminal_status = cast(
+                                    ResponsesAPIStatus, terminal_status_value
+                                )
+                            else:
+                                terminal_status = _event_to_status.get(
+                                    event_type, "completed"
+                                )
 
                             # Extract error for failed responses
                             if event_type == "response.failed":
@@ -308,7 +325,7 @@ async def background_streaming_task(  # noqa: PLR0915
             await flush_state_if_needed(force=True)
 
         # Use the terminal status from the stream, default to "completed"
-        final_status = terminal_status or "completed"
+        final_status: ResponsesAPIStatus = terminal_status or "completed"
 
         await polling_handler.update_state(
             polling_id=polling_id,
