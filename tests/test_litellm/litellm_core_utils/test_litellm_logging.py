@@ -148,6 +148,38 @@ def test_use_custom_pricing_for_model():
     assert use_custom_pricing_for_model(litellm_params) == True
 
 
+def test_use_custom_pricing_for_model_via_litellm_metadata():
+    """Pricing in litellm_metadata.model_info must be detected.
+
+    Generic API call routes (/messages, /responses) store model_info
+    under litellm_metadata, not metadata. Regression test for #23185.
+    """
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {
+                "id": "claude-sonnet-4-custom",
+                "input_cost_per_token": 0.0003,
+                "output_cost_per_token": 0.0015,
+            },
+        },
+    }
+    assert use_custom_pricing_for_model(litellm_params) is True
+
+
+def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
+    """Should return False when litellm_metadata.model_info has no pricing keys."""
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {"id": "some-id", "db_model": False},
+        },
+    }
+    assert use_custom_pricing_for_model(litellm_params) is False
+
+
 def test_logging_prevent_double_logging(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
