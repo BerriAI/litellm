@@ -5542,10 +5542,10 @@ async def _async_data_generator_emit_error(
     )
     if isinstance(e, HTTPException):
         raise e
-    if isinstance(e, StreamingCallbackError):
-        error_msg = str(e)
-    else:
-        error_msg = str(e)
+    # Only include the error message, not the traceback.
+    # The traceback is already logged above via verbose_proxy_logger.exception().
+    # Including it in the SSE response leaks internal details to clients.
+    error_msg = str(e)
     proxy_exception = ProxyException(
         message=getattr(e, "message", error_msg),
         type=getattr(e, "type", "None"),
