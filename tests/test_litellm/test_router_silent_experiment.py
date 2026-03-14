@@ -81,6 +81,9 @@ def test_get_silent_experiment_kwargs():
     assert "is_silent_experiment" not in kwargs["metadata"]
     assert kwargs["metadata"]["litellm_parent_otel_span"] is mock_span
     assert kwargs["metadata"]["user_api_key_auth"] is mock_auth
+    # Shallow copy must preserve user_api_key_auth so the silent experiment
+    # can attribute billing / spend logs to the correct key/team.
+    assert result["metadata"]["user_api_key_auth"] is mock_auth
 
 
 def test_silent_experiment_completion_direct():
