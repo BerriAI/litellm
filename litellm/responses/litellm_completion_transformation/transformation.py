@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.utils import trim_messages
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -26,6 +27,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    ContextManagementEntry,
     GenericChatCompletionMessage,
     InputTokensDetails,
     OpenAIMcpServerTool,
@@ -58,6 +60,10 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+# After compaction, target this fraction of compact_threshold so there is
+# headroom before the next compaction triggers (e.g. 0.25 = 25% of threshold).
+_COMPACT_TARGET_RATIO = 0.25
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -190,11 +196,26 @@ class LiteLLMCompletionResponsesConfig:
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
 
-        litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
-            ),
+            )
+        )
+
+        context_management = responses_api_request.get("context_management")
+        if context_management:
+            (
+                messages,
+                context_management,
+            ) = LiteLLMCompletionResponsesConfig._apply_client_side_compaction(
+                messages=messages,
+                model=model,
+                context_management=context_management,
+            )
+
+        litellm_completion_request: dict = {
+            "messages": messages,
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
                 responses_api_request.get("tool_choice")
@@ -211,7 +232,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": responses_api_request.get("context_management"),
+            "context_management": context_management,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -274,6 +295,43 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         return messages
+
+    @staticmethod
+    def _apply_client_side_compaction(
+        messages: List,
+        model: str,
+        context_management: List[ContextManagementEntry],
+    ) -> Tuple[List, Optional[List[ContextManagementEntry]]]:
+        """
+        If context_management contains a compaction entry, trim messages to
+        _COMPACT_TARGET_RATIO * compact_threshold tokens so there is headroom
+        before the next compaction triggers.
+
+        Returns (trimmed_messages, None) when compaction is applied so that
+        context_management is not forwarded to the underlying completion call.
+        Returns (messages, context_management) unchanged if no compaction entry
+        is found.
+        """
+        compaction_entry = next(
+            (
+                entry
+                for entry in context_management
+                if isinstance(entry, dict) and entry.get("type") == "compaction"
+            ),
+            None,
+        )
+        if compaction_entry is None:
+            return messages, context_management
+
+        compact_threshold = compaction_entry.get("compact_threshold")
+        if compact_threshold is None:
+            return messages, context_management
+
+        target_tokens = int(compact_threshold * _COMPACT_TARGET_RATIO)
+        trimmed = trim_messages(
+            messages=messages, model=model, max_tokens=target_tokens
+        )
+        return trimmed, None
 
     @staticmethod
     async def async_responses_api_session_handler(
@@ -415,7 +473,9 @@ class LiteLLMCompletionResponsesConfig:
                                         if isinstance(new_msg, dict)
                                         else getattr(new_msg, "tool_calls", None)
                                     )
-                                    new_tcs: list = _raw_tcs if isinstance(_raw_tcs, list) else []
+                                    new_tcs: list = (
+                                        _raw_tcs if isinstance(_raw_tcs, list) else []
+                                    )
                                     for tc in new_tcs:
                                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                                             last_msg, tc

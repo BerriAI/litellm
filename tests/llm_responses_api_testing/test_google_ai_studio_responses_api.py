@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 import json
-from base_responses_api import BaseResponsesAPITest
+from base_responses_api import BaseResponsesAPITest, validate_responses_api_response
 @pytest.mark.asyncio
 async def test_basic_google_ai_studio_responses_api_with_tools():
     litellm._turn_on_debug()
@@ -247,6 +247,39 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
                     print(f"✅ Streaming thought signature preserved: {thought_signature[:50]}...")
     
     print(f"✅ Collected {len(chunks)} streaming chunks")
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_responses_api_context_management_server_side_compaction():
+    """
+    E2E test for server-side compaction (context_management) on Google AI Studio Responses API.
+    Passes context_management with compact_threshold; validates that the request is
+    accepted and returns a valid response. Compaction may not run for short inputs.
+    """
+    if not os.getenv("GEMINI_API_KEY"):
+        pytest.skip("GEMINI_API_KEY not set")
+
+    context_management = [{"type": "compaction", "compact_threshold": 50}]
+    try:
+        response = await litellm.aresponses(
+            model="gemini/gemini-2.5-flash-lite",
+            input="Long ping to verify context_management is accepted. Please provide a detailed response that exceeds the compaction threshold to trigger server-side compaction. " * 200,
+            max_output_tokens=20,
+            context_management=context_management,
+        )
+    except litellm.InternalServerError:
+        pytest.skip("Skipping test due to litellm.InternalServerError")
+
+    validate_responses_api_response(response, final_chunk=True)
+    assert response.get("id") is not None
+    assert response.get("status") is not None
+    
+    input_tokens = response.get("usage", {}).get("input_tokens", 0)
+    assert input_tokens <= context_management[0]["compact_threshold"]*0.25, (
+        f"Expected input_tokens ({input_tokens}) to be <= compact_threshold "
+        f"({context_management[0]['compact_threshold']}) after compaction"
+    )
+    print(f"Compaction verified: {input_tokens} input tokens <= threshold {context_management[0]['compact_threshold']}")
 
 
 class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
