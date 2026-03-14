@@ -23,7 +23,7 @@ import {
 } from "@tremor/react";
 import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -43,6 +43,7 @@ import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
+import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
@@ -59,13 +60,12 @@ interface UsagePageProps {
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
-  const [userSpendData, setUserSpendData] = useState<{
-    results: DailyData[];
-    metadata: any;
-  }>({ results: [], metadata: {} });
+  // Aggregated endpoint: try first, fall back to paginated if unavailable
+  const [aggregatedData, setAggregatedData] = useState<{ results: DailyData[]; metadata: any } | null>(null);
+  const [aggregatedFailed, setAggregatedFailed] = useState(false);
+  const [aggregatedLoading, setAggregatedLoading] = useState(false);
 
   // Separate loading states for better UX
-  const [loading, setLoading] = useState(false);
   const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Create initial dates outside of state to prevent recreation
@@ -172,6 +172,67 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       setSelectedUserId(userID);
     }
   }, [isAdmin, userID]);
+
+  // For non-admins, always pass their own user_id
+  const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
+
+  const startTime = useMemo(() => dateValue.from ? new Date(dateValue.from) : null, [dateValue.from]);
+  const endTime = useMemo(() => dateValue.to ? new Date(dateValue.to) : null, [dateValue.to]);
+
+  // Try aggregated endpoint first, fall back to paginated on failure
+  const aggregatedFetchIdRef = useRef(0);
+  useEffect(() => {
+    if (!accessToken || !startTime || !endTime) return;
+    const fetchId = ++aggregatedFetchIdRef.current;
+    setAggregatedLoading(true);
+    setAggregatedFailed(false);
+    setAggregatedData(null);
+
+    userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId)
+      .then((data) => {
+        if (aggregatedFetchIdRef.current !== fetchId) return;
+        setAggregatedData(data);
+        setAggregatedLoading(false);
+        setIsDateChanging(false);
+      })
+      .catch(() => {
+        if (aggregatedFetchIdRef.current !== fetchId) return;
+        setAggregatedFailed(true);
+        setAggregatedLoading(false);
+      });
+  }, [accessToken, startTime, endTime, effectiveUserId]);
+
+  // Paginated fallback — only enabled when aggregated endpoint fails
+  const paginatedResult = usePaginatedDailyActivity({
+    fetchFn: userDailyActivityCall,
+    args: [accessToken, startTime, endTime, effectiveUserId],
+    enabled: aggregatedFailed && !!accessToken && !!startTime && !!endTime,
+  });
+
+  // Derive userSpendData from whichever source is active
+  const userSpendData = useMemo(() => {
+    if (aggregatedData) return aggregatedData;
+    if (aggregatedFailed) return paginatedResult.data;
+    return { results: [] as DailyData[], metadata: {} as any };
+  }, [aggregatedData, aggregatedFailed, paginatedResult.data]);
+
+  const loading = aggregatedLoading || paginatedResult.loading;
+
+  // Clear isDateChanging when paginated data starts arriving
+  useEffect(() => {
+    if (aggregatedFailed && !paginatedResult.loading && paginatedResult.data.results.length > 0) {
+      setIsDateChanging(false);
+    }
+  }, [aggregatedFailed, paginatedResult.loading, paginatedResult.data.results.length]);
+
+  // Super responsive date change handler
+  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
+    // Instant visual feedback
+    setIsDateChanging(true);
+
+    // Update date immediately for UI responsiveness
+    setDateValue(newValue);
+  }, []);
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -362,87 +423,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       .slice(0, topKeysLimit);
   }, [userSpendData.results, topKeysLimit]);
 
-  const fetchUserSpendData = useCallback(async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
-
-    // For non-admins, always pass their own user_id
-    const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
-
-    setLoading(true);
-
-    // Create new Date objects to avoid mutating the original dates
-    const startTime = new Date(dateValue.from);
-    const endTime = new Date(dateValue.to);
-
-    try {
-      // Prefer aggregated endpoint to avoid many page requests
-      try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
-        setUserSpendData(aggregated);
-        return;
-      } catch (e) {
-        // Fallback to paginated calls if aggregated endpoint is unavailable
-      }
-
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
-
-      if (firstPageData.metadata.total_pages <= 1) {
-        setUserSpendData(firstPageData);
-        return;
-      }
-
-      const allResults = [...firstPageData.results];
-      const aggregatedMetadata = { ...firstPageData.metadata };
-
-      for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
-        allResults.push(...pageData.results);
-        if (pageData.metadata) {
-          aggregatedMetadata.total_spend = (aggregatedMetadata.total_spend || 0) + (pageData.metadata.total_spend || 0);
-          aggregatedMetadata.total_api_requests = (aggregatedMetadata.total_api_requests || 0) + (pageData.metadata.total_api_requests || 0);
-          aggregatedMetadata.total_successful_requests = (aggregatedMetadata.total_successful_requests || 0) + (pageData.metadata.total_successful_requests || 0);
-          aggregatedMetadata.total_failed_requests = (aggregatedMetadata.total_failed_requests || 0) + (pageData.metadata.total_failed_requests || 0);
-          aggregatedMetadata.total_tokens = (aggregatedMetadata.total_tokens || 0) + (pageData.metadata.total_tokens || 0);
-          aggregatedMetadata.total_prompt_tokens = (aggregatedMetadata.total_prompt_tokens || 0) + (pageData.metadata.total_prompt_tokens || 0);
-          aggregatedMetadata.total_completion_tokens = (aggregatedMetadata.total_completion_tokens || 0) + (pageData.metadata.total_completion_tokens || 0);
-          aggregatedMetadata.total_cache_read_input_tokens = (aggregatedMetadata.total_cache_read_input_tokens || 0) + (pageData.metadata.total_cache_read_input_tokens || 0);
-          aggregatedMetadata.total_cache_creation_input_tokens = (aggregatedMetadata.total_cache_creation_input_tokens || 0) + (pageData.metadata.total_cache_creation_input_tokens || 0);
-        }
-      }
-
-      setUserSpendData({
-        results: allResults,
-        metadata: aggregatedMetadata,
-      });
-    } catch (error) {
-      console.error("Error fetching user spend data:", error);
-    } finally {
-      setLoading(false);
-      setIsDateChanging(false);
-    }
-  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
-
-  // Super responsive date change handler
-  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
-    setLoading(true);
-
-    // Update date immediately for UI responsiveness
-    setDateValue(newValue);
-  }, []);
-
-  // Debounced effect for data fetching with shorter delay
-  useEffect(() => {
-    if (!dateValue.from || !dateValue.to) return;
-
-    const timeoutId = setTimeout(() => {
-      fetchUserSpendData();
-    }, 50); // Very short debounce
-
-    return () => clearTimeout(timeoutId);
-  }, [fetchUserSpendData]);
-
   const sortedDailyResults = useMemo(
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
@@ -502,6 +482,29 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
+          {(paginatedResult.isFetchingMore || paginatedResult.cancelled) && (
+            <div className="flex items-center gap-2 text-sm text-gray-500 mb-2">
+              {paginatedResult.isFetchingMore && (
+                <>
+                  <LoadingOutlined spin className="text-xs" />
+                  <span>
+                    Loading spend data... (page {paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages})
+                  </span>
+                  <button
+                    onClick={paginatedResult.cancel}
+                    className="text-blue-600 hover:text-blue-800 underline text-xs"
+                  >
+                    Stop
+                  </button>
+                </>
+              )}
+              {paginatedResult.cancelled && (
+                <span className="text-yellow-600 text-xs">
+                  Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages} pages loaded)
+                </span>
+              )}
+            </div>
+          )}
           {/* Your Usage Panel */}
           {usageView === "global" && (
             <>
