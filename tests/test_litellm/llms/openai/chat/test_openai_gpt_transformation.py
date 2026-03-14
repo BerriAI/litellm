@@ -511,3 +511,82 @@ class TestGPT5ReasoningEffortPreservation:
 
         assert optional_params.get("temperature") == 0.5
         assert non_default_params.get("reasoning_effort") == "none"
+class TestStoreParamForwarding:
+    """Regression tests for store=true forwarding.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23087
+    The 'store' param was in OPENAI_CHAT_COMPLETION_PARAMS but not in
+    the completion() function signature or optional_param_args, so it
+    was silently dropped and never reached the OpenAI API.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def test_store_in_supported_params(self):
+        """Verify 'store' is listed as a supported OpenAI param."""
+        supported = self.config.get_supported_openai_params("gpt-5.1")
+        assert "store" in supported
+
+    def test_store_mapped_to_optional_params(self):
+        """Verify 'store' flows through map_openai_params to optional_params."""
+        optional_params = self.config.map_openai_params(
+            non_default_params={"store": True},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+        assert optional_params.get("store") is True
+
+    def test_store_false_mapped_to_optional_params(self):
+        """Verify store=False is also forwarded correctly."""
+        optional_params = self.config.map_openai_params(
+            non_default_params={"store": False},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+        assert optional_params.get("store") is False
+
+    def test_store_in_completion_signature(self):
+        """Verify 'store' is an explicit parameter of completion()."""
+        import inspect
+
+        from litellm.main import completion
+
+        sig = inspect.signature(completion)
+        assert "store" in sig.parameters, (
+            "'store' must be in completion() signature so it flows "
+            "through optional_param_args to get_optional_params"
+        )
+
+    def test_store_in_acompletion_signature(self):
+        """Verify 'store' is an explicit parameter of acompletion()."""
+        import inspect
+
+        from litellm.main import acompletion
+
+        sig = inspect.signature(acompletion)
+        assert "store" in sig.parameters, (
+            "'store' must be in acompletion() signature so it flows "
+            "through completion_kwargs to completion()"
+        )
+
+    def test_store_reaches_get_optional_params(self):
+        """Integration test: verify store=True flows through get_optional_params.
+
+        This reproduces the exact bug from issue #23087 where store=True
+        was dropped because it was in OPENAI_CHAT_COMPLETION_PARAMS
+        (excluded from non_default_params) but not in completion()'s
+        optional_param_args (excluded from the standard path).
+        """
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="gpt-5.1",
+            custom_llm_provider="openai",
+            store=True,
+        )
+        assert optional_params.get("store") is True, (
+            "store=True must survive get_optional_params pipeline"
+        )
