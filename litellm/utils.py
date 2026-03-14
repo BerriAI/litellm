@@ -6910,16 +6910,21 @@ def process_messages(messages, max_tokens, model):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
-    verbose_logger.debug(
-        f"calling process_messages with messages: {messages}, max_tokens: {max_tokens}, model: {model}"
-    )
+    _is_debug = verbose_logger.isEnabledFor(logging.DEBUG)
+    if _is_debug:
+        verbose_logger.debug(
+            "calling process_messages with messages: %s, max_tokens: %s, model: %s",
+            messages, max_tokens, model,
+        )
     for message in messages:
-        verbose_logger.debug(f"processing final_messages: {final_messages}")
+        if _is_debug:
+            verbose_logger.debug("processing final_messages: %s", final_messages)
         used_tokens = get_token_count(final_messages, model)
         available_tokens = max_tokens - used_tokens
-        verbose_logger.debug(
-            f"used_tokens: {used_tokens}, available_tokens: {available_tokens}"
-        )
+        if _is_debug:
+            verbose_logger.debug(
+                "used_tokens: %s, available_tokens: %s", used_tokens, available_tokens,
+            )
         if available_tokens <= 3:
             break
 
@@ -6930,10 +6935,12 @@ def process_messages(messages, max_tokens, model):
             max_tokens=max_tokens,
             model=model,
         )
-        verbose_logger.debug(
-            f"final_messages after attempt_message_addition: {final_messages}"
-        )
-    verbose_logger.debug(f"Final messages: {final_messages}")
+        if _is_debug:
+            verbose_logger.debug(
+                "final_messages after attempt_message_addition: %s", final_messages,
+            )
+    if _is_debug:
+        verbose_logger.debug("Final messages: %s", final_messages)
     return final_messages
 
 
@@ -6942,9 +6949,10 @@ def attempt_message_addition(
 ):
     temp_messages = [message] + final_messages
     temp_message_tokens = get_token_count(messages=temp_messages, model=model)
-    verbose_logger.debug(
-        f"temp_message_tokens: {temp_message_tokens}, max_tokens: {max_tokens}"
-    )
+    if verbose_logger.isEnabledFor(logging.DEBUG):
+        verbose_logger.debug(
+            "temp_message_tokens: %s, max_tokens: %s", temp_message_tokens, max_tokens,
+        )
     if temp_message_tokens <= max_tokens:
         return temp_messages
 
@@ -6994,15 +7002,19 @@ def shorten_message_to_fit_limit(
 
     content = message["content"]
     attempts = 0
+    _is_debug = verbose_logger.isEnabledFor(logging.DEBUG)
 
-    verbose_logger.debug(f"content: {content}")
+    if _is_debug:
+        verbose_logger.debug("content: %s", content)
 
     while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
-        verbose_logger.debug(f"getting token count for message: {message}")
+        if _is_debug:
+            verbose_logger.debug("getting token count for message: %s", message)
         total_tokens = get_token_count([message], model)
-        verbose_logger.debug(
-            f"total_tokens: {total_tokens}, tokens_needed: {tokens_needed}"
-        )
+        if _is_debug:
+            verbose_logger.debug(
+                "total_tokens: %s, tokens_needed: %s", total_tokens, tokens_needed,
+            )
 
         if total_tokens <= tokens_needed:
             break
@@ -7018,7 +7030,8 @@ def shorten_message_to_fit_limit(
 
         trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
-        verbose_logger.debug(f"trimmed_content: {trimmed_content}")
+        if _is_debug:
+            verbose_logger.debug("trimmed_content: %s", trimmed_content)
         content = trimmed_content
         attempts += 1
 
