@@ -2574,7 +2574,7 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
                     return True
 
         return False
-    except Exception as e:
+    except (ValueError, KeyError) as e:
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
@@ -3828,7 +3828,6 @@ def pre_process_optional_params(
     ):
         if (
             custom_llm_provider == "ollama"
-            and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
             and custom_llm_provider != "anyscale"
@@ -5814,12 +5813,27 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
             )
-    except Exception as e:
-        verbose_logger.debug(f"Error getting model info: {e}")
-        raise Exception(
-            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
-                model, custom_llm_provider
+    except (ValueError, KeyError) as e:
+        verbose_logger.debug(
+            "Model not mapped, returning conservative defaults. "
+            "model={}, custom_llm_provider={}, error={}".format(
+                model, custom_llm_provider, e
             )
+        )
+        return ModelInfoBase(
+            key=model or "",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=0,
+            output_cost_per_token=0,
+            litellm_provider=custom_llm_provider or "",
+            mode="chat",
+            supports_function_calling=False,
+            supports_vision=False,
+            supports_tool_choice=False,
+            supports_response_schema=False,
+            supports_system_messages=True,
         )
 
 

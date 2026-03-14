@@ -402,8 +402,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif (
-                    "invalid_request_error" in error_str
-                    and "model_not_found" in error_str
+                    "invalid_request_error" in error_str.lower()
+                    and "model_not_found" in error_str.lower()
                 ):
                     exception_mapping_worked = True
                     raise NotFoundError(
@@ -466,7 +466,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         body=getattr(original_exception, "body", None),
                     )
                 elif (
-                    "invalid_request_error" in error_str
+                    "invalid_request_error" in error_str.lower()
                     and "Incorrect API key provided" not in error_str
                 ):
                     exception_mapping_worked = True
