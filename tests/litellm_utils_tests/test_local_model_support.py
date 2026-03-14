@@ -32,6 +32,19 @@ def clear_model_info_cache():
     get_model_info.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def restore_global_state():
+    """Save and restore global state that tests may mutate."""
+    orig_model_cost = litellm.model_cost.copy()
+    orig_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    yield
+    litellm.model_cost = orig_model_cost
+    if orig_env is None:
+        os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    else:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = orig_env
+
+
 # ─── Fix 1: get_model_info returns defaults for unknown models ───
 
 
@@ -64,6 +77,14 @@ class TestGetModelInfoUnknownModels:
                 custom_llm_provider="openai",
             )
 
+    def test_unknown_model_no_provider_defaults_to_openai(self):
+        """When no provider is given, should still not raise for supports_* checks."""
+        result = supports_function_calling(
+            model="openai/my-local-llm",
+            custom_llm_provider=None,
+        )
+        assert result is True
+
 
 # ─── Fix 2: supports_function_calling for unknown/local models ───
 
@@ -95,6 +116,23 @@ class TestSupportsFunctionCallingLocal:
         result = supports_function_calling(model="gpt-3.5-turbo")
         assert result is True
 
+    def test_text_completion_openai_no_function_calling(self):
+        """text-completion-openai uses /v1/completions which does not support
+        function calling or tool choice."""
+        result = supports_function_calling(
+            model="davinci-002",
+            custom_llm_provider="text-completion-openai",
+        )
+        assert result is False
+
+    def test_text_completion_openai_no_tool_choice(self):
+        """text-completion-openai should not support tool_choice."""
+        result = supports_tool_choice(
+            model="davinci-002",
+            custom_llm_provider="text-completion-openai",
+        )
+        assert result is False
+
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -116,8 +154,24 @@ class TestSupportsFunctionCallingLocal:
 class TestCooldownNotTriggeredByContentPolicy:
     """ContentPolicyViolationError should not trigger deployment cooldowns."""
 
-    def test_content_policy_error_not_cooldown_required(self):
-        """ContentPolicyViolationError should be in the ignored cooldown strings."""
+    def test_content_policy_error_not_cooldown_required_5xx(self):
+        """ContentPolicyViolationError with 5xx status should still not
+        trigger cooldown (per-request, not deployment-level)."""
+        from unittest.mock import MagicMock
+
+        from litellm.router_utils.cooldown_handlers import _is_cooldown_required
+
+        mock_router = MagicMock()
+        result = _is_cooldown_required(
+            litellm_router_instance=mock_router,
+            model_id="test-deployment",
+            exception_status=500,
+            exception_str="litellm.ContentPolicyViolationError: some error",
+        )
+        assert result is False
+
+    def test_content_policy_error_not_cooldown_required_4xx(self):
+        """ContentPolicyViolationError with 4xx status should not trigger cooldown."""
         from unittest.mock import MagicMock
 
         from litellm.router_utils.cooldown_handlers import _is_cooldown_required
@@ -148,47 +202,93 @@ class TestCooldownNotTriggeredByContentPolicy:
 
 
 class TestErrorClassificationPatterns:
-    """Verify that the safety system pattern requires invalid_request_error context."""
+    """Verify that the safety system pattern requires invalid_request_error context
+    by exercising exception_type() directly."""
 
     def test_safety_system_without_invalid_request_not_content_policy(self):
         """A 'safety system' error without 'invalid_request_error' should NOT
-        be classified as ContentPolicyViolationError."""
+        be classified as ContentPolicyViolationError via exception_type()."""
         from litellm.exceptions import ContentPolicyViolationError
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 
-        # Simulate an error from a local server that mentions safety system
-        # but doesn't include invalid_request_error
-        error_msg = "request was rejected as a result of the safety system"
-
-        # Check that the pattern won't match without invalid_request_error
-        error_str = error_msg.lower()
-        matches_pattern = (
-            "invalid_request_error" in error_str
-            and "request was rejected as a result of the safety system" in error_str
+        original_exc = Exception(
+            "request was rejected as a result of the safety system"
         )
-        assert matches_pattern is False
 
-    def test_real_openai_content_policy_still_detected(self):
-        """A real OpenAI content policy violation with proper error format
-        should still be detected."""
-        error_str = (
+        raised_exc = None
+        try:
+            exception_type(
+                model="my-local-model",
+                original_exception=original_exc,
+                custom_llm_provider="openai",
+            )
+        except ContentPolicyViolationError:
+            raised_exc = "ContentPolicyViolationError"
+        except Exception:
+            raised_exc = "other"
+
+        assert raised_exc != "ContentPolicyViolationError", (
+            "Safety system error without invalid_request_error should not raise "
+            "ContentPolicyViolationError"
+        )
+
+    def test_real_openai_content_policy_detected_via_exception_type(self):
+        """A real OpenAI content policy violation should be classified as
+        ContentPolicyViolationError via exception_type()."""
+        from litellm.exceptions import ContentPolicyViolationError
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+        error_msg = (
             '{"error": {"type": "invalid_request_error", '
             '"code": "content_policy_violation", '
             '"message": "Your request was rejected."}}'
         )
-        matches_pattern = (
-            "invalid_request_error" in error_str
-            and "content_policy_violation" in error_str
-        )
-        assert matches_pattern is True
+        original_exc = Exception(error_msg)
+        original_exc.status_code = 400
 
-    def test_safety_system_with_invalid_request_detected(self):
-        """A safety system error with invalid_request_error context should be detected."""
-        error_str = (
-            'invalid_request_error: Your request was rejected as a result of the safety system'
+        with pytest.raises(ContentPolicyViolationError):
+            exception_type(
+                model="gpt-4",
+                original_exception=original_exc,
+                custom_llm_provider="openai",
+            )
+
+    def test_safety_system_with_invalid_request_detected_via_exception_type(self):
+        """A safety system error WITH invalid_request_error context should be
+        classified as ContentPolicyViolationError via exception_type()."""
+        from litellm.exceptions import ContentPolicyViolationError
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+        error_msg = (
+            "Invalid_Request_Error: Your request was rejected "
+            "as a result of the safety system"
         )
-        matches_pattern = (
-            "invalid_request_error" in error_str.lower()
-            and "request was rejected as a result of the safety system"
-            in error_str.lower()
+        original_exc = Exception(error_msg)
+        original_exc.status_code = 400
+
+        with pytest.raises(ContentPolicyViolationError):
+            exception_type(
+                model="gpt-4",
+                original_exception=original_exc,
+                custom_llm_provider="openai",
+            )
+
+    def test_safety_system_with_mixed_case_detected(self):
+        """Case-insensitive matching: mixed-case 'Invalid_Request_Error'
+        and 'Safety System' should still be detected."""
+        from litellm.exceptions import ContentPolicyViolationError
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+        error_msg = (
+            "Invalid_Request_Error: Request was rejected "
+            "as a result of the Safety System"
         )
-        assert matches_pattern is True
+        original_exc = Exception(error_msg)
+        original_exc.status_code = 400
+
+        with pytest.raises(ContentPolicyViolationError):
+            exception_type(
+                model="gpt-4",
+                original_exception=original_exc,
+                custom_llm_provider="openai",
+            )

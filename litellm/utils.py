@@ -2559,11 +2559,14 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             # For OpenAI-compatible providers (including local servers like
             # Ollama, LM Studio, vLLM), default to True for function calling
             # and tool choice since these endpoints typically support tool use.
+            # Exclude text-completion-openai: it uses /v1/completions which
+            # does not support function calling or tool choice.
             if key in ("supports_function_calling", "supports_tool_choice"):
+                if custom_llm_provider == "text-completion-openai":
+                    return False
                 if custom_llm_provider in (
                     "openai",
                     "custom_openai",
-                    "text-completion-openai",
                 ) or (
                     custom_llm_provider is not None
                     and custom_llm_provider in litellm.openai_compatible_providers
@@ -2585,11 +2588,14 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         # For OpenAI-compatible providers (including local servers like
         # Ollama, LM Studio, vLLM), default to True for function calling
         # and tool choice since these endpoints typically support tool use.
+        # Exclude text-completion-openai: it uses /v1/completions which
+        # does not support function calling or tool choice.
         if key in ("supports_function_calling", "supports_tool_choice"):
+            if custom_llm_provider == "text-completion-openai":
+                return False
             if custom_llm_provider in (
                 "openai",
                 "custom_openai",
-                "text-completion-openai",
             ) or (
                 custom_llm_provider is not None
                 and custom_llm_provider in litellm.openai_compatible_providers
