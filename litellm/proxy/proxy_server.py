@@ -5497,7 +5497,33 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
-async def async_data_generator(
+async def _async_data_generator_fire_post_guardrail_log(
+    proxy_logging_obj: ProxyLogging,
+    request_data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    streaming_chunks: List[Dict[str, Any]],
+) -> None:
+    """Fire async_post_guardrail_log_success_event after stream completes (post-guardrail response)."""
+    if not streaming_chunks:
+        return
+    try:
+        complete_response = litellm.stream_chunk_builder(chunks=streaming_chunks)
+        if complete_response is not None:
+            logging_obj = request_data.get("litellm_logging_obj")
+            await proxy_logging_obj.async_post_guardrail_log_success_event(
+                data=request_data,
+                response=complete_response,
+                user_api_key_dict=user_api_key_dict,
+                logging_obj=logging_obj,
+            )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "async_data_generator: async_post_guardrail_log_success_event: %s",
+            e,
+        )
+
+
+async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
     verbose_proxy_logger.debug("inside generator")
@@ -5511,6 +5537,8 @@ async def async_data_generator(
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
         _str_so_far: str = ""
+        # Collect post-guardrail chunks for async_post_guardrail_log_success_event
+        _streaming_chunks_for_log: List[Dict[str, Any]] = []
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -5535,6 +5563,15 @@ async def async_data_generator(
                 model_mismatch_logged=model_mismatch_logged,
             )
 
+            # Collect after restamp so logged response has client-requested model name
+            if isinstance(chunk, BaseModel):
+                try:
+                    _streaming_chunks_for_log.append(
+                        chunk.model_dump(mode="json", exclude_none=True)
+                    )
+                except Exception:
+                    pass
+
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
@@ -5545,6 +5582,17 @@ async def async_data_generator(
                 yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
+
+        if error_message is None:
+            # Fire post-guardrail log in background so [DONE] is not delayed
+            asyncio.create_task(
+                _async_data_generator_fire_post_guardrail_log(
+                    proxy_logging_obj=proxy_logging_obj,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    streaming_chunks=_streaming_chunks_for_log,
+                )
+            )
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:

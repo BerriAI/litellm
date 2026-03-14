@@ -1073,6 +1073,14 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
         )
 
+        # Log success after post-call hooks so callbacks see the final (e.g. guardrail-modified) response
+        await proxy_logging_obj.async_post_guardrail_log_success_event(
+            data=self.data,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            logging_obj=logging_obj,
+        )
+
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
