@@ -53,6 +53,16 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      { organization_id: "org-1", organization_alias: "Engineering" },
+      { organization_id: "org-2", organization_alias: "Sales" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: vi.fn().mockReturnValue({
     data: [
@@ -575,5 +585,92 @@ describe("KeyEditView", () => {
     if (resolveSubmit) {
       resolveSubmit();
     }
+  });
+
+  describe("organization dropdown", () => {
+    it("should render the organization dropdown", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+    });
+
+    it("should disable the organization dropdown for non-admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeTruthy();
+    });
+
+    it("should not disable the organization dropdown for admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeFalsy();
+    });
+
+    it("should initialize organization from keyData", async () => {
+      const keyWithOrg = {
+        ...MOCK_KEY_DATA,
+        organization_id: "org-1",
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyWithOrg}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Engineering")).toBeInTheDocument();
+      });
+    });
   });
 });
