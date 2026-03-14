@@ -405,12 +405,21 @@ class BedrockLLM(BaseAWSLLM):
         # Normalize model string to lowercase for matching
         model_lower = model.lower()
 
-        # Claude 3+ indicators (all use Messages API)
+        # Claude 3+ indicators (all use Messages API).
+        # We intentionally include bare family names ("opus-4", "sonnet-4", "haiku-4")
+        # to handle cases where the model string is an alias or stripped of its
+        # "claude-" prefix (e.g. a LiteLLM proxy model_group named "opus_4_6").
         messages_api_indicators = [
-            "claude-3",  # Claude 3.x models
-            "claude-opus-4",  # Claude Opus 4
-            "claude-sonnet-4",  # Claude Sonnet 4
-            "claude-haiku-4",  # Claude Haiku 4
+            "claude-3",       # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4.x (with prefix)
+            "claude-sonnet-4",  # Claude Sonnet 4.x (with prefix)
+            "claude-haiku-4",  # Claude Haiku 4.x (with prefix)
+            "claude-4",       # Claude 4.x (generic, future-proofing)
+            "claude-5",       # Claude 5.x (future-proofing)
+            # Handle aliases / stripped model IDs (no "claude-" prefix):
+            "opus-4",
+            "sonnet-4",
+            "haiku-4",
         ]
 
         return any(indicator in model_lower for indicator in messages_api_indicators)
