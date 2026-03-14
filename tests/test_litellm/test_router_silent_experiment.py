@@ -15,12 +15,28 @@ class _NonCopyableSpan:
         raise TypeError("OTel spans cannot be deepcopied")
 
 
+class _FakeUserAPIKeyAuth:
+    """Mimics UserAPIKeyAuth which contains a parent_otel_span that is not
+    deepcopy-able. This is what actually causes safe_deep_copy to fail for
+    the metadata dict in production — safe_deep_copy handles the top-level
+    litellm_parent_otel_span specially (pops it before copying), but does
+    NOT handle user_api_key_auth.parent_otel_span inside it."""
+
+    def __init__(self, key_alias, parent_otel_span):
+        self.key_alias = key_alias
+        self.parent_otel_span = parent_otel_span
+
+    def __deepcopy__(self, memo):
+        raise TypeError("Contains OTel span that cannot be deepcopied")
+
+
 def test_get_silent_experiment_kwargs():
     """
     Test _get_silent_experiment_kwargs returns isolated kwargs with silent experiment metadata.
 
-    Uses a non-copyable span object so that safe_deep_copy falls back to the
-    original metadata reference — exercising the identity-check fix path.
+    Uses a non-copyable user_api_key_auth (mimicking the real proxy scenario)
+    so that safe_deep_copy falls back to the original metadata reference —
+    exercising the identity-check fix path.
     """
     model_list = [
         {
@@ -30,8 +46,16 @@ def test_get_silent_experiment_kwargs():
     ]
     router = Router(model_list=model_list)
     mock_span = _NonCopyableSpan()
+    mock_auth = _FakeUserAPIKeyAuth(
+        key_alias="HaneefKeyNonTeamProd",
+        parent_otel_span=mock_span,
+    )
     kwargs = {
-        "metadata": {"foo": "bar", "litellm_parent_otel_span": mock_span},
+        "metadata": {
+            "foo": "bar",
+            "litellm_parent_otel_span": mock_span,
+            "user_api_key_auth": mock_auth,
+        },
         "litellm_call_id": "call-123",
         "stream": True,
         "proxy_server_request": {"body": {"model": "test"}},
@@ -51,6 +75,7 @@ def test_get_silent_experiment_kwargs():
     # Original metadata must NOT be mutated
     assert "is_silent_experiment" not in kwargs["metadata"]
     assert kwargs["metadata"]["litellm_parent_otel_span"] is mock_span
+    assert kwargs["metadata"]["user_api_key_auth"] is mock_auth
 
 
 def test_silent_experiment_completion_direct():
