@@ -535,6 +535,10 @@ describe("formatContentFilterDataForAPI", () => {
 });
 
 describe("ContentFilterManager YAML file upload", () => {
+  beforeEach(() => {
+    mockMessageError.mockReset();
+  });
+
   afterEach(() => {
     capturedOnFileUpload = undefined;
   });
