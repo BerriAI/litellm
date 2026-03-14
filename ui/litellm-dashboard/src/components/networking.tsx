@@ -7206,7 +7206,6 @@ export const updateDefaultTeamSettings = async (accessToken: string, settings: R
 
     const data = await response.json();
     console.log("Updated default team settings:", data);
-    NotificationsManager.success("Default team settings updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update default team settings:", error);
