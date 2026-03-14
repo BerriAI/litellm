@@ -322,7 +322,6 @@ from litellm.proxy.credential_endpoints.endpoints import router as credential_ro
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
-from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
@@ -541,6 +540,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
