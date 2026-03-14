@@ -5122,6 +5122,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
