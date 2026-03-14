@@ -28,6 +28,7 @@ vi.mock("./ContentFilterConfiguration", () => ({
     onPatternRemove,
     onBlockedWordAdd,
     onBlockedWordRemove,
+    onFileUpload,
     selectedPatterns,
     blockedWords,
   }: {
@@ -35,10 +36,13 @@ vi.mock("./ContentFilterConfiguration", () => ({
     onPatternRemove: (id: string) => void;
     onBlockedWordAdd: (w: object) => void;
     onBlockedWordRemove: (id: string) => void;
+    onFileUpload?: (content: string) => void;
     selectedPatterns: { id: string }[];
     blockedWords: { id: string }[];
   }) => (
     <div data-testid="content-filter-config">
+      <span data-testid="blocked-word-count">{blockedWords.length}</span>
+      <span data-testid="blocked-word-keywords">{blockedWords.map((w: any) => w.keyword).join(",")}</span>
       <button
         type="button"
         onClick={() =>
@@ -64,6 +68,18 @@ vi.mock("./ContentFilterConfiguration", () => ({
       >
         Add keyword
       </button>
+      {onFileUpload && (
+        <button
+          type="button"
+          onClick={() =>
+            onFileUpload(
+              "blocked_words:\n  - keyword: \"uploaded\"\n    action: \"BLOCK\"\n  - keyword: \"bad\"\n    action: \"MASK\"\n    description: \"bad word\""
+            )
+          }
+        >
+          Upload file
+        </button>
+      )}
       {selectedPatterns[0] && (
         <button
           type="button"
@@ -504,5 +520,37 @@ describe("formatContentFilterDataForAPI", () => {
         severity_threshold: "medium",
       },
     ]);
+  });
+});
+
+describe("ContentFilterManager YAML file upload", () => {
+  it("should parse uploaded YAML and merge blocked words into state", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+
+    render(
+      <ContentFilterManager
+        guardrailData={CONTENT_FILTER_GUARDRAIL_DATA}
+        guardrailSettings={GUARDRAIL_SETTINGS}
+        onSave={onSave}
+        accessToken="test-token"
+        isEditing={true}
+      />
+    );
+
+    // Verify initial state: 1 blocked word ("test") from guardrailData
+    expect(screen.getByTestId("blocked-word-count").textContent).toBe("1");
+
+    // Click "Upload file" button from mock which triggers onFileUpload with YAML
+    const uploadBtn = await screen.findByText("Upload file");
+    await user.click(uploadBtn);
+
+    // After upload, should have 3 blocked words (1 original + 2 uploaded)
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-word-count").textContent).toBe("3");
+      const keywords = screen.getByTestId("blocked-word-keywords").textContent;
+      expect(keywords).toContain("uploaded");
+      expect(keywords).toContain("bad");
+    });
   });
 });
