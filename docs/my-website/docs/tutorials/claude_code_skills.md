@@ -1,6 +1,6 @@
-# Claude Code Skills for LiteLLM
+# Manage LiteLLM with AI Agents
 
-[Agent Skills](https://agentskills.io) are reusable prompt templates that give Claude Code new capabilities via slash commands. The [litellm-skills](https://github.com/BerriAI/litellm-skills) repo provides ready-made skills for managing a live LiteLLM proxy — creating users, teams, keys, models, MCP servers, agents, and viewing usage — all via `curl` from inside any Claude Code session.
+[litellm-skills](https://github.com/BerriAI/litellm-skills) is a collection of [Agent Skills](https://agentskills.io) for managing a live LiteLLM proxy deployment. Install them once and any agent that supports the Agent Skills standard (Claude Code, OpenCode, OpenClaw, etc.) can create users, teams, keys, models, MCP servers, agents, and query usage — all by running `curl` commands against your proxy.
 
 ## Install
 
@@ -30,97 +30,94 @@ ln -s litellm/delete-agent delete-agent
 ln -s litellm/view-usage view-usage
 ```
 
-Claude Code discovers skills by looking for `SKILL.md` files at `~/.claude/skills/<skill-name>/SKILL.md`. The symlinks expose each sub-skill at the expected depth.
+Each symlink exposes a `SKILL.md` at the path the agent's skill discovery mechanism expects.
 
 ## Requirements
 
 - `curl` installed
 - A running LiteLLM proxy (local or remote)
-- A proxy admin key (not a virtual key scoped to `llm_api_routes`)
+- A proxy admin key — not a virtual key scoped to `llm_api_routes`
 
 ## Available Skills
 
 ### Users
 
-| Command | Description |
-|---------|-------------|
-| `/add-user` | Create a user with email, role, budget, and model access |
-| `/update-user` | Update budget, role, or model access for an existing user |
+| Skill | What it does |
+|-------|-------------|
+| `/add-user` | Create a user — email, role, budget, model access |
+| `/update-user` | Update budget, role, or models for an existing user |
 | `/delete-user` | Delete one or more users |
 
 ### Teams
 
-| Command | Description |
-|---------|-------------|
+| Skill | What it does |
+|-------|-------------|
 | `/add-team` | Create a team with budget and model limits |
-| `/update-team` | Update budget, models, or rate limits for an existing team |
+| `/update-team` | Update budget, models, or rate limits |
 | `/delete-team` | Delete one or more teams |
 
 ### API Keys
 
-| Command | Description |
-|---------|-------------|
-| `/add-key` | Generate an API key scoped to a user, team, budget, and expiry |
-| `/update-key` | Update budget, models, or expiry for an existing key |
-| `/delete-key` | Delete one or more keys by value or alias |
+| Skill | What it does |
+|-------|-------------|
+| `/add-key` | Generate a key scoped to a user, team, budget, and expiry |
+| `/update-key` | Update budget, models, or expiry |
+| `/delete-key` | Delete by key value or alias |
 
 ### Organizations
 
-| Command | Description |
-|---------|-------------|
-| `/add-org` | Create an organization with budget and model access |
-| `/delete-org` | Delete one or more organizations |
+| Skill | What it does |
+|-------|-------------|
+| `/add-org` | Create an org with budget and model access |
+| `/delete-org` | Delete one or more orgs |
 
 ### Models
 
-| Command | Description |
-|---------|-------------|
-| `/add-model` | Add any LLM provider (OpenAI, Azure, Anthropic, Bedrock, Ollama…) and test it |
-| `/update-model` | Rotate credentials or change the underlying deployment |
-| `/delete-model` | Remove a model from the proxy |
+| Skill | What it does |
+|-------|-------------|
+| `/add-model` | Add any provider (OpenAI, Azure, Anthropic, Bedrock, Ollama…) and test it |
+| `/update-model` | Rotate credentials or swap the underlying deployment |
+| `/delete-model` | Remove a model |
 
 ### MCP Servers
 
-| Command | Description |
-|---------|-------------|
+| Skill | What it does |
+|-------|-------------|
 | `/add-mcp` | Register an MCP server (SSE, HTTP, or stdio) |
 | `/update-mcp` | Update URL, credentials, or allowed tools |
-| `/delete-mcp` | Remove an MCP server registration |
+| `/delete-mcp` | Remove an MCP server |
 
 ### Agents
 
-| Command | Description |
-|---------|-------------|
-| `/add-agent` | Create an AI agent backed by a model and optional MCP servers |
+| Skill | What it does |
+|-------|-------------|
+| `/add-agent` | Create an agent backed by a model and optional MCP servers |
 | `/update-agent` | Swap the model or update description and limits |
 | `/delete-agent` | Remove an agent |
 
 ### Usage
 
-| Command | Description |
-|---------|-------------|
-| `/view-usage` | Query daily spend and token activity by user, team, org, or model |
+| Skill | What it does |
+|-------|-------------|
+| `/view-usage` | Daily spend and token activity — by user, team, org, or model |
 
-## Usage
+## How it works
 
-When you invoke a skill, Claude will ask for your `LITELLM_BASE_URL` and admin key, then collect the minimum required fields for the operation and run the `curl`. For example:
+When you invoke a skill, the agent asks for your `LITELLM_BASE_URL` and admin key, collects the fields needed for that operation, runs the `curl`, and shows the result. For example:
 
 ```
 /add-model
 ```
-
-Claude will ask: which provider, what to call it, and any credentials — then add it to your proxy and run a test call to confirm it routes correctly.
+→ Agent asks: provider, public name, credentials. Adds the model, runs a test completion, reports pass/fail.
 
 ```
 /view-usage
 ```
-
-Claude will ask for a date range (defaults to the current month) and print a table of daily requests, tokens, and spend.
+→ Agent asks: date range (defaults to current month), optional team/model filter. Prints a table of daily requests, tokens, and spend.
 
 ## Related
 
 - [litellm-skills on GitHub](https://github.com/BerriAI/litellm-skills)
-- [Virtual Keys](../proxy/virtual_keys.md) — Managing API keys on the proxy
-- [Team-based routing](../proxy/team_based_routing.md) — Setting up teams
-- [Model Management](../proxy/model_management.md) — Adding models via config or API
-- [MCP Servers](./claude_mcp.md) — Connecting MCP servers to Claude Code via LiteLLM
+- [Virtual Keys](../proxy/virtual_keys.md) — managing API keys on the proxy
+- [Team-based routing](../proxy/team_based_routing.md) — setting up teams
+- [Model Management](../proxy/model_management.md) — adding models via config or API

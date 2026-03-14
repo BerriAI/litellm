@@ -163,7 +163,6 @@ const sidebars = {
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
             "tutorials/claude_code_beta_headers",
-            "tutorials/claude_code_skills",
           ]
         },
         "tutorials/opencode_integration",
@@ -194,6 +193,19 @@ const sidebars = {
         "tutorials/google_adk",
         "tutorials/livekit_xai_realtime",
         "projects/openai-agents"
+      ]
+    },
+    {
+      type: "category",
+      label: "Manage with AI Agents",
+      link: {
+        type: "generated-index",
+        title: "Manage with AI Agents",
+        description: "Use AI agents to manage your LiteLLM deployment — create users, teams, keys, models, and more via natural language.",
+        slug: "/manage_with_ai_agents"
+      },
+      items: [
+        "tutorials/claude_code_skills",
       ]
     },
 
