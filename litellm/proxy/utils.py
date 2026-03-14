@@ -2010,6 +2010,12 @@ class ProxyLogging:
                 )
                 if getattr(logging_obj, "model_call_details", {}).get("end_time"):
                     kwargs["llm_end_time"] = logging_obj.model_call_details["end_time"]
+            if start_time is None:
+                _kwarg_start = kwargs.get("start_time")
+                if isinstance(_kwarg_start, datetime):
+                    start_time = _kwarg_start
+                if getattr(logging_obj, "model_call_details", {}).get("end_time"):
+                    kwargs["llm_end_time"] = logging_obj.model_call_details["end_time"]
 
             for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
