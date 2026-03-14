@@ -1613,13 +1613,18 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        responses_api_model_info, model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-            tools=tools,
-            reasoning_effort=reasoning_effort,
-        )
+        # Only run the second bridge check if the first one didn't already
+        # detect responses mode (e.g. via the "responses/" prefix).  The second
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
+        # the first (early) check doesn't cover.
+        if responses_api_model_info.get("mode") != "responses":
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+            )
 
         if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
