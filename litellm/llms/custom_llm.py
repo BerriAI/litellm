@@ -63,10 +63,12 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def streaming(
@@ -84,10 +86,12 @@ class CustomLLM(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
     ) -> Iterator[GenericStreamingChunk]:
+        if headers is None:
+            headers = {}
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def acompletion(
