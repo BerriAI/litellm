@@ -10,12 +10,14 @@ Verifies that:
 
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.utils import (
     _get_model_info_helper,
     get_model_info,
@@ -99,6 +101,27 @@ class TestGetModelInfoUnknownModels:
         )
         assert result is True
 
+    def test_helper_fallback_handles_bad_request_from_provider_resolution(self):
+        """fallback_on_unmapped should still return defaults when provider resolution raises BadRequestError."""
+        with patch(
+            "litellm.get_llm_provider",
+            side_effect=BadRequestError(
+                message="model not mapped",
+                model="openai/my-local-llm",
+                llm_provider="openai",
+            ),
+        ):
+            info = _get_model_info_helper(
+                model="openai/my-local-llm",
+                custom_llm_provider="openai",
+                fallback_on_unmapped=True,
+            )
+
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+        assert info["input_cost_per_token"] == 0
+        assert info["output_cost_per_token"] == 0
+
 
 # ─── Fix 2: supports_function_calling for unknown/local models ───
 
@@ -160,6 +183,24 @@ class TestSupportsFunctionCallingLocal:
         """Various local model name patterns should all support function calling."""
         result = supports_function_calling(model=model_name)
         assert result is True
+
+    def test_bad_request_from_provider_resolution_still_defaults_capability(self):
+        """supports_* helpers should gracefully degrade when provider resolution raises BadRequestError."""
+        with patch(
+            "litellm.get_llm_provider",
+            side_effect=BadRequestError(
+                message="bad provider input",
+                model="openai/my-local-llm",
+                llm_provider="openai",
+            ),
+        ):
+            assert (
+                supports_function_calling(
+                    model="openai/my-local-llm",
+                    custom_llm_provider="openai",
+                )
+                is True
+            )
 
 
 # ─── Fix 3: Error classification and cooldown ───

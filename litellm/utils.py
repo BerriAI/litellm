@@ -2583,7 +2583,7 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
                 return default_capability
 
         return False
-    except (ValueError, KeyError) as e:
+    except (ValueError, KeyError, BadRequestError) as e:
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
@@ -5816,7 +5816,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
             )
-    except (ValueError, KeyError) as e:
+    except (ValueError, KeyError, BadRequestError) as e:
         if not fallback_on_unmapped:
             raise
         verbose_logger.debug(
