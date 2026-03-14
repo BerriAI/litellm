@@ -88,6 +88,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "bedrock_mantle":
+        return litellm.BedrockMantleChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
@@ -142,6 +144,14 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.MistralConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
+        elif request_type == "transcription":
+            from litellm.llms.mistral.audio_transcription.transformation import (
+                MistralAudioTranscriptionConfig,
+            )
+
+            return MistralAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider == "text-completion-codestral":
         return litellm.CodestralTextCompletionConfig().get_supported_openai_params(
             model=model

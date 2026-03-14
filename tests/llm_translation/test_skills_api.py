@@ -23,27 +23,42 @@ from litellm.types.llms.anthropic_skills import (
 
 
 @contextmanager
-def create_skill_zip(skill_name: str):
+def create_skill_zip(skill_name: str, unique_suffix: Optional[str] = None):
     """
     Helper context manager to create a zip file for a skill.
-    
+
     Args:
         skill_name: Name of the skill directory in test_skills_data/
-        
+        unique_suffix: Optional suffix to make the skill name unique in the zip.
+                       When provided, the SKILL.md frontmatter name is rewritten
+                       to avoid duplicate-name conflicts on the API side.
+
     Yields:
         File handle to the zip file
-        
+
     The zip file is automatically cleaned up after use.
     """
+    import time
+
     test_dir = Path(__file__).parent / "test_skills_data"
     skill_dir = test_dir / skill_name
-    
+
     # Create a zip file containing the skill directory
     zip_path = test_dir / f"{skill_name}.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        zip_file.write(skill_dir, arcname=skill_name)
-        zip_file.write(skill_dir / "SKILL.md", arcname=f"{skill_name}/SKILL.md")
-    
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(skill_dir, arcname=skill_name)
+
+        if unique_suffix is not None:
+            # Rewrite SKILL.md with a unique name to avoid API conflicts
+            skill_md = (skill_dir / "SKILL.md").read_text()
+            skill_md = skill_md.replace(
+                f"name: {skill_name}",
+                f"name: {skill_name}-{unique_suffix}",
+            )
+            zf.writestr(f"{skill_name}/SKILL.md", skill_md)
+        else:
+            zf.write(skill_dir / "SKILL.md", arcname=f"{skill_name}/SKILL.md")
+
     try:
         with open(zip_path, "rb") as f:
             yield f
@@ -77,13 +92,13 @@ class BaseSkillsAPITest(ABC):
     def test_create_skill(self):
         """
         Test creating a skill.
-        
+
         Note: This test creates a skill but does not clean it up,
         as we want to verify it was created successfully.
         The test_delete_skill test will handle cleanup.
         """
         import time
-        
+
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
         api_base = self.get_api_base()
@@ -96,12 +111,14 @@ class BaseSkillsAPITest(ABC):
 
         # Use helper to create skill zip
         skill_name = "test-skill-litellm"
-        
-        # Use unique title to avoid conflicts with previous test runs
-        unique_title = f"Test Skill {int(time.time())}"
-        
+
+        # Use unique title and unique skill name to avoid conflicts
+        # with previous test runs (skills are never cleaned up in CI)
+        ts = str(int(time.time()))
+        unique_title = f"Test Skill {ts}"
+
         # Upload the skill with the zip file
-        with create_skill_zip(skill_name) as zip_file:
+        with create_skill_zip(skill_name, unique_suffix=ts) as zip_file:
             response = litellm.create_skill(
                 display_title=unique_title,
                 files=[zip_file],
@@ -217,12 +234,13 @@ class BaseSkillsAPITest(ABC):
 
         # Use helper to create skill zip
         skill_name = "test-delete-skill"
-        
-        # Use unique title to avoid conflicts
-        unique_title = f"Test Delete Skill {int(time.time())}"
-        
+
+        # Use unique title and skill name to avoid conflicts
+        ts = str(int(time.time()))
+        unique_title = f"Test Delete Skill {ts}"
+
         # Create a skill specifically to delete
-        with create_skill_zip(skill_name) as zip_file:
+        with create_skill_zip(skill_name, unique_suffix=ts) as zip_file:
             created_skill = litellm.create_skill(
                 display_title=unique_title,
                 files=[zip_file],

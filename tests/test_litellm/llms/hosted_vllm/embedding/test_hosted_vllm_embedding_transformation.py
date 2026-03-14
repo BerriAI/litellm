@@ -235,14 +235,16 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_encoding_format_not_sent_in_actual_request(self):
         """
         E2E test that encoding_format is not sent when not provided.
-        
+
         This test mocks the HTTP client to verify the actual request payload.
+        Patches HTTPHandler.post at the class level so the mock is used when
+        base_llm_http_handler calls sync_httpx_client.post() with the passed client.
         """
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         client = HTTPHandler()
-        
-        with patch.object(client, "post") as mock_post:
+
+        with patch.object(HTTPHandler, "post") as mock_post:
             # Mock response
             mock_response = Mock()
             mock_response.status_code = 200
@@ -265,15 +267,13 @@ class TestHostedVLLMEmbeddingTransformation:
             mock_response.text = json.dumps(mock_response.json.return_value)
             mock_post.return_value = mock_response
 
-            try:
-                litellm.embedding(
-                    model=self.model,
-                    input=["Hello world"],
-                    api_base="https://test-vllm.example.com/v1",
-                    client=client,
-                )
-            except Exception:
-                pass
+            litellm.embedding(
+                model=self.model,
+                input=["Hello world"],
+                api_base="https://test-vllm.example.com/v1",
+                client=client,
+                caching=False,
+            )
 
             # Verify the request was made
             mock_post.assert_called_once()

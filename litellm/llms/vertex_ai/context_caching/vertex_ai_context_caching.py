@@ -4,13 +4,16 @@ import httpx
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm._logging import verbose_logger
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.utils import is_prompt_caching_valid_prompt
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     VertexAICachedContentResponseObject,
@@ -314,6 +317,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
         tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
@@ -444,6 +461,20 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)

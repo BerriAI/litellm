@@ -22,7 +22,7 @@ const processKeysIntoOptions = (
     if (alias && typeof alias === "string") {
       keyAliases.add(alias.trim());
     }
-    const orgId = key?.organization_id;
+    const orgId = key?.organization_id ?? key?.org_id;
     if (orgId && typeof orgId === "string") {
       organizationIds.add(orgId.trim());
     }

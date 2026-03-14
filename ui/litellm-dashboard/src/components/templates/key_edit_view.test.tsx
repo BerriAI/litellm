@@ -31,9 +31,6 @@ vi.mock("../networking", async () => {
     vectorStoreListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
-    mcpToolsCall: vi.fn().mockResolvedValue({
-      data: [],
-    }),
     agentListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
