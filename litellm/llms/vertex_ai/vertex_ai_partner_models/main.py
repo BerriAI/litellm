@@ -135,11 +135,19 @@ class VertexAIPartnerModels(VertexBase):
         try:
             vertex_httpx_logic = VertexLLM()
 
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
-                credentials=vertex_credentials,
-                project_id=vertex_project,
-                custom_llm_provider="vertex_ai",
-            )
+            ## Check if Authorization header is already present (e.g. pre-fetched
+            ## token via Workload Identity Federation).  When it is, skip ADC
+            ## token refresh so the caller-supplied credential is honoured.
+            _has_auth_header = headers is not None and "Authorization" in headers
+
+            access_token: Optional[str] = None
+            project_id: Optional[str] = vertex_project
+            if not _has_auth_header:
+                access_token, project_id = vertex_httpx_logic._ensure_access_token(
+                    credentials=vertex_credentials,
+                    project_id=vertex_project,
+                    custom_llm_provider="vertex_ai",
+                )
 
             openai_like_chat_completions = OpenAILikeChatHandler()
             codestral_fim_completions = CodestralTextCompletion()
@@ -198,7 +206,8 @@ class VertexAIPartnerModels(VertexBase):
             elif "claude" in model:
                 if headers is None:
                     headers = {}
-                headers.update({"Authorization": "Bearer {}".format(access_token)})
+                if "Authorization" not in headers:
+                    headers["Authorization"] = "Bearer {}".format(access_token)
 
                 optional_params.update(
                     {
