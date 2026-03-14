@@ -13,6 +13,7 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
+import AgentMonitorView from "@/components/AgentMonitor/AgentMonitorView";
 import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
@@ -617,6 +618,8 @@ function CreateKeyPageContent() {
                     <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
+                  ) : page == "agent-monitor" ? (
+                    <AgentMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
                     <NewUsagePage
                       teams={(teams as Team[]) ?? []}

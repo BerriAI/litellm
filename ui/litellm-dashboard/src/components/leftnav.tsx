@@ -175,6 +175,13 @@ const menuGroups: MenuGroup[] = [
         icon: <SafetyOutlined />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
+      {
+        key: "agent-monitor",
+        page: "agent-monitor",
+        label: "Agent Monitor",
+        icon: <RobotOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
     ],
   },
   {

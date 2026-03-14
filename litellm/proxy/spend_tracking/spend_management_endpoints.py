@@ -11,15 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
+from litellm.proxy._types import (ProviderBudgetResponse,
+                                  ProviderBudgetResponseObject)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _user_has_admin_view,
-)
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    get_spend_by_team_and_customer,
-)
+    _is_user_team_admin, _user_has_admin_view)
+from litellm.proxy.spend_tracking.spend_tracking_utils import \
+    get_spend_by_team_and_customer
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
@@ -1696,6 +1694,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     error_message: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
     ),
+    agent_id: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by agent_id"
+    ),
     sort_by: str = fastapi.Query(
         default="startTime",
         description="Sort logs by field: spend, total_tokens, startTime, or endTime",
@@ -1833,6 +1834,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
+        if agent_id is not None:
+            where_conditions["agent_id"] = agent_id
+
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
             if min_spend is not None:
@@ -1897,6 +1901,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             ("model", "model"),
             ("model_id", "model_id"),
             ("end_user", "end_user"),
+            ("agent_id", "agent_id"),
         ]:
             val = where_conditions.get(wc_key)
             if val is not None and isinstance(val, str):
@@ -2488,9 +2493,7 @@ async def global_spend_logs(
     import traceback
 
     from litellm.integrations.prometheus_helpers.prometheus_api import (
-        get_daily_spend_from_prometheus,
-        is_prometheus_connected,
-    )
+        get_daily_spend_from_prometheus, is_prometheus_connected)
     from litellm.proxy.proxy_server import prisma_client
 
     try:

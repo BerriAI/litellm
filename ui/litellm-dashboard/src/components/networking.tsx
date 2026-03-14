@@ -2547,6 +2547,7 @@ interface UiSpendLogsParams {
   key_alias?: string;
   error_code?: string;
   error_message?: string;
+  agent_id?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
   min_spend?: number;
