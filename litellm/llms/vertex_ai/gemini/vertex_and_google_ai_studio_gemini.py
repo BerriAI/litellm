@@ -2020,10 +2020,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thought_signatures: Optional[Any] = None
 
         for idx, candidate in enumerate(_candidates):
-            if "content" not in candidate:
-                continue
-
-            # Extract metadata using helper function
+            # Extract metadata BEFORE checking for content, because the
+            # final streaming chunk may carry groundingMetadata / safetyRatings
+            # without any "content" key.
             (
                 candidate_grounding_metadata,
                 candidate_url_context_metadata,
@@ -2035,6 +2034,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata.extend(candidate_url_context_metadata)
             safety_ratings.extend(candidate_safety_ratings)
             citation_metadata.extend(candidate_citation_metadata)
+
+            if "content" not in candidate:
+                continue
 
             if "parts" in candidate["content"]:
                 (
@@ -2981,6 +2983,15 @@ class ModelResponseIterator:
                 if not model_response.choices and _candidates:
                     from litellm.types.utils import Delta, StreamingChoices
 
+                    # Convert grounding metadata to annotations for the
+                    # final chunk (metadata was already extracted above).
+                    annotations = None
+                    if grounding_metadata:
+                        annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                            grounding_metadata=grounding_metadata,
+                            content_text=None,
+                        ) or None
+
                     for candidate in _candidates:
                         finish_reason_str = candidate.get("finishReason")
                         if finish_reason_str is not None:
@@ -2995,7 +3006,11 @@ class ModelResponseIterator:
                             choice = StreamingChoices(
                                 finish_reason=mapped_finish_reason,
                                 index=candidate.get("index", 0),
-                                delta=Delta(content=None, role=None),
+                                delta=Delta(
+                                    content=None,
+                                    role=None,
+                                    annotations=annotations,
+                                ),
                                 logprobs=None,
                                 enhancements=None,
                             )
