@@ -2556,6 +2556,20 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             if supported_by_provider is not None:
                 return supported_by_provider
 
+            # For OpenAI-compatible providers (including local servers like
+            # Ollama, LM Studio, vLLM), default to True for function calling
+            # and tool choice since these endpoints typically support tool use.
+            if key in ("supports_function_calling", "supports_tool_choice"):
+                if custom_llm_provider in (
+                    "openai",
+                    "custom_openai",
+                    "text-completion-openai",
+                ) or (
+                    custom_llm_provider is not None
+                    and custom_llm_provider in litellm.openai_compatible_providers
+                ):
+                    return True
+
         return False
     except Exception as e:
         verbose_logger.debug(
