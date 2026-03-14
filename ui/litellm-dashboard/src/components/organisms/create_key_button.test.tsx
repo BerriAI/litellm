@@ -235,6 +235,24 @@ vi.mock("../common_components/ProjectDropdown", () => ({
       onChange={(e) => onChange?.(e.target.value)}
     />
   ),
+
+vi.mock("../agent_management/AgentSelector", () => ({ default: () => null }));
+vi.mock("../common_components/budget_duration_dropdown", () => ({ default: () => null }));
+vi.mock("../common_components/check_openapi_schema", () => ({ default: () => null }));
+vi.mock("../common_components/KeyLifecycleSettings", () => ({ default: () => null }));
+vi.mock("../common_components/ModelAliasManager", () => ({ default: () => null }));
+vi.mock("../common_components/PassThroughRoutesSelector", () => ({ default: () => null }));
+vi.mock("../common_components/PremiumLoggingSettings", () => ({ default: () => null }));
+vi.mock("../common_components/RateLimitTypeFormItem", () => ({ default: () => null }));
+vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => null }));
+vi.mock("../common_components/team_dropdown", () => ({ default: () => null }));
+vi.mock("../CreateUserButton", () => ({ CreateUserButton: () => null }));
+vi.mock("../mcp_server_management/MCPServerSelector", () => ({ default: () => null }));
+vi.mock("../mcp_server_management/MCPToolPermissions", () => ({ default: () => null }));
+vi.mock("../shared/numerical_input", () => ({ default: () => null }));
+vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
+vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
+  getModelDisplayName: (model: string) => model,
 }));
 
 vi.mock("../common_components/AccessGroupSelector", () => ({
