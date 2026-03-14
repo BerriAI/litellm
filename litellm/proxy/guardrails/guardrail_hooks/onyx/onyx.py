@@ -109,7 +109,7 @@ class OnyxGuardrail(CustomGuardrail):
             result.pop("api_key", None)
             return result
         if isinstance(body_snapshot, dict):
-            return copy.copy(body_snapshot)
+            return copy.deepcopy(body_snapshot)
         if isinstance(body_keys, (list, tuple)):
             reconstructed = {
                 k: request_data.get(k)
@@ -119,7 +119,8 @@ class OnyxGuardrail(CustomGuardrail):
             if reconstructed:
                 return reconstructed
 
-        internal_keys = ("url", "method", "headers", "arrival_time", "body_keys", "body_snapshot")
+        # Legacy format: proxy_server_request has messages/model at top level
+        internal_keys = ("url", "method", "headers", "arrival_time", "body_keys")
         return {
             k: v
             for k, v in proxy_server_request.items()
