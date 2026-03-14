@@ -3,6 +3,7 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 """
 
 import asyncio
+import builtins
 import contextvars
 from functools import partial
 from typing import Any, Coroutine, Dict, List, Optional, Union
@@ -233,7 +234,8 @@ def create(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "name": name,
@@ -395,11 +397,11 @@ def search(
 
         ## MOCK RESPONSE LOGIC
         if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, (str, list)
+            litellm_params.mock_response, (str, builtins.list)
         ):
             mock_results = None
-            if isinstance(litellm_params.mock_response, list):
-                mock_results = litellm_params.mock_response
+            if isinstance(litellm_params.mock_response, builtins.list):
+                mock_results = litellm_params.mock_response  # type: ignore[assignment]
             return mock_vector_store_search_response(mock_results=mock_results)
 
         # Default to OpenAI for vector stores
@@ -440,7 +442,8 @@ def search(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=api_type,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -585,7 +588,8 @@ def retrieve(
                 f"Vector store retrieve is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id},
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -732,7 +736,8 @@ def list(
                 f"Vector store list is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "after": after,
@@ -895,7 +900,8 @@ def update(
             )
         )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -1035,7 +1041,8 @@ def delete(
                 f"Vector store delete is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id},
             litellm_params={"litellm_call_id": litellm_call_id},
