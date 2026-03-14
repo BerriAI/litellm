@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.utils import (
     _get_model_info_helper,
     get_model_info,
@@ -101,10 +101,10 @@ class TestGetModelInfoUnknownModels:
         )
         assert result is True
 
-    def test_helper_fallback_handles_bad_request_from_provider_resolution(self):
-        """fallback_on_unmapped should still return defaults when provider resolution raises BadRequestError."""
+    def test_helper_fallback_handles_bad_request_during_name_resolution(self):
+        """fallback_on_unmapped should still return defaults when helper-internal name resolution raises BadRequestError."""
         with patch(
-            "litellm.get_llm_provider",
+            "litellm.utils._get_potential_model_names",
             side_effect=BadRequestError(
                 message="model not mapped",
                 model="openai/my-local-llm",
@@ -342,6 +342,23 @@ class TestErrorClassificationPatterns:
         original_exc.status_code = 400
 
         with pytest.raises(ContentPolicyViolationError):
+            exception_type(
+                model="gpt-4",
+                original_exception=original_exc,
+                custom_llm_provider="openai",
+            )
+
+    def test_incorrect_api_key_lowercase_maps_to_auth_error(self):
+        """Lowercase incorrect-api-key messages should bypass the generic
+        invalid_request_error branch and preserve auth classification."""
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+        original_exc = Exception(
+            "Invalid_Request_Error: incorrect api key provided for openai"
+        )
+        original_exc.status_code = 401
+
+        with pytest.raises(AuthenticationError):
             exception_type(
                 model="gpt-4",
                 original_exception=original_exc,
