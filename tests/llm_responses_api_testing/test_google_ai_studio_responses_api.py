@@ -265,7 +265,7 @@ async def test_google_ai_studio_responses_api_context_management_server_side_com
     long_input = "Long ping to verify context_management is accepted. Please provide a detailed response that exceeds the compaction threshold to trigger server-side compaction. " * 200
     try:
         response = await litellm.aresponses(
-            model="gemini/gemini-2.5-flash",
+            model="gemini/gemini-2.5-flash-lite",
             input=long_input,
             max_output_tokens=20,
             context_management=context_management,
