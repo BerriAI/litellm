@@ -8505,9 +8505,12 @@ class Router:
         try:
             input_tokens = litellm.token_counter(messages=messages)
         except Exception as e:
+            error_msg = str(e)
+            if litellm.redact_messages_in_exceptions or litellm.turn_off_message_logging:
+                error_msg = "redacted by litellm. 'litellm.redact_messages_in_exceptions' is enabled."
             verbose_router_logger.error(
                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
-                    str(e)
+                    error_msg
                 )
             )
             return _returned_deployments
