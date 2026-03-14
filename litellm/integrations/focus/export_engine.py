@@ -67,6 +67,33 @@ class FocusExportEngine:
             "summary": summary,
         }
 
+    async def export_all(
+        self,
+        *,
+        limit: Optional[int],
+    ) -> None:
+        """Export all available data without time-window filtering."""
+        data = await self._database.get_usage_data(limit=limit)
+        if data.is_empty():
+            verbose_logger.debug("Focus export: no usage data available")
+            return
+
+        normalized = self._transformer.transform(data)
+        if normalized.is_empty():
+            verbose_logger.debug("Focus export: normalized data empty")
+            return
+
+        # Build a window spanning the full data range for the filename
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        window = FocusTimeWindow(
+            start_time=now.replace(hour=0, minute=0, second=0, microsecond=0),
+            end_time=now,
+            frequency="all",
+        )
+        await self._serialize_and_upload(normalized, window)
+
     async def export_window(
         self,
         *,
