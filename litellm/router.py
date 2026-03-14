@@ -1357,6 +1357,11 @@ class Router:
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
 
+        # OTel spans are not safe to use across event loops. The silent
+        # experiment runs in a new event loop, so strip the span to prevent
+        # cross-loop tracing races or span corruption.
+        silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
+
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
         # Pop logging objects and call IDs to ensure a fresh logging context

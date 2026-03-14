@@ -72,7 +72,11 @@ def test_get_silent_experiment_kwargs():
     # so that setting model_group / is_silent_experiment on the silent dict
     # doesn't corrupt the primary call's metadata.
     assert result["metadata"] is not kwargs["metadata"]
-    # Original metadata must NOT be mutated
+    # OTel span must be stripped from the silent copy — it's not safe to use
+    # across event loops (silent experiment runs in a new event loop).
+    assert "litellm_parent_otel_span" not in result["metadata"]
+    # Original metadata must NOT be mutated — must carry the real span,
+    # not safe_deep_copy's temporary "placeholder" string.
     assert "is_silent_experiment" not in kwargs["metadata"]
     assert kwargs["metadata"]["litellm_parent_otel_span"] is mock_span
     assert kwargs["metadata"]["user_api_key_auth"] is mock_auth
