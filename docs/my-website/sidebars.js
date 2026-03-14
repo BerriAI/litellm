@@ -163,6 +163,7 @@ const sidebars = {
             "tutorials/claude_non_anthropic_models",
             "tutorials/claude_code_plugin_marketplace",
             "tutorials/claude_code_beta_headers",
+            "tutorials/claude_code_skills",
           ]
         },
         "tutorials/opencode_integration",
