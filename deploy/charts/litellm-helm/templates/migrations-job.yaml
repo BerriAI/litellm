@@ -34,7 +34,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      serviceAccountName: {{ include "litellm.migrationServiceAccountName" . }}
       {{- with .Values.migrationJob.extraInitContainers }}
       initContainers:
         {{- toYaml . | nindent 8 }}

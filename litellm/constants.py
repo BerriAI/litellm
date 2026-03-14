@@ -1214,12 +1214,8 @@ OPENAI_FINISH_REASONS = [
     "stop",
     "length",
     "function_call",
+    "tool_calls",
     "content_filter",
-    "null",
-    "finish_reason_unspecified",
-    "malformed_function_call",
-    "guardrail_intervened",
-    "eos",
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
@@ -1242,6 +1238,11 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
+LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
+    "Truncation is a DB storage safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################

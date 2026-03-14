@@ -18,6 +18,7 @@ SEARCH_PROVIDERS = [
     "linkup",
     "duckduckgo",
     "searchapi",
+    "serper",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

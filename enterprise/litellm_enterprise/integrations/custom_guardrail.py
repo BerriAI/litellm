@@ -50,8 +50,10 @@ class EnterpriseCustomGuardrailHelper:
                     break
 
         if matched_mode is not None:
-            # Tag matched: only run if event_type matches the tag's mode value
+            # Tag matched: only run if event_type matches the tag's mode value(s)
             if event_type is not None:
+                if isinstance(matched_mode, list):
+                    return event_type.value in matched_mode
                 return event_type.value == matched_mode
             return True
 

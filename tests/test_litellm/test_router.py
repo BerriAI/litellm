@@ -2733,3 +2733,24 @@ def test_credential_name_not_injected_when_absent():
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"] == ["A.101"]
+
+
+def test_combine_fallback_usage():
+    """Test that _combine_fallback_usage merges partial and fallback usage."""
+    from litellm.router import Router
+    from litellm.types.utils import Usage
+
+    # Create a stream chunk with usage
+    chunk = litellm.ModelResponseStream(
+        id="test",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Call _combine_fallback_usage with no extra usage
+    Router._combine_fallback_usage(chunk, None)
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 5
+    assert chunk.usage.total_tokens == 15

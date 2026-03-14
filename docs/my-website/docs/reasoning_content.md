@@ -592,6 +592,12 @@ Expected Response
 </TabItem>
 </Tabs>
 
+:::tip gpt-5.4: reasoning_effort + function tools
+
+OpenAI does not support `reasoning_effort` with function tools for `gpt-5.4` in `/v1/chat/completions`. Use `openai/responses/gpt-5.4` to route through the Responses API instead. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+:::
+
 ## OpenAI Responses API - Auto-Summary Control
 
 When using OpenAI Responses API models (like `gpt-5`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.

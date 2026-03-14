@@ -198,9 +198,8 @@ async def _get_batch_output_file_content_as_dictionary(
                        Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
-    )
+    from litellm.proxy.openai_files_endpoints.common_utils import \
+        _is_base64_encoded_unified_file_id
 
     if custom_llm_provider == "vertex_ai":
         raise ValueError("Vertex AI does not support file content retrieval")
@@ -227,7 +226,7 @@ async def _get_batch_output_file_content_as_dictionary(
     credentials = _extract_file_access_credentials(litellm_params)
     file_content_kwargs.update(credentials)
     
-    _file_content = await afile_content(**file_content_kwargs)
+    _file_content = await afile_content(**file_content_kwargs)  # type: ignore[reportArgumentType]
     return _get_file_content_as_dictionary(_file_content.content)
 
 

@@ -561,6 +561,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "bedrock_mantle":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = (
