@@ -136,6 +136,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Unknown or unsupported type
         return None, index
 
+    def _convert_tool_message_to_function_output(
+        self, content: Any, tool_call_id: Optional[str]
+    ) -> Dict[str, Any]:
+        """Convert a tool-role message into a function_call_output item."""
+        tool_output: List[Dict[str, Any]]
+        if content is None:
+            tool_output = []
+        elif isinstance(content, str):
+            tool_output = [{"type": "input_text", "text": content}]
+        elif isinstance(content, list):
+            tool_output = self._convert_content_to_responses_format(
+                content, "user",
+            )
+        else:
+            tool_output = [{"type": "input_text", "text": str(content)}]
+        return {
+            "type": "function_call_output",
+            "call_id": tool_call_id,
+            "output": tool_output,
+        }
+
     def convert_chat_completion_messages_to_responses_api(
         self, messages: List["AllMessageValues"]
     ) -> Tuple[List[Any], Optional[str]]:
@@ -152,7 +173,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 # Extract system message as instructions
                 if isinstance(content, str):
                     if instructions:
-                        # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
                     else:
                         instructions = content
@@ -168,30 +188,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         }
                     )
             elif role == "tool":
-                # Convert tool message to function call output format
-                # The Responses API expects 'output' to be a list with input_text/input_image types
-                # Using list format for consistency across text and multimodal content
-                tool_output: List[Dict[str, Any]]
-                if content is None:
-                    tool_output = []
-                elif isinstance(content, str):
-                    # Convert string to list with input_text
-                    tool_output = [{"type": "input_text", "text": content}]
-                elif isinstance(content, list):
-                    # Transform list content to Responses API format
-                    tool_output = self._convert_content_to_responses_format(
-                        content,
-                        "user",  # Use "user" role to get input_* types
-                    )
-                else:
-                    # Fallback: convert unexpected types to input_text
-                    tool_output = [{"type": "input_text", "text": str(content)}]
                 input_items.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": tool_call_id,
-                        "output": tool_output,
-                    }
+                    self._convert_tool_message_to_function_output(content, tool_call_id)
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
                 # Emit reasoning items from thinking_blocks before tool calls
