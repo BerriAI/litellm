@@ -575,6 +575,42 @@ class RouterBudgetLimiting(CustomLogger):
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
 
+    def register_deployment_budget(
+        self,
+        model_id: str,
+        max_budget: float,
+        budget_duration: str,
+    ) -> None:
+        """
+        Dynamically register a deployment's budget config.
+
+        Called when a new deployment is added to the router (e.g., from DB),
+        so that its max_budget/budget_duration are tracked for budget-based routing.
+        """
+        _budget_config = GenericBudgetInfo(
+            time_period=budget_duration,
+            budget_limit=max_budget,
+        )
+        if self.deployment_budget_config is None:
+            self.deployment_budget_config = {}
+        self.deployment_budget_config[model_id] = _budget_config
+        verbose_router_logger.debug(
+            f"Registered deployment budget: model_id={model_id}, max_budget={max_budget}, budget_duration={budget_duration}"
+        )
+
+    def remove_deployment_budget(self, model_id: str) -> None:
+        """
+        Remove a deployment's budget config.
+
+        Called when a deployment is deleted from the router.
+        """
+        if self.deployment_budget_config is None:
+            return
+        self.deployment_budget_config.pop(model_id, None)
+        verbose_router_logger.debug(
+            f"Removed deployment budget: model_id={model_id}"
+        )
+
     def _get_budget_config_for_deployment(
         self,
         model_id: str,
