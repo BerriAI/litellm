@@ -49,17 +49,20 @@ def restore_global_state():
 
 
 class TestGetModelInfoUnknownModels:
-    """_get_model_info_helper raises for unmapped models; the graceful
-    behaviour lives in _supports_factory and the Router (which already
-    catch exceptions).  get_model_info therefore also raises."""
+    """Unknown models should return provider-aware defaults instead of raising."""
 
-    def test_unknown_local_model_raises(self):
-        """A model not in the static map should raise."""
-        with pytest.raises(Exception):
-            get_model_info(
-                model="openai/qwen3-coder-30b-a3b-instruct",
-                custom_llm_provider="openai",
-            )
+    def test_unknown_local_model_returns_provider_aware_defaults(self):
+        """A model not in the static map should return safe OpenAI-compatible defaults."""
+        info = get_model_info(
+            model="openai/qwen3-coder-30b-a3b-instruct",
+            custom_llm_provider="openai",
+        )
+
+        assert info["input_cost_per_token"] == 0
+        assert info["output_cost_per_token"] == 0
+        assert info["mode"] == "chat"
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
 
     def test_known_model_still_works(self):
         """Known models should still return their actual info."""
@@ -69,13 +72,27 @@ class TestGetModelInfoUnknownModels:
         assert info is not None
         assert info["input_cost_per_token"] > 0
 
-    def test_helper_raises_for_unmapped_model(self):
-        """_get_model_info_helper should raise for unmapped models."""
-        with pytest.raises(Exception):
-            _get_model_info_helper(
-                model="llama-3.2-local",
-                custom_llm_provider="openai",
-            )
+    def test_helper_returns_defaults_for_unmapped_openai_model(self):
+        """_get_model_info_helper should return defaults for unmapped OpenAI-compatible models."""
+        info = _get_model_info_helper(
+            model="llama-3.2-local",
+            custom_llm_provider="openai",
+        )
+
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+        assert info["input_cost_per_token"] == 0
+        assert info["output_cost_per_token"] == 0
+
+    def test_helper_disables_tool_capabilities_for_text_completion_provider(self):
+        """text-completion-openai should keep tool capabilities disabled."""
+        info = _get_model_info_helper(
+            model="davinci-002-local",
+            custom_llm_provider="text-completion-openai",
+        )
+
+        assert info["supports_function_calling"] is False
+        assert info["supports_tool_choice"] is False
 
     def test_unknown_model_no_provider_defaults_to_openai(self):
         """When no provider is given, should still not raise for supports_* checks."""

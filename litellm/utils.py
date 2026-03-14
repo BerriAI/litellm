@@ -2514,6 +2514,24 @@ def _supports_provider_info_factory(
     return None
 
 
+def _unknown_model_default_capability(
+    key: str, custom_llm_provider: Optional[str]
+) -> Optional[bool]:
+    if key not in ("supports_function_calling", "supports_tool_choice"):
+        return None
+
+    if custom_llm_provider == "text-completion-openai":
+        return False
+
+    if custom_llm_provider in ("openai", "custom_openai", "ollama") or (
+        custom_llm_provider is not None
+        and custom_llm_provider in litellm.openai_compatible_providers
+    ):
+        return True
+
+    return None
+
+
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -2556,22 +2574,11 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             if supported_by_provider is not None:
                 return supported_by_provider
 
-            # For OpenAI-compatible providers (including local servers like
-            # Ollama, LM Studio, vLLM), default to True for function calling
-            # and tool choice since these endpoints typically support tool use.
-            # Exclude text-completion-openai: it uses /v1/completions which
-            # does not support function calling or tool choice.
-            if key in ("supports_function_calling", "supports_tool_choice"):
-                if custom_llm_provider == "text-completion-openai":
-                    return False
-                if custom_llm_provider in (
-                    "openai",
-                    "custom_openai",
-                ) or (
-                    custom_llm_provider is not None
-                    and custom_llm_provider in litellm.openai_compatible_providers
-                ):
-                    return True
+            default_capability = _unknown_model_default_capability(
+                key, custom_llm_provider
+            )
+            if default_capability is not None:
+                return default_capability
 
         return False
     except (ValueError, KeyError) as e:
@@ -2585,22 +2592,11 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         if supported_by_provider is not None:
             return supported_by_provider
 
-        # For OpenAI-compatible providers (including local servers like
-        # Ollama, LM Studio, vLLM), default to True for function calling
-        # and tool choice since these endpoints typically support tool use.
-        # Exclude text-completion-openai: it uses /v1/completions which
-        # does not support function calling or tool choice.
-        if key in ("supports_function_calling", "supports_tool_choice"):
-            if custom_llm_provider == "text-completion-openai":
-                return False
-            if custom_llm_provider in (
-                "openai",
-                "custom_openai",
-            ) or (
-                custom_llm_provider is not None
-                and custom_llm_provider in litellm.openai_compatible_providers
-            ):
-                return True
+        default_capability = _unknown_model_default_capability(
+            key, custom_llm_provider
+        )
+        if default_capability is not None:
+            return default_capability
 
         return False
 
@@ -5820,6 +5816,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 model, custom_llm_provider, e
             )
         )
+        supports_function_calling = _unknown_model_default_capability(
+            "supports_function_calling", custom_llm_provider
+        )
+        supports_tool_choice = _unknown_model_default_capability(
+            "supports_tool_choice", custom_llm_provider
+        )
         return ModelInfoBase(
             key=model or "",
             max_tokens=None,
@@ -5829,9 +5831,9 @@ def _get_model_info_helper(  # noqa: PLR0915
             output_cost_per_token=0,
             litellm_provider=custom_llm_provider or "",
             mode="chat",
-            supports_function_calling=False,
+            supports_function_calling=supports_function_calling,
             supports_vision=False,
-            supports_tool_choice=False,
+            supports_tool_choice=supports_tool_choice,
             supports_response_schema=False,
             supports_system_messages=True,
         )
