@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -730,6 +731,10 @@ async def proxy_shutdown_event():
         except Exception:
             # [DO NOT BLOCK shutdown events for this]
             pass
+
+    # Drain in-flight post-guardrail log tasks so they complete before exit
+    if _post_guardrail_log_tasks:
+        await asyncio.gather(*_post_guardrail_log_tasks, return_exceptions=True)
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
@@ -1574,6 +1579,8 @@ open_telemetry_logger: Optional[OpenTelemetry] = None
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
 )
+# Strong refs to post-guardrail log tasks so they complete before shutdown
+_post_guardrail_log_tasks: Set[asyncio.Task[None]] = set()
 ### REDIS QUEUE ###
 async_result = None
 celery_app_conn = None
@@ -5497,6 +5504,57 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
+async def _async_data_generator_fire_post_guardrail_log(
+    request_data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    chunks_for_log: List[Dict[str, Any]],
+    logging_obj: Optional[Any],
+) -> None:
+    """Build full response from streaming chunks and run post-guardrail log hook."""
+    if not chunks_for_log:
+        return
+    try:
+        complete_response = litellm.stream_chunk_builder(chunks=chunks_for_log)
+        if complete_response is not None:
+            await proxy_logging_obj.async_post_guardrail_log_success_event(
+                data=request_data,
+                response=cast(LLMResponseTypes, complete_response),
+                user_api_key_dict=user_api_key_dict,
+                logging_obj=logging_obj,
+            )
+    except Exception as e:
+        verbose_proxy_logger.exception("Error in post-guardrail log (streaming): %s", e)
+
+
+async def _async_data_generator_emit_error(
+    e: Exception,
+    request_data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> str:
+    """Run failure hook and return the SSE error payload to yield. Re-raises HTTPException."""
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=e,
+        request_data=request_data,
+    )
+    verbose_proxy_logger.debug(
+        f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
+    )
+    if isinstance(e, HTTPException):
+        raise e
+    if isinstance(e, StreamingCallbackError):
+        error_msg = str(e)
+    else:
+        error_msg = str(e)
+    proxy_exception = ProxyException(
+        message=getattr(e, "message", error_msg),
+        type=getattr(e, "type", "None"),
+        param=getattr(e, "param", "None"),
+        code=getattr(e, "status_code", 500),
+    )
+    return f"data: {json.dumps({'error': proxy_exception.to_dict()})}\n\n"
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -5507,6 +5565,8 @@ async def async_data_generator(
             request_data=request_data
         )
         model_mismatch_logged = False
+        # Chunks for post-guardrail log: use exclude_none=True only so stream_chunk_builder gets required keys
+        _streaming_chunks_for_log: List[Dict[str, Any]] = []
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -5536,6 +5596,9 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
+                _streaming_chunks_for_log.append(
+                    chunk.model_dump(mode="json", exclude_none=True)
+                )
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
@@ -5545,6 +5608,21 @@ async def async_data_generator(
                 yield f"data: {chunk}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
+
+        # Post-guardrail log: run in background so we don't block yielding [DONE]
+        def _discard_task(t: asyncio.Task[None]) -> None:
+            _post_guardrail_log_tasks.discard(t)
+
+        _task = asyncio.create_task(
+            _async_data_generator_fire_post_guardrail_log(
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                chunks_for_log=_streaming_chunks_for_log,
+                logging_obj=request_data.get("litellm_logging_obj"),
+            )
+        )
+        _post_guardrail_log_tasks.add(_task)
+        _task.add_done_callback(_discard_task)
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
@@ -5557,33 +5635,10 @@ async def async_data_generator(
                 str(e)
             )
         )
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=request_data,
+        error_payload = await _async_data_generator_emit_error(
+            e, request_data, user_api_key_dict
         )
-        verbose_proxy_logger.debug(
-            f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
-        )
-
-        if isinstance(e, HTTPException):
-            raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
-        yield f"data: {error_returned}\n\n"
+        yield error_payload
     finally:
         # Close the response stream to release the underlying HTTP connection
         # back to the connection pool. This prevents pool exhaustion when

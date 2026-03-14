@@ -174,6 +174,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    async def async_post_guardrail_log_success_event(
+        self, kwargs, response_obj, start_time, end_time
+    ):
+        """
+        Called by the proxy after post-call hooks (e.g. guardrails) have run.
+        Use this to log the final response seen by the client; async_log_success_event
+        runs before post-call hooks and sees the unmodified response.
+        Override this method to log post-guardrail responses; the base no-op is not invoked.
+        """
+        pass
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
