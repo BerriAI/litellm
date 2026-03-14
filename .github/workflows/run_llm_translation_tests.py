@@ -9,7 +9,10 @@ markdown report with provider-specific breakdowns and test statistics.
 import os
 import sys
 import subprocess
-import xml.etree.ElementTree as ET
+try:
+    import defusedxml.ElementTree as ET  # preferred: protects against XXE and "XML bombs"
+except ImportError:
+    import xml.etree.ElementTree as ET  # fallback; acceptable since Python 3.8 restricts external entities
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
