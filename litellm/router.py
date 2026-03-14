@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -1551,7 +1552,9 @@ class Router:
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
                     # scheduled via asyncio.create_task during acompletion.
                     pending = asyncio.all_tasks()
-                    pending.discard(asyncio.current_task())
+                    current = asyncio.current_task()
+                    if current is not None:
+                        pending.discard(current)
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -6541,6 +6544,18 @@ class Router:
                     f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
                 )
                 return None
+
+            # Validate tag_regex patterns BEFORE adding the deployment so we never
+            # have partially-initialised router state if a pattern is invalid.
+            _tag_regex = deployment.litellm_params.get("tag_regex") or []
+            for pattern in _tag_regex:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"{pattern!r} — {exc}"
+                    ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
 
