@@ -2027,7 +2027,7 @@ class ProxyLogging:
                 try:
                     end_time = datetime.now(timezone.utc)
                     await _callback.async_post_guardrail_log_success_event(
-                        kwargs=kwargs,
+                        kwargs=dict(kwargs),
                         response_obj=response,
                         start_time=start_time,
                         end_time=end_time,
