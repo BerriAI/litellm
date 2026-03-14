@@ -2,10 +2,10 @@
 OpenAI-like chat completion transformation
 """
 
+import json
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
-import orjson
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
@@ -95,7 +95,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: Optional[str],
         base_model: Optional[str],
     ) -> ModelResponse:
-        response_json = orjson.loads(response.content)
+        response_json = json.loads(response.content)
         logging_obj.post_call(
             input=messages,
             api_key="",

@@ -15,7 +15,6 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import orjson
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -179,7 +178,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data).decode()
+                        else json.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,
@@ -239,7 +238,7 @@ class BaseLLMHTTPHandler:
                     data=(
                         signed_json_body
                         if signed_json_body is not None
-                        else orjson.dumps(data).decode()
+                        else json.dumps(data)
                     ),
                     timeout=timeout,
                     stream=stream,
