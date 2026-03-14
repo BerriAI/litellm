@@ -37012,5 +37012,126 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "bedrock/us-east-1/zai.glm-4.7": {
+        "aliases": [
+            "bedrock/us-east-2/zai.glm-4.7",
+            "bedrock/us-west-2/zai.glm-4.7"
+        ],
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/ap-northeast-1/zai.glm-4.7": {
+        "aliases": [
+            "bedrock/ap-south-1/zai.glm-4.7",
+            "bedrock/ap-southeast-3/zai.glm-4.7",
+            "bedrock/eu-north-1/zai.glm-4.7",
+            "bedrock/sa-east-1/zai.glm-4.7"
+        ],
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.64e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/ap-southeast-2/zai.glm-4.7": {
+        "input_cost_per_token": 6.18e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.266e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/us-east-1/zai.glm-4.7-flash": {
+        "aliases": [
+            "bedrock/us-east-2/zai.glm-4.7-flash",
+            "bedrock/us-west-2/zai.glm-4.7-flash"
+        ],
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/ap-northeast-1/zai.glm-4.7-flash": {
+        "aliases": [
+            "bedrock/ap-south-1/zai.glm-4.7-flash",
+            "bedrock/ap-southeast-3/zai.glm-4.7-flash",
+            "bedrock/eu-central-1/zai.glm-4.7-flash",
+            "bedrock/eu-north-1/zai.glm-4.7-flash",
+            "bedrock/eu-south-1/zai.glm-4.7-flash",
+            "bedrock/eu-west-1/zai.glm-4.7-flash",
+            "bedrock/sa-east-1/zai.glm-4.7-flash"
+        ],
+        "input_cost_per_token": 8e-08,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.8e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/eu-west-2/zai.glm-4.7-flash": {
+        "input_cost_per_token": 1.1e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6.2e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/ap-southeast-2/zai.glm-4.7-flash": {
+        "input_cost_per_token": 7.21e-08,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.12e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     }
 }
