@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.bedrock.chat.converse_transformation import (
+    AmazonConverseConfig,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -20,6 +23,18 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+# Anthropic Claude models that support native structured outputs on Bedrock InvokeModel.
+# Maintained separately from the Converse path's BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
+# because Invoke and Converse have independent feature rollouts.
+# Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+BEDROCK_INVOKE_NATIVE_STRUCTURED_OUTPUT_MODELS = {
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+}
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -49,6 +64,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    @staticmethod
+    def _supports_native_structured_outputs(model: str) -> bool:
+        """Check if the Bedrock Invoke model supports native structured outputs."""
+        return any(substring in model for substring in BEDROCK_INVOKE_NATIVE_STRUCTURED_OUTPUT_MODELS)
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -56,26 +76,36 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201)
-        # Bedrock Invoke doesn't support output_format parameter
-        original_model = model
-        if "response_format" in non_default_params:
-            # Use a model name that forces tool-based approach
+        response_format = non_default_params.get("response_format")
+
+        # Native path: build output_format directly for Bedrock-supported models
+        # (includes haiku-4-5 which the Anthropic parent doesn't know about).
+        if isinstance(response_format, dict) and self._supports_native_structured_outputs(model):
+            _output_format = self.map_response_format_to_anthropic_output_format(response_format)
+            if _output_format is not None:
+                optional_params["output_format"] = _output_format
+                optional_params["json_mode"] = True
+                remaining = {k: v for k, v in non_default_params.items() if k != "response_format"}
+                return AnthropicConfig.map_openai_params(
+                    self,
+                    remaining,
+                    optional_params,
+                    model,
+                    drop_params,
+                )
+
+        # Fallback: force tool-based structured outputs for unsupported models
+        # (or json_object without schema on a supported model).
+        if response_format is not None:
             model = "claude-3-sonnet-20240229"
 
-        optional_params = AnthropicConfig.map_openai_params(
+        return AnthropicConfig.map_openai_params(
             self,
             non_default_params,
             optional_params,
             model,
             drop_params,
         )
-
-        # Restore original model name
-        model = original_model
-
-        return optional_params
 
     def transform_request(
         self,
@@ -87,11 +117,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     ) -> dict:
         # Filter out AWS authentication parameters before passing to Anthropic transformation
         # AWS params should only be used for signing requests, not included in request body
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-        }
+        filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
 
         _anthropic_request = AnthropicConfig.transform_request(
@@ -105,11 +131,26 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         _anthropic_request.pop("model", None)
         _anthropic_request.pop("stream", None)
-        # Bedrock Invoke doesn't support output_format parameter
-        _anthropic_request.pop("output_format", None)
-        # Bedrock Invoke doesn't support output_config parameter
-        # Fixes: https://github.com/BerriAI/litellm/issues/22797
-        _anthropic_request.pop("output_config", None)
+
+        # Convert Anthropic output_format to Bedrock InvokeModel output_config.format
+        output_format = _anthropic_request.pop("output_format", None)
+        if output_format and isinstance(output_format, dict) and output_format.get("type") == "json_schema":
+            schema = output_format.get("schema", {})
+            normalized_schema = AmazonConverseConfig._add_additional_properties_to_schema(schema)
+            # Preserve existing output_config keys (e.g. effort from reasoning_effort)
+            output_config = _anthropic_request.get("output_config") or {}
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": normalized_schema,
+            }
+            _anthropic_request["output_config"] = output_config
+        else:
+            # Non-native path: strip output_config entirely.
+            # Bedrock Invoke rejects the key itself (not just sub-keys) with
+            # "extraneous key [output_config] is not permitted" for models
+            # that don't support native structured outputs.
+            # Fixes: https://github.com/BerriAI/litellm/issues/22797
+            _anthropic_request.pop("output_config", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
@@ -135,9 +176,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
         beta_set.update(auto_betas)
 
-        if tool_search_used and not (
-            programmatic_tool_calling_used or input_examples_used
-        ):
+        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
@@ -166,9 +205,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if tool_type == "tool_search_tool_regex_20251119":
                 normalized_tool = tool.copy()
                 normalized_tool["type"] = "tool_search_tool_regex"
-                normalized_tool["name"] = normalized_tool.get(
-                    "name", "tool_search_tool_regex"
-                )
+                normalized_tool["name"] = normalized_tool.get("name", "tool_search_tool_regex")
                 normalized_tools.append(normalized_tool)
                 continue
             normalized_tools.append(tool)
