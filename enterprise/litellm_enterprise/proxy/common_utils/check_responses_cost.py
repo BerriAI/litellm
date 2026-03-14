@@ -38,11 +38,22 @@ class CheckResponsesCost:
         in non-terminal states as 'stale_expired'. These will never complete and
         should not be polled.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
+        )
         result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "response",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                    ]
+                },
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -76,7 +87,7 @@ class CheckResponsesCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order={"created_at": "asc"},
         )
-        
+
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
         completed_jobs = []
 
@@ -91,29 +102,35 @@ class CheckResponsesCost:
                 # Get the stored response object to extract model information
                 stored_response = job.file_object
                 model_name = stored_response.get("model", None)
-                
+
                 # Decrypt the response ID
-                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
-                
+                (
+                    responses_id_security,
+                    _,
+                    _,
+                ) = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
+
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                 }
-                
+
                 # Add model information if available
                 if model_name:
                     litellm_metadata["model"] = model_name
-                    litellm_metadata["model_group"] = model_name  # Use same value for model_group
-                
+                    litellm_metadata[
+                        "model_group"
+                    ] = model_name  # Use same value for model_group
+
                 response = await litellm.aget_responses(
                     response_id=responses_id_security,
                     litellm_metadata=litellm_metadata,
                 )
-                
+
                 verbose_proxy_logger.debug(
                     f"Response {unified_object_id} status: {response.status}, model: {model_name}"
                 )
-                
+
             except Exception as e:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} due to error: {e}"
@@ -126,7 +143,7 @@ class CheckResponsesCost:
                     f"Response {unified_object_id} is complete. Cost automatically tracked by aget_responses."
                 )
                 completed_jobs.append(job)
-                
+
             elif response.status in ["failed", "cancelled"]:
                 verbose_proxy_logger.info(
                     f"Response {unified_object_id} has status {response.status}, marking as complete"
@@ -142,4 +159,3 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(
                 f"Marked {len(completed_jobs)} response jobs as completed"
             )
-

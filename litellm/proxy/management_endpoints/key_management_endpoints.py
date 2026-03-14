@@ -1838,9 +1838,7 @@ async def _validate_update_key_data(
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
-    _team_id_to_check = data.team_id or getattr(
-        existing_key_row, "team_id", None
-    )
+    _team_id_to_check = data.team_id or getattr(existing_key_row, "team_id", None)
     if _team_id_to_check is not None:
         team_obj = await get_team_object(
             team_id=_team_id_to_check,
@@ -1910,9 +1908,7 @@ async def _validate_update_key_data(
         if team_obj is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Team object not found for team change validation"
-                },
+                detail={"error": "Team object not found for team change validation"},
             )
         await validate_key_team_change(
             key=existing_key_row,

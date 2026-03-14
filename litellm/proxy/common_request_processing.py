@@ -1082,6 +1082,14 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
+        # Log success after post-call hooks so callbacks see the final response and client-requested model name
+        await proxy_logging_obj.async_post_guardrail_log_success_event(
+            data=self.data,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            logging_obj=logging_obj,
+        )
+
         hidden_params = (
             getattr(response, "_hidden_params", {}) or {}
         )  # get any updated response headers

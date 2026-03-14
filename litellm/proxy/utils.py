@@ -1976,6 +1976,70 @@ class ProxyLogging:
             raise e
         return response
 
+    async def async_post_guardrail_log_success_event(
+        self,
+        data: dict,
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+        logging_obj: Optional[Any] = None,
+    ) -> None:
+        """
+        Invoke async_post_guardrail_log_success_event on all CustomLogger callbacks.
+        Called by the proxy after post_call_success_hook so loggers see the
+        post-guardrail response (e.g. after tool blocking / response moderation).
+        """
+        try:
+            kwargs = dict(data)
+            if logging_obj is not None and getattr(
+                logging_obj, "model_call_details", None
+            ):
+                kwargs = {**logging_obj.model_call_details, **kwargs}
+            kwargs["user_api_key_dict"] = user_api_key_dict
+            start_time = None
+            end_time = datetime.now(timezone.utc)
+            if logging_obj is not None:
+                start_time = getattr(logging_obj, "completion_start_time", None) or (
+                    kwargs.get("start_time")
+                    if isinstance(kwargs.get("start_time"), datetime)
+                    else None
+                )
+                if getattr(logging_obj, "model_call_details", {}).get("end_time"):
+                    end_time = logging_obj.model_call_details["end_time"]
+
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is None or isinstance(_callback, CustomGuardrail):
+                    continue
+                if not isinstance(_callback, CustomLogger):
+                    continue
+                hook = getattr(
+                    _callback, "async_post_guardrail_log_success_event", None
+                )
+                if not callable(hook):
+                    continue
+                try:
+                    await hook(
+                        kwargs=kwargs,
+                        response_obj=response,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.exception(
+                        "Error in async_post_guardrail_log_success_event: %s", e
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in async_post_guardrail_log_success_event: %s", e
+            )
+
     async def post_call_response_headers_hook(
         self,
         data: dict,
@@ -5233,7 +5297,7 @@ def normalize_route_for_root_path(route: str) -> Optional[str]:
     root_path = get_server_root_path()
     if root_path and root_path != "/":
         if route.startswith(root_path + "/"):
-            return route[len(root_path):]
+            return route[len(root_path) :]
         return None
     return route
 
