@@ -423,8 +423,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif (
                     (
-                        "invalid_request_error" in error_str
-                        and "content_policy_violation" in error_str
+                        "invalid_request_error" in error_str.lower()
+                        and "content_policy_violation" in error_str.lower()
                     )
                     or (
                         "Invalid prompt" in error_str
