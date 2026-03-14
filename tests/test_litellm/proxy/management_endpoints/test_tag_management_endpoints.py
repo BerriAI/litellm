@@ -245,6 +245,120 @@ async def test_delete_tag():
 
 
 @pytest.mark.asyncio
+async def test_list_tags_with_dynamic_tags():
+    """
+    Test that list_tags uses group_by to get distinct dynamic tags efficiently
+    and merges them with stored tags, excluding duplicates.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            # Setup stored tags
+            stored_tag = Mock()
+            stored_tag.tag_name = "stored-tag"
+            stored_tag.description = "A stored tag"
+            stored_tag.models = ["model-1"]
+            stored_tag.model_info = {}
+            stored_tag.spend = 0.0
+            stored_tag.budget_id = None
+            stored_tag.created_at = datetime(2025, 1, 1)
+            stored_tag.updated_at = datetime(2025, 1, 1)
+            stored_tag.created_by = "user-123"
+            stored_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
+
+            # Setup dynamic tags via group_by — includes one that overlaps with stored
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[
+                {"tag": "dynamic-tag-1", "_min": {"created_at": datetime(2025, 2, 1)}, "_max": {"updated_at": datetime(2025, 3, 1)}},
+                {"tag": "dynamic-tag-2", "_min": {"created_at": datetime(2025, 2, 2)}, "_max": {"updated_at": datetime(2025, 3, 2)}},
+                {"tag": "stored-tag", "_min": {"created_at": datetime(2025, 1, 1)}, "_max": {"updated_at": datetime(2025, 1, 1)}},  # duplicate, should be excluded
+            ])
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get("/tag/list", headers=headers)
+
+            assert response.status_code == 200
+            result = response.json()
+
+            # Should have 1 stored + 2 dynamic (the duplicate excluded)
+            assert len(result) == 3
+
+            tag_names = [t["name"] for t in result]
+            assert "stored-tag" in tag_names
+            assert "dynamic-tag-1" in tag_names
+            assert "dynamic-tag-2" in tag_names
+
+            # Verify dynamic tags include created_at/updated_at
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
+            assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
+            assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tags_no_dynamic_tags():
+    """
+    Test list_tags when there are no dynamic tags in the spend table.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            stored_tag = Mock()
+            stored_tag.tag_name = "stored-tag"
+            stored_tag.description = "A stored tag"
+            stored_tag.models = []
+            stored_tag.model_info = None
+            stored_tag.spend = 0.0
+            stored_tag.budget_id = None
+            stored_tag.created_at = datetime(2025, 1, 1)
+            stored_tag.updated_at = datetime(2025, 1, 1)
+            stored_tag.created_by = "user-123"
+            stored_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
+
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get("/tag/list", headers=headers)
+
+            assert response.status_code == 200
+            result = response.json()
+            assert len(result) == 1
+            assert result[0]["name"] == "stored-tag"
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id

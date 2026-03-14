@@ -12,6 +12,10 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+)
+from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
 from litellm.constants import REDACTED_BY_LITELM_STRING
@@ -48,8 +52,8 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
-    if _master_key is None:
+def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    if _master_key is None or api_key is None:
         return False
 
     ## string comparison
@@ -116,8 +120,7 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata.get(key)
-            for key in SpendLogsMetadata.__annotations__.keys()
+            key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -372,9 +375,11 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
-            else metadata.get("standard_logging_guardrail_information", None)
-            if metadata is not None
-            else None
+            else (
+                metadata.get("standard_logging_guardrail_information", None)
+                if metadata is not None
+                else None
+            )
         ),
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)
@@ -515,9 +520,7 @@ def _get_session_id_for_spend_log(
     return str(uuid.uuid4())
 
 
-def _get_request_duration_ms(
-    start_time: datetime, end_time: datetime
-) -> Optional[int]:
+def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> Optional[int]:
     """Compute request duration in milliseconds from start and end times."""
     try:
         return int((end_time - start_time).total_seconds() * 1000)
@@ -633,7 +636,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.constants import (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    )
 
     if visited is None:
         visited = set()
@@ -679,7 +685,8 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
                     f"{value[-end_chars:]}"
                 )
                 return truncated_value
@@ -709,20 +716,20 @@ def _convert_to_json_serializable_dict(
     if max_depth <= 0:
         # Return a placeholder if max depth is exceeded
         return "<max_depth_exceeded>"
-    
+
     if visited is None:
         visited = set()
-    
+
     # Get the object's memory address to track visited objects
     obj_id = id(obj)
     if obj_id in visited:
         # Circular reference detected, return placeholder
         return "<circular_reference>"
-    
+
     # Only track mutable objects (dict, list, objects with __dict__)
     if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
         visited.add(obj_id)
-    
+
     try:
         if isinstance(obj, BaseModel):
             # Use Pydantic's model_dump() instead of pickle
@@ -741,7 +748,9 @@ def _convert_to_json_serializable_dict(
             ]
         elif hasattr(obj, "__dict__"):
             # Handle objects with __dict__ attribute
-            return _convert_to_json_serializable_dict(obj.__dict__, visited, max_depth - 1)
+            return _convert_to_json_serializable_dict(
+                obj.__dict__, visited, max_depth - 1
+            )
         else:
             # Primitives (str, int, float, bool, None) pass through
             return obj
@@ -788,14 +797,19 @@ def _get_proxy_server_request_for_spend_logs_payload(
                         "standard_callback_dynamic_params"
                     ),
                 }
-                
+
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-            
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
+            if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
+                verbose_proxy_logger.info(
+                    "Spend Log: request body was truncated before storing in DB. %s",
+                    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+                )
             return _request_body_json_str
     return "{}"
 
@@ -848,7 +862,7 @@ def _get_response_for_spend_logs_payload(
                 perform_redaction,
                 should_redact_message_logging,
             )
-            
+
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
                 "litellm_params": litellm_params,
@@ -856,11 +870,13 @@ def _get_response_for_spend_logs_payload(
                     "standard_callback_dynamic_params"
                 ),
             }
-            
+
             # If redaction is enabled, convert to serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
                 response_obj = _convert_to_json_serializable_dict(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
+                response_obj = perform_redaction(
+                    model_call_details={}, result=response_obj
+                )
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}
@@ -871,8 +887,15 @@ def _get_response_for_spend_logs_payload(
         if sanitized_response is None:
             return "{}"
         if isinstance(sanitized_response, str):
-            return sanitized_response
-        return safe_dumps(sanitized_response)
+            result_str = sanitized_response
+        else:
+            result_str = safe_dumps(sanitized_response)
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
+            verbose_proxy_logger.info(
+                "Spend Log: response was truncated before storing in DB. %s",
+                LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+            )
+        return result_str
     return "{}"
 
 
@@ -882,7 +905,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value = general_settings.get("store_prompts_in_spend_logs")
-    
+
     # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
     if store_prompts_value is True:
         return True
@@ -890,7 +913,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
         # Case-insensitive string comparison
         if store_prompts_value.lower() == "true":
             return True
-    
+
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
 

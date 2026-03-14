@@ -1562,13 +1562,18 @@ LiteLLM Supports the following image types passed in `url`
 
 ## Media Resolution Control (Images & Videos)
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
+LiteLLM supports OpenAI's `detail` parameter for specifying the image resolution when using Gemini models. The behavior differs between Gemini versions:
+
+| Gemini Version | Resolution Control | Behavior |
+|----------------|-------------------|----------|
+| Gemini 3+ | Per-part | Each image/video can have its own `detail` setting |
+| Gemini 2.x (2.0, 2.5) | Global | The highest `detail` from all images is applied globally via `mediaResolution` in `generationConfig` |
 
 **Supported `detail` values:**
-- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
-- `"medium"` - Maps to `media_resolution: "medium"`
-- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
-- `"ultra_high"` - Maps to `media_resolution: "ultra_high"`
+- `"low"` - Maps to `MEDIA_RESOLUTION_LOW` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `MEDIA_RESOLUTION_MEDIUM`
+- `"high"` - Maps to `MEDIA_RESOLUTION_HIGH` (1120 tokens for images)
+- `"ultra_high"` - Maps to `MEDIA_RESOLUTION_ULTRA_HIGH`
 - `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
 
 **Usage Examples:**
@@ -1605,8 +1610,9 @@ messages = [
     }
 ]
 
+# Works with both Gemini 2.x and 3+
 response = completion(
-    model="gemini/gemini-3-pro-preview",
+    model="gemini/gemini-2.5-flash",  # or gemini-3-pro-preview
     messages=messages,
 )
 ```
@@ -1647,7 +1653,9 @@ response = completion(
 </Tabs>
 
 :::info
-**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
+**Gemini 3+ Per-Part Resolution:** Each image or video can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This works with both `image_url` and `file` content types.
+
+**Gemini 2.x Global Resolution:** When multiple images have different `detail` values, LiteLLM uses the highest resolution found and applies it globally via `mediaResolution` in `generationConfig` (e.g., if one image has `"low"` and another has `"high"`, all images will use `"high"`).
 :::
 
 ## Video Metadata Control
@@ -2041,6 +2049,7 @@ response = litellm.completion(
 | gemini-2.0-flash-lite-preview-02-05	     | `completion(model='gemini/gemini-2.0-flash-lite-preview-02-05', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-lite-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-lite-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-3.1-flash-lite-preview     | `completion(model='gemini/gemini-3.1-flash-lite-preview', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-latest     | `completion(model='gemini/gemini-flash-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-lite-latest     | `completion(model='gemini/gemini-flash-lite-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 

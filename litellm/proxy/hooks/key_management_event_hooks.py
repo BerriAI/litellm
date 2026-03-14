@@ -151,9 +151,7 @@ class KeyManagementEventHooks:
                     or f"virtual-key-{existing_key_row.token}"
                 )
                 new_secret_name = (
-                    response.key_alias
-                    or data.key_alias
-                    or f"virtual-key-{response.token_id}"
+                    response.key_alias or data.key_alias or initial_secret_name
                 )
                 verbose_proxy_logger.info(
                     "Updating secret in secret manager: secret_name=%s",

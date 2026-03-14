@@ -12,7 +12,7 @@ from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 class A2AProviderConfigManager:
     """
     Manager for A2A provider configurations.
-    
+
     Similar to ProviderConfigManager in litellm.utils but specifically for A2A providers.
     """
 
@@ -31,7 +31,7 @@ class A2AProviderConfigManager:
         """
         if custom_llm_provider is None:
             return None
-            
+
         if custom_llm_provider == "pydantic_ai_agents":
             from litellm.a2a_protocol.providers.pydantic_ai_agents.config import (
                 PydanticAIProviderConfig,
@@ -45,4 +45,3 @@ class A2AProviderConfigManager:
         #     return AnotherProviderConfig()
 
         return None
-

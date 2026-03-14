@@ -1195,7 +1195,7 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_oauth2_with_client_creds(self):
         """Test that requires_per_user_auth returns False for OAuth2 with client credentials"""
-        # OAuth2 with client credentials
+        # M2M must be opted in explicitly with oauth2_flow="client_credentials"
         server = MCPServer(
             server_id="oauth-server",
             name="oauth-server",
@@ -1205,6 +1205,7 @@ class TestMCPServerManager:
             client_id="client-id",
             client_secret="client-secret",
             token_url="http://oauth-server.com/token",
+            oauth2_flow="client_credentials",
         )
         assert server.requires_per_user_auth is False
         assert server.has_client_credentials is True
@@ -2305,6 +2306,181 @@ class TestMCPServerManager:
         # Verify it matched using server_name, not name
         assert resolved_server.name == "Test Server Name"  # name is different
         assert resolved_server.server_name == "test_server"  # server_name matches
+
+
+class TestMCPServerTimestamps:
+    """Regression tests: created_at/updated_at must be preserved, not overwritten with datetime.now()."""
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_preserves_timestamps(self):
+        """build_mcp_server_from_table must carry created_at and updated_at into MCPServer."""
+        manager = MCPServerManager()
+
+        created = datetime(2024, 1, 15, 10, 0, 0)
+        updated = datetime(2024, 6, 20, 12, 30, 0)
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="ts-server-1",
+            server_name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.created_at == created
+        assert mcp_server.updated_at == updated
+
+    def test_build_mcp_server_table_preserves_timestamps(self):
+        """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
+        manager = MCPServerManager()
+
+        created = datetime(2024, 1, 15, 10, 0, 0)
+        updated = datetime(2024, 6, 20, 12, 30, 0)
+
+        server = MCPServer(
+            server_id="ts-server-2",
+            name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.created_at == created
+        assert table.updated_at == updated
+
+    def test_build_mcp_server_table_none_timestamps_when_not_set(self):
+        """_build_mcp_server_table must return None timestamps when not set on MCPServer."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="ts-server-3",
+            name="ts_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.created_at is None
+        assert table.updated_at is None
+
+    @pytest.mark.asyncio
+    async def test_round_trip_timestamps_preserved(self):
+        """Timestamps survive the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+
+        created = datetime(2023, 3, 10, 8, 0, 0)
+        updated = datetime(2023, 9, 5, 16, 45, 0)
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="ts-server-4",
+            server_name="ts_server_rt",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=created,
+            updated_at=updated,
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+
+        assert rebuilt_table.created_at == created
+        assert rebuilt_table.updated_at == updated
+
+
+class TestHasClientCredentialsOAuth2Flow:
+    """
+    Regression tests for the M2M auto-detection bug.
+
+    Before the fix, has_client_credentials returned True whenever
+    client_id + client_secret + token_url were all set, even for
+    interactive OAuth setups (e.g. GitHub Enterprise). This silently
+    dropped user tokens and fetched M2M tokens instead.
+
+    The fix: M2M must be opted in explicitly via oauth2_flow="client_credentials".
+    """
+
+    def _make_server(self, **kwargs) -> MCPServer:
+        return MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url="https://github.example.com/mcp",
+            **kwargs,
+        )
+
+    def test_all_three_fields_set_without_oauth2_flow_is_not_m2m(self):
+        """
+        GitHub Enterprise regression: client_id + client_secret + token_url
+        should NOT trigger M2M flow unless oauth2_flow is explicitly set.
+        """
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+        )
+        assert server.has_client_credentials is False
+
+    def test_explicit_client_credentials_flow_enables_m2m(self):
+        """oauth2_flow='client_credentials' opts in to M2M."""
+        server = self._make_server(
+            client_id="svc-client-id",
+            client_secret="svc-client-secret",
+            token_url="https://idp.example.com/token",
+            oauth2_flow="client_credentials",
+        )
+        assert server.has_client_credentials is True
+
+    def test_explicit_authorization_code_flow_disables_m2m(self):
+        """oauth2_flow='authorization_code' always returns False."""
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+            oauth2_flow="authorization_code",
+        )
+        assert server.has_client_credentials is False
+
+    def test_no_fields_no_flow_is_not_m2m(self):
+        """No credentials configured — not M2M."""
+        server = self._make_server()
+        assert server.has_client_credentials is False
+
+    def test_partial_fields_without_flow_is_not_m2m(self):
+        """Partial credential fields without explicit flow — not M2M."""
+        server = self._make_server(
+            client_id="only-client-id",
+        )
+        assert server.has_client_credentials is False
+
+    def test_needs_user_oauth_token_true_without_explicit_m2m(self):
+        """
+        Without oauth2_flow='client_credentials', an oauth2 server with
+        client fields set still needs a user OAuth token (interactive flow).
+        """
+        server = self._make_server(
+            client_id="gh-client-id",
+            client_secret="gh-client-secret",
+            token_url="https://github.example.com/login/oauth/access_token",
+        )
+        assert server.needs_user_oauth_token is True
+
+    def test_needs_user_oauth_token_false_with_explicit_m2m(self):
+        """With oauth2_flow='client_credentials', no per-user token needed."""
+        server = self._make_server(
+            client_id="svc-client-id",
+            client_secret="svc-client-secret",
+            token_url="https://idp.example.com/token",
+            oauth2_flow="client_credentials",
+        )
+        assert server.needs_user_oauth_token is False
 
 
 if __name__ == "__main__":

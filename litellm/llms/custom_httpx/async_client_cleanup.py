@@ -28,17 +28,17 @@ async def close_litellm_async_clients():
                 pass
 
         # Handle AsyncHTTPHandler instances (used by Gemini and other providers)
-        elif hasattr(handler, 'client'):
+        elif hasattr(handler, "client"):
             client = handler.client
             # Check if the httpx client has an aiohttp transport
-            if hasattr(client, '_transport') and hasattr(client._transport, 'aclose'):
+            if hasattr(client, "_transport") and hasattr(client._transport, "aclose"):
                 try:
                     await client._transport.aclose()
                 except Exception:
                     # Silently ignore errors during cleanup
                     pass
             # Also close the httpx client itself
-            if hasattr(client, 'aclose') and not client.is_closed:
+            if hasattr(client, "aclose") and not client.is_closed:
                 try:
                     await client.aclose()
                 except Exception:
@@ -46,7 +46,7 @@ async def close_litellm_async_clients():
                     pass
 
         # Handle any other objects with aclose method
-        elif hasattr(handler, 'aclose'):
+        elif hasattr(handler, "aclose"):
             try:
                 await handler.aclose()
             except Exception:
@@ -55,9 +55,11 @@ async def close_litellm_async_clients():
 
     # Close the global base_llm_aiohttp_handler instance (issue #12443)
     # This is used by Gemini and other providers that use aiohttp
-    if hasattr(litellm, 'base_llm_aiohttp_handler'):
-        base_handler = getattr(litellm, 'base_llm_aiohttp_handler', None)
-        if isinstance(base_handler, BaseLLMAIOHTTPHandler) and hasattr(base_handler, 'close'):
+    if hasattr(litellm, "base_llm_aiohttp_handler"):
+        base_handler = getattr(litellm, "base_llm_aiohttp_handler", None)
+        if isinstance(base_handler, BaseLLMAIOHTTPHandler) and hasattr(
+            base_handler, "close"
+        ):
             try:
                 await base_handler.close()
             except Exception:

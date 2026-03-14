@@ -6,6 +6,10 @@ causing token_counter to always use OpenAI tokenizer instead of the configured c
 
 import pytest
 import litellm
+
+# These tests load HuggingFace tokenizers which can cause OOM when run in parallel with -n 8.
+# Use lighter tokenizer (Xenova/llama-3-tokenizer) to reduce memory; isolate to prevent crashes.
+pytestmark = pytest.mark.xdist_group("heavy_tokenizer")
 import litellm.proxy.proxy_server
 from litellm.proxy.proxy_server import token_counter
 from litellm.proxy._types import TokenCountRequest
@@ -44,7 +48,7 @@ async def test_custom_tokenizer_from_model_info():
                 "model_info": {
                     "mode": "embedding",
                     "custom_tokenizer": {
-                        "identifier": "intfloat/multilingual-e5-large-instruct",
+                        "identifier": "Xenova/llama-3-tokenizer",  # Lighter for CI
                         "revision": "main",
                         "auth_token": None,
                     },
@@ -71,9 +75,9 @@ async def test_custom_tokenizer_from_model_info():
     print("Model used:", response.model_used)
     print("Total tokens:", response.total_tokens)
 
-    # Verify that custom tokenizer (intfloat/multilingual-e5-large-instruct) was used
+    # Verify that custom tokenizer (Xenova/llama-3-tokenizer) was used
     assert response.tokenizer_type == "huggingface_tokenizer", (
-        f"Expected 'huggingface_tokenizer' (intfloat/multilingual-e5-large-instruct) "
+        f"Expected 'huggingface_tokenizer' (custom_tokenizer from model_info) "
         f"but got '{response.tokenizer_type}'. "
         "This indicates the custom_tokenizer from model_info was not used."
     )
@@ -104,7 +108,7 @@ async def test_custom_tokenizer_with_llamacpp():
                 },
                 "model_info": {
                     "custom_tokenizer": {
-                        "identifier": "intfloat/multilingual-e5-large-instruct",
+                        "identifier": "Xenova/llama-3-tokenizer",
                         "revision": "main",
                         "auth_token": None,
                     },
@@ -129,15 +133,10 @@ async def test_custom_tokenizer_with_llamacpp():
 
 
 @pytest.mark.asyncio
-async def test_multilingual_e5_embedding_model():
+async def test_custom_tokenizer_embedding_model():
     """
-    Test the exact real-world use case: intfloat/multilingual-e5-large-instruct
-    tokenizer with a custom embedding endpoint.
-
-    This is the user's actual production scenario:
-    - Custom embedding model endpoint (could be llama.cpp, vLLM, etc.)
-    - Using intfloat/multilingual-e5-large-instruct for tokenization
-    - Model served via OpenAI-compatible API
+    Test custom tokenizer with embedding model (simulates intfloat/multilingual-e5
+    or similar). Uses Xenova/llama-3-tokenizer for CI stability (lighter than e5).
     """
 
     llm_router = Router(
@@ -151,7 +150,7 @@ async def test_multilingual_e5_embedding_model():
                 "model_info": {
                     "mode": "embedding",
                     "custom_tokenizer": {
-                        "identifier": "intfloat/multilingual-e5-large-instruct",
+                        "identifier": "Xenova/llama-3-tokenizer",
                         "revision": "main",
                         "auth_token": None,
                     },
@@ -162,14 +161,13 @@ async def test_multilingual_e5_embedding_model():
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    # Test with multilingual content (what e5-large-instruct is designed for)
     response = await token_counter(
         request=TokenCountRequest(
             model="my-embedding-model",
             messages=[
                 {
                     "role": "user",
-                    "content": "This is a multilingual test. C'est un test multilingue. 这是一个多语言测试。",
+                    "content": "This is a multilingual test. C'est un test multilingue.",
                 }
             ],
         )
@@ -179,10 +177,8 @@ async def test_multilingual_e5_embedding_model():
         f"Embedding model test - Tokenizer: {response.tokenizer_type}, Tokens: {response.total_tokens}"
     )
 
-    # Must use HuggingFace tokenizer with intfloat/multilingual-e5-large-instruct
     assert response.tokenizer_type == "huggingface_tokenizer", (
-        f"The intfloat/multilingual-e5-large-instruct tokenizer was not used! "
-        f"Got: {response.tokenizer_type}"
+        f"Custom tokenizer from model_info was not used! Got: {response.tokenizer_type}"
     )
     assert response.total_tokens > 0
 

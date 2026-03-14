@@ -26,7 +26,7 @@ from litellm.types.tool_management import LiteLLM_ToolTableRow
 
 def _make_tool_row(
     tool_name: str = "my_tool",
-    call_policy: str = "untrusted",
+    input_policy: str = "untrusted",
     origin: Optional[str] = None,
 ) -> LiteLLM_ToolTableRow:
     now = datetime.now(timezone.utc)
@@ -34,7 +34,7 @@ def _make_tool_row(
         tool_id="uuid-1",
         tool_name=tool_name,
         origin=origin,
-        call_policy=call_policy,  # type: ignore[arg-type]
+        input_policy=input_policy,  # type: ignore[arg-type]
         assignments={},
         created_at=now,
         updated_at=now,
@@ -90,11 +90,11 @@ class TestToolManagementEndpoints:
     )
     @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
     def test_list_tools_with_policy_filter(self, mock_db_list):
-        mock_db_list.return_value = [_make_tool_row(call_policy="blocked")]
+        mock_db_list.return_value = [_make_tool_row(input_policy="blocked")]
 
-        resp = self.client.get("/v1/tool/list?call_policy=blocked")
+        resp = self.client.get("/v1/tool/list?input_policy=blocked")
         assert resp.status_code == 200
-        assert resp.json()["tools"][0]["call_policy"] == "blocked"
+        assert resp.json()["tools"][0]["input_policy"] == "blocked"
 
     @patch(
         "litellm.proxy.db.tool_registry_writer.get_tool",
@@ -125,15 +125,15 @@ class TestToolManagementEndpoints:
     )
     @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
     def test_update_tool_policy_blocked(self, mock_db_update):
-        mock_db_update.return_value = _make_tool_row(call_policy="blocked")
+        mock_db_update.return_value = _make_tool_row(input_policy="blocked")
 
         resp = self.client.post(
             "/v1/tool/policy",
-            json={"tool_name": "my_tool", "call_policy": "blocked"},
+            json={"tool_name": "my_tool", "input_policy": "blocked"},
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["call_policy"] == "blocked"
+        assert body["input_policy"] == "blocked"
         assert body["updated"] is True
 
     @patch("litellm.proxy.proxy_server.prisma_client", None)
@@ -144,6 +144,6 @@ class TestToolManagementEndpoints:
     def test_update_tool_policy_invalid_policy_returns_422(self):
         resp = self.client.post(
             "/v1/tool/policy",
-            json={"tool_name": "my_tool", "call_policy": "invalid_value"},
+            json={"tool_name": "my_tool", "input_policy": "invalid_value"},
         )
         assert resp.status_code == 422

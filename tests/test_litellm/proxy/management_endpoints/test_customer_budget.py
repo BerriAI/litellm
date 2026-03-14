@@ -6,7 +6,10 @@ Tests customer update functionality related to budget management:
 - Creating new budgets for customers with proper field validation
 - Budget creation with required metadata fields
 - Proper database relationship handling
+- Budget initialization on customer creation
 """
+
+from datetime import datetime, timedelta
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,10 +17,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    NewCustomerRequest,
     UpdateCustomerRequest,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.management_endpoints.customer_endpoints import update_end_user
+from litellm.proxy.management_endpoints.customer_endpoints import (
+    new_budget_request,
+    update_end_user,
+)
 
 
 @pytest.fixture
@@ -341,3 +348,31 @@ async def test_update_customer_with_budget_id_and_creation_fields(
     # The update data should contain budget_id from the created budget, not the original budget_id
     update_data = call_args[1]['data']
     assert update_data['budget_id'] == "new-budget-combo"  # From created budget
+
+
+def test_new_budget_request_sets_budget_reset_at_when_duration_provided():
+    """
+    Test that new_budget_request auto-populates budget_reset_at when
+    budget_duration is provided but budget_reset_at is not.
+
+    Without this fix, budgets created via /customer/new with a budget_duration
+    but no budget_reset_at would have budget_reset_at=NULL in the DB, causing
+    the ResetBudgetJob to immediately pick them up and zero out enduser spend.
+    """
+    data = NewCustomerRequest(
+        user_id="test-user",
+        max_budget=10.0,
+        budget_duration="30d",
+    )
+
+    before = datetime.utcnow()
+    result = new_budget_request(data)
+    after = datetime.utcnow()
+
+    assert result is not None
+    assert result.budget_reset_at is not None
+    assert result.budget_duration == "30d"
+
+    expected_min = before + timedelta(days=30)
+    expected_max = after + timedelta(days=30)
+    assert expected_min <= result.budget_reset_at <= expected_max

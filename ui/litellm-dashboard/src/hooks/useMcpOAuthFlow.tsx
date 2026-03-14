@@ -10,6 +10,7 @@ import {
   registerMcpOAuthClient,
   serverRootPath,
 } from "@/components/networking";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -79,9 +80,10 @@ export const useMcpOAuthFlow = ({
   const setStorageItem = (key: string, value: string) => {
     if (typeof window === "undefined") return;
     try {
-      // Store in both sessionStorage and localStorage for redundancy
+      // Use sessionStorage only — the flow state may contain client credentials;
+      // writing them to localStorage would persist across browser sessions and
+      // make them readable by any injected script (XSS).
       window.sessionStorage.setItem(key, value);
-      window.localStorage.setItem(key, value);
     } catch (err) {
       console.warn(`Failed to set storage item ${key}`, err);
     }
@@ -223,7 +225,7 @@ export const useMcpOAuthFlow = ({
     } catch (err) {
       console.error("Failed to start OAuth flow", err);
       setStatus("error");
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       setError(message);
       NotificationsManager.error(message);
     }
@@ -310,7 +312,7 @@ export const useMcpOAuthFlow = ({
       setError(null);
       NotificationsManager.success("OAuth token retrieved successfully");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
       NotificationsManager.error(message);

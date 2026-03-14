@@ -15,13 +15,13 @@ from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
 def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
     """
     Convert a Prisma skill record to LiteLLM_SkillsTable.
-    
+
     Handles Base64 decoding of file_content field.
     """
     import base64
 
     data = prisma_skill.model_dump()
-    
+
     # Decode Base64 file_content back to bytes
     # model_dump() converts Base64 field to base64-encoded string
     if data.get("file_content") is not None:
@@ -30,7 +30,7 @@ def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
         elif isinstance(data["file_content"], bytes):
             # Already bytes, no conversion needed
             pass
-    
+
     return LiteLLM_SkillsTable(**data)
 
 

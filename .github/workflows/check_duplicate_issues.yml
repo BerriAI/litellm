@@ -27,3 +27,26 @@ jobs:
             {{/issues}}
 
             Please review the linked issue(s) to see if they address your concern. If this is not a duplicate, please provide additional context to help us understand the difference.
+
+      - name: Checkout close script
+        if: github.event.action == 'opened'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Set up Python
+        if: github.event.action == 'opened'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Auto-close if high-confidence duplicate
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/close_duplicate_issues.py \
+            --issue-number ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --threshold 0.85 \
+            --close

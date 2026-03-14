@@ -106,13 +106,9 @@ AIRLINE_COMPARISON_SIGNALS = [
 
 # Explicit markers: strong override when present.
 AIRLINE_EXPLICIT_COMPETITOR_MARKER = r"\b(airways?|airline|carrier)\b"
-AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
-    r"\b(fly|travel|going|visit|layover|stopover|transit)\b.{0,12}\b(to|in|via|from)\b.{0,8}\b"
-)
+AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = r"\b(fly|travel|going|visit|layover|stopover|transit)\b.{0,12}\b(to|in|via|from)\b.{0,8}\b"
 
-_MAJOR_AIRLINES_PATH = (
-    Path(__file__).resolve().parent / "major_airlines.json"
-)
+_MAJOR_AIRLINES_PATH = Path(__file__).resolve().parent / "major_airlines.json"
 
 
 def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
@@ -163,7 +159,9 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         if not merged.get("explicit_competitor_marker"):
             merged["explicit_competitor_marker"] = AIRLINE_EXPLICIT_COMPETITOR_MARKER
         if not merged.get("explicit_other_meaning_marker"):
-            merged["explicit_other_meaning_marker"] = AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
+            merged[
+                "explicit_other_meaning_marker"
+            ] = AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
         if not merged.get("domain_words"):
             merged["domain_words"] = ["airline", "airlines", "carrier"]
         if not merged.get("competitors"):
@@ -184,12 +182,15 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
     def _classify_ambiguous(self, text: str, token: str) -> Tuple[str, float]:
         """Other meaning vs competitor using airline signals and explicit markers."""
         text_lower = text.lower()
-        if self._explicit_competitor_marker and self._explicit_competitor_marker.search(
-            text_lower
-        ) and _word_boundary_match(text_lower, token.lower()):
+        if (
+            self._explicit_competitor_marker
+            and self._explicit_competitor_marker.search(text_lower)
+            and _word_boundary_match(text_lower, token.lower())
+        ):
             return "COMPETITOR", 0.85
-        if self._explicit_other_meaning_marker and self._explicit_other_meaning_marker.search(
-            text_lower
+        if (
+            self._explicit_other_meaning_marker
+            and self._explicit_other_meaning_marker.search(text_lower)
         ):
             return "OTHER_MEANING", 0.85
         # Operational-only: baggage/lounge/check-in/refund with no comparison → product query

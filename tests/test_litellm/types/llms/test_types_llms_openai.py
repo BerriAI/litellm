@@ -263,3 +263,150 @@ class TestAssistantMessageImageUrlContent:
         assert "image_url" in types, (
             f"image_url block was silently dropped during AllMessageValues serialisation; blocks: {content}"
         )
+
+
+class TestResponsesAPIReasoningNullFields:
+    """
+    Tests for issue #16824: reasoning output items should not include null
+    status/content/encrypted_content fields.
+
+    When a provider returns reasoning items without these fields, LiteLLM's
+    Pydantic parsing adds them as Optional defaults (None). Serializing them
+    as null breaks downstream SDKs (e.g., the OpenAI C# SDK crashes on
+    status=null).
+
+    The fix uses a field_serializer on ResponsesAPIResponse.output that
+    mirrors the request-side filtering in
+    OpenAIResponsesAPIConfig._handle_reasoning_item().
+    """
+
+    def _make_response(self, output):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_test",
+            created_at=1741476542,
+            model="gpt-5-mini",
+            object="response",
+            status="completed",
+            output=output,
+        )
+
+    def test_reasoning_item_null_fields_removed_model_dump(self):
+        """Null status/content/encrypted_content should be absent from model_dump."""
+        response = self._make_response(
+            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
+        )
+        dumped = response.model_dump()
+        reasoning = dumped["output"][0]
+        assert "status" not in reasoning
+        assert "content" not in reasoning
+        assert "encrypted_content" not in reasoning
+
+    def test_reasoning_item_null_fields_removed_model_dump_json(self):
+        """Null fields should also be absent from model_dump_json."""
+        response = self._make_response(
+            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
+        )
+        parsed = json.loads(response.model_dump_json())
+        reasoning = parsed["output"][0]
+        assert "status" not in reasoning
+        assert "content" not in reasoning
+        assert "encrypted_content" not in reasoning
+
+    def test_reasoning_item_non_null_values_preserved(self):
+        """Non-null values on reasoning items should be kept."""
+        response = self._make_response(
+            output=[
+                {
+                    "id": "rs_abc",
+                    "type": "reasoning",
+                    "summary": [],
+                    "status": "completed",
+                    "encrypted_content": "gAAAA...",
+                }
+            ]
+        )
+        dumped = response.model_dump()
+        reasoning = dumped["output"][0]
+        assert reasoning["status"] == "completed"
+        assert reasoning["encrypted_content"] == "gAAAA..."
+
+    def test_message_item_not_affected(self):
+        """Non-reasoning output items should keep all their fields."""
+        response = self._make_response(
+            output=[
+                {
+                    "id": "msg_abc",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello!",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ]
+        )
+        dumped = response.model_dump()
+        message = dumped["output"][0]
+        assert message["status"] == "completed"
+        assert message["type"] == "message"
+        assert len(message["content"]) == 1
+
+    def test_mixed_output_reasoning_and_message(self):
+        """Reasoning items cleaned, message items untouched in same response."""
+        response = self._make_response(
+            output=[
+                {"id": "rs_abc", "type": "reasoning", "summary": []},
+                {
+                    "id": "msg_abc",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Answer",
+                            "annotations": [],
+                        }
+                    ],
+                },
+            ]
+        )
+        dumped = response.model_dump()
+        reasoning = [
+            o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "reasoning"
+        ][0]
+        message = [
+            o for o in dumped["output"] if isinstance(o, dict) and o.get("type") == "message"
+        ][0]
+        assert "status" not in reasoning
+        assert "content" not in reasoning
+        assert message["status"] == "completed"
+        assert len(message["content"]) == 1
+
+    def test_reasoning_core_fields_preserved(self):
+        """id, type, summary should always be present on reasoning items."""
+        response = self._make_response(
+            output=[{"id": "rs_abc", "type": "reasoning", "summary": ["thinking..."]}]
+        )
+        dumped = response.model_dump()
+        reasoning = dumped["output"][0]
+        assert reasoning["id"] == "rs_abc"
+        assert reasoning["type"] == "reasoning"
+        assert reasoning["summary"] == ["thinking..."]
+
+    def test_top_level_null_fields_unaffected(self):
+        """Top-level response fields with None should not be affected."""
+        response = self._make_response(
+            output=[{"id": "rs_abc", "type": "reasoning", "summary": []}]
+        )
+        dumped = response.model_dump()
+        assert "error" in dumped
+        assert dumped["error"] is None
+        assert "instructions" in dumped
+        assert dumped["instructions"] is None

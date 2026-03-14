@@ -108,7 +108,9 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         # Check for configuration issues
         assert api_base is not None  # always set via env default above
         is_resolve_policy = api_base.endswith("/resolve-and-execute-policy")
-        is_execute_policy = api_base.endswith("/execute-policy") and not is_resolve_policy
+        is_execute_policy = (
+            api_base.endswith("/execute-policy") and not is_resolve_policy
+        )
 
         # Scenario A: execute-policy without policy_id
         if is_execute_policy and (policy_id is None or policy_id < 1):

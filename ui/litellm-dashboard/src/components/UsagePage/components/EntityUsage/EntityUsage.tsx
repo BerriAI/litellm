@@ -100,11 +100,24 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   });
   const { teams } = useTeams();
 
+  const [agentSpendData, setAgentSpendData] = useState<EntitySpendData>({
+    results: [],
+    metadata: {
+      total_spend: 0,
+      total_api_requests: 0,
+      total_successful_requests: 0,
+      total_failed_requests: 0,
+      total_tokens: 0,
+    },
+  });
+
   const modelMetrics = processActivityData(spendData, "models", teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
+  const agentMetrics = entityType === "team" ? processActivityData(agentSpendData, "entities", teams || []) : {};
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -171,8 +184,21 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     }
   };
 
+  const fetchAgentSpendData = async () => {
+    if (!accessToken || !dateValue.from || !dateValue.to || entityType !== "team") return;
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
+    try {
+      const data = await agentDailyActivityCall(accessToken, startTime, endTime, 1, null);
+      setAgentSpendData(data);
+    } catch (e) {
+      console.error("Failed to fetch agent activity data:", e);
+    }
+  };
+
   useEffect(() => {
     fetchSpendData();
+    fetchAgentSpendData();
   }, [accessToken, dateValue, entityId, selectedTags]);
 
   const getTopModels = () => {
@@ -207,6 +233,37 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, topModelsLimit);
+  };
+
+  const getTopAgents = () => {
+    const agentSpend: { [key: string]: any } = {};
+    agentSpendData.results.forEach((day) => {
+      Object.entries(day.breakdown.entities || {}).forEach(([agentId, data]) => {
+        if (!agentSpend[agentId]) {
+          agentSpend[agentId] = {
+            spend: 0,
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            tokens: 0,
+            agent_name: (data.metadata as any)?.agent_name || agentId,
+          };
+        }
+        agentSpend[agentId].spend += data.metrics.spend;
+        agentSpend[agentId].requests += data.metrics.api_requests;
+        agentSpend[agentId].successful_requests += data.metrics.successful_requests;
+        agentSpend[agentId].failed_requests += data.metrics.failed_requests;
+        agentSpend[agentId].tokens += data.metrics.total_tokens;
+      });
+    });
+
+    return Object.entries(agentSpend)
+      .map(([agentId, metrics]) => ({
+        key: metrics.agent_name,
+        ...metrics,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, topAgentsLimit);
   };
 
   const getTopAPIKeys = () => {
@@ -408,6 +465,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
           <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
+          {entityType === "team" ? <Tab>Agent Activity</Tab> : <></>}
           <Tab>Key Activity</Tab>
           <Tab>Endpoint Activity</Tab>
         </TabList>
@@ -621,6 +679,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 </Card>
               </Col>
 
+              {/* Top Agents - only for team entity type */}
+              {entityType === "team" && (
+                <Col numColSpan={2}>
+                  <Card>
+                    <Title>Top Agents Driving Spend</Title>
+                    <TopModelView
+                      topModels={getTopAgents()}
+                      topModelsLimit={topAgentsLimit}
+                      setTopModelsLimit={setTopAgentsLimit}
+                    />
+                  </Card>
+                </Col>
+              )}
+
               {/* Spend by Provider */}
               <Col numColSpan={2}>
                 <Card>
@@ -696,6 +768,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           <TabPanel>
             <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
+          {entityType === "team" ? (
+            <TabPanel>
+              <ActivityMetrics modelMetrics={agentMetrics} />
+            </TabPanel>
+          ) : <></>}
           <TabPanel>
             <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>

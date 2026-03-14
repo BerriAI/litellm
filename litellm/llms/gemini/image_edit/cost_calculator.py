@@ -32,4 +32,3 @@ def cost_calculator(
 
     num_images = len(image_response.data or [])
     return output_cost_per_image * num_images
-

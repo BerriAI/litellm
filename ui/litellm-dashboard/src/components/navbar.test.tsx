@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -6,7 +7,68 @@ import Navbar from "./navbar";
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  serverRootPath: "",
 }));
+
+vi.mock("@/app/(dashboard)/hooks/useDisableBouncingIcon", () => ({
+  useDisableBouncingIcon: () => false,
+}));
+
+vi.mock("./Navbar/BlogDropdown/BlogDropdown", () => ({
+  BlogDropdown: () => <div data-testid="blog-dropdown">Blog</div>,
+}));
+
+const mockUserDropdownData = vi.hoisted(() => ({
+  current: () => ({
+    userId: "test-user",
+    userEmail: "test@example.com",
+    userRole: "Admin",
+    premiumUser: false,
+  }),
+}));
+
+vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
+  const React = await import("react");
+  const { useState } = React;
+  const localStorageUtils = await import("@/utils/localStorageUtils");
+  return {
+    default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
+      const { userId, userEmail, userRole, premiumUser } = mockUserDropdownData.current();
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setOpen(!open)}>
+            User
+          </button>
+          {open && (
+            <div data-testid="user-dropdown-content">
+              <span>{userId}</span>
+              <span>{userRole}</span>
+              <span>{userEmail}</span>
+              {premiumUser && <span>Premium</span>}
+              <button type="button" onClick={() => onLogout()}>
+                Logout
+              </button>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Toggle hide new feature indicators"
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      localStorageUtils.setLocalStorageItem("disableShowNewBadge", "true");
+                      localStorageUtils.emitLocalStorageChange("disableShowNewBadge");
+                    }
+                  }}
+                />
+                Toggle hide new feature indicators
+              </label>
+            </div>
+          )}
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/utils/proxyUtils", () => ({
   fetchProxySettings: vi.fn(),
@@ -122,7 +184,8 @@ describe("Navbar", () => {
 
   it("should show premium user badge when premiumUser is true", async () => {
     const user = userEvent.setup();
-    mockUseAuthorizedImpl = () => ({
+    const originalCurrent = mockUserDropdownData.current;
+    mockUserDropdownData.current = () => ({
       userId: "test-user",
       userEmail: "test@example.com",
       userRole: "Admin",
@@ -137,12 +200,7 @@ describe("Navbar", () => {
     });
 
     // Reset mock
-    mockUseAuthorizedImpl = () => ({
-      userId: "test-user",
-      userEmail: "test@example.com",
-      userRole: "Admin",
-      premiumUser: false,
-    });
+    mockUserDropdownData.current = originalCurrent;
   });
 
   it("should show version badge when health data contains version", () => {

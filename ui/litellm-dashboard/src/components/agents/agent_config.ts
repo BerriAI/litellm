@@ -29,6 +29,7 @@ export const AGENT_FORM_CONFIG: {
   optional: SectionConfig;
   litellm: SectionConfig;
   cost: SectionConfig;
+  tracing: SectionConfig;
 } = {
   basic: {
     key: "basic",
@@ -174,6 +175,19 @@ export const AGENT_FORM_CONFIG: {
       },
     ],
   },
+  tracing: {
+    key: "tracing",
+    title: "Tracing",
+    fields: [
+      {
+        name: "enable_tracing",
+        label: "Enable Tracing",
+        type: "switch",
+        defaultValue: false,
+        tooltip: "Enable request tracing for this agent",
+      },
+    ],
+  },
 };
 
 export const SKILL_FIELD_CONFIG = {
@@ -269,6 +283,27 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.litellm_params = params;
   }
 
+  if (values.tpm_limit != null) agentData.tpm_limit = values.tpm_limit;
+  if (values.rpm_limit != null) agentData.rpm_limit = values.rpm_limit;
+  if (values.session_tpm_limit != null) agentData.session_tpm_limit = values.session_tpm_limit;
+  if (values.session_rpm_limit != null) agentData.session_rpm_limit = values.session_rpm_limit;
+  // static_headers: convert [{header, value}, ...] → {header: value, ...}
+  if (Array.isArray(values.static_headers) && values.static_headers.length > 0) {
+    const staticHeaders: Record<string, string> = {};
+    values.static_headers.forEach((entry: { header?: string; value?: string }) => {
+      const key = entry?.header?.trim();
+      if (key) staticHeaders[key] = entry?.value ?? "";
+    });
+    if (Object.keys(staticHeaders).length > 0) {
+      agentData.static_headers = staticHeaders;
+    }
+  }
+
+  // extra_headers: already an array of strings from Select tags
+  if (Array.isArray(values.extra_headers) && values.extra_headers.length > 0) {
+    agentData.extra_headers = values.extra_headers;
+  }
+
   return agentData;
 };
 
@@ -302,5 +337,18 @@ export const parseAgentForForm = (agent: any) => {
     cost_per_query: agent.litellm_params?.cost_per_query,
     input_cost_per_token: agent.litellm_params?.input_cost_per_token,
     output_cost_per_token: agent.litellm_params?.output_cost_per_token,
+    tpm_limit: agent.tpm_limit,
+    rpm_limit: agent.rpm_limit,
+    session_tpm_limit: agent.session_tpm_limit,
+    session_rpm_limit: agent.session_rpm_limit,
+    // static_headers: {key: value} → [{header, value}, ...]
+    static_headers: agent.static_headers
+      ? Object.entries(agent.static_headers as Record<string, string>).map(([header, value]) => ({
+          header,
+          value,
+        }))
+      : [],
+    // extra_headers: already an array of strings
+    extra_headers: agent.extra_headers ?? [],
   };
 };

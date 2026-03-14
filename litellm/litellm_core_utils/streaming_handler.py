@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    NoReturn,
     Optional,
     Union,
     cast,
@@ -161,6 +162,7 @@ class CustomStreamWrapper:
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
+        self._last_returned_hidden_params: Optional[dict] = None
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -483,7 +485,6 @@ class CustomStreamWrapper:
 
     def handle_openai_chat_completion_chunk(self, chunk):
         try:
-
             str_line = chunk
             text = ""
             is_finished = False
@@ -533,7 +534,6 @@ class CustomStreamWrapper:
 
     def handle_azure_text_completion_chunk(self, chunk):
         try:
-
             text = ""
             is_finished = False
             finish_reason = None
@@ -554,7 +554,6 @@ class CustomStreamWrapper:
 
     def handle_openai_text_completion_chunk(self, chunk):
         try:
-
             text = ""
             is_finished = False
             finish_reason = None
@@ -1097,7 +1096,13 @@ class CustomStreamWrapper:
                 and self.custom_llm_provider in litellm._custom_providers
             ):
                 if self.received_finish_reason is not None:
-                    if "provider_specific_fields" not in chunk:
+                    _chunk_has_content = isinstance(chunk, dict) and (
+                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                    )
+                    if not _chunk_has_content and (
+                        not isinstance(chunk, dict)
+                        or "provider_specific_fields" not in chunk
+                    ):
                         raise StopIteration
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
@@ -1230,7 +1235,7 @@ class CustomStreamWrapper:
                                     ],
                                 )
                                 _streaming_response = StreamingChoices(delta=_delta_obj)
-                                _model_response = ModelResponse(stream=True)
+                                _model_response = ModelResponseStream()
                                 _model_response.choices = [_streaming_response]
                                 response_obj = {"original_chunk": _model_response}
                             else:
@@ -1347,7 +1352,10 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
-                if self.custom_llm_provider in [LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value]:
+                if self.custom_llm_provider in [
+                    LlmProviders.AZURE.value,
+                    LlmProviders.AZURE_AI.value,
+                ]:
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                         # for azure, we need to pass the model from the original chunk
                         self.model = getattr(chunk, "model", self.model)
@@ -1603,10 +1611,12 @@ class CustomStreamWrapper:
             )
             return chunk
 
-    def _add_mcp_list_tools_to_first_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+    def _add_mcp_list_tools_to_first_chunk(
+        self, chunk: ModelResponseStream
+    ) -> ModelResponseStream:
         """
         Add mcp_list_tools from _hidden_params to the first chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata with mcp_list_tools is stored in _hidden_params
         and adds it to the first chunk's delta.provider_specific_fields.
         """
@@ -1614,43 +1624,53 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to first chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata or not isinstance(mcp_metadata, dict):
                 return chunk
-            
+
             # Only add mcp_list_tools to first chunk (not tool_calls or tool_results)
             mcp_list_tools = mcp_metadata.get("mcp_list_tools")
             if not mcp_list_tools:
                 return chunk
-            
+
             # Add mcp_list_tools to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
-                    if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                    if (
+                        isinstance(choice, StreamingChoices)
+                        and hasattr(choice, "delta")
+                        and choice.delta
+                    ):
                         # Get existing provider_specific_fields or create new dict
                         provider_fields = (
-                            getattr(choice.delta, "provider_specific_fields", None) or {}
+                            getattr(choice.delta, "provider_specific_fields", None)
+                            or {}
                         )
-                        
+
                         # Add only mcp_list_tools to first chunk
                         provider_fields["mcp_list_tools"] = mcp_list_tools
-                        
+
                         # Set the provider_specific_fields
-                        setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+                        setattr(
+                            choice.delta, "provider_specific_fields", provider_fields
+                        )
+
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.exception(
                 f"Error adding MCP list tools to first chunk: {str(e)}"
             )
-        
+
         return chunk
 
-    def _add_mcp_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+    def _add_mcp_metadata_to_final_chunk(
+        self, chunk: ModelResponseStream
+    ) -> ModelResponseStream:
         """
         Add MCP metadata from _hidden_params to the final chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata is stored in _hidden_params and adds it to
         the chunk's delta.provider_specific_fields, similar to how RAG adds search results.
         """
@@ -1658,33 +1678,41 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to final chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata:
                 return chunk
-            
+
             # Add MCP metadata to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
-                    if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
+                    if (
+                        isinstance(choice, StreamingChoices)
+                        and hasattr(choice, "delta")
+                        and choice.delta
+                    ):
                         # Get existing provider_specific_fields or create new dict
                         provider_fields = (
-                            getattr(choice.delta, "provider_specific_fields", None) or {}
+                            getattr(choice.delta, "provider_specific_fields", None)
+                            or {}
                         )
-                        
+
                         # Add MCP metadata
                         if isinstance(mcp_metadata, dict):
                             provider_fields.update(mcp_metadata)
-                        
+
                         # Set the provider_specific_fields
-                        setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+                        setattr(
+                            choice.delta, "provider_specific_fields", provider_fields
+                        )
+
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.exception(
                 f"Error adding MCP metadata to final chunk: {str(e)}"
             )
-        
+
         return chunk
 
     def cache_streaming_response(self, processed_chunk, cache_hit: bool):
@@ -1804,12 +1832,12 @@ class CustomStreamWrapper:
                     )
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
-                    
+
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         response = self._add_mcp_list_tools_to_first_chunk(response)
                         self.sent_first_chunk = True
-                    
+
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
@@ -1835,6 +1863,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         response._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = response._hidden_params
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -1876,6 +1905,22 @@ class CustomStreamWrapper:
                         None,
                         cache_hit,
                     )
+                # Update hidden_params with final usage from
+                # stream_chunk_builder.  Some providers (e.g. OpenRouter)
+                # send usage in a chunk after finish_reason, which arrives
+                # after _hidden_params["usage"] was initially set.  The
+                # _hidden_params dict is the same object the user received
+                # (shared by reference), so mutating it here also corrects
+                # the user's copy.
+                if (
+                    self.stream_options is None
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage = getattr(complete_streaming_response, "usage", None)
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
+
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -1899,14 +1944,7 @@ class CustomStreamWrapper:
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
             ).start()
-            if isinstance(e, OpenAIError):
-                raise e
-            else:
-                raise exception_type(
-                    model=self.model,
-                    original_exception=e,
-                    custom_llm_provider=self.custom_llm_provider,
-                )
+            self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -1970,7 +2008,9 @@ class CustomStreamWrapper:
                     )
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
-                        processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
+                        processed_chunk = self._add_mcp_list_tools_to_first_chunk(
+                            processed_chunk
+                        )
                         self.sent_first_chunk = True
 
                     _has_usage = (
@@ -2005,6 +2045,9 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = (
+                            processed_chunk._hidden_params
+                        )
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2069,6 +2112,17 @@ class CustomStreamWrapper:
                             cache_hit=cache_hit,
                         )
                     )
+                # Update hidden_params with final usage from
+                # stream_chunk_builder (see sync __next__ for full comment).
+                if (
+                    self.stream_options is None
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage = getattr(complete_streaming_response, "usage", None)
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
+
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -2124,7 +2178,25 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
-            ## Map to OpenAI Exception
+            self._handle_stream_fallback_error(e)
+
+    def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
+        """
+        Common error handling for both __next__ and __anext__.
+
+        Maps the raw exception to an OpenAI-compatible type, then decides
+        whether to raise it directly (non-retriable 4xx) or wrap it in
+        MidStreamFallbackError so the Router can trigger a fallback.
+
+        429 (rate-limit) is explicitly exempted from the 4xx filter because
+        it is transient and the Router should switch to another model group.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        # Map to OpenAI exception format
+        if isinstance(e, OpenAIError):
+            mapped_exception: Exception = e
+        else:
             try:
                 mapped_exception = exception_type(
                     model=self.model,
@@ -2136,46 +2208,52 @@ class CustomStreamWrapper:
             except Exception as mapping_error:
                 mapped_exception = mapping_error
 
-            def _normalize_status_code(exc: Exception) -> Optional[int]:
-                """
-                Best-effort status_code extraction.
-                Uses status_code on the exception, then falls back to the response.
-                """
+        def _normalize_status_code(exc: Exception) -> Optional[int]:
+            """Best-effort status_code extraction."""
+            try:
+                code = getattr(exc, "status_code", None)
+                if code is not None:
+                    return int(code)
+            except Exception:
+                pass
+
+            response = getattr(exc, "response", None)
+            if response is not None:
                 try:
-                    code = getattr(exc, "status_code", None)
-                    if code is not None:
-                        return int(code)
+                    status_code = getattr(response, "status_code", None)
+                    if status_code is not None:
+                        return int(status_code)
                 except Exception:
                     pass
+            return None
 
-                response = getattr(exc, "response", None)
-                if response is not None:
-                    try:
-                        status_code = getattr(response, "status_code", None)
-                        if status_code is not None:
-                            return int(status_code)
-                    except Exception:
-                        pass
-                return None
+        mapped_status_code = _normalize_status_code(mapped_exception)
+        original_status_code = _normalize_status_code(e)
 
-            mapped_status_code = _normalize_status_code(mapped_exception)
-            original_status_code = _normalize_status_code(e)
+        # Raise non-retriable client errors directly (skip fallback).
+        # Exception: 429 (rate-limit) IS retriable/transient — allow it
+        # through so the Router can switch to a different model group.
+        if (
+            mapped_status_code is not None
+            and 400 <= mapped_status_code < 500
+            and mapped_status_code != 429
+        ):
+            raise mapped_exception
+        if (
+            original_status_code is not None
+            and 400 <= original_status_code < 500
+            and original_status_code != 429
+        ):
+            raise mapped_exception
 
-            if mapped_status_code is not None and 400 <= mapped_status_code < 500:
-                raise mapped_exception
-            if original_status_code is not None and 400 <= original_status_code < 500:
-                raise mapped_exception
-
-            from litellm.exceptions import MidStreamFallbackError
-
-            raise MidStreamFallbackError(
-                message=str(mapped_exception),
-                model=self.model,
-                llm_provider=self.custom_llm_provider or "anthropic",
-                original_exception=mapped_exception,
-                generated_content=self.response_uptil_now,
-                is_pre_first_chunk=not self.sent_first_chunk,
-            )
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model,
+            llm_provider=self.custom_llm_provider or "anthropic",
+            original_exception=mapped_exception,
+            generated_content=self.response_uptil_now,
+            is_pre_first_chunk=not self.sent_first_chunk,
+        )
 
     @staticmethod
     def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:

@@ -23,7 +23,11 @@ def _initialize_proxy_with_config(config: dict, tmp_path) -> TestClient:
     IMPORTANT: proxy_server.initialize() mutates module-level globals. We must call
     cleanup_router_config_variables() before initializing to prevent cross-test bleed.
     """
-    from litellm.proxy.proxy_server import app, cleanup_router_config_variables, initialize
+    from litellm.proxy.proxy_server import (
+        app,
+        cleanup_router_config_variables,
+        initialize,
+    )
 
     cleanup_router_config_variables()
 
@@ -123,8 +127,8 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
     client_model = "vllm-model"
     internal_model = f"hosted_vllm/{client_model}"
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Patch proxy_logging_obj hooks so async_data_generator yields exactly our chunk.
     async def _iterator_hook(
@@ -176,8 +180,8 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     canonical_model = "vllm-model"
     internal_model = f"hosted_vllm/{canonical_model}"
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
 
     async def _iterator_hook(
         user_api_key_dict: UserAPIKeyAuth,
@@ -215,3 +219,57 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     payload = json.loads(first[len("data: ") :].strip())
     assert payload["model"] == client_model_alias
     assert not payload["model"].startswith("hosted_vllm/")
+
+
+@pytest.mark.asyncio
+async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeypatch):
+    """
+    Regression test for Azure Model Router streaming:
+
+    When the client requests azure_ai/model_router, the streaming chunks should
+    preserve the actual model used (e.g., azure_ai/gpt-5-nano-2025-08-07) from
+    the downstream response, NOT override to the router model.
+    """
+    router_model = "azure_ai/model_router"
+    actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def _iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        yield _make_model_response_stream_chunk(model=actual_model_used)
+
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    gen = proxy_server.async_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+        request_data={
+            "model": router_model,
+            "_litellm_client_requested_model": router_model,
+        },
+    )
+
+    chunks = []
+    async for item in gen:
+        chunks.append(item)
+
+    assert len(chunks) >= 2
+    first = chunks[0]
+    assert first.startswith("data: ")
+
+    payload = json.loads(first[len("data: ") :].strip())
+    # Azure Model Router: preserve actual model used, not the router model
+    assert payload["model"] == actual_model_used
+    assert payload["model"] != router_model

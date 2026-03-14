@@ -96,7 +96,7 @@ export function useFilterLogic({
 
     // Apply Organization ID filter
     if (filters["Organization ID"]) {
-      result = result.filter((key) => key.organization_id === filters["Organization ID"]);
+      result = result.filter((key) => (key.organization_id ?? key.org_id) === filters["Organization ID"]);
     }
 
     setFilteredKeys(result);

@@ -4,7 +4,7 @@ E2E tests for Claude Agent SDK with LiteLLM Proxy using Bedrock models.
 Tests streaming messages across different Bedrock models:
 - Regular Bedrock Claude Sonnet 4.5
 - Bedrock Converse Claude Sonnet 4.5
-- AWS Nova Premier
+- AWS Nova Pro
 """
 
 import os
@@ -14,14 +14,14 @@ from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 
 # Test models from test_config.yaml
-# Note: bedrock-converse-claude-sonnet-4.5 removed temporarily as the Bedrock Converse API 
+# Note: bedrock-converse-claude-sonnet-4.5 removed temporarily as the Bedrock Converse API
 # for Claude Sonnet 4.5 may not be available in all regions/accounts
-# Note: bedrock-nova-premier requires an inference profile for on-demand throughput
-# https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html
+# Note: bedrock-nova-premier requires provisioned throughput (not standard cross-region
+# inference profile) and is not reliably available in CI accounts. Using nova-pro instead.
 TEST_MODELS = [
     ("bedrock-claude-sonnet-4.5", "Bedrock Invoke API"),
     ("bedrock-converse-claude-sonnet-4.5", "Bedrock Converse API"),
-    ("bedrock-nova-premier", "AWS Nova Premier"),
+    ("bedrock-nova-pro", "AWS Nova Pro"),
 ]
 
 

@@ -108,11 +108,20 @@ class VertexAIBatchPrediction(VertexLLM):
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
-        response = await client.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(vertex_batch_request),
-        )
+        try:
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(vertex_batch_request),
+            )
+        except httpx.HTTPStatusError as e:
+            error_body = e.response.text
+            litellm.verbose_logger.error(
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code,
+                error_body[:1000],
+            )
+            raise
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
@@ -194,6 +203,7 @@ class VertexAIBatchPrediction(VertexLLM):
         # Log the request using logging_obj if available
         if logging_obj is not None:
             from litellm.litellm_core_utils.litellm_logging import Logging
+
             if isinstance(logging_obj, Logging):
                 logging_obj.pre_call(
                     input="",
@@ -235,10 +245,11 @@ class VertexAIBatchPrediction(VertexLLM):
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
-        
+
         # Log the request using logging_obj if available
         if logging_obj is not None:
             from litellm.litellm_core_utils.litellm_logging import Logging
+
             if isinstance(logging_obj, Logging):
                 logging_obj.pre_call(
                     input="",
@@ -256,7 +267,7 @@ class VertexAIBatchPrediction(VertexLLM):
                         ),
                     },
                 )
-    
+
         response = await client.get(
             url=api_base,
             headers=headers,
