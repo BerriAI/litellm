@@ -170,6 +170,68 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj():
+    """
+    When an LLM call fails, the proxy calls post_call_failure_hook with
+    request_data that doesn't contain standard_logging_object. But the
+    litellm_logging_obj (set by function_setup) is in request_data and
+    holds the standard_logging_object with the correct trace_id.
+
+    The failure hook should propagate this so the DB spend log's session_id
+    matches the Langfuse trace_id.
+    """
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+    )
+
+    # Simulate a litellm_logging_obj with model_call_details containing
+    # the standard_logging_object (as set by _failure_handler_helper_fn)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "trace-id-from-logging-obj"
+    mock_logging_obj.model_call_details = {
+        "standard_logging_object": {
+            "trace_id": "trace-id-from-logging-obj",
+            "error_str": "InternalServerError",
+        }
+    }
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+        "litellm_logging_obj": mock_logging_obj,
+        # Note: no "standard_logging_object" and no "litellm_trace_id"
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_kwargs = mock_update_database.call_args[1]["kwargs"]
+
+        # standard_logging_object should have been propagated from logging obj
+        assert call_kwargs.get("standard_logging_object") is not None
+        assert (
+            call_kwargs["standard_logging_object"]["trace_id"]
+            == "trace-id-from-logging-obj"
+        )
+        # litellm_trace_id should also be propagated as a fallback
+        assert call_kwargs.get("litellm_trace_id") == "trace-id-from-logging-obj"
+
+
+@pytest.mark.asyncio
 async def test_enrich_failure_metadata_with_team_alias():
     """
     When team_id is set but team_alias is missing (and key_alias is present),
