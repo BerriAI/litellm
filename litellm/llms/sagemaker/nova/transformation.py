@@ -68,6 +68,3 @@ class SagemakerNovaConfig(SagemakerChatConfig):
         )
         request_body.pop("model", None)
         return request_body
-
-
-sagemaker_nova_config = SagemakerNovaConfig()
