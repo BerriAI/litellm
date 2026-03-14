@@ -309,3 +309,39 @@ def test_hosted_vllm_redacted_thinking_blocks_dropped():
         "text": "Final answer.",
     }
     assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_all_thinking_blocks_filtered_no_content():
+    """
+    When all thinking blocks are redacted and the message has no existing
+    content, the message must still have a valid content field (empty string)
+    since thinking_blocks was already popped.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "thinking_blocks": [
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque_data_1",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque_data_2",
+                },
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    # thinking_blocks removed, content set to empty string as fallback
+    assert "thinking_blocks" not in assistant_msg
+    assert "content" in assistant_msg
+    assert assistant_msg["content"] == ""
