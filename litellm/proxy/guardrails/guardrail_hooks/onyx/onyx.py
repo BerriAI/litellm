@@ -4,6 +4,7 @@
 #                   https://onyx.security/
 #
 # +-------------------------------------------------------------+
+import copy
 import os
 import uuid
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type
@@ -86,6 +87,46 @@ class OnyxGuardrail(CustomGuardrail):
             )
         return result
 
+    @staticmethod
+    def _get_request_payload(request_data: dict) -> dict:
+        """
+        Build a proxy_server_request-shaped payload for Onyx.
+
+        When lazy_proxy_request_body is enabled, body may be omitted and
+        body_snapshot/body_keys used instead. Reconstruct the payload so Onyx
+        receives a consistent format.
+        """
+        proxy_server_request = request_data.get("proxy_server_request") or {}
+        if not isinstance(proxy_server_request, dict):
+            proxy_server_request = {}
+
+        payload = {
+            k: proxy_server_request[k]
+            for k in ("url", "method", "headers", "arrival_time")
+            if k in proxy_server_request
+        }
+
+        body = proxy_server_request.get("body")
+        body_snapshot = proxy_server_request.get("body_snapshot")
+        body_keys = proxy_server_request.get("body_keys")
+
+        if isinstance(body, dict):
+            body = copy.copy(body)
+            body.pop("api_key", None)
+            payload["body"] = body
+        elif isinstance(body_snapshot, dict):
+            payload["body"] = copy.deepcopy(body_snapshot)
+        elif isinstance(body_keys, (list, tuple)):
+            reconstructed = {
+                k: request_data.get(k)
+                for k in body_keys
+                if isinstance(k, str) and k not in ("api_key", "proxy_server_request")
+            }
+            if reconstructed:
+                payload["body"] = reconstructed
+
+        return payload
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -104,7 +145,7 @@ class OnyxGuardrail(CustomGuardrail):
         )
         payload = {}
         if input_type == "request":
-            payload = request_data.get("proxy_server_request", {})
+            payload = self._get_request_payload(request_data)
         else:
             try:
                 response = ModelResponse(**request_data)

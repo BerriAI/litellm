@@ -2263,6 +2263,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    lazy_proxy_request_body: Optional[bool] = Field(
+        None,
+        description="Omits proxy_server_request.body when store_prompts_in_spend_logs is False to reduce memory usage. Custom loggers/guardrails reading the request body must opt in. Default: False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",

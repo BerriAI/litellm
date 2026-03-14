@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import json
 import os
@@ -899,7 +900,32 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
+@functools.lru_cache(maxsize=1)
+def _should_use_lazy_proxy_request_body() -> bool:
+    """
+    When True, omit proxy_server_request.body when store_prompts is off to save
+    memory. When False (default), always include body for backward compatibility.
+    """
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
+
+    val = general_settings.get("lazy_proxy_request_body")
+    if val is True:
+        return True
+    if isinstance(val, str) and val.lower() == "true":
+        return True
+    if val is False or (isinstance(val, str) and val.lower() == "false"):
+        return False  # explicit opt-out takes precedence over env var
+    return get_secret_bool("LITELLM_LAZY_PROXY_REQUEST_BODY") is True
+
+
+@functools.lru_cache(maxsize=1)
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
+    """
+    Whether to store prompts/responses in spend logs. Cached for the process
+    lifetime since the setting is static; call cache_clear() in tests when
+    patching the underlying config.
+    """
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 

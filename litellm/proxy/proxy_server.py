@@ -4201,6 +4201,22 @@ class ProxyConfig:
         if "ui_access_mode" in _general_settings:
             general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
 
+        ## LAZY PROXY REQUEST BODY ##
+        if "lazy_proxy_request_body" in _general_settings:
+            from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                _should_use_lazy_proxy_request_body,
+            )
+            value = _general_settings["lazy_proxy_request_body"]
+            if value is None:
+                general_settings["lazy_proxy_request_body"] = None
+            elif isinstance(value, bool):
+                general_settings["lazy_proxy_request_body"] = value
+            elif isinstance(value, str):
+                general_settings["lazy_proxy_request_body"] = value.lower() == "true"
+            else:
+                general_settings["lazy_proxy_request_body"] = bool(value)
+            _should_use_lazy_proxy_request_body.cache_clear()
+
         ## STORE PROMPTS IN SPEND LOGS ##
         if "store_prompts_in_spend_logs" in _general_settings:
             value = _general_settings["store_prompts_in_spend_logs"]
@@ -4217,6 +4233,10 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+            from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                _should_use_lazy_proxy_request_body,
+            )
+            _should_use_lazy_proxy_request_body.cache_clear()
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -12036,6 +12056,7 @@ async def get_config_list(
         "pass_through_endpoints": {"type": "PydanticModel"},
         "store_model_in_db": {"type": "Boolean"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
+        "lazy_proxy_request_body": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},

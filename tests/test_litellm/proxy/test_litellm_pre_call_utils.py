@@ -1817,3 +1817,97 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+class TestLazyProxyRequestBody:
+    """Tests for lazy_proxy_request_body: omit proxy_server_request.body when store_prompts is off."""
+
+    def _make_request_mock(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url.path = "/v1/chat/completions"
+        request.url = MagicMock()
+        request.url.__str__ = lambda self: "http://localhost/v1/chat/completions"
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = {"Content-Type": "application/json"}
+        request.client = MagicMock()
+        request.client.host = "127.0.0.1"
+        return request
+
+    @pytest.mark.asyncio
+    async def test_lazy_and_no_store_prompts_omits_body_uses_snapshot(self):
+        """When lazy=True and store_prompts=False, proxy_server_request has body_snapshot, not body."""
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        with patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils._should_use_lazy_proxy_request_body",
+            return_value=True,
+        ), patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs",
+            return_value=False,
+        ):
+            data = {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+            updated = await add_litellm_data_to_request(
+                data=data,
+                request=self._make_request_mock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+                proxy_config=MagicMock(),
+                general_settings={},
+                version="test",
+            )
+        psr = updated.get("proxy_server_request", {})
+        assert "body" not in psr, "body should be omitted when lazy and !store_prompts"
+        assert "body_snapshot" in psr, "body_snapshot should be present"
+        assert "body_keys" in psr, "body_keys should be present"
+        assert psr["body_snapshot"]["model"] == "gpt-4"
+        assert psr["body_keys"] == ["model", "messages"]
+
+    @pytest.mark.asyncio
+    async def test_lazy_and_store_prompts_includes_body(self):
+        """When lazy=True but store_prompts=True, proxy_server_request has body."""
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        with patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils._should_use_lazy_proxy_request_body",
+            return_value=True,
+        ), patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs",
+            return_value=True,
+        ):
+            data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}
+            updated = await add_litellm_data_to_request(
+                data=data,
+                request=self._make_request_mock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+                proxy_config=MagicMock(),
+                general_settings={},
+                version="test",
+            )
+        psr = updated.get("proxy_server_request", {})
+        assert "body" in psr, "body should be present when store_prompts"
+        assert psr["body"]["model"] == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_not_lazy_includes_body_by_default(self):
+        """When lazy=False (default), proxy_server_request has body."""
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        with patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils._should_use_lazy_proxy_request_body",
+            return_value=False,
+        ):
+            data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}
+            updated = await add_litellm_data_to_request(
+                data=data,
+                request=self._make_request_mock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+                proxy_config=MagicMock(),
+                general_settings={},
+                version="test",
+            )
+        psr = updated.get("proxy_server_request", {})
+        assert "body" in psr, "body should be present when not lazy"
+        assert "body_snapshot" not in psr

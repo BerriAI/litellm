@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import orjson
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -927,6 +928,33 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
+    # Capture caller keys and values before proxy mutates data (for guardrail
+    # reconstruction; values may be rewritten by model routing, message hooks, etc.)
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _should_use_lazy_proxy_request_body,
+        _should_store_prompts_and_responses_in_spend_logs as store_prompts_setting,
+    )
+
+    _store_prompts = True  # safe default: include body (backward compat)
+    body_keys: list = []
+    body_snapshot: Optional[dict] = None
+
+    _lazy = _should_use_lazy_proxy_request_body()
+    if _lazy:
+        _store_prompts = store_prompts_setting()
+        body_keys = list(data.keys())
+        if not _store_prompts:
+            try:
+                body_snapshot = orjson.loads(
+                    orjson.dumps({k: data.get(k) for k in body_keys})
+                )
+            except (TypeError, ValueError) as e:
+                verbose_proxy_logger.warning(
+                    "body_snapshot serialization failed, Onyx will use live request_data: %s",
+                    e,
+                )
+                body_snapshot = None
+
     if forward_llm_auth and "x-api-key" in _headers:
         data["api_key"] = _headers["x-api-key"]
         verbose_proxy_logger.debug(
@@ -937,15 +965,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric
     arrival_time = time.time()
-    data["proxy_server_request"] = {
+    proxy_server_request: Dict[str, Any] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
+    if _lazy and not _store_prompts:
+        proxy_server_request["body_keys"] = body_keys  # Only needed for reconstruction
+    if not _lazy:
+        proxy_server_request["body"] = copy.copy(data)  # backward compatible default
+    elif _store_prompts:
+        proxy_server_request["body"] = copy.copy(data)  # for spend log
+    elif body_snapshot is not None:
+        proxy_server_request["body_snapshot"] = body_snapshot
+    data["proxy_server_request"] = proxy_server_request
 
     safe_add_api_version_from_query_params(data, request)
     _metadata_variable_name = _get_metadata_variable_name(request)
