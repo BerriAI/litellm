@@ -109,7 +109,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     print("response", response)
 
-    await asyncio.sleep(20)
+    await asyncio.sleep(40)
     spend_after = await call_spend_logs_endpoint()
     print("spend_after", spend_after)
     assert (

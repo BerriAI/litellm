@@ -60,9 +60,7 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS = (
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
-MAX_BASE64_LENGTH_FOR_LOGGING = int(
-    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
-)
+MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
@@ -136,6 +134,12 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 # may not exist or be read-only. /tmp is always writable.
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
+
+# MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
+MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
+MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
+MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
+MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
@@ -1208,12 +1212,8 @@ OPENAI_FINISH_REASONS = [
     "stop",
     "length",
     "function_call",
+    "tool_calls",
     "content_filter",
-    "null",
-    "finish_reason_unspecified",
-    "malformed_function_call",
-    "guardrail_intervened",
-    "eos",
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
@@ -1236,6 +1236,11 @@ X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
+LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
+    "Truncation is a DB storage safeguard. "
+    "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). "
+    "To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env."
+)
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -1322,6 +1327,11 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or 24
 )
 
+########################### UI SESSION DURATION ###########################
+# Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
+# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which intentionally uses a fixed 10-minute expiry for security.
+LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
+
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
@@ -1341,6 +1351,15 @@ PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
 PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
+MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
+MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
+    1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+)
+# Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
+# CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
+# installations with large numbers of stale managed objects).
+_batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
+PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
@@ -1409,9 +1428,7 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
-DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
-    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
-)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [

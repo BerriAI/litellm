@@ -45,7 +45,9 @@ def append_query_params(url: Optional[str], params: dict) -> str:
     if not isinstance(url, str) or url == "":
         # Preserve previous startup behavior when DATABASE_URL is absent.
         # Returning an empty string avoids urlparse type errors in test/dev flows.
-        verbose_proxy_logger.warning("append_query_params received empty or non-string URL, returning empty string")
+        verbose_proxy_logger.warning(
+            "append_query_params received empty or non-string URL, returning empty string"
+        )
         return ""
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
@@ -347,9 +349,8 @@ class ProxyInitializationHelpers:
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        multiproc_dir = (
-            os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            or os.environ.get("prometheus_multiproc_dir")
+        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
+            "prometheus_multiproc_dir"
         )
 
         auto_created = not multiproc_dir
@@ -853,7 +854,14 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                    if not PrismaManager.setup_database(
+                        use_migrate=not use_prisma_db_push
+                    ):
+                        print(  # noqa
+                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                        )
+                        sys.exit(1)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

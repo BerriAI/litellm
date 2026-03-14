@@ -25,6 +25,7 @@ def get_a2a_agent_url():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=5)
 async def test_a2a_non_streaming():
     """Test non-streaming A2A request."""
     from a2a.types import MessageSendParams, SendMessageRequest

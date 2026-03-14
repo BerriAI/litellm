@@ -5,6 +5,7 @@ import pytest
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -248,3 +249,47 @@ def test_validate_environment_with_authorization_header_calculates_api_base():
         # Verify Authorization header is still present
         assert "Authorization" in updated_headers, \
             "Authorization header should be preserved"
+
+
+def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
+    """Ensure scope field is removed from cache_control for Vertex AI (not supported)."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ],
+        }
+    ]
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "system": [
+            {
+                "type": "text",
+                "text": "You are an AI assistant.",
+                "cache_control": {"type": "ephemeral", "scope": "global"},
+            }
+        ],
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    # scope removed from system
+    assert "scope" not in result["system"][0]["cache_control"]
+    assert result["system"][0]["cache_control"]["type"] == "ephemeral"
+
+    # scope removed from message content
+    assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
+    assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"

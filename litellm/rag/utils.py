@@ -62,4 +62,3 @@ def get_rag_transformation_class(custom_llm_provider: str):
 
     # OpenAI and Bedrock don't need special transformations
     return None
-
