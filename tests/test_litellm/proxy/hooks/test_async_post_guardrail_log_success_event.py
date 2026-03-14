@@ -85,18 +85,22 @@ async def test_post_guardrail_log_base_custom_logger_not_invoked():
     """Base CustomLogger (no override) is not invoked; only overriders are called."""
     base_logger = CustomLogger()
     overriding_logger = PostGuardrailLogger()
-    # Base first, then override: only overriding should be called
-    with patch("litellm.callbacks", [base_logger, overriding_logger]):
-        from litellm.proxy.utils import ProxyLogging
-        from litellm.caching.caching import DualCache
+    with patch.object(
+        base_logger,
+        "async_post_guardrail_log_success_event",
+        new_callable=AsyncMock,
+    ) as mock_base_method:
+        with patch("litellm.callbacks", [base_logger, overriding_logger]):
+            from litellm.proxy.utils import ProxyLogging
+            from litellm.caching.caching import DualCache
 
-        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-        await proxy_logging.async_post_guardrail_log_success_event(
-            data={"model": "gpt-4"},
-            response=ModelResponse(id="r1", choices=[], model="gpt-4"),
-            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-        )
-
+            proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+            await proxy_logging.async_post_guardrail_log_success_event(
+                data={"model": "gpt-4"},
+                response=ModelResponse(id="r1", choices=[], model="gpt-4"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            )
+        mock_base_method.assert_not_called()
     assert overriding_logger.called is True
 
 

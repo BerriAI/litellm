@@ -5565,7 +5565,8 @@ async def async_data_generator(
             request_data=request_data
         )
         model_mismatch_logged = False
-        # Chunks for post-guardrail log: use exclude_none=True only so stream_chunk_builder gets required keys
+        # Chunks for post-guardrail log: use exclude_none=True only so stream_chunk_builder gets required keys.
+        # This list holds the full stream in memory until the background post-guardrail log task completes.
         _streaming_chunks_for_log: List[Dict[str, Any]] = []
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
