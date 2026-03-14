@@ -84,11 +84,11 @@ echo ""
 "$PYTHON_BIN" -m pip install --upgrade --force-reinstall --no-cache-dir "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
-# ── find the litellm binary installed alongside this Python ────────────────
-# Use the bin dir of the resolved Python executable — not PATH — so we always
-# run the version we just installed, even if the user is inside a repo checkout.
-PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
-LITELLM_BIN="${PYTHON_BIN_DIR}/litellm"
+# ── find the litellm binary installed by pip for this Python ───────────────
+# sysconfig.get_path('scripts') is where pip puts console scripts — reliable
+# even when the Python lives in a libexec/ symlink tree (e.g. Homebrew).
+SCRIPTS_DIR="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+LITELLM_BIN="${SCRIPTS_DIR}/litellm"
 
 if [ ! -x "$LITELLM_BIN" ]; then
   # Fall back to user-base bin (pip install --user)
@@ -109,7 +109,7 @@ installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]
 
 # ── PATH hint ──────────────────────────────────────────────────────────────
 if ! command -v litellm >/dev/null 2>&1; then
-  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${PYTHON_BIN_DIR}\""
+  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${SCRIPTS_DIR}\""
 fi
 
 # ── launch setup wizard ────────────────────────────────────────────────────
