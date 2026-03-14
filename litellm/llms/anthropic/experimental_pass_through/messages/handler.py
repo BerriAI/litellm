@@ -11,6 +11,7 @@ from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -62,10 +63,14 @@ def _strip_empty_text_blocks_from_anthropic_messages(
     This mirrors the filtering already done in ``anthropic_messages_pt()``
     (the ``/v1/chat/completions`` path), but operates on native Anthropic
     message format so it covers the ``/v1/messages`` passthrough path.
+
+    Returns a new list; the original message dicts are not mutated.
     """
+    result = []
     for message in messages:
         content = message.get("content")
         if not isinstance(content, list):
+            result.append(message)
             continue
         filtered = [
             block
@@ -76,11 +81,19 @@ def _strip_empty_text_blocks_from_anthropic_messages(
                 and not (block.get("text") or "").strip()
             )
         ]
-        # Only replace if we actually removed something, and keep at
-        # least one block to avoid sending an empty content array.
         if len(filtered) < len(content) and len(filtered) > 0:
-            message["content"] = filtered
-    return messages
+            result.append({**message, "content": filtered})
+        elif len(filtered) == 0 and len(content) > 0:
+            # All blocks were empty text; cannot send empty content array.
+            # Preserve original to avoid breaking the request shape.
+            verbose_logger.warning(
+                "Cannot strip all empty text blocks from message "
+                "(would empty content). Message forwarded as-is."
+            )
+            result.append(message)
+        else:
+            result.append(message)
+    return result
 
 
 async def _execute_pre_request_hooks(

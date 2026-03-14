@@ -60,6 +60,30 @@ def test_preserves_nonempty_text_block():
     assert result == original
 
 
+def test_does_not_mutate_original_messages():
+    """The original message dicts must not be mutated in-place."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": ""},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_mut",
+                    "name": "search",
+                    "input": {"q": "test"},
+                },
+            ],
+        },
+    ]
+    original_content = copy.deepcopy(messages[0]["content"])
+    result = _strip_empty_text_blocks_from_anthropic_messages(messages)
+    # Result should have the empty text block removed
+    assert len(result[0]["content"]) == 1
+    # But the original message should be untouched
+    assert messages[0]["content"] == original_content
+
+
 def test_string_content_untouched():
     """Messages with string content (not list) must pass through unchanged."""
     messages = [
