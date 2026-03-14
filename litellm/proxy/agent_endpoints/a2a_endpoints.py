@@ -47,6 +47,26 @@ def _get_agent(agent_id: str):
     return agent
 
 
+def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
+    """Raise 400 if agent requires x-litellm-trace-id on inbound calls and it is missing."""
+    agent_litellm_params = agent.litellm_params or {}
+    if not agent_litellm_params.get("require_trace_id_on_calls_to_agent"):
+        return
+
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers_dict = dict(request.headers)
+    trace_id = get_chain_id_from_headers(headers_dict)
+    if not trace_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Agent '{agent.agent_id}' requires x-litellm-trace-id header "
+                "on all inbound requests."
+            ),
+        )
+
+
 async def _handle_stream_message(
     api_base: Optional[str],
     request_id: str,
@@ -269,7 +289,7 @@ async def get_agent_card(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def invoke_agent_a2a(
+async def invoke_agent_a2a(  # noqa: PLR0915
     agent_id: str,
     request: Request,
     fastapi_response: Response,
@@ -345,6 +365,8 @@ async def invoke_agent_a2a(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        _enforce_inbound_trace_id(agent, request)
+
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
@@ -365,6 +387,10 @@ async def invoke_agent_a2a(
         )
 
         # Set up data dict for litellm processing
+        if "metadata" not in body:
+            body["metadata"] = {}
+        body["metadata"]["agent_id"] = agent.agent_id
+
         body.update(
             {
                 "model": f"a2a_agent/{agent_name}",

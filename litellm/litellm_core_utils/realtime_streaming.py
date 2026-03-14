@@ -111,9 +111,7 @@ class RealTimeStreaming:
         if self._should_store_message(message_obj):
             self.messages.append(message_obj)
 
-    def _collect_user_input_from_client_event(
-        self, message: Union[str, dict]
-    ) -> None:
+    def _collect_user_input_from_client_event(self, message: Union[str, dict]) -> None:
         """Extract user text content from client WebSocket events for spend logging."""
         try:
             if isinstance(message, str):
@@ -158,15 +156,10 @@ class RealTimeStreaming:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
-            if (
-                event_type
-                == "conversation.item.input_audio_transcription.completed"
-            ):
+            if event_type == "conversation.item.input_audio_transcription.completed":
                 transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
-                    self.input_messages.append(
-                        {"role": "user", "content": transcript}
-                    )
+                    self.input_messages.append({"role": "user", "content": transcript})
         except (AttributeError, TypeError):
             pass
 
@@ -204,9 +197,7 @@ class RealTimeStreaming:
         """Log messages in list"""
         if self.logging_obj:
             if self.input_messages:
-                self.logging_obj.model_call_details["messages"] = (
-                    self.input_messages
-                )
+                self.logging_obj.model_call_details["messages"] = self.input_messages
             if self.session_tools or self.tool_calls:
                 self.logging_obj.model_call_details[
                     "realtime_tools"
@@ -313,10 +304,13 @@ class RealTimeStreaming:
             except Exception as e:
                 # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
                 # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
-                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
+                is_guardrail_block = hasattr(e, "status_code") or isinstance(
+                    e, ValueError
+                )
                 if not is_guardrail_block:
                     verbose_logger.exception(
-                        "[realtime guardrail] unexpected error in apply_guardrail: %s", e
+                        "[realtime guardrail] unexpected error in apply_guardrail: %s",
+                        e,
                     )
                     raise
                 # Extract the human-readable error from the detail dict (HTTPException)
@@ -327,23 +321,30 @@ class RealTimeStreaming:
                 elif detail is not None:
                     safe_msg = str(detail)
                 else:
-                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+                    safe_msg = (
+                        str(e)
+                        or "I'm sorry, that request was blocked by the content filter."
+                    )
 
                 # Use realtime_violation_message if configured; fall back to guardrail error text.
-                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+                error_msg = (
+                    getattr(callback, "realtime_violation_message", None) or safe_msg
+                )
 
                 # Cancel any in-progress LLM response (e.g. VAD auto-response).
                 await self._send_to_backend(json.dumps({"type": "response.cancel"}))
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
-                    json.dumps({
-                        "type": "error",
-                        "error": {
-                            "type": "guardrail_violation",
-                            "message": error_msg,
-                            "code": "content_policy_violation",
-                        },
-                    })
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "guardrail_violation",
+                                "message": error_msg,
+                                "code": "content_policy_violation",
+                            },
+                        }
+                    )
                 )
                 # Ask the LLM to voice the exact guardrail message so the
                 # user hears it as audio in voice sessions (not just text).
@@ -351,23 +352,29 @@ class RealTimeStreaming:
                     f"Say exactly the following message to the user, word for word, "
                     f"do not add anything else: {error_msg}"
                 )
-                await self._send_to_backend(json.dumps({
-                    "type": "conversation.item.create",
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": guardrail_prompt}],
-                    },
-                }))
                 await self._send_to_backend(
-                    json.dumps({"type": "response.create"})
+                    json.dumps(
+                        {
+                            "type": "conversation.item.create",
+                            "item": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": guardrail_prompt}
+                                ],
+                            },
+                        }
+                    )
                 )
+                await self._send_to_backend(json.dumps({"type": "response.create"}))
 
                 self._violation_count += 1
                 end_session_after: Optional[int] = getattr(
                     callback, "end_session_after_n_fails", None
                 )
-                should_end = getattr(callback, "on_violation", None) == "end_session" or (
+                should_end = getattr(
+                    callback, "on_violation", None
+                ) == "end_session" or (
                     end_session_after is not None
                     and self._violation_count >= end_session_after
                 )
@@ -410,7 +417,9 @@ class RealTimeStreaming:
         self.current_conversation_id = returned_object["current_conversation_id"]
         self.current_item_chunks = returned_object["current_item_chunks"]
         self.current_delta_type = returned_object["current_delta_type"]
-        self.session_configuration_request = returned_object["session_configuration_request"]
+        self.session_configuration_request = returned_object[
+            "session_configuration_request"
+        ]
         events = (
             transformed_response
             if isinstance(transformed_response, list)
@@ -446,12 +455,11 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
                 blocked = await self.run_realtime_guardrails(
-                    cast(str, transcript), item_id=cast(Optional[str], event.get("item_id"))
+                    cast(str, transcript),
+                    item_id=cast(Optional[str], event.get("item_id")),
                 )
                 if not blocked:
-                    await self._send_to_backend(
-                        json.dumps({"type": "response.create"})
-                    )
+                    await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
             self.store_message(event_str)
@@ -502,9 +510,7 @@ class RealTimeStreaming:
                 )
                 if not blocked:
                     # Clean — trigger LLM response
-                    await self._send_to_backend(
-                        json.dumps({"type": "response.create"})
-                    )
+                    await self._send_to_backend(json.dumps({"type": "response.create"}))
                 return True
         except (json.JSONDecodeError, AttributeError):
             pass
@@ -579,7 +585,10 @@ class RealTimeStreaming:
                                     self._pending_guardrail_message = combined_text
                                     continue  # don't forward the original blocked message
 
-                    if msg_type == "response.create" and self._pending_guardrail_message:
+                    if (
+                        msg_type == "response.create"
+                        and self._pending_guardrail_message
+                    ):
                         # The guardrail already sent the synthetic AI bubble — drop this
                         # response.create so OpenAI doesn't generate an additional response.
                         self._pending_guardrail_message = None

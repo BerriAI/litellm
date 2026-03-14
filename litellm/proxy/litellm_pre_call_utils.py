@@ -201,12 +201,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    )
-    team_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
-    )
+    key_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    team_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -267,14 +267,14 @@ def clean_headers(
 ) -> dict:
     """
     Removes litellm api key from headers
-    
+
     Args:
         headers: Request headers
         litellm_key_header_name: Custom header name for LiteLLM API key
         forward_llm_provider_auth_headers: Whether to forward provider auth headers
         authenticated_with_header: Which header was used for LiteLLM authentication
             (e.g., "x-litellm-api-key", "authorization", "x-api-key")
-    
+
     Returns:
         Cleaned headers dict
     """
@@ -288,14 +288,17 @@ def clean_headers(
         header_lower = header.lower()
 
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
-            if authenticated_with_header is None or authenticated_with_header.lower() != "authorization":
+            if (
+                authenticated_with_header is None
+                or authenticated_with_header.lower() != "authorization"
+            ):
                 clean_headers[header] = value
             continue
         # Special handling for x-api-key: forward it based on authenticated_with_header
         elif header_lower == "x-api-key":
-            if (
-                forward_llm_provider_auth_headers
-                and (authenticated_with_header is None or authenticated_with_header.lower() != "x-api-key")
+            if forward_llm_provider_auth_headers and (
+                authenticated_with_header is None
+                or authenticated_with_header.lower() != "x-api-key"
             ):
                 clean_headers[header] = value
         elif (
@@ -630,7 +633,6 @@ class LiteLLMProxyRequestSetup:
             "x-litellm-session-id"
         )
 
-
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug(
@@ -695,6 +697,12 @@ class LiteLLMProxyRequestSetup:
             "user_api_key"
         ] = user_api_key_dict.api_key  # this is just the hashed token
 
+        # Key-owned agent_id for spend attribution; keep existing (e.g. from header) if key has none
+        _key_agent_id = getattr(user_api_key_dict, "agent_id", None)
+        _existing_agent_id = data[_metadata_variable_name].get("agent_id")
+        _resolved_agent_id = _key_agent_id or _existing_agent_id
+        data[_metadata_variable_name]["agent_id"] = _resolved_agent_id
+
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
         )
@@ -750,11 +758,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = (
-                LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=key_metadata["tags"],
-                )
+            data[_metadata_variable_name][
+                "tags"
+            ] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=key_metadata["tags"],
             )
         if "disable_global_guardrails" in key_metadata and isinstance(
             key_metadata["disable_global_guardrails"], bool
@@ -924,7 +932,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
-
     if forward_llm_auth and "x-api-key" in _headers:
         data["api_key"] = _headers["x-api-key"]
         verbose_proxy_logger.debug(
@@ -1051,9 +1058,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
+        data[_metadata_variable_name][
+            "global_max_parallel_requests"
+        ] = general_settings.get("global_max_parallel_requests", None)
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -1141,14 +1148,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    data[_metadata_variable_name]["user_api_key_team_metadata"] = (
-        user_api_key_dict.team_metadata
+    data[_metadata_variable_name][
+        "user_api_key_team_metadata"
+    ] = user_api_key_dict.team_metadata
+    data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
+        user_api_key_dict, "object_permission_id", None
     )
-    data[_metadata_variable_name]["user_api_key_object_permission_id"] = (
-        getattr(user_api_key_dict, "object_permission_id", None)
-    )
-    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = (
-        getattr(user_api_key_dict, "team_object_permission_id", None)
+    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
+        user_api_key_dict, "team_object_permission_id", None
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
@@ -1853,9 +1860,11 @@ async def add_guardrails_from_policy_engine(
 
     # Extract tags and build context
     all_tags = get_tags_from_request_body(data) or None
+    _team_alias = user_api_key_dict.team_alias
+    _key_alias = user_api_key_dict.key_alias
     context = PolicyMatchContext(
-        team_alias=user_api_key_dict.team_alias,
-        key_alias=user_api_key_dict.key_alias,
+        team_alias=_team_alias if isinstance(_team_alias, str) else None,
+        key_alias=_key_alias if isinstance(_key_alias, str) else None,
         model=data.get("model"),
         tags=all_tags,
     )

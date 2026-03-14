@@ -9,7 +9,6 @@ import datetime
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
-import httpx
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
@@ -121,9 +120,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-            custom_llm_provider
-        )
+        litellm_logging_obj.model_call_details[
+            "custom_llm_provider"
+        ] = custom_llm_provider
 
     return agent_name
 
@@ -439,7 +438,7 @@ def _build_streaming_logging_obj(
     return logging_obj
 
 
-async def asend_message_streaming(
+async def asend_message_streaming(  # noqa: PLR0915
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
@@ -653,15 +652,26 @@ async def create_a2a_client(
 
     verbose_logger.info(f"Creating A2A client for {base_url}")
 
-    # Always create a fresh httpx client per A2A call so that per-agent auth
-    # headers (extra_headers) are never shared across agents or requests.
-    # Mutating a cached shared client would cause headers from one agent to
-    # bleed into requests made to a different agent.
-    httpx_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout),
-        headers=extra_headers or {},
-    )
+    # Use get_async_httpx_client with per-agent params so that different agents
+    # (with different extra_headers) get separate cached clients.  The params
+    # dict is hashed into the cache key, keeping agent auth isolated while
+    # still reusing connections within the same agent.
+    #
+    # Only pass params that AsyncHTTPHandler.__init__ accepts (e.g. timeout).
+    # Use "disable_aiohttp_transport" key for cache-key-only data (it's
+    # filtered out before reaching the constructor).
+    _client_params: dict = {"timeout": timeout}
     if extra_headers:
+        # Encode headers into a cache-key-only param so each unique header
+        # set produces a distinct cache key.
+        _client_params["disable_aiohttp_transport"] = str(sorted(extra_headers.items()))
+    _async_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2AProvider,
+        params=_client_params,
+    )
+    httpx_client = _async_handler.client
+    if extra_headers:
+        httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug(
             f"A2A client created with extra_headers={list(extra_headers.keys())}"
         )

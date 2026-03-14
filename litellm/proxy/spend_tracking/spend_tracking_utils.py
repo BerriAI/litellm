@@ -15,21 +15,26 @@ from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
 )
-from litellm.constants import \
-    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs, reconstruct_model_name)
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.utils import (CostBreakdown,
-                                 StandardLoggingGuardrailInformation,
-                                 StandardLoggingMCPToolCall,
-                                 StandardLoggingModelInformation,
-                                 StandardLoggingPayload,
-                                 StandardLoggingVectorStoreRequest,
-                                 VectorStoreSearchResponse)
+from litellm.types.utils import (
+    CostBreakdown,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
+)
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -47,8 +52,8 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
-    if _master_key is None:
+def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    if _master_key is None or api_key is None:
         return False
 
     ## string comparison
@@ -121,9 +126,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -501,7 +506,6 @@ def _get_session_id_for_spend_log(
     """
     from litellm._uuid import uuid
 
-
     if (
         standard_logging_payload is not None
         and standard_logging_payload.get("trace_id") is not None
@@ -758,7 +762,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
-                    perform_redaction, should_redact_message_logging)
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
 
                 # Build model_call_details dict to check redaction settings
                 model_call_details = {
@@ -829,7 +835,9 @@ def _get_response_for_spend_logs_payload(
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction, should_redact_message_logging)
+                perform_redaction,
+                should_redact_message_logging,
+            )
 
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {

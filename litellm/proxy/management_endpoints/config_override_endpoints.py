@@ -1,22 +1,30 @@
 import asyncio
-import json
 import os
 from typing import Any, Dict, Set
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-from fastapi import APIRouter, Depends, HTTPException
-from prisma.errors import RecordNotFoundError
-from pydantic import TypeAdapter
+try:
+    from prisma.errors import RecordNotFoundError
+except ImportError:
+    RecordNotFoundError = Exception  # type: ignore
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem, LitellmUserRoles, UserAPIKeyAuth
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    KeyManagementSystem,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,
     HashicorpVaultConfig,
@@ -210,9 +218,7 @@ async def update_hashicorp_vault_config(
     _set_env_vars(config_data)
 
     try:
-        proxy_config.initialize_secret_manager(
-            key_management_system="hashicorp_vault"
-        )
+        proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
     except Exception as e:
         _set_env_vars(previous_env)
         verbose_proxy_logger.exception(
@@ -287,9 +293,7 @@ async def get_hashicorp_vault_config(
 
         # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
         decrypted_data = proxy_config._decrypt_db_variables(config_data)
-        masked_data = _mask_sensitive_fields(
-            decrypted_data, HASHICORP_SENSITIVE_FIELDS
-        )
+        masked_data = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
 
         return ConfigOverrideSettingsResponse(
             config_type="hashicorp_vault",
@@ -299,9 +303,7 @@ async def get_hashicorp_vault_config(
 
     # Fallback to env vars — also mask sensitive values
     env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
-    masked_env_values = _mask_sensitive_fields(
-        env_values, HASHICORP_SENSITIVE_FIELDS
-    )
+    masked_env_values = _mask_sensitive_fields(env_values, HASHICORP_SENSITIVE_FIELDS)
 
     return ConfigOverrideSettingsResponse(
         config_type="hashicorp_vault",
@@ -391,7 +393,9 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager
+        )
         lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace
