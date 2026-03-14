@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 
 
@@ -110,5 +111,5 @@ async def test_update_agent_in_db_preserves_explicit_static_headers_and_extra_he
     call_kwargs = mock_update.call_args.kwargs
     update_data = call_kwargs["data"]
 
-    assert update_data["static_headers"] == '{"Authorization": "Bearer xyz"}'
+    assert update_data["static_headers"] == safe_dumps({"Authorization": "Bearer xyz"})
     assert update_data["extra_headers"] == ["X-Custom-Header"]

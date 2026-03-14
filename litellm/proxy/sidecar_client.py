@@ -58,9 +58,7 @@ class SidecarClient:
 
         self._healthy = await self._check_health()
         if self._healthy:
-            verbose_proxy_logger.info(
-                f"Sidecar client connected to {self.sidecar_url}"
-            )
+            verbose_proxy_logger.info(f"Sidecar client connected to {self.sidecar_url}")
         else:
             verbose_proxy_logger.warning(
                 f"Sidecar not available at {self.sidecar_url}, will use fallback"
@@ -144,9 +142,7 @@ class SidecarClient:
             self._process.terminate()
             try:
                 await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, self._process.wait
-                    ),
+                    asyncio.get_event_loop().run_in_executor(None, self._process.wait),
                     timeout=5,
                 )
             except asyncio.TimeoutError:

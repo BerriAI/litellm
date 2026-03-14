@@ -2,7 +2,6 @@
 OpenAI-like chat completion transformation
 """
 
-import json
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
@@ -95,7 +94,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: Optional[str],
         base_model: Optional[str],
     ) -> ModelResponse:
-        response_json = json.loads(response.content)
+        response_json = response.json()
         logging_obj.post_call(
             input=messages,
             api_key="",

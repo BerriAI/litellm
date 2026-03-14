@@ -946,16 +946,22 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
     ## Initialize Rust sidecar client (optional, for high-perf forwarding)
-    _use_sidecar = os.environ.get("USE_SIDECAR", "").lower() == "true" or general_settings.get("use_sidecar", False)
+    _use_sidecar = os.environ.get(
+        "USE_SIDECAR", ""
+    ).lower() == "true" or general_settings.get("use_sidecar", False)
     if _use_sidecar:
         # Ensure env var is set so AsyncHTTPHandler._should_use_sidecar_transport() picks it up
         os.environ["USE_SIDECAR"] = "true"
 
         from litellm.proxy.sidecar_client import init_sidecar_client
 
-        _sidecar_port = int(os.environ.get("SIDECAR_PORT", general_settings.get("sidecar_port", 8787)))
+        _sidecar_port = int(
+            os.environ.get("SIDECAR_PORT", general_settings.get("sidecar_port", 8787))
+        )
         os.environ.setdefault("SIDECAR_PORT", str(_sidecar_port))
-        _sidecar_binary = os.environ.get("SIDECAR_BINARY", general_settings.get("sidecar_binary", ""))
+        _sidecar_binary = os.environ.get(
+            "SIDECAR_BINARY", general_settings.get("sidecar_binary", "")
+        )
         await init_sidecar_client(
             port=_sidecar_port,
             binary=_sidecar_binary or None,

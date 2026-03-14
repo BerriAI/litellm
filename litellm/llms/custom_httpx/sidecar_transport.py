@@ -68,7 +68,11 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
         provider_base = f"{parsed.scheme}://{parsed.host}"
         if parsed.port and parsed.port not in (80, 443):
             provider_base += f":{parsed.port}"
-        path = parsed.raw_path.decode("ascii") if isinstance(parsed.raw_path, bytes) else str(parsed.raw_path)
+        path = (
+            parsed.raw_path.decode("ascii")
+            if isinstance(parsed.raw_path, bytes)
+            else str(parsed.raw_path)
+        )
 
         # Extract auth header if present
         api_key = ""
