@@ -49,6 +49,40 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _strip_empty_text_blocks_from_anthropic_messages(
+    messages: List[Dict],
+) -> List[Dict]:
+    """Remove empty text content blocks from Anthropic-format messages.
+
+    Anthropic's API often returns assistant messages with ``{"type": "text",
+    "text": ""}`` alongside ``tool_use`` blocks. When these messages are sent
+    back in a multi-turn conversation, Anthropic rejects them with a
+    validation error.
+
+    This mirrors the filtering already done in ``anthropic_messages_pt()``
+    (the ``/v1/chat/completions`` path), but operates on native Anthropic
+    message format so it covers the ``/v1/messages`` passthrough path.
+    """
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        filtered = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not block.get("text")
+            )
+        ]
+        # Only replace if we actually removed something, and keep at
+        # least one block to avoid sending an empty content array.
+        if len(filtered) < len(content) and len(filtered) > 0:
+            message["content"] = filtered
+    return messages
+
+
 async def _execute_pre_request_hooks(
     model: str,
     messages: List[Dict],
@@ -236,6 +270,14 @@ def anthropic_messages_handler(
     from litellm.types.utils import LlmProviders
 
     metadata = validate_anthropic_api_metadata(metadata)
+
+    # Sanitize empty text content blocks in Anthropic-format messages.
+    # Anthropic's API returns assistant messages with {"type": "text", "text": ""}
+    # alongside tool_use blocks, but rejects them on subsequent requests.
+    # This must happen here (in the /v1/messages handler) because messages are
+    # already in Anthropic format and bypass anthropic_messages_pt() sanitization.
+    # Fixes: https://github.com/BerriAI/litellm/issues/22930
+    messages = _strip_empty_text_blocks_from_anthropic_messages(messages)
 
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
