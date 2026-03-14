@@ -1268,7 +1268,8 @@ class BaseAWSLLM:
 
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
-                request.headers[header_name] = header_value
+                if header_value is not None:
+                    request.headers[header_name] = header_value
 
             if (
                 extra_headers is not None and "Authorization" in extra_headers
@@ -1298,6 +1299,8 @@ class BaseAWSLLM:
         }
 
         for header_name, header_value in headers.items():
+            if header_value is None:
+                continue
             header_lower = header_name.lower()
             if (
                 header_lower in aws_headers
@@ -1393,7 +1396,8 @@ class BaseAWSLLM:
         # Add back original headers after signing. Only headers in SignedHeaders
         # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
         for header_name, header_value in headers.items():
-            request_headers_dict[header_name] = header_value
+            if header_value is not None:
+                request_headers_dict[header_name] = header_value
         if (
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header

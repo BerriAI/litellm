@@ -846,12 +846,16 @@ async def get_generic_sso_response(
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
     additional_generic_sso_headers_dict = _parse_generic_sso_headers()
 
-    code_verifier: Optional[str] = None  # assigned inside try; initialized for type tracking
+    code_verifier: Optional[
+        str
+    ] = None  # assigned inside try; initialized for type tracking
 
     try:
-        token_exchange_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-            request=request,
-            generic_include_client_id=generic_include_client_id,
+        token_exchange_params = (
+            await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=request,
+                generic_include_client_id=generic_include_client_id,
+            )
         )
 
         # Extract code_verifier (and the cache key for deferred deletion) before calling fastapi-sso
@@ -915,7 +919,9 @@ async def get_generic_sso_response(
             # Assign directly rather than relying on nonlocal mutation so that Pyright
             # can track that received_response is non-None from this point on.
             received_response = {
-                k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS
+                k: v
+                for k, v in combined_response.items()
+                if k not in _OAUTH_TOKEN_FIELDS
             }
             # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
             # is never set. Read the token directly from the exchange response instead so
@@ -2598,7 +2604,9 @@ class SSOAuthenticationHandler:
                             state,
                         )
                     else:
-                        verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
+                        verbose_proxy_logger.debug(
+                            "PKCE code_verifier retrieved from cache"
+                        )
                 elif isinstance(cached_data, str):
                     # Handle legacy format (plain string) for backward compatibility
                     code_verifier = cached_data
@@ -2647,7 +2655,9 @@ class SSOAuthenticationHandler:
         In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
         Otherwise logs a warning and returns (token exchange proceeds without verifier).
         """
-        active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        active_cache = (
+            redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        )
         strict_cache_miss = (
             os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         )
