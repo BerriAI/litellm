@@ -782,6 +782,10 @@ class CustomStreamWrapper:
                 and completion_obj["function_call"] is not None
             )
             or (
+                "reasoning_content" in completion_obj
+                and completion_obj["reasoning_content"] is not None
+            )
+            or (
                 "tool_calls" in model_response.choices[0].delta
                 and model_response.choices[0].delta["tool_calls"] is not None
                 and len(model_response.choices[0].delta["tool_calls"]) > 0
@@ -1097,7 +1101,9 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
-                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                        or chunk.get("reasoning_content") is not None
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
@@ -1128,6 +1134,14 @@ class CustomStreamWrapper:
                     and anthropic_response_obj["tool_use"] is not None
                 ):
                     completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+
+                if (
+                    "reasoning_content" in anthropic_response_obj
+                    and anthropic_response_obj["reasoning_content"] is not None
+                ):
+                    completion_obj["reasoning_content"] = anthropic_response_obj[
+                        "reasoning_content"
+                    ]
 
                 if (
                     "provider_specific_fields" in anthropic_response_obj
@@ -2330,16 +2344,22 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
+    delta_kwargs: Dict[str, Any] = {
+        "content": chunk["text"],
+        "tool_calls": chunk.get("tool_use", None),
+    }
+
+    reasoning_content = chunk.get("reasoning_content", None)
+    if reasoning_content is not None:
+        delta_kwargs["reasoning_content"] = reasoning_content
+
     model_response_stream = ModelResponseStream(
         id=str(uuid.uuid4()),
         model="",
         choices=[
             StreamingChoices(
                 index=chunk.get("index", 0),
-                delta=Delta(
-                    content=chunk["text"],
-                    tool_calls=chunk.get("tool_use", None),
-                ),
+                delta=Delta(**delta_kwargs),
             )
         ],
         finish_reason=chunk["finish_reason"] if chunk["is_finished"] else None,
