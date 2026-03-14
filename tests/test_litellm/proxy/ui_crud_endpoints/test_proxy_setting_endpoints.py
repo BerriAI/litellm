@@ -128,12 +128,6 @@ class TestProxySettingEndpoints:
 
         from litellm.proxy.proxy_server import proxy_config
 
-        monkeypatch.setattr(
-            proxy_config, "get_config", lambda: empty_config  # sync, wrapped by endpoint
-        )
-
-        import asyncio
-
         async def mock_get_config():
             return empty_config
 
