@@ -36,52 +36,17 @@ def clear_model_info_cache():
 
 
 class TestGetModelInfoUnknownModels:
-    """get_model_info should return conservative defaults instead of raising."""
+    """_get_model_info_helper raises for unmapped models; the graceful
+    behaviour lives in _supports_factory and the Router (which already
+    catch exceptions).  get_model_info therefore also raises."""
 
-    def test_unknown_local_model_returns_defaults(self):
-        """A model not in the static map should return defaults, not raise."""
-        info = get_model_info(
-            model="openai/qwen3-coder-30b-a3b-instruct",
-            custom_llm_provider="openai",
-        )
-        assert info is not None
-        assert info["input_cost_per_token"] == 0
-        assert info["output_cost_per_token"] == 0
-        assert info["mode"] == "chat"
-
-    def test_unknown_model_has_function_calling_support(self):
-        """Unknown models should default to supporting function calling."""
-        info = get_model_info(
-            model="openai/my-custom-local-model",
-            custom_llm_provider="openai",
-        )
-        assert info.get("supports_function_calling") is True
-        assert info.get("supports_tool_choice") is True
-
-    def test_unknown_model_has_system_message_support(self):
-        """Unknown models should default to supporting system messages."""
-        info = get_model_info(
-            model="openai/some-random-model",
-            custom_llm_provider="openai",
-        )
-        assert info.get("supports_system_messages") is True
-
-    def test_unknown_model_provider_preserved(self):
-        """The provider should be preserved in the returned info."""
-        info = get_model_info(
-            model="openai/deepseek-r1-32b",
-            custom_llm_provider="openai",
-        )
-        assert info["litellm_provider"] == "openai"
-
-    def test_unknown_model_no_provider_defaults_to_openai(self):
-        """When no provider is given, should still not raise."""
-        info = _get_model_info_helper(
-            model="totally-unknown-model-xyz",
-            custom_llm_provider="openai",
-        )
-        assert info is not None
-        assert info["input_cost_per_token"] == 0
+    def test_unknown_local_model_raises(self):
+        """A model not in the static map should raise."""
+        with pytest.raises(Exception):
+            get_model_info(
+                model="openai/qwen3-coder-30b-a3b-instruct",
+                custom_llm_provider="openai",
+            )
 
     def test_known_model_still_works(self):
         """Known models should still return their actual info."""
@@ -91,15 +56,13 @@ class TestGetModelInfoUnknownModels:
         assert info is not None
         assert info["input_cost_per_token"] > 0
 
-    def test_helper_returns_defaults_for_unmapped_model(self):
-        """_get_model_info_helper should return defaults for unmapped models."""
-        info = _get_model_info_helper(
-            model="llama-3.2-local",
-            custom_llm_provider="openai",
-        )
-        assert info is not None
-        assert info["key"] == "openai/llama-3.2-local"
-        assert info["mode"] == "chat"
+    def test_helper_raises_for_unmapped_model(self):
+        """_get_model_info_helper should raise for unmapped models."""
+        with pytest.raises(Exception):
+            _get_model_info_helper(
+                model="llama-3.2-local",
+                custom_llm_provider="openai",
+            )
 
 
 # ─── Fix 2: supports_function_calling for unknown/local models ───

@@ -5609,36 +5609,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                         _model_info = None
 
             if _model_info is None or key is None:
-                # Return sensible defaults for unknown models (e.g. local models
-                # served via Ollama, LM Studio, vLLM) instead of raising.
-                # A missing entry in the static map should never block inference.
-                _default_provider = custom_llm_provider or "openai"
-                _default_key = (
-                    f"{_default_provider}/{model}" if _default_provider else model
-                )
-                verbose_logger.warning(
-                    "Model '%s' (provider=%s) is not in the model cost map. "
-                    "Returning default model info with conservative values.",
-                    model,
-                    _default_provider,
-                )
-                return ModelInfoBase(
-                    key=_default_key,
-                    max_tokens=None,
-                    max_input_tokens=None,
-                    max_output_tokens=None,
-                    input_cost_per_token=0,
-                    output_cost_per_token=0,
-                    litellm_provider=_default_provider,
-                    mode="chat",
-                    supports_system_messages=True,
-                    supports_response_schema=None,
-                    supports_function_calling=True,
-                    supports_tool_choice=True,
-                    supports_assistant_prefill=None,
-                    supports_prompt_caching=None,
-                    supports_computer_use=None,
-                    supports_pdf_input=None,
+                raise ValueError(
+                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
 
             _input_cost_per_token: Optional[float] = _model_info.get(
@@ -5823,34 +5795,11 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
             )
     except Exception as e:
-        # Return conservative defaults instead of raising so that unmapped
-        # models (local inference servers, custom deployments) are not blocked.
-        _default_provider = custom_llm_provider or "openai"
-        _default_key = f"{_default_provider}/{model}" if _default_provider else model
-        verbose_logger.warning(
-            "Error getting model info for model=%s, custom_llm_provider=%s: %s. "
-            "Returning default model info.",
-            model,
-            custom_llm_provider,
-            str(e),
-        )
-        return ModelInfoBase(
-            key=_default_key,
-            max_tokens=None,
-            max_input_tokens=None,
-            max_output_tokens=None,
-            input_cost_per_token=0,
-            output_cost_per_token=0,
-            litellm_provider=_default_provider,
-            mode="chat",
-            supports_system_messages=True,
-            supports_response_schema=None,
-            supports_function_calling=True,
-            supports_tool_choice=True,
-            supports_assistant_prefill=None,
-            supports_prompt_caching=None,
-            supports_computer_use=None,
-            supports_pdf_input=None,
+        verbose_logger.debug(f"Error getting model info: {e}")
+        raise Exception(
+            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
+                model, custom_llm_provider
+            )
         )
 
 
