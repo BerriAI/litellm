@@ -12,7 +12,7 @@ from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.utils import token_counter, trim_messages
+from litellm.utils import cheap_token_counter, trim_messages
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -327,14 +327,21 @@ class LiteLLMCompletionResponsesConfig:
         if compact_threshold is None:
             return messages, context_management
 
-        current_tokens = token_counter(model=model, messages=messages)
+        current_tokens = cheap_token_counter(messages=messages)
         if current_tokens < compact_threshold:
             return messages, context_management
 
         target_tokens = int(compact_threshold * _COMPACT_TARGET_RATIO)
-        trimmed = trim_messages(
-            messages=messages, model=model, max_tokens=target_tokens
+        # Always preserve the latest (current-turn) message; only trim history.
+        latest_message = messages[-1]
+        history = messages[:-1]
+        # Account for the tokens the latest message will always consume.
+        latest_tokens = cheap_token_counter(messages=[latest_message])
+        history_target = max(0, target_tokens - latest_tokens)
+        trimmed_history = trim_messages(
+            messages=history, model=model, max_tokens=history_target
         )
+        trimmed = trimmed_history + [latest_message]
         return trimmed, None
 
     @staticmethod
