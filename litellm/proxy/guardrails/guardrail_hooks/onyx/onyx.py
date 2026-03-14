@@ -90,42 +90,42 @@ class OnyxGuardrail(CustomGuardrail):
     @staticmethod
     def _get_request_payload(request_data: dict) -> dict:
         """
-        Build a proxy_server_request-shaped payload for Onyx.
+        Build the request payload for Onyx validation.
 
         When lazy_proxy_request_body is enabled, body may be omitted and
-        body_snapshot/body_keys used instead. Reconstruct the payload so Onyx
-        receives a consistent format.
+        body_snapshot/body_keys used instead. Reconstruct so Onyx receives
+        the completion request content (messages, model, etc.).
         """
         proxy_server_request = request_data.get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             proxy_server_request = {}
-
-        payload = {
-            k: proxy_server_request[k]
-            for k in ("url", "method", "headers", "arrival_time")
-            if k in proxy_server_request
-        }
 
         body = proxy_server_request.get("body")
         body_snapshot = proxy_server_request.get("body_snapshot")
         body_keys = proxy_server_request.get("body_keys")
 
         if isinstance(body, dict):
-            body = copy.copy(body)
-            body.pop("api_key", None)
-            payload["body"] = body
-        elif isinstance(body_snapshot, dict):
-            payload["body"] = copy.deepcopy(body_snapshot)
-        elif isinstance(body_keys, (list, tuple)):
+            result = copy.copy(body)
+            result.pop("api_key", None)
+            return result
+        if isinstance(body_snapshot, dict):
+            return copy.deepcopy(body_snapshot)
+        if isinstance(body_keys, (list, tuple)):
             reconstructed = {
                 k: request_data.get(k)
                 for k in body_keys
                 if isinstance(k, str) and k not in ("api_key", "proxy_server_request")
             }
             if reconstructed:
-                payload["body"] = reconstructed
+                return reconstructed
 
-        return payload
+        # Legacy format: proxy_server_request has messages/model at top level
+        internal_keys = ("url", "method", "headers", "arrival_time", "body_keys")
+        return {
+            k: v
+            for k, v in proxy_server_request.items()
+            if k not in internal_keys
+        }
 
     @log_guardrail_information
     async def apply_guardrail(

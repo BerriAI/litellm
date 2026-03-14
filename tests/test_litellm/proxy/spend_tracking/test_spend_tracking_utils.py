@@ -1090,6 +1090,7 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
     for true_value in ["true", "TRUE", "True", "TrUe"]:
         with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
             mock_get_secret_bool.return_value = False  # Ensure env var is False
+            _should_store_prompts_and_responses_in_spend_logs.cache_clear()
             result = _should_store_prompts_and_responses_in_spend_logs()
             assert result is True, f"Expected True for '{true_value}', got {result}"
     
@@ -1104,21 +1105,25 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
             # When env var is True, should return True
             mock_get_secret_bool.return_value = True
+            _should_store_prompts_and_responses_in_spend_logs.cache_clear()
             result = _should_store_prompts_and_responses_in_spend_logs()
             assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
-            
+
             # When env var is False, should return False
             mock_get_secret_bool.return_value = False
+            _should_store_prompts_and_responses_in_spend_logs.cache_clear()
             result = _should_store_prompts_and_responses_in_spend_logs()
             assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
-    
+
     # Test when general_settings doesn't have the key at all
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         mock_get_secret_bool.return_value = True
+        _should_store_prompts_and_responses_in_spend_logs.cache_clear()
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is True, "Expected True (from env var) when key missing, got False"
-        
+
         mock_get_secret_bool.return_value = False
+        _should_store_prompts_and_responses_in_spend_logs.cache_clear()
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
 
