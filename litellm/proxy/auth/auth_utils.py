@@ -747,21 +747,24 @@ def get_end_user_id_from_request_body(
 
         # If we have a header name to check, try to read it from request headers
         if isinstance(custom_header_name_to_check, list):
+            headers_lower = {k.lower(): v for k, v in request_headers.items()}
+            for expected_header in custom_header_name_to_check:
+                header_value = headers_lower.get(expected_header)
+                if header_value is not None:
+                    user_id_str = str(header_value)
+                    if user_id_str.strip():
+                        return user_id_str
+                    
+        elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
-                if header_name.lower() in custom_header_name_to_check:
-                    user_id_from_header = header_value
+                if header_name.lower() == custom_header_name_to_check:
                     user_id_str = (
-                        str(user_id_from_header)
-                        if user_id_from_header is not None
+                        str(header_value)
+                        if header_value is not None
                         else ""
                     )
                     if user_id_str.strip():
                         return user_id_str
-        elif isinstance(custom_header_name_to_check, str):
-            user_id_from_header = request_headers.get(custom_header_name_to_check)
-            user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
-            if user_id_str.strip():
-                return user_id_str
 
     # Check 3: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:
