@@ -1,5 +1,10 @@
--- Rename call_policy to input_policy
-ALTER TABLE "LiteLLM_ToolTable" RENAME COLUMN "call_policy" TO "input_policy";
+-- Rename call_policy to input_policy (only if the old name still exists)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'LiteLLM_ToolTable' AND column_name = 'call_policy') THEN
+        ALTER TABLE "LiteLLM_ToolTable" RENAME COLUMN "call_policy" TO "input_policy";
+    END IF;
+END $$;
 
 -- Add output_policy column
 ALTER TABLE "LiteLLM_ToolTable" ADD COLUMN IF NOT EXISTS "output_policy" TEXT NOT NULL DEFAULT 'untrusted';

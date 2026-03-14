@@ -36,5 +36,10 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_ToolTable_call_policy_idx" ON "LiteLLM_ToolT
 CREATE INDEX IF NOT EXISTS "LiteLLM_ToolTable_team_id_idx" ON "LiteLLM_ToolTable"("team_id");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_AgentsTable" ADD CONSTRAINT "LiteLLM_AgentsTable_object_permission_id_fkey" FOREIGN KEY ("object_permission_id") REFERENCES "LiteLLM_ObjectPermissionTable"("object_permission_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_AgentsTable_object_permission_id_fkey') THEN
+        ALTER TABLE "LiteLLM_AgentsTable" ADD CONSTRAINT "LiteLLM_AgentsTable_object_permission_id_fkey" FOREIGN KEY ("object_permission_id") REFERENCES "LiteLLM_ObjectPermissionTable"("object_permission_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 

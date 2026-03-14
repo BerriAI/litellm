@@ -239,3 +239,39 @@ class TestMigrationSQLIdempotency:
             "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n"
             + "\n".join(violations)
         )
+
+    def test_rename_column_is_guarded(self, all_migrations):
+        """RENAME COLUMN must be inside a DO $$ IF EXISTS block"""
+        violations = []
+        for migration_name, sql in all_migrations:
+            lines = sql.splitlines()
+            in_do_block = False
+            for line_num, line in enumerate(lines, 1):
+                if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = True
+                if re.search(r"END\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = False
+                if re.search(r"RENAME\s+COLUMN\s+", line, re.IGNORECASE) and not in_do_block:
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "RENAME COLUMN without DO $$ IF EXISTS guard found in migrations:\n"
+            + "\n".join(violations)
+        )
+
+    def test_add_constraint_is_guarded(self, all_migrations):
+        """ADD CONSTRAINT must be inside a DO $$ IF NOT EXISTS block"""
+        violations = []
+        for migration_name, sql in all_migrations:
+            lines = sql.splitlines()
+            in_do_block = False
+            for line_num, line in enumerate(lines, 1):
+                if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = True
+                if re.search(r"END\s+\$\$", line, re.IGNORECASE):
+                    in_do_block = False
+                if re.search(r"ADD\s+CONSTRAINT\s+", line, re.IGNORECASE) and not in_do_block:
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "ADD CONSTRAINT without DO $$ IF NOT EXISTS guard found in migrations:\n"
+            + "\n".join(violations)
+        )
