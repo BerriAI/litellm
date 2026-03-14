@@ -2725,9 +2725,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             assistant_content.append(
                                 cast(AnthropicMessagesTextParam, _cached_message)
                             )
+                        # handle tool_use blocks from content list
+                        # Track IDs in unique_tool_ids so that duplicate entries
+                        # from tool_calls are skipped later.
+                        # Fixes: https://github.com/BerriAI/litellm/issues/23510
+                        elif m.get("type", "") == "tool_use":
+                            _tool_use_id = m.get("id")
+                            if _tool_use_id:
+                                if _tool_use_id in unique_tool_ids:
+                                    continue
+                                unique_tool_ids.add(_tool_use_id)
+                            assistant_content.append(m)  # type: ignore
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "") == "server_tool_use":
+                            _server_tool_id = m.get("id")
+                            if _server_tool_id:
+                                if _server_tool_id in unique_tool_ids:
+                                    continue
+                                unique_tool_ids.add(_server_tool_id)
                             assistant_content.append(m)  # type: ignore
                         # handle all *_tool_result blocks (tool_search_tool_result,
                         # web_search_tool_result, bash_code_execution_tool_result, etc.)
