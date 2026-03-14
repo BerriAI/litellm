@@ -402,7 +402,7 @@ async def common_checks(  # noqa: PLR0915
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
-            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
+            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin."
         )
 
     # 2. If team can call model

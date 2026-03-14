@@ -4846,10 +4846,6 @@ class Router:
             "generate_content_stream",
             "vector_store_search",
             "vector_store_create",
-            "vector_store_retrieve",
-            "vector_store_list",
-            "vector_store_update",
-            "vector_store_delete",
             "ocr",
             "search",
             "video_generation",
@@ -4873,6 +4869,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_retrieve",
+            "vector_store_list",
+            "vector_store_update",
+            "vector_store_delete",
+        ):
+
+            def vector_store_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(
+                        original_function=original_function, **kwargs
+                    )
+                return original_function(**kwargs)
+
+            return vector_store_sync_wrapper
 
         if call_type in (
             "vector_store_file_create",

@@ -214,6 +214,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
@@ -260,7 +261,6 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
     claude_code_marketplace_router,
 )
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
-from litellm.proxy.realtime_endpoints.endpoints import router as webrtc_router
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
 )
@@ -471,6 +471,7 @@ from litellm.proxy.policy_engine.policy_resolve_endpoints import (
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
+from litellm.proxy.realtime_endpoints.endpoints import router as webrtc_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -6069,7 +6070,7 @@ class ProxyStartupEvent:
                         "Invalid maximum_spend_logs_retention_interval value"
                     )
         ### CHECK BATCH COST ###
-        if llm_router is not None:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
                 from litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
@@ -6100,7 +6101,7 @@ class ProxyStartupEvent:
                 pass
 
         ### CHECK RESPONSES COST ###
-        if llm_router is not None:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
                 from litellm_enterprise.proxy.common_utils.check_responses_cost import (
                     CheckResponsesCost,

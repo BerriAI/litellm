@@ -1932,16 +1932,16 @@ def test_transform_request_uses_dynamic_max_tokens():
 
     messages = [{"role": "user", "content": "Hello"}]
 
-    # Claude 3.5 model should get 8192 as default max_tokens
+    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-7-sonnet-20250219",
         messages=messages,
         optional_params={},  # No max_tokens provided
         litellm_params={},
         headers={}
     )
 
-    assert result["max_tokens"] == 8192
+    assert result["max_tokens"] == 64000
 
 
 def test_transform_request_respects_user_max_tokens():
@@ -1955,7 +1955,7 @@ def test_transform_request_respects_user_max_tokens():
 
     # User provides explicit max_tokens=1000, should not be overridden
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-7-sonnet-20250219",
         messages=messages,
         optional_params={"max_tokens": 1000},
         litellm_params={},

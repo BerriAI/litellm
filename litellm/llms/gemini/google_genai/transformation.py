@@ -308,7 +308,6 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         contents: GenerateContentContentListUnionDict,
         tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
-        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> dict:
         from litellm.types.google_genai.main import (
@@ -327,8 +326,6 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
         if system_instruction is not None:
             request_dict["systemInstruction"] = system_instruction
-        if tool_config is not None:
-            request_dict["toolConfig"] = tool_config
         return request_dict
 
     def transform_generate_content_response(
