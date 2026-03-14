@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 # LiteLLM Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
-# Branch QA: LITELLM_BRANCH=worktree-dynamic-tickling-journal curl -fsSL .../install.sh | sh
 set -euo pipefail
 
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=9
 
-# If LITELLM_BRANCH is set, install from that git branch instead of PyPI.
-# Used for testing PRs before they ship a release.
-LITELLM_BRANCH="${LITELLM_BRANCH:-}"
-if [ -n "$LITELLM_BRANCH" ]; then
-  LITELLM_PACKAGE="git+https://github.com/BerriAI/litellm.git@${LITELLM_BRANCH}#egg=litellm[proxy]"
-else
-  LITELLM_PACKAGE="litellm[proxy]"
-fi
+# NOTE: set to "litellm[proxy]" before merging to main (once --setup ships in a PyPI release).
+# On this branch we install from git so the installer gets the --setup flag.
+LITELLM_PACKAGE="litellm[proxy] @ git+https://github.com/BerriAI/litellm.git@worktree-dynamic-tickling-journal"
 
 # ── colours ────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
