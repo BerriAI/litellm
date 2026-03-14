@@ -215,3 +215,82 @@ async def test_explicit_tag_match_takes_precedence_over_regex():
     assert len(result) == 1
     tr = metadata.get("tag_routing", {})
     assert tr.get("matched_via") == "tags"
+
+
+@pytest.mark.asyncio
+async def test_user_agent_present_no_tag_regex_deployments_does_not_raise():
+    """
+    Backwards-compat: a request that carries a User-Agent but targets plain-tag
+    deployments (no tag_regex) must NOT raise ValueError — it should fall
+    through to the default/all-deployments path just like before.
+    """
+    plain_tag_only_deployments = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "openai/premium-deployment",
+                "api_key": "fake",
+                "tags": ["premium"],
+            },
+            "model_info": {"id": "premium-deployment"},
+        },
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "openai/free-deployment",
+                "api_key": "fake",
+                "tags": ["free"],
+            },
+            "model_info": {"id": "free-deployment"},
+        },
+    ]
+    router = _make_router_mock()
+    # The request has a User-Agent (as all proxy requests do) but NO tags and
+    # neither deployment has tag_regex — must not raise, must return all.
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-4",
+        healthy_deployments=plain_tag_only_deployments,
+        request_kwargs={"metadata": {"user_agent": "Mozilla/5.0 (any-client)"}},
+    )
+    # Falls through to "return healthy_deployments" path unchanged
+    assert result == plain_tag_only_deployments
+
+
+@pytest.mark.asyncio
+async def test_tag_routing_metadata_not_overwritten_for_multiple_matches():
+    """
+    When multiple deployments match, tag_routing records only the first match
+    so the provenance reflects what the load balancer likely selected.
+    """
+    deployment_a = {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "openai/cc-deployment-a",
+            "api_key": "fake",
+            "tag_regex": [r"^User-Agent: claude-code\/"],
+        },
+        "model_info": {"id": "cc-deployment-a"},
+    }
+    deployment_b = {
+        "model_name": "claude-sonnet",
+        "litellm_params": {
+            "model": "openai/cc-deployment-b",
+            "api_key": "fake",
+            "tag_regex": [r"^User-Agent: claude-code\/"],
+        },
+        "model_info": {"id": "cc-deployment-b"},
+    }
+    router = _make_router_mock()
+    metadata: dict = {"user_agent": "claude-code/1.0"}
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="claude-sonnet",
+        healthy_deployments=[deployment_a, deployment_b],
+        request_kwargs={"metadata": metadata},
+    )
+    assert len(result) == 2
+    # tag_routing recorded once and reflects the first match
+    tr = metadata.get("tag_routing", {})
+    assert tr.get("matched_deployment") == "claude-sonnet"
+    assert tr.get("matched_via") == "tag_regex"

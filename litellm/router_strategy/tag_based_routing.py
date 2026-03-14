@@ -28,18 +28,20 @@ def _is_valid_deployment_tag_regex(
     Test compiled regex patterns against "Header-Name: value" strings.
 
     Returns the first matching pattern string, or None if nothing matches.
-    Uses re.compile() which has an internal LRU cache — no per-call overhead
-    after the first compile.
+    Compiles each pattern once (re's LRU cache) and logs invalid patterns once
+    per pattern, not once per header string.
     """
     for pattern in tag_regexes:
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            verbose_logger.warning(
+                "tag_regex: invalid pattern %r — skipping", pattern
+            )
+            continue
         for header_str in header_strings:
-            try:
-                if re.search(pattern, header_str):
-                    return pattern
-            except re.error:
-                verbose_logger.warning(
-                    "tag_regex: invalid pattern %r — skipping", pattern
-                )
+            if compiled.search(header_str):
+                return pattern
     return None
 
 
@@ -117,7 +119,23 @@ async def get_deployments_for_tag(
         new_healthy_deployments: List[Any] = []
         default_deployments: List[Any] = []
 
-        has_tag_filter = bool(request_tags) or bool(header_strings)
+        # Only activate header-based regex filtering when at least one deployment in
+        # the candidate set has tag_regex configured.  This preserves existing
+        # behaviour for operators who use plain tags: a request that carries a
+        # User-Agent (all proxy requests do) but targets deployments with no
+        # tag_regex will continue to use the original tag-only code path.
+        _healthy_list = (
+            healthy_deployments
+            if isinstance(healthy_deployments, list)
+            else list(healthy_deployments)
+        )
+        has_regex_deployments = any(
+            d.get("litellm_params", {}).get("tag_regex")
+            for d in _healthy_list
+        )
+        has_tag_filter = bool(request_tags) or (
+            bool(header_strings) and has_regex_deployments
+        )
         if has_tag_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
@@ -164,14 +182,18 @@ async def get_deployments_for_tag(
                         matched_via,
                         matched_value,
                     )
-                    # Record provenance in metadata so it flows to SpendLogs
-                    metadata["tag_routing"] = {
-                        "matched_deployment": deployment.get("model_name"),
-                        "matched_via": matched_via,
-                        "matched_value": matched_value,
-                        "request_tags": request_tags or [],
-                        "user_agent": user_agent,
-                    }
+                    # Record provenance in metadata so it flows to SpendLogs.
+                    # Written only for the first match — load balancer selects one
+                    # deployment from new_healthy_deployments, so overwriting on
+                    # subsequent matches would produce misleading observability data.
+                    if "tag_routing" not in metadata:
+                        metadata["tag_routing"] = {
+                            "matched_deployment": deployment.get("model_name"),
+                            "matched_via": matched_via,
+                            "matched_value": matched_value,
+                            "request_tags": request_tags or [],
+                            "user_agent": user_agent,
+                        }
                     new_healthy_deployments.append(deployment)
 
                 if deployment_tags and "default" in deployment_tags:
