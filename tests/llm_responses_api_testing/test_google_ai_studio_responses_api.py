@@ -259,11 +259,14 @@ async def test_google_ai_studio_responses_api_context_management_server_side_com
     if not os.getenv("GEMINI_API_KEY"):
         pytest.skip("GEMINI_API_KEY not set")
 
-    context_management = [{"type": "compaction", "compact_threshold": 50}]
+    compact_threshold = 1000
+    context_management = [{"type": "compaction", "compact_threshold": compact_threshold}]
+
+    long_input = "Long ping to verify context_management is accepted. Please provide a detailed response that exceeds the compaction threshold to trigger server-side compaction. " * 10
     try:
         response = await litellm.aresponses(
             model="gemini/gemini-2.5-flash-lite",
-            input="Long ping to verify context_management is accepted. Please provide a detailed response that exceeds the compaction threshold to trigger server-side compaction. " * 200,
+            input=long_input,
             max_output_tokens=20,
             context_management=context_management,
         )
@@ -273,13 +276,16 @@ async def test_google_ai_studio_responses_api_context_management_server_side_com
     validate_responses_api_response(response, final_chunk=True)
     assert response.get("id") is not None
     assert response.get("status") is not None
-    
-    input_tokens = response.get("usage", {}).get("input_tokens", 0)
-    assert input_tokens <= context_management[0]["compact_threshold"]*0.25, (
-        f"Expected input_tokens ({input_tokens}) to be <= compact_threshold "
-        f"({context_management[0]['compact_threshold']}) after compaction"
+
+    usage = response.get("usage")
+    assert usage is not None, "Response must include a usage field to verify compaction"
+    input_tokens = usage.get("input_tokens")
+    assert input_tokens is not None, "usage.input_tokens must be present"
+    assert input_tokens <= compact_threshold * 0.25, (
+        f"Expected input_tokens ({input_tokens}) to be <= {compact_threshold * 0.25} "
+        f"(25% of compact_threshold {compact_threshold}) after compaction"
     )
-    print(f"Compaction verified: {input_tokens} input tokens <= threshold {context_management[0]['compact_threshold']}")
+    print(f"Compaction verified: {input_tokens} input tokens <= {compact_threshold * 0.25} (25% of threshold)")
 
 
 class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):

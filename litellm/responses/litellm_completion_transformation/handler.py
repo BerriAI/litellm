@@ -55,6 +55,8 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 **kwargs,
             )
+            
+        kwargs.pop("context_management", None)
 
         completion_args = {}
         completion_args.update(kwargs)
