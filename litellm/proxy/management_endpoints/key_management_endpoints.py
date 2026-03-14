@@ -908,6 +908,11 @@ async def _check_team_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"team_id": team_table.team_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    if isinstance(data, UpdateKeyRequest):
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
         keys=keys,
         team_table=team_table,
@@ -1062,6 +1067,11 @@ async def _check_org_key_limits(
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"organization_id": org_table.organization_id},
     )
+    # Exclude the key being updated to avoid double-counting its limits.
+    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    if isinstance(data, UpdateKeyRequest):
+        hashed_key = hash_token(data.key)
+        keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
         keys=keys,
         org_table=org_table,
@@ -1789,6 +1799,135 @@ async def _validate_mcp_servers_for_key_update(
     )
 
 
+async def _validate_update_key_data(
+    data: UpdateKeyRequest,
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Any,
+    premium_user: bool,
+    prisma_client: Any,
+    user_api_key_cache: Any,
+) -> None:
+    """Validate permissions and constraints for key update."""
+    # sanity check - prevent non-proxy admin user from updating key to belong to a different user
+    if (
+        data.user_id is not None
+        and data.user_id != existing_key_row.user_id
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"User={data.user_id} is not allowed to update key={data.key} to belong to user={existing_key_row.user_id}",
+        )
+
+    common_key_access_checks(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        user_id=existing_key_row.user_id,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+
+    await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+        user_api_key_dict=user_api_key_dict,
+        route=KeyManagementRoutes.KEY_UPDATE,
+        prisma_client=prisma_client,
+        existing_key_row=existing_key_row,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    # Check team limits if key has a team_id (from request or existing key)
+    team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+    _team_id_to_check = data.team_id or getattr(existing_key_row, "team_id", None)
+    if _team_id_to_check is not None:
+        team_obj = await get_team_object(
+            team_id=_team_id_to_check,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
+        if team_obj is not None:
+            await _check_team_key_limits(
+                team_table=team_obj,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
+    # Validate key against project limits if project_id is being set
+    _project_id_to_check = getattr(data, "project_id", None) or getattr(
+        existing_key_row, "project_id", None
+    )
+    if _project_id_to_check is not None and (
+        data.models is not None or data.max_budget is not None
+    ):
+        await _check_project_key_limits(
+            project_id=_project_id_to_check,
+            data=data,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    # Check org key limits only when throughput-related fields or organization_id change
+    _org_id_to_check = data.organization_id or getattr(
+        existing_key_row, "organization_id", None
+    )
+    _throughput_fields_changed = (
+        data.organization_id is not None
+        or data.tpm_limit is not None
+        or data.rpm_limit is not None
+        or data.tpm_limit_type is not None
+        or data.rpm_limit_type is not None
+    )
+    if _org_id_to_check is not None and _throughput_fields_changed:
+        org_table = await get_org_object(
+            org_id=_org_id_to_check,
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
+        )
+        if org_table is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Organization not found for organization_id={_org_id_to_check}",
+            )
+        await _check_org_key_limits(
+            org_table=org_table,
+            data=data,
+            prisma_client=prisma_client,
+        )
+
+    # if team change - check if this is possible
+    if is_different_team(data=data, existing_key_row=existing_key_row):
+        if llm_router is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                },
+            )
+        if team_obj is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Team object not found for team change validation"},
+            )
+        await validate_key_team_change(
+            key=existing_key_row,
+            team=team_obj,
+            change_initiated_by=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+    # Validate MCP servers in object_permission against the effective team
+    if data.object_permission is not None:
+        await _validate_mcp_servers_for_key_update(
+            data=data,
+            team_obj=team_obj,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1811,6 +1950,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
@@ -1902,100 +2042,15 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
-        ## sanity check - prevent non-proxy admin user from updating key to belong to a different user
-        if (
-            data.user_id is not None
-            and data.user_id != existing_key_row.user_id
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User={data.user_id} is not allowed to update key={key} to belong to user={existing_key_row.user_id}",
-            )
-
-        common_key_access_checks(
-            user_api_key_dict=user_api_key_dict,
+        await _validate_update_key_data(
             data=data,
-            user_id=existing_key_row.user_id,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=user_api_key_dict,
             llm_router=llm_router,
             premium_user=premium_user,
-        )
-
-        # check if user has permission to update key
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_UPDATE,
             prisma_client=prisma_client,
-            existing_key_row=existing_key_row,
             user_api_key_cache=user_api_key_cache,
         )
-
-        # Only check team limits if key has a team_id
-        team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
-        if data.team_id is not None:
-            team_obj = await get_team_object(
-                team_id=data.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_db_only=True,
-            )
-
-            if team_obj is not None:
-                await _check_team_key_limits(
-                    team_table=team_obj,
-                    data=data,
-                    prisma_client=prisma_client,
-                )
-
-        # Validate key against project limits if project_id is being set
-        _project_id_to_check = getattr(data, "project_id", None) or getattr(
-            existing_key_row, "project_id", None
-        )
-        if _project_id_to_check is not None and (
-            data.models is not None or data.max_budget is not None
-        ):
-            await _check_project_key_limits(
-                project_id=_project_id_to_check,
-                data=data,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-
-        # if team change - check if this is possible
-        if is_different_team(data=data, existing_key_row=existing_key_row):
-            if llm_router is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
-                    },
-                )
-            # team_obj should be set since is_different_team() returns True only when data.team_id is not None
-            if team_obj is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "Team object not found for team change validation"
-                    },
-                )
-            await validate_key_team_change(
-                key=existing_key_row,
-                team=team_obj,
-                change_initiated_by=user_api_key_dict,
-                llm_router=llm_router,
-            )
-
-            # Set Management Endpoint Metadata Fields
-
-        # Validate MCP servers in object_permission against the effective team
-        if data.object_permission is not None:
-            await _validate_mcp_servers_for_key_update(
-                data=data,
-                team_obj=team_obj,
-                existing_key_row=existing_key_row,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
 
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
