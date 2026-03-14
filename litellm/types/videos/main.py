@@ -1,12 +1,14 @@
 from typing import Any, Dict, List, Literal, Optional
-from typing_extensions import TypedDict
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
+
 from litellm.types.utils import FileTypes
 
 
 class VideoObject(BaseModel):
     """Represents a generated video object."""
+
     id: str
     object: Literal["video"]
     status: str
@@ -42,10 +44,9 @@ class VideoObject(BaseModel):
             return self.dict()
 
 
-
-
 class VideoResponse(BaseModel):
     """Response object for video generation requests."""
+
     data: List[VideoObject]
     hidden_params: Dict[str, Any] = {}
 
@@ -71,7 +72,14 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
 
     Params here: https://platform.openai.com/docs/api-reference/videos/create
     """
+
     input_reference: Optional[FileTypes]  # File reference for input image
+    image: Optional[
+        Any
+    ]  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
+    parameters: Optional[
+        Dict[str, Any]
+    ]  # Provider-specific parameters block passed directly to the API
     model: Optional[str]
     seconds: Optional[str]
     size: Optional[str]
@@ -86,7 +94,9 @@ class VideoCreateRequestParams(VideoCreateOptionalRequestParams, total=False):
 
     Params here: https://platform.openai.com/docs/api-reference/videos/create
     """
+
     prompt: str
+
 
 class DecodedVideoId(TypedDict, total=False):
     """Structure representing a decoded video ID"""

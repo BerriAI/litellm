@@ -2,11 +2,13 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
 from fastapi import Request
+from starlette.datastructures import State
 
 from litellm.proxy.utils import _get_docs_url, _get_redoc_url
 
@@ -23,12 +25,15 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
 
 @pytest.fixture
 def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
+    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -807,6 +812,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.url.path = "/chat/completions"
     mock_request.query_params = {}
     mock_request.headers = {}
+    mock_request.state = State()
 
     # Setup key with tags in metadata
     user_api_key_dict = UserAPIKeyAuth(
@@ -1486,12 +1492,46 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
+    
+    async def get_data(
+        self,
+        token: Optional[Union[str, list]] = None,
+        user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
+        team_id: Optional[str] = None,
+        team_id_list: Optional[list] = None,
+        key_val: Optional[dict] = None,
+        table_name: Optional[str] = None,
+        query_type: str = "find_unique",
+        expires: Optional[datetime] = None,
+        reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """Mock get_data method to return user info for admin"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        
+        # Return a proper LiteLLM_UserTable object when querying by user_id
+        if user_id:
+            return LiteLLM_UserTable(
+                user_id=user_id,
+                user_role="proxy_admin",
+                spend=0.0,
+                max_budget=None,
+            )
+        return None
 
 
 @pytest.mark.asyncio
 async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
     # Patch the prisma_client import
-    from litellm.proxy._types import UserInfoResponse
+    from litellm.proxy._types import UserAPIKeyAuth, UserInfoResponse
+
+    # Create a mock user_api_key_dict for admin user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user_123",
+        user_role="proxy_admin",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
@@ -1502,11 +1542,18 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         )
 
         # Execute the function
-        result = await _get_user_info_for_proxy_admin()
+        result = await _get_user_info_for_proxy_admin(
+            user_api_key_dict=mock_user_api_key_dict
+        )
 
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+        # Verify admin's user_id is populated
+        assert result.user_id == "admin_user_123"
+        # Verify admin's user_info is populated
+        assert result.user_info is not None
+        assert result.user_info["user_id"] == "admin_user_123"
 
 
 def test_custom_openid_response():
@@ -1623,6 +1670,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
     mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    mock_prisma.start_db_health_watchdog_task = AsyncMock()
     # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
     mock_db = MagicMock()
     mock_db.start_token_refresh_task = AsyncMock()
@@ -1896,12 +1944,12 @@ from litellm.proxy._types import LiteLLM_UserTable
         (
             "anthropic/*",
             {"model": "anthropic/*"},
-            ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
+            ["anthropic/claude-haiku-4-5-20251001", "anthropic/claude-opus-4-6"],
         ),
         (
             "vertex_ai/gemini-*",
             {"model": "vertex_ai/gemini-*"},
-            ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+            ["vertex_ai/gemini-2.5-flash", "vertex_ai/gemini-2.5-pro"],
         ),
         (
             "foo/*",

@@ -71,20 +71,17 @@ def mock_proxy_config(monkeypatch):
 
 
 @pytest.fixture
-def mock_auth(monkeypatch):
-    """Mock the authentication to bypass auth checks"""
+def mock_auth():
+    """Mock the authentication to bypass auth checks using FastAPI dependency overrides"""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
 
     async def mock_user_api_key_auth():
         return {"user_id": "test_user"}
 
-    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-        user_api_key_auth,
-    )
-
-    monkeypatch.setattr(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
-        mock_user_api_key_auth,
-    )
+    app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
+    yield
+    app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 class TestProxySettingEndpoints:
@@ -233,6 +230,56 @@ class TestProxySettingEndpoints:
 
         # Verify save_config was called exactly once
         assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_get_default_team_settings_includes_team_member_permissions_schema(
+        self, mock_proxy_config, mock_auth
+    ):
+        """Test that team_member_permissions field appears in schema with enum items"""
+        response = client.get("/get/default_team_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check that team_member_permissions is in the schema
+        props = data["field_schema"]["properties"]
+        assert "team_member_permissions" in props
+
+        perm_schema = props["team_member_permissions"]
+        assert perm_schema["type"] == "array"
+        assert "items" in perm_schema
+        assert "enum" in perm_schema["items"]
+        # Verify some known enum values are present
+        enum_values = perm_schema["items"]["enum"]
+        assert "/key/generate" in enum_values
+        assert "/key/info" in enum_values
+        assert "/key/delete" in enum_values
+
+    def test_update_default_team_settings_with_permissions(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating default team settings with team_member_permissions"""
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+
+        new_settings = {
+            "models": ["gpt-4"],
+            "team_member_permissions": ["/key/generate", "/key/update", "/key/delete"],
+        }
+
+        response = client.patch("/update/default_team_settings", json=new_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        settings = data["settings"]
+        assert settings["team_member_permissions"] == [
+            "/key/generate",
+            "/key/update",
+            "/key/delete",
+        ]
 
     def test_get_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting the SSO settings from the dedicated database table"""
@@ -666,6 +713,119 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_update_ui_theme_settings_with_favicon(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating UI theme settings with favicon_url"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.store_model_in_db", True
+        )
+
+        new_theme = {
+            "logo_url": "https://example.com/new-logo.png",
+            "favicon_url": "https://example.com/custom-favicon.ico",
+        }
+
+        response = client.patch(
+            "/update/ui_theme_settings", json=new_theme
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert (
+            data["theme_config"]["logo_url"]
+            == "https://example.com/new-logo.png"
+        )
+        assert (
+            data["theme_config"]["favicon_url"]
+            == "https://example.com/custom-favicon.ico"
+        )
+
+        updated_config = mock_proxy_config["config"]
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        assert (
+            "LITELLM_FAVICON_URL"
+            in updated_config["environment_variables"]
+        )
+        assert (
+            updated_config["environment_variables"][
+                "LITELLM_FAVICON_URL"
+            ]
+            == "https://example.com/custom-favicon.ico"
+        )
+
+    def test_update_ui_theme_settings_clear_favicon(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test clearing favicon_url from UI theme settings"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.store_model_in_db", True
+        )
+
+        new_theme = {
+            "favicon_url": "https://example.com/custom-favicon.ico",
+        }
+        response = client.patch(
+            "/update/ui_theme_settings", json=new_theme
+        )
+        assert response.status_code == 200
+
+        clear_theme = {"favicon_url": None}
+        response = client.patch(
+            "/update/ui_theme_settings", json=clear_theme
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "LITELLM_FAVICON_URL" not in os.environ
+
+    def test_get_ui_theme_settings_includes_favicon_schema(
+        self, mock_proxy_config
+    ):
+        """Test UI theme settings includes favicon_url in schema"""
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "values" in data
+        assert "field_schema" in data
+        assert "properties" in data["field_schema"]
+        assert "favicon_url" in data["field_schema"]["properties"]
+        assert (
+            "description"
+            in data["field_schema"]["properties"]["favicon_url"]
+        )
+
+    def test_get_ui_theme_settings_with_favicon_configured(
+        self, mock_proxy_config
+    ):
+        """Test getting UI theme settings when favicon is configured"""
+        mock_proxy_config["config"]["litellm_settings"][
+            "ui_theme_config"
+        ] = {
+            "logo_url": "https://example.com/logo.png",
+            "favicon_url": "https://example.com/favicon.ico",
+        }
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert (
+            data["values"]["logo_url"]
+            == "https://example.com/logo.png"
+        )
+        assert (
+            data["values"]["favicon_url"]
+            == "https://example.com/favicon.ico"
+        )
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock
@@ -700,6 +860,7 @@ class TestProxySettingEndpoints:
     def test_get_ui_settings_allows_internal_roles(self, monkeypatch, user_role):
         """Ensure internal users and viewers can fetch UI settings"""
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
 
         mock_prisma = MagicMock()
@@ -742,8 +903,9 @@ class TestProxySettingEndpoints:
     ):
         """Test updating UI settings with an allowlisted field"""
         from unittest.mock import AsyncMock, MagicMock
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
         # Override the FastAPI dependency with a proper mock
         mock_user_auth = UserAPIKeyAuth(
@@ -755,6 +917,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {"disable_model_add_for_internal_users": True}
@@ -782,8 +945,9 @@ class TestProxySettingEndpoints:
     ):
         """Test non-allowlisted UI settings are ignored on update"""
         from unittest.mock import AsyncMock, MagicMock
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
         # Override the FastAPI dependency with a proper mock
         mock_user_auth = UserAPIKeyAuth(
@@ -795,6 +959,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {
@@ -1105,6 +1270,7 @@ class TestProxySettingEndpoints:
     def test_get_sso_settings_with_role_mappings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting SSO settings when role_mappings is present in database"""
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.proxy._types import LitellmUserRoles
 
         # Mock the prisma client with database record containing role_mappings
@@ -1153,6 +1319,7 @@ class TestProxySettingEndpoints:
         """Test that role_mappings is properly stored and retrieved from SSO settings"""
         import json
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.proxy._types import LitellmUserRoles
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
@@ -1232,8 +1399,9 @@ class TestProxySettingEndpoints:
         """Test the _setup_role_mappings function directly with custom role mapping logic from environment variables"""
         import asyncio
         import os
-        from litellm.proxy.management_endpoints.ui_sso import _setup_role_mappings
+
         from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.management_endpoints.ui_sso import _setup_role_mappings
 
         # Set up environment variables for custom role mappings using valid Python dict format
         monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_ROLES", "{'proxy_admin': ['custom-admin-group'], 'internal_user': ['custom-user-group'], 'proxy_admin_viewer': ['custom-viewer-group']}")
@@ -1264,6 +1432,7 @@ class TestProxySettingEndpoints:
         """Test the _setup_role_mappings function returns None when no configuration is available"""
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.proxy.management_endpoints.ui_sso import _setup_role_mappings
 
         # Ensure environment variables are not set
@@ -1283,6 +1452,7 @@ class TestProxySettingEndpoints:
     def test_get_sso_settings_with_env_role_mappings(self, mock_proxy_config, mock_auth, monkeypatch):
         import json
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.proxy._types import LitellmUserRoles
         
         monkeypatch.setenv("GENERIC_ROLE_MAPPINGS_ROLES", '{"proxy_admin": ["custom-admin-group"], "internal_user": ["custom-user-group"], "proxy_admin_viewer": ["custom-viewer-group"]}')

@@ -30,7 +30,11 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"]] = None,
+    custom_llm_provider: Optional[
+        Literal[
+            "cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"
+        ]
+    ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
@@ -177,7 +181,10 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == litellm.LlmProviders.COHERE or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY:
+        if (
+            _custom_llm_provider == litellm.LlmProviders.COHERE
+            or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
+        ):
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -365,6 +372,7 @@ def rerank(  # noqa: PLR0915
                 max_chunks_per_doc=max_chunks_per_doc,
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
+                timeout=optional_params.timeout,
                 api_base=api_base,
                 extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
@@ -496,7 +504,9 @@ def rerank(  # noqa: PLR0915
             )
         elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
             credentials = IBMWatsonXMixin.get_watsonx_credentials(
-                optional_params=dict(optional_params), api_key=dynamic_api_key, api_base=dynamic_api_base
+                optional_params=dict(optional_params),
+                api_key=dynamic_api_key,
+                api_base=dynamic_api_base,
             )
 
             api_key = credentials["api_key"]

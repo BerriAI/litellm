@@ -769,7 +769,7 @@ def test_parse_additional_properties_json_schema(model, provider, expectedAddPro
 
 def test_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview-2024-09-12",
+        model="o1-2024-12-17",
         custom_llm_provider="openai",
         seed=10,
         user="John",
@@ -780,7 +780,7 @@ def test_o1_model_params():
 
 def test_azure_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview",
+        model="o1",
         custom_llm_provider="azure",
         seed=10,
         user="John",
@@ -798,13 +798,13 @@ def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview",
+                model="o1",
                 custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
         get_optional_params(
-            model="o1-preview-2024-09-12",
+            model="o1-2024-12-17",
             custom_llm_provider="openai",
             temperature=temperature,
         )
@@ -2045,3 +2045,42 @@ def test_store_in_openai_chat_completion_params():
     result = get_standard_openai_params({"store": True, "temperature": 0.7})
     assert "store" in result
     assert result["store"] is True
+
+
+def test_store_param_passed_through_openai_azure():
+    """
+    Test that the `store` parameter is correctly passed through to OpenAI
+    and Azure OpenAI providers when using get_optional_params().
+
+    This verifies the fix for the regression where `store` was being filtered
+    out by get_non_default_completion_params() due to architectural issues
+    in parameter processing pipeline.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19700
+    """
+    # Test OpenAI provider
+    optional_params_openai = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        store=True,
+    )
+    assert "store" in optional_params_openai
+    assert optional_params_openai["store"] is True
+
+    # Test Azure OpenAI provider
+    optional_params_azure = get_optional_params(
+        model="gpt-4.1-2025-04-14",
+        custom_llm_provider="azure",
+        store=True,
+    )
+    assert "store" in optional_params_azure
+    assert optional_params_azure["store"] is True
+
+    # Test with store=False
+    optional_params_false = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        store=False,
+    )
+    assert "store" in optional_params_false
+    assert optional_params_false["store"] is False

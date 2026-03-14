@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 from typing import (
@@ -24,6 +25,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_MAX_RECURSE_DEPTH,
+    LITELLM_DETAILED_TIMING,
+    MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -38,6 +42,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -242,6 +247,26 @@ async def create_response(
     )
 
 
+def _is_azure_model_router_request(model: str) -> bool:
+    """
+    Check if the requested model is an Azure Model Router.
+
+    Azure Model Router models follow the pattern:
+    - azure_ai/model_router/<deployment-name>
+    - azure_ai/model-router
+    - model_router/<deployment-name>
+    - model-router
+
+    Args:
+        model: The requested model name
+
+    Returns:
+        bool: True if this is an Azure Model Router request
+    """
+    model_lower = model.lower()
+    return "model-router" in model_lower or "model_router" in model_lower
+
+
 def _override_openai_response_model(
     *,
     response_obj: Any,
@@ -261,9 +286,11 @@ def _override_openai_response_model(
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
 
-    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-    we should preserve the actual model that was used (the fallback model) rather than
-    overriding it with the originally requested model.
+    Exceptions:
+    1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+       we preserve the actual model that was used (the fallback model).
+    2. If the request was to an Azure Model Router, we preserve the actual model
+       that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     """
     if not requested_model:
         return
@@ -283,6 +310,14 @@ def _override_openai_response_model(
                 attempted_fallbacks,
             )
             return
+
+    # Check if this is an Azure Model Router request - if so, preserve the actual model used
+    if _is_azure_model_router_request(requested_model):
+        verbose_proxy_logger.debug(
+            "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
+            log_context,
+        )
+        return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
@@ -348,6 +383,32 @@ def _get_cost_breakdown_from_logging_obj(
     margin_percent = cost_breakdown.get("margin_percent")
 
     return original_cost, discount_amount, margin_total_amount, margin_percent
+
+
+def _has_attribute_error_in_chain(exc: Exception) -> bool:
+    """Walk the exception chain to find an AttributeError at any depth.
+
+    Checks __cause__, __context__, and the litellm-specific original_exception
+    attribute iteratively. Depth is capped at DEFAULT_MAX_RECURSE_DEPTH to
+    avoid infinite loops from circular exception references.
+    """
+    stack: list[BaseException] = [exc]
+    seen: set[int] = set()
+    depth = 0
+    while stack and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        current = stack.pop()
+        exc_id = id(current)
+        if exc_id in seen:
+            continue
+        seen.add(exc_id)
+        if isinstance(current, AttributeError):
+            return True
+        for attr in ("__cause__", "__context__", "original_exception"):
+            inner = getattr(current, attr, None)
+            if inner is not None and isinstance(inner, BaseException):
+                stack.append(inner)
+        depth += 1
+    return False
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -434,6 +495,27 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-overhead-duration-ms": str(
                 hidden_params.get("litellm_overhead_time_ms", None)
             ),
+            "x-litellm-callback-duration-ms": str(
+                hidden_params.get("callback_duration_ms", None)
+            ),
+            **(
+                {
+                    "x-litellm-timing-pre-processing-ms": str(
+                        hidden_params.get("timing_pre_processing_ms", None)
+                    ),
+                    "x-litellm-timing-llm-api-ms": str(
+                        hidden_params.get("timing_llm_api_ms", None)
+                    ),
+                    "x-litellm-timing-post-processing-ms": str(
+                        hidden_params.get("timing_post_processing_ms", None)
+                    ),
+                    "x-litellm-timing-message-copy-ms": str(
+                        hidden_params.get("timing_message_copy_ms", None)
+                    ),
+                }
+                if LITELLM_DETAILED_TIMING
+                else {}
+            ),
             "x-litellm-fastest_response_batch_completion": (
                 str(fastest_response_batch_completion)
                 if fastest_response_batch_completion is not None
@@ -474,6 +556,9 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -497,6 +582,10 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -549,16 +638,6 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
-        # Calculate request queue time if arrival_time is available
-        # Use start_time.timestamp() to avoid extra time.time() call for better performance
-        proxy_server_request = self.data.get("proxy_server_request", {})
-        arrival_time = proxy_server_request.get("arrival_time")
-        queue_time_seconds = None
-        if arrival_time is not None:
-            # Convert start_time (datetime) to timestamp for calculation
-            processing_start_time = start_time.timestamp()
-            queue_time_seconds = processing_start_time - arrival_time
-
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -567,6 +646,15 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+
+        # Calculate request queue time after add_litellm_data_to_request
+        # which sets arrival_time in proxy_server_request
+        proxy_server_request = self.data.get("proxy_server_request", {})
+        arrival_time = proxy_server_request.get("arrival_time")
+        queue_time_seconds = None
+        if arrival_time is not None:
+            processing_start_time = time.time()
+            queue_time_seconds = processing_start_time - arrival_time
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
@@ -619,6 +707,27 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_request(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=self.data.get("model"),
+        )
+
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -668,6 +777,26 @@ class ProxyBaseLLMRequestProcessing:
             model_id = model_info.get("id", "") or ""
         return model_id
 
+    def _debug_log_request_payload(self) -> None:
+        """Log request payload at DEBUG level, truncating if too large."""
+        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            return
+        _payload_str = json.dumps(self.data, default=str)
+        if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                len(_payload_str),
+                MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+                list(self.data.keys())
+                if isinstance(self.data, dict)
+                else type(self.data).__name__,
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n%s",
+                json.dumps(self.data, indent=4, default=str),
+            )
+
     async def base_process_llm_request(
         self,
         request: Request,
@@ -678,18 +807,36 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
             "acompact_responses",
+            "acreate_batch",
+            "aretrieve_batch",
+            "alist_batches",
+            "acancel_batch",
+            "afile_content",
+            "afile_retrieve",
+            "afile_delete",
             "atext_completion",
-            "aimage_edit",
+            "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
             "alist_input_items",
+            "aimage_edit",
             "agenerate_content",
             "agenerate_content_stream",
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -717,8 +864,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
-            "acancel_batch",
-            "afile_delete",
+            "asend_message",
+            "call_mcp_tool",
             "acreate_eval",
             "alist_evals",
             "aget_eval",
@@ -752,12 +899,7 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-            verbose_proxy_logger.debug(
-                "Request received by LiteLLM:\n{}".format(
-                    json.dumps(self.data, indent=4, default=str)
-                ),
-            )
+        self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,
@@ -859,6 +1001,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=dict(request.headers),
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -868,9 +1011,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data["_litellm_client_requested_model"] = (
-                    requested_model_from_client
-                )
+                self.data[
+                    "_litellm_client_requested_model"
+                ] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -967,6 +1110,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=dict(request.headers),
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1135,6 +1279,9 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=(self.data.get("proxy_server_request") or {}).get(
+                    "headers", {}
+                ),
             )
             if callback_headers:
                 headers.update(callback_headers)
@@ -1161,23 +1308,11 @@ class ProxyBaseLLMRequestProcessing:
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
-        # Check for AttributeError in various places:
-        # 1. Direct AttributeError (already handled above)
-        # 2. In underlying exception (__cause__, __context__, original_exception)
-        has_attribute_error = (
-            (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__cause__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__context__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "original_exception", None), AttributeError)
-            )
-        )
+        # Check for AttributeError in the exception chain.
+        # The AttributeError may be wrapped in multiple layers
+        # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
+        # so walk __cause__, __context__, and original_exception recursively.
+        has_attribute_error = _has_attribute_error_in_chain(e)
 
         if has_attribute_error:
             raise ProxyException(
@@ -1465,9 +1600,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
