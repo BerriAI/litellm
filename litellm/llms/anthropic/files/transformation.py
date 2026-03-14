@@ -14,7 +14,7 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -79,7 +79,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return AnthropicError(
             status_code=status_code,
             message=error_message,
-            headers=headers,
+            headers=cast(httpx.Headers, headers) if isinstance(headers, dict) else headers,
         )
 
     def validate_environment(

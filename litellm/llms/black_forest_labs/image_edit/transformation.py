@@ -230,8 +230,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,

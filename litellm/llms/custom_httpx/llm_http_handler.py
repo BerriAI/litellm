@@ -3036,10 +3036,11 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
+            file_request = cast(Dict[str, Any], transformed_request)
             upload_response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                files=transformed_request,
+                files=file_request,
                 timeout=timeout,
             )
         else:
@@ -4870,10 +4871,12 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+            if provider_config is not None:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+            raise
 
     async def async_realtime_calls_handler(
         self,
@@ -4954,10 +4957,12 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
-            )
+            if provider_config is not None:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+            raise
 
     async def async_responses_websocket(
         self,
@@ -8026,7 +8031,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params = {}
+        params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -8108,7 +8113,7 @@ class BaseLLMHTTPHandler:
 
         url = api_base
 
-        params = {}
+        params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -8170,7 +8175,7 @@ class BaseLLMHTTPHandler:
 
         url = f"{api_base}/{vector_store_id}"
 
-        request_body = dict(vector_store_update_optional_params)
+        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
@@ -8253,7 +8258,7 @@ class BaseLLMHTTPHandler:
 
         url = f"{api_base}/{vector_store_id}"
 
-        request_body = dict(vector_store_update_optional_params)
+        request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
         # Clean metadata to only include string values (OpenAI requirement)
         if "metadata" in request_body and request_body["metadata"] is not None:
@@ -9329,7 +9334,6 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> Any:
         """
@@ -9347,7 +9351,6 @@ class BaseLLMHTTPHandler:
                 generate_content_provider_config=generate_content_provider_config,
                 generate_content_config_dict=generate_content_config_dict,
                 tools=tools,
-                tool_config=tool_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -9386,7 +9389,6 @@ class BaseLLMHTTPHandler:
             model=model,
             contents=contents,
             tools=tools,
-            tool_config=tool_config,
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
@@ -9459,7 +9461,6 @@ class BaseLLMHTTPHandler:
         client: Optional[AsyncHTTPHandler] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-        tool_config: Optional[Dict[str, Any]] = None,
         system_instruction: Optional[Any] = None,
     ) -> Any:
         """
@@ -9497,7 +9498,6 @@ class BaseLLMHTTPHandler:
             model=model,
             contents=contents,
             tools=tools,
-            tool_config=tool_config,
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
