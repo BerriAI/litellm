@@ -127,6 +127,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
         disable_exception_on_block: Optional[bool] = False,
+        allow_guardrail_intervened_without_assessments: Optional[bool] = False,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -145,6 +146,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.disable_exception_on_block: bool = disable_exception_on_block or False
         """
         If True, will not raise an exception when the guardrail is blocked.
+        """
+
+        self.allow_guardrail_intervened_without_assessments: bool = (
+            allow_guardrail_intervened_without_assessments or False
+        )
+        """
+        If True, GUARDRAIL_INTERVENED responses with empty/missing assessments
+        will pass through instead of being blocked.  The safe default (False)
+        treats missing assessments as blocked.
         """
 
         # Set supported event hooks to include MCP hooks
@@ -687,6 +697,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Treat as blocked — the safe default when we cannot distinguish
             # BLOCKED from ANONYMIZED.
             # Relevant issue: https://github.com/BerriAI/litellm/issues/22949
+            if self.allow_guardrail_intervened_without_assessments:
+                return False
             return True
 
         for assessment in assessments:

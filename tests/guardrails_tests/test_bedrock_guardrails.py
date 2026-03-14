@@ -1601,3 +1601,59 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
     # If no error is raised and result is None, then the test passes
     assert result is None
     print("✅ No output text in response test passed")
+
+
+def test_allow_guardrail_intervened_without_assessments_flag():
+    """
+    When allow_guardrail_intervened_without_assessments=True, a
+    GUARDRAIL_INTERVENED response with empty assessments should pass through
+    (return False).  The default (False) should block (return True).
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrailResponse,
+    )
+
+    response_no_assessments: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Sorry, I can't help with that."}],
+        "assessments": [],
+    }
+
+    # Default: should block
+    guardrail_default = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    assert guardrail_default._should_raise_guardrail_blocked_exception(
+        response_no_assessments
+    ) is True, "Default should block GUARDRAIL_INTERVENED without assessments"
+
+    # Opt-in flag: should pass through
+    guardrail_allow = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        allow_guardrail_intervened_without_assessments=True,
+    )
+    assert guardrail_allow._should_raise_guardrail_blocked_exception(
+        response_no_assessments
+    ) is False, "allow_guardrail_intervened_without_assessments=True should pass through"
+
+    # Ensure BLOCKED assessments are still caught even with the flag on
+    response_with_blocked: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Blocked content."}],
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Violence", "type": "DENY", "action": "BLOCKED"}
+                    ]
+                }
+            }
+        ],
+    }
+    assert guardrail_allow._should_raise_guardrail_blocked_exception(
+        response_with_blocked
+    ) is True, "BLOCKED assessments should still raise even with the flag on"
