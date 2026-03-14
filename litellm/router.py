@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -1551,7 +1552,9 @@ class Router:
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
                     # scheduled via asyncio.create_task during acompletion.
                     pending = asyncio.all_tasks()
-                    pending.discard(asyncio.current_task())
+                    current = asyncio.current_task()
+                    if current is not None:
+                        pending.discard(current)
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -6525,6 +6528,18 @@ class Router:
                 return None
 
             deployment = self._add_deployment(deployment=deployment)
+
+            # Validate tag_regex patterns early so a bad regex fails at startup
+            # rather than silently misbehaving on the first matching request.
+            _tag_regex = deployment.litellm_params.get("tag_regex") or []
+            for pattern in _tag_regex:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"{pattern!r} — {exc}"
+                    ) from exc
 
             model = deployment.to_json(exclude_none=True)
 

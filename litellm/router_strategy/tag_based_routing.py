@@ -6,6 +6,7 @@ Use this to route requests between Teams
 - If no default_deployments are set, return all deployments
 """
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -17,6 +18,29 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+def _is_valid_deployment_tag_regex(
+    tag_regexes: List[str],
+    header_strings: List[str],
+) -> Optional[str]:
+    """
+    Test compiled regex patterns against "Header-Name: value" strings.
+
+    Returns the first matching pattern string, or None if nothing matches.
+    Uses re.compile() which has an internal LRU cache — no per-call overhead
+    after the first compile.
+    """
+    for pattern in tag_regexes:
+        for header_str in header_strings:
+            try:
+                if re.search(pattern, header_str):
+                    return pattern
+            except re.error:
+                verbose_logger.warning(
+                    "tag_regex: invalid pattern %r — skipping", pattern
+                )
+    return None
 
 
 def is_valid_deployment_tag(
@@ -83,30 +107,74 @@ async def get_deployments_for_tag(
         request_tags = metadata.get("tags")
         match_any = llm_router_instance.tag_filtering_match_any
 
-        new_healthy_deployments = []
-        default_deployments = []
-        if request_tags:
+        # Build header strings for regex matching from what the proxy already stores.
+        # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
+        user_agent = metadata.get("user_agent", "")
+        header_strings: List[str] = (
+            [f"User-Agent: {user_agent}"] if user_agent else []
+        )
+
+        new_healthy_deployments: List[Any] = []
+        default_deployments: List[Any] = []
+
+        has_tag_filter = bool(request_tags) or bool(header_strings)
+        if has_tag_filter:
             verbose_logger.debug(
-                "get_deployments_for_tag routing: router_keys: %s", request_tags
+                "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
+                request_tags,
+                user_agent,
             )
-            # example this can be router_keys=["free", "custom"]
             for deployment in healthy_deployments:
                 deployment_litellm_params = deployment.get("litellm_params")
                 deployment_tags = deployment_litellm_params.get("tags")
+                deployment_tag_regex = deployment_litellm_params.get("tag_regex")
 
                 verbose_logger.debug(
-                    "deployment: %s,  deployment_router_keys: %s",
-                    deployment,
+                    "deployment: %s  tags: %s  tag_regex: %s",
+                    deployment.get("model_name"),
                     deployment_tags,
+                    deployment_tag_regex,
                 )
 
-                if deployment_tags is None:
-                    continue
+                matched_via: Optional[str] = None
+                matched_value: Optional[str] = None
 
-                if is_valid_deployment_tag(deployment_tags, request_tags, match_any):
+                # 1. Exact tag match (existing behaviour)
+                if deployment_tags and request_tags:
+                    if is_valid_deployment_tag(deployment_tags, request_tags, match_any):
+                        matched_via = "tags"
+                        matched_value = next(
+                            (t for t in deployment_tags if t in set(request_tags)),
+                            deployment_tags[0],
+                        )
+
+                # 2. Regex match against request headers (new)
+                if matched_via is None and deployment_tag_regex and header_strings:
+                    regex_match = _is_valid_deployment_tag_regex(
+                        deployment_tag_regex, header_strings
+                    )
+                    if regex_match is not None:
+                        matched_via = "tag_regex"
+                        matched_value = regex_match
+
+                if matched_via is not None:
+                    verbose_logger.debug(
+                        "tag routing match: deployment=%s matched_via=%s matched_value=%s",
+                        deployment.get("model_name"),
+                        matched_via,
+                        matched_value,
+                    )
+                    # Record provenance in metadata so it flows to SpendLogs
+                    metadata["tag_routing"] = {
+                        "matched_deployment": deployment.get("model_name"),
+                        "matched_via": matched_via,
+                        "matched_value": matched_value,
+                        "request_tags": request_tags or [],
+                        "user_agent": user_agent,
+                    }
                     new_healthy_deployments.append(deployment)
 
-                if "default" in deployment_tags:
+                if deployment_tags and "default" in deployment_tags:
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
