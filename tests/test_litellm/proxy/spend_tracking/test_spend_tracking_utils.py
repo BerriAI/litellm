@@ -7,7 +7,6 @@ from datetime import timezone
 from typing import Any, cast
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -15,7 +14,6 @@ sys.path.insert(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
