@@ -998,6 +998,10 @@ def test_supports_tool_choice_simple_tests():
 
     assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
 
+    # Responses API prefix must resolve to base model. See #23423.
+    assert litellm.utils.supports_tool_choice(model="openai/responses/gpt-5.4") is True
+    assert litellm.utils.supports_tool_choice(model="responses/gpt-5.4", custom_llm_provider="openai") is True
+
 
 def test_check_provider_match():
     """

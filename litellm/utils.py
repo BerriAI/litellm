@@ -2538,6 +2538,12 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        # Strip responses/ prefix so capability lookups resolve to the
+        # base model entry in the cost map (e.g. "gpt-5.4" not
+        # "responses/gpt-5.4").  See #23423.
+        if model.startswith("responses/"):
+            model = model[len("responses/"):]
+
         model_info = _get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
