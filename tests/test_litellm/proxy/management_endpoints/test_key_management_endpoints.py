@@ -1502,6 +1502,57 @@ async def test_validate_key_team_change_with_member_permissions():
                     )
 
 
+@pytest.mark.asyncio
+async def test_validate_key_team_change_skips_all_team_models_sentinel():
+    """
+    Test that validate_key_team_change skips the 'all-team-models' sentinel
+    value when checking if the target team can access the key's models.
+
+    Keys with models=["all-team-models"] mean "use whatever models the team
+    allows", so moving them to any team should not fail model validation.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_key = MagicMock()
+    mock_key.user_id = "test-user-123"
+    mock_key.models = ["all-team-models"]
+    mock_key.tpm_limit = None
+    mock_key.rpm_limit = None
+
+    mock_team = MagicMock()
+    mock_team.team_id = "test-team-456"
+    mock_team.models = ["gpt-4", "claude-3"]
+    mock_team.members_with_roles = []
+    mock_team.tpm_limit = None
+    mock_team.rpm_limit = None
+
+    mock_change_initiator = MagicMock()
+    mock_change_initiator.user_id = "test-user-123"
+    mock_change_initiator.user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    mock_router = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+        new_callable=AsyncMock,
+    ) as mock_can_access:
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
+        ) as mock_get_user:
+            mock_get_user.return_value = MagicMock()
+
+            await validate_key_team_change(
+                key=mock_key,
+                team=mock_team,
+                change_initiated_by=mock_change_initiator,
+                llm_router=mock_router,
+            )
+
+            # can_team_access_model should NOT have been called since
+            # "all-team-models" is a sentinel that should be skipped
+            mock_can_access.assert_not_called()
+
+
 def test_key_rotation_fields_helper():
     """
     Test the key data update logic for rotation fields.
