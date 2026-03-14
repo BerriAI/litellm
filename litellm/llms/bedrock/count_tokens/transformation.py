@@ -91,7 +91,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # Transform messages
         user_messages = []
         for message in messages:
-            transformed_message: Dict[str, Any] = {"role": message.get("role"), "content": []}
+            transformed_message: Dict[str, Any] = {
+                "role": message.get("role"),
+                "content": [],
+            }
             content = message.get("content", "")
             if isinstance(content, str):
                 transformed_message["content"].append({"text": content})
@@ -121,10 +124,16 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             return [{"text": system}]
         if isinstance(system, list):
             # Already in blocks format (e.g. [{"type": "text", "text": "..."}])
-            return [{"text": block.get("text", "")} for block in system if isinstance(block, dict)]
+            return [
+                {"text": block.get("text", "")}
+                for block in system
+                if isinstance(block, dict)
+            ]
         return []
 
-    def _transform_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    def _transform_tools(
+        self, tools: Optional[List[Dict[str, Any]]]
+    ) -> Optional[Dict[str, Any]]:
         """Transform Anthropic tools to Bedrock toolConfig format."""
         if not tools:
             return None
@@ -139,15 +148,19 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             name = name[:64]
 
             description = tool.get("description") or name
-            input_schema = tool.get("input_schema", {"type": "object", "properties": {}})
+            input_schema = tool.get(
+                "input_schema", {"type": "object", "properties": {}}
+            )
 
-            bedrock_tools.append({
-                "toolSpec": {
-                    "name": name,
-                    "description": description,
-                    "inputSchema": {"json": input_schema},
+            bedrock_tools.append(
+                {
+                    "toolSpec": {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": {"json": input_schema},
+                    }
                 }
-            })
+            )
 
         return {"tools": bedrock_tools}
 

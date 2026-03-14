@@ -101,6 +101,11 @@ export interface KeyResponse {
     user_email: string;
     user_alias: string | null;
   };
+  created_by_user?: {
+    user_id: string;
+    user_email: string;
+    user_alias: string | null;
+  };
 }
 
 interface KeyListResponse {

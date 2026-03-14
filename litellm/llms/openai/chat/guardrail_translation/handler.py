@@ -558,7 +558,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for streaming_choice in response.choices:
                 if isinstance(streaming_choice, litellm.StreamingChoices):
                     # Check for text content
-                    if streaming_choice.delta.content and isinstance(streaming_choice.delta.content, str):
+                    if streaming_choice.delta.content and isinstance(
+                        streaming_choice.delta.content, str
+                    ):
                         return True
                     # Check for tool calls
                     if streaming_choice.delta.tool_calls and isinstance(

@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from opentelemetry.trace import SpanKind
 
     from litellm.integrations.opentelemetry import OpenTelemetry as _OpenTelemetry
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
@@ -91,7 +93,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
-        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+            safe_set_attribute,
+        )
 
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
 
@@ -103,7 +107,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             # Fall back to static config from env var
             config = ArizePhoenixLogger.get_arize_phoenix_config()
             if config.project_name:
-                safe_set_attribute(span, "openinference.project.name", config.project_name)
+                safe_set_attribute(
+                    span, "openinference.project.name", config.project_name
+                )
 
         return
 
@@ -172,7 +178,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
             parent_span = self.tracer.start_span(
                 name="litellm_proxy_request",
-                start_time=self._to_ns(start_time_val) if start_time_val is not None else None,
+                start_time=self._to_ns(start_time_val)
+                if start_time_val is not None
+                else None,
                 context=traceparent_ctx,
                 kind=self.span_kind.SERVER,
             )
@@ -212,9 +220,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         # Raw-request sub-span (if enabled) — must be created before
         # ending the parent span so the hierarchy is valid.
-        self._maybe_log_raw_request(
-            kwargs, response_obj, start_time, end_time, span
-        )
+        self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
         span.end(end_time=self._to_ns(end_time))
 
         # Guardrail span
@@ -290,7 +296,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         if collector_endpoint:
             # Parse the endpoint to determine protocol
-            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint):
+            if collector_endpoint.startswith("grpc://") or (
+                ":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint
+            ):
                 endpoint = collector_endpoint
                 protocol = "otlp_grpc"
             else:
@@ -334,11 +342,10 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             endpoint=endpoint,
             project_name=project_name,
         )
-    
+
     ## cannot suppress additional proxy server spans, removed previous methods.
 
     async def async_health_check(self):
-
         config = self.get_arize_phoenix_config()
 
         if not config.otlp_auth_headers:

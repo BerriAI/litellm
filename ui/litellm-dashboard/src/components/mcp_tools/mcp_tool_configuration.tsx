@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox, Input } from "antd";
+import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
+import McpCrudPermissionPanel from "./McpCrudPermissionPanel";
 
 interface KeyTool {
   name: string;
@@ -160,6 +161,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
 }) => {
   const previousToolsRef = useRef<ToolEntry[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
+  const [viewMode, setViewMode] = useState<"crud" | "flat">("crud");
   const hasInitializedRef = useRef(false);
   const previousSuggestedToolNamesRef = useRef<string>("");
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
@@ -367,6 +369,19 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               />
             )}
           </div>
+          {tools.length > 0 && (
+            <Radio.Group
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              size="small"
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: "Risk Groups", value: "crud" },
+                { label: "Flat List", value: "flat" },
+              ]}
+            />
+          )}
         </div>
 
         {/* Description */}
@@ -436,7 +451,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               </Text>
             </div>
 
-            {/* Search bar */}
+            {/* Search box shared by both views */}
             <Input
               placeholder="Search tools by name or description..."
               prefix={<SearchOutlined className="text-gray-400" />}
@@ -447,14 +462,26 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               size="large"
             />
 
-            {/* Tool list with checkboxes */}
-            {filteredTools.length === 0 ? (
-              <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
-                <SearchOutlined className="text-2xl mb-2" />
-                <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
-              </div>
-            ) : (
-              <div className="space-y-2">
+            {/* CRUD grouped view */}
+            {viewMode === "crud" && (
+              <McpCrudPermissionPanel
+                tools={tools}
+                searchFilter={toolSearchTerm}
+                value={allowedTools.length === 0 ? undefined : allowedTools}
+                onChange={(allowed) => onAllowedToolsChange(allowed)}
+              />
+            )}
+
+            {/* Flat list view */}
+            {viewMode === "flat" && (
+              <>
+                {filteredTools.length === 0 ? (
+                  <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                    <SearchOutlined className="text-2xl mb-2" />
+                    <Text>No tools found matching &quot;{toolSearchTerm}&quot;</Text>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
                 {pinnedFiltered.length > 0 && (
                   <>
                     <div className="flex items-center justify-between px-1">
@@ -533,7 +560,9 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                     ))}
                   </>
                 )}
-              </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
