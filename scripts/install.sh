@@ -119,7 +119,7 @@ read -r answer </dev/tty
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
-  exec "$LITELLM_BIN" --setup
+  exec "$LITELLM_BIN" --setup </dev/tty
 else
   echo ""
   header "Quick start:"
