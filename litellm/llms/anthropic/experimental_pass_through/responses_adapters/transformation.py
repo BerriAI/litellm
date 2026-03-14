@@ -8,7 +8,6 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
-import litellm
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_default_reasoning_summary_disabled,
 )
