@@ -2301,21 +2301,14 @@ async def validate_key_team_change(
     # Check if the team has access to the key's models
     if len(key.models) > 0:
         for model in key.models:
+            # Skip special sentinel values — "all-team-models" means
+            # "use whatever the team allows", so it's always valid.
+            if model == SpecialModelNames.all_team_models.value:
+                continue
             await can_team_access_model(
                 model=model,
                 team_object=team,
                 llm_router=llm_router,
-            )
-
-    # Check if the key's user_id is a member of the team
-    member_object = _get_user_in_team(
-        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
-    )
-    if key.user_id is not None:
-        if not member_object:
-            raise HTTPException(
-                status_code=403,
-                detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
             )
 
     # Check if the key's tpm/rpm limit is less than the team's tpm/rpm limit
@@ -2329,6 +2322,17 @@ async def validate_key_team_change(
             raise HTTPException(
                 status_code=403,
                 detail=f"Key={key.token} has a rpm_limit={key.rpm_limit} which is greater than the team's rpm_limit={team.rpm_limit}.",
+            )
+
+    # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
+    if key.user_id is not None:
+        if not member_object:
+            raise HTTPException(
+                status_code=403,
+                detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
             )
 
     # Check if the person initiating the change is a Proxy Admin or Team Admin
