@@ -11,6 +11,7 @@ import importlib.metadata
 import os
 import secrets
 import sys
+import sysconfig
 import termios
 import tty
 from pathlib import Path
@@ -482,12 +483,14 @@ def _run_wizard() -> None:
         print()
         print(f"  {green(_CHECK)} Starting LiteLLM proxy on port {bold(str(port))}…")
         print()
-        # exec replaces this process with the proxy server
+        # exec replaces this process with the proxy server.
+        # Use the litellm console script (same bin dir as the running Python)
+        # rather than `python -m litellm` — litellm has no __main__.py.
+        scripts_dir = sysconfig.get_path("scripts")
+        litellm_bin = os.path.join(scripts_dir, "litellm")
         os.execlp(  # noqa: S606
-            sys.executable,
-            sys.executable,
-            "-m",
-            "litellm",
+            litellm_bin,
+            litellm_bin,
             "--config",
             str(config_path),
             "--port",
