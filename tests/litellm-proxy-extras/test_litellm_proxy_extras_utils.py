@@ -1,5 +1,9 @@
+import glob
 import os
+import re
 import sys
+
+import pytest
 
 sys.path.insert(
     0,
@@ -9,6 +13,18 @@ sys.path.insert(
 )
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+# Migrations created before this date predate the idempotent SQL requirement.
+# Only migrations on or after this date are enforced.
+_IDEMPOTENT_SQL_CUTOFF = "20260311"
+
+# Path to the migrations directory
+_MIGRATIONS_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "../../litellm-proxy-extras/litellm_proxy_extras/migrations",
+    )
+)
 
 
 def test_custom_prisma_dir(monkeypatch):
@@ -138,3 +154,123 @@ class TestErrorClassificationPriority:
         error_message = "connection timeout"
         assert ProxyExtrasDBManager._is_permission_error(error_message) is False
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
+
+
+def _get_recent_migrations():
+    """Return (migration_name, sql_content) pairs for migrations at or after the cutoff."""
+    migration_files = sorted(glob.glob(os.path.join(_MIGRATIONS_DIR, "*/migration.sql")))
+    results = []
+    for path in migration_files:
+        migration_name = os.path.basename(os.path.dirname(path))
+        # Extract the timestamp prefix (first 8+ digits)
+        timestamp_match = re.match(r"(\d{8,})", migration_name)
+        if not timestamp_match:
+            continue
+        if timestamp_match.group(1) >= _IDEMPOTENT_SQL_CUTOFF:
+            with open(path) as f:
+                results.append((migration_name, f.read()))
+    return results
+
+
+# Non-idempotent DDL patterns that should use IF [NOT] EXISTS
+_UNSAFE_PATTERNS = [
+    # ADD COLUMN without IF NOT EXISTS
+    (
+        r"ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)",
+        "ADD COLUMN without IF NOT EXISTS",
+    ),
+    # DROP COLUMN without IF EXISTS
+    (
+        r"DROP\s+COLUMN\s+(?!IF\s+EXISTS)",
+        "DROP COLUMN without IF EXISTS",
+    ),
+    # DROP INDEX without IF EXISTS (standalone statement, not inside ALTER TABLE)
+    (
+        r"DROP\s+INDEX\s+(?!IF\s+EXISTS)(?!.*ON)",
+        "DROP INDEX without IF EXISTS",
+    ),
+    # CREATE INDEX without IF NOT EXISTS
+    (
+        r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS)(?!CONCURRENTLY)",
+        "CREATE INDEX without IF NOT EXISTS",
+    ),
+]
+
+
+class TestMigrationSQLIdempotency:
+    """Ensure new migration SQL files use idempotent DDL (IF [NOT] EXISTS).
+
+    Migrations on pre-existing instances can fail when DDL statements assume
+    the target object doesn't already exist (or still exists for drops).
+    These tests enforce that all migrations created after the cutoff date
+    use safe, re-runnable SQL patterns.
+    """
+
+    @pytest.fixture(scope="class")
+    def recent_migrations(self):
+        migrations = _get_recent_migrations()
+        assert len(migrations) > 0, (
+            f"No migrations found at or after cutoff {_IDEMPOTENT_SQL_CUTOFF}. "
+            f"Check that _MIGRATIONS_DIR ({_MIGRATIONS_DIR}) is correct."
+        )
+        return migrations
+
+    def test_add_column_uses_if_not_exists(self, recent_migrations):
+        """ADD COLUMN statements must use IF NOT EXISTS"""
+        violations = []
+        for migration_name, sql in recent_migrations:
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(r"ADD\s+COLUMN\s+", line, re.IGNORECASE) and not re.search(
+                    r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "ADD COLUMN without IF NOT EXISTS found in recent migrations:\n"
+            + "\n".join(violations)
+        )
+
+    def test_drop_column_uses_if_exists(self, recent_migrations):
+        """DROP COLUMN statements must use IF EXISTS"""
+        violations = []
+        for migration_name, sql in recent_migrations:
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(r"DROP\s+COLUMN\s+", line, re.IGNORECASE) and not re.search(
+                    r"DROP\s+COLUMN\s+IF\s+EXISTS", line, re.IGNORECASE
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "DROP COLUMN without IF EXISTS found in recent migrations:\n"
+            + "\n".join(violations)
+        )
+
+    def test_drop_index_uses_if_exists(self, recent_migrations):
+        """DROP INDEX statements must use IF EXISTS"""
+        violations = []
+        for migration_name, sql in recent_migrations:
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(r"DROP\s+INDEX\s+", line, re.IGNORECASE) and not re.search(
+                    r"DROP\s+INDEX\s+IF\s+EXISTS", line, re.IGNORECASE
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "DROP INDEX without IF EXISTS found in recent migrations:\n"
+            + "\n".join(violations)
+        )
+
+    def test_create_index_uses_if_not_exists(self, recent_migrations):
+        """CREATE INDEX statements must use IF NOT EXISTS"""
+        violations = []
+        for migration_name, sql in recent_migrations:
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(
+                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE
+                ) and not re.search(
+                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS",
+                    line,
+                    re.IGNORECASE,
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "CREATE INDEX without IF NOT EXISTS found in recent migrations:\n"
+            + "\n".join(violations)
+        )
