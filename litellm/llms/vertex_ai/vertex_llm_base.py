@@ -541,6 +541,38 @@ class VertexBase:
             # Re-raise the original error for better context
             raise error
 
+    def invalidate_credentials(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+    ) -> None:
+        """
+        Invalidate cached credentials for the given credentials/project_id pair.
+
+        Call this when a Vertex AI API request returns a 401/UNAUTHENTICATED
+        error, so the next call to get_access_token() will reload and refresh
+        credentials instead of returning the cached (now invalid) token.
+
+        This addresses the gap where a cached Credentials object has a
+        non-expired but invalid token (e.g. revoked, corrupted, or replaced
+        by a VCR test stub). Without invalidation the stale token is returned
+        on every call until it naturally expires (~1 hour).
+
+        Fixes: https://github.com/BerriAI/litellm/issues/23512
+        """
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        credential_cache_key = (cache_credentials, project_id)
+
+        if credential_cache_key in self._credentials_project_mapping:
+            verbose_logger.debug(
+                "Invalidating cached credentials for project_id: %s "
+                "due to authentication error from the API.",
+                project_id,
+            )
+            del self._credentials_project_mapping[credential_cache_key]
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
