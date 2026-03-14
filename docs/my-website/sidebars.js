@@ -713,15 +713,7 @@ const sidebars = {
             "providers/openai_compatible",
             "providers/text_completion_openai",
             "providers/amazon_nova",
-            {
-              type: "category",
-              label: "Anthropic",
-              collapsed: true,
-              items: [
-                "providers/anthropic",
-                "providers/anthropic_programmatic_tool_calling",
-              ],
-            },
+            "providers/anthropic",
             "providers/aws_sagemaker",
             {
               type: "category",
