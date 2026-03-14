@@ -10,6 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm import supports_reasoning
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
@@ -191,3 +192,112 @@ def test_transform_messages_helper_removes_provider_specific_fields():
     out = config._transform_messages_helper(messages, model="fireworks/test", litellm_params={})
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+class TestGetModelsUrl:
+    """Regression tests for get_models URL construction.
+
+    Ensures the /v1 path segment from api_base is not duplicated when
+    building the Fireworks AI models endpoint URL.
+    Fixes: https://github.com/BerriAI/litellm/issues/23106
+    """
+
+    @patch("litellm.llms.fireworks_ai.chat.transformation.get_secret_str")
+    @patch("litellm.module_level_client")
+    def test_get_models_url_no_v1_duplication(self, mock_client, mock_secret):
+        """Default api_base (…/inference/v1) must not produce /v1/v1/ in URL."""
+        mock_secret.side_effect = lambda key: {
+            "FIREWORKS_ACCOUNT_ID": "fireworks",
+        }.get(key)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "models": [{"name": "accounts/fireworks/models/llama-v3-70b-instruct"}]
+        }
+        mock_client.get.return_value = mock_response
+
+        config = FireworksAIConfig()
+        config.get_models(
+            api_key="test-key",
+            api_base="https://api.fireworks.ai/inference/v1",
+        )
+
+        called_url = mock_client.get.call_args[1]["url"]
+        assert "/v1/v1/" not in called_url, (
+            f"URL contains duplicated /v1/v1/ segment: {called_url}"
+        )
+        assert called_url == "https://api.fireworks.ai/inference/v1/accounts/fireworks/models"
+
+    @patch("litellm.llms.fireworks_ai.chat.transformation.get_secret_str")
+    @patch("litellm.module_level_client")
+    def test_get_models_url_custom_api_base(self, mock_client, mock_secret):
+        """Custom api_base without /v1 should still produce a valid URL."""
+        mock_secret.side_effect = lambda key: {
+            "FIREWORKS_ACCOUNT_ID": "my-org",
+        }.get(key)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "models": [{"name": "accounts/my-org/models/custom-model"}]
+        }
+        mock_client.get.return_value = mock_response
+
+        config = FireworksAIConfig()
+        config.get_models(
+            api_key="test-key",
+            api_base="https://custom.fireworks.ai",
+        )
+
+        called_url = mock_client.get.call_args[1]["url"]
+        assert called_url == "https://custom.fireworks.ai/v1/accounts/my-org/models"
+
+    @patch("litellm.llms.fireworks_ai.chat.transformation.get_secret_str")
+    @patch("litellm.module_level_client")
+    def test_get_models_url_api_base_without_v1(self, mock_client, mock_secret):
+        """api_base without trailing /v1 (e.g. FIREWORKS_API_BASE=…/inference) must still get /v1 added."""
+        mock_secret.side_effect = lambda key: {
+            "FIREWORKS_ACCOUNT_ID": "fireworks",
+        }.get(key)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "models": [{"name": "accounts/fireworks/models/llama-v3-70b-instruct"}]
+        }
+        mock_client.get.return_value = mock_response
+
+        config = FireworksAIConfig()
+        config.get_models(
+            api_key="test-key",
+            api_base="https://api.fireworks.ai/inference",
+        )
+
+        called_url = mock_client.get.call_args[1]["url"]
+        assert called_url == "https://api.fireworks.ai/inference/v1/accounts/fireworks/models"
+
+    @patch("litellm.llms.fireworks_ai.chat.transformation.get_secret_str")
+    @patch("litellm.module_level_client")
+    def test_get_models_url_default_api_base(self, mock_client, mock_secret):
+        """When no api_base is passed, the default (…/inference/v1) must be used without /v1 duplication."""
+        mock_secret.side_effect = lambda key: {
+            "FIREWORKS_ACCOUNT_ID": "fireworks",
+            "FIREWORKS_API_KEY": "test-key",
+        }.get(key)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "models": [{"name": "accounts/fireworks/models/llama-v3-70b-instruct"}]
+        }
+        mock_client.get.return_value = mock_response
+
+        config = FireworksAIConfig()
+        config.get_models()
+
+        called_url = mock_client.get.call_args[1]["url"]
+        assert "/v1/v1/" not in called_url, (
+            f"Default api_base produced duplicated /v1/v1/: {called_url}"
+        )
+        assert called_url == "https://api.fireworks.ai/inference/v1/accounts/fireworks/models"
