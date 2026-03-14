@@ -81,7 +81,7 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --quiet --progress-bar off "${LITELLM_PACKAGE}" \
+"$PYTHON_BIN" -m pip install --quiet --progress-bar off --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
 # ── find litellm binary ────────────────────────────────────────────────────
