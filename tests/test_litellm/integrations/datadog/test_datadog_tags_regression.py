@@ -58,6 +58,21 @@ class TestDatadogTagsRegression:
         # Verify NEW team tag is added
         assert "team:regression-team" in tags_with_team
 
+    def test_get_datadog_tags_preserves_commas_in_values(self, mock_env_vars):
+        """
+        Regression: Tag values containing commas must remain a single tag.
+        get_datadog_tags returns List[str] (not comma-joined) so values with
+        commas are not incorrectly split.
+        """
+        payload = StandardLoggingPayload(request_tags=["my,tag", "another"])
+        tags = get_datadog_tags(payload)
+
+        # request_tag:my,tag must be a single tag, not split into two
+        assert "request_tag:my,tag" in tags
+        assert "request_tag:another" in tags
+        # Must not have been incorrectly split (would produce request_tag:my)
+        assert "request_tag:my" not in tags
+
     @pytest.mark.asyncio
     async def test_datadog_cost_management_tags_regression(self, mock_env_vars):
         """

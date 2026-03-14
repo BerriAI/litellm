@@ -203,7 +203,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        tags=get_datadog_tags().split(","),
+                        tags=get_datadog_tags(),
                         spans=self.log_queue,
                     ),
                 ),
@@ -307,7 +307,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         base_tags = get_datadog_tags(
             standard_logging_object=standard_logging_payload
-        ).split(",")
+        )
         error_tag = "error:true" if error_info else "error:false"
         tags = base_tags + [error_tag]
 
