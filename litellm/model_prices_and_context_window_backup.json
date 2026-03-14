@@ -20518,6 +20518,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
