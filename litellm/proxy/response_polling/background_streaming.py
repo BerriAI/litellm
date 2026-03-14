@@ -9,7 +9,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 """
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional, cast
 
 from fastapi import Request, Response
 
@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+from litellm.types.llms.openai import ResponsesAPIStatus
 
 
 async def background_streaming_task(  # noqa: PLR0915
@@ -114,7 +115,7 @@ async def background_streaming_task(  # noqa: PLR0915
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: Optional[ResponsesAPIStatus] = None  # Will be set by response.completed/failed/incomplete/cancelled
         terminal_error = None
         _event_to_status = {
             "response.completed": "completed",
@@ -249,9 +250,12 @@ async def background_streaming_task(  # noqa: PLR0915
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
-                            terminal_status = response_data.get(
-                                "status",
-                                _event_to_status.get(event_type, "completed"),
+                            terminal_status = cast(
+                                ResponsesAPIStatus,
+                                response_data.get(
+                                    "status",
+                                    _event_to_status.get(event_type, "completed"),
+                                ),
                             )
 
                             # Extract error for failed responses

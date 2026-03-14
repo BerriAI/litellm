@@ -643,7 +643,13 @@ def test_arouter_responses_api_bridge():
     ## CONFIRM MODEL NAME IS STRIPPED
     client = HTTPHandler()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"id": "resp_test", "object": "response", "status": "completed", "output": []}
+    mock_response.text = '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
             result = router.completion(
                 model="[IP-approved] o3-pro",
