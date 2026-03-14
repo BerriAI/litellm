@@ -521,7 +521,7 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._roll_back_migration(
                                             migration_name
                                         )
-                                    except subprocess.CalledProcessError as rollback_err:
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
                                         logger.warning(
                                             f"Failed to roll back migration {migration_name}: {rollback_err}. "
                                             f"It may already be in a rolled-back state."
