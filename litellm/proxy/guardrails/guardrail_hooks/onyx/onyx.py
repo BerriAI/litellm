@@ -119,8 +119,7 @@ class OnyxGuardrail(CustomGuardrail):
             if reconstructed:
                 return reconstructed
 
-        # Legacy format: proxy_server_request has messages/model at top level
-        internal_keys = ("url", "method", "headers", "arrival_time", "body_keys")
+        internal_keys = ("url", "method", "headers", "arrival_time", "body_keys", "body_snapshot")
         return {
             k: v
             for k, v in proxy_server_request.items()
