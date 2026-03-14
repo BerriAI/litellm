@@ -56,8 +56,6 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        kwargs.pop("context_management", None)
-
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
@@ -106,8 +104,6 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
             )
-
-        kwargs.pop("context_management", None)
 
         acompletion_args = {}
         acompletion_args.update(kwargs)

@@ -12,7 +12,7 @@ from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.utils import trim_messages
+from litellm.utils import token_counter, trim_messages
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -325,6 +325,10 @@ class LiteLLMCompletionResponsesConfig:
 
         compact_threshold = compaction_entry.get("compact_threshold")
         if compact_threshold is None:
+            return messages, context_management
+
+        current_tokens = token_counter(model=model, messages=messages)
+        if current_tokens < compact_threshold:
             return messages, context_management
 
         target_tokens = int(compact_threshold * _COMPACT_TARGET_RATIO)

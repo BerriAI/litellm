@@ -2,8 +2,6 @@ import os
 import sys
 from unittest.mock import patch
 
-import pytest
-
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -12,7 +10,6 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
     _COMPACT_TARGET_RATIO,
 )
-from litellm.types.llms.openai import ContextManagementEntry
 
 
 MESSAGES = [{"role": "user", "content": "Hello"}]
@@ -34,12 +31,15 @@ class TestApplyClientSideCompaction:
         assert cm is context_management
 
     def test_compaction_entry_calls_trim_messages(self):
-        """When a compaction entry is present, trim_messages is called with the correct target."""
+        """When token count exceeds compact_threshold, trim_messages is called with the correct target."""
         compact_threshold = 10000
         expected_target = int(compact_threshold * _COMPACT_TARGET_RATIO)
         trimmed_messages = [{"role": "user", "content": "trimmed"}]
 
         with patch(
+            "litellm.responses.litellm_completion_transformation.transformation.token_counter",
+            return_value=compact_threshold + 1,
+        ), patch(
             "litellm.responses.litellm_completion_transformation.transformation.trim_messages",
             return_value=trimmed_messages,
         ) as mock_trim:
@@ -56,6 +56,28 @@ class TestApplyClientSideCompaction:
         )
         assert msgs is trimmed_messages
         assert cm is None  # context_management must not be forwarded
+
+    def test_below_threshold_does_not_compact(self):
+        """When token count is below compact_threshold, messages are returned unchanged."""
+        compact_threshold = 10000
+
+        with patch(
+            "litellm.responses.litellm_completion_transformation.transformation.token_counter",
+            return_value=compact_threshold - 1,
+        ), patch(
+            "litellm.responses.litellm_completion_transformation.transformation.trim_messages",
+        ) as mock_trim:
+            msgs, cm = LiteLLMCompletionResponsesConfig._apply_client_side_compaction(
+                messages=MESSAGES,
+                model=MODEL,
+                context_management=[
+                    {"type": "compaction", "compact_threshold": compact_threshold}
+                ],
+            )
+
+        mock_trim.assert_not_called()
+        assert msgs is MESSAGES
+        assert cm is not None  # context_management is passed through unchanged
 
     def test_compaction_entry_without_threshold_does_not_compact(self):
         """When compact_threshold is absent there is no target to trim to, so messages are left unchanged."""
@@ -84,6 +106,9 @@ class TestApplyClientSideCompaction:
         expected_target = 2000  # 8000 * 0.25
 
         with patch(
+            "litellm.responses.litellm_completion_transformation.transformation.token_counter",
+            return_value=compact_threshold + 1,
+        ), patch(
             "litellm.responses.litellm_completion_transformation.transformation.trim_messages",
             return_value=MESSAGES,
         ) as mock_trim:
