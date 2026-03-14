@@ -9,6 +9,11 @@ from typing import Any, Optional
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 from .base import FocusDestination, FocusTimeWindow
 
@@ -131,45 +136,38 @@ class FocusVantageDestination(FocusDestination):
         # rejection (e.g. InvoiceIssuerName, ProviderName, PublisherName).
         content = _strip_unsupported_columns(content)
 
-        # Reuse a single HTTP client for the entire deliver() call
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # Check both size and row-count limits before single-shot upload
-            lines = content.split(b"\n")
-            data_line_count = sum(1 for line in lines[1:] if line.strip())
-            within_limits = (
-                len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
-                and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
-            )
-            if within_limits:
-                await self._upload_csv(client, content, filename)
-                return
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback,
+            params={"timeout": 60.0},
+        )
 
-            # Otherwise split into batches respecting both limits
-            await self._upload_batched(client, content, filename)
+        # Check both size and row-count limits before single-shot upload
+        lines = content.split(b"\n")
+        data_line_count = sum(1 for line in lines[1:] if line.strip())
+        within_limits = (
+            len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
+            and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
+        )
+        if within_limits:
+            await self._upload_csv(client, content, filename)
+            return
+
+        # Otherwise split into batches respecting both limits
+        await self._upload_batched(client, content, filename)
 
     async def _upload_csv(
-        self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
+        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
     ) -> None:
         url = f"{self.base_url}/v2/integrations/" f"{self.integration_token}/costs.csv"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        response = await client.post(
+        await client.post(
             url,
             headers=headers,
             files={"csv": (filename, csv_bytes, "text/csv")},
         )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            verbose_logger.error(
-                "Vantage destination: upload failed for %s — %s — response body: %s",
-                filename,
-                e,
-                response.text,
-            )
-            raise
 
         verbose_logger.debug(
             "Vantage destination: uploaded %d bytes (%s)",
@@ -178,7 +176,7 @@ class FocusVantageDestination(FocusDestination):
         )
 
     async def _upload_batched(
-        self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
+        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
     ) -> None:
         """Split the CSV into batches and upload each.
 
@@ -217,7 +215,7 @@ class FocusVantageDestination(FocusDestination):
 
     async def _upload_size_limited(
         self,
-        client: httpx.AsyncClient,
+        client: AsyncHTTPHandler,
         header: bytes,
         data_lines: list[bytes],
         filename: str,

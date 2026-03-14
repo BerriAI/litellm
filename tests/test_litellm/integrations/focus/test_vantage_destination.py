@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,6 +14,8 @@ from litellm.integrations.focus.destinations.vantage_destination import (
     VANTAGE_MAX_BYTES_PER_UPLOAD,
     VANTAGE_MAX_ROWS_PER_UPLOAD,
 )
+
+MOCK_TARGET = "litellm.integrations.focus.destinations.vantage_destination.get_async_httpx_client"
 
 
 def _window(freq: str = "hourly", hour: int = 5) -> FocusTimeWindow:
@@ -72,17 +74,14 @@ async def test_should_skip_empty_content():
 @pytest.mark.asyncio
 async def test_should_upload_csv_to_correct_url():
     dest = FocusVantageDestination(prefix="exports", config=_config())
-    captured: Dict[str, Any] = {}
 
     mock_response = AsyncMock()
     mock_response.raise_for_status = lambda: None
 
-    mock_client = AsyncMock()
+    mock_client = MagicMock()
     mock_client.post = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("litellm.integrations.focus.destinations.vantage_destination.httpx.AsyncClient", return_value=mock_client):
+    with patch(MOCK_TARGET, return_value=mock_client):
         await dest.deliver(
             content=b"header\nrow1\n",
             time_window=_window(),
@@ -114,9 +113,7 @@ async def test_should_batch_large_content():
     mock_response = AsyncMock()
     mock_response.raise_for_status = lambda: None
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client = MagicMock()
 
     async def capture_post(url, **kwargs):
         files = kwargs.get("files", {})
@@ -126,7 +123,7 @@ async def test_should_batch_large_content():
 
     mock_client.post = capture_post
 
-    with patch("litellm.integrations.focus.destinations.vantage_destination.httpx.AsyncClient", return_value=mock_client):
+    with patch(MOCK_TARGET, return_value=mock_client):
         await dest.deliver(
             content=large_content,
             time_window=_window(),
@@ -160,9 +157,7 @@ async def test_should_batch_by_row_count():
     mock_response = AsyncMock()
     mock_response.raise_for_status = lambda: None
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client = MagicMock()
 
     async def capture_post(url, **kwargs):
         files = kwargs.get("files", {})
@@ -172,7 +167,7 @@ async def test_should_batch_by_row_count():
 
     mock_client.post = capture_post
 
-    with patch("litellm.integrations.focus.destinations.vantage_destination.httpx.AsyncClient", return_value=mock_client):
+    with patch(MOCK_TARGET, return_value=mock_client):
         await dest.deliver(
             content=content,
             time_window=_window(),
