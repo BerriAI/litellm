@@ -11,6 +11,10 @@
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
 - [ ] I have requested a Greptile review by commenting `@greptileai` and received a **Confidence Score of at least 4/5** before requesting a maintainer review
 
+## Delays in PR merge?
+
+If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slack (#pr-review)](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA).
+
 ## CI (LiteLLM team)
 
 > **CI status guideline:**
