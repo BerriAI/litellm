@@ -167,10 +167,15 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_thinking_blocks_converted_to_text():
     """
-    Test that thinking_blocks on assistant messages are converted to content
-    blocks prepended before the existing content.
+    Test that thinking_blocks on assistant messages are converted to standard
+    text content blocks prepended before the existing content.
+
+    vLLM/sglang only accept standard OpenAI content types (text, image_url,
+    video_url, audio_url), so thinking blocks must be converted to text.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/22997
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -204,9 +209,10 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assistant_msg = transformed["messages"][1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
+    # Thinking content is converted to standard text blocks
     assert assistant_msg["content"][0] == {
-        "type": "thinking",
-        "thinking": "Let me reason about this...",
+        "type": "text",
+        "text": "Let me reason about this...",
     }
     assert assistant_msg["content"][1] == {
         "type": "text",
@@ -217,7 +223,8 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
     """
-    Test thinking_blocks prepended when assistant content is already a list.
+    Test thinking_blocks converted to text and prepended when assistant
+    content is already a list.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -247,13 +254,58 @@ def test_hosted_vllm_thinking_blocks_with_list_content():
     )
     assistant_msg = transformed["messages"][0]
     assert len(assistant_msg["content"]) == 3
+    # All content blocks are standard text type
     assert assistant_msg["content"][0] == {
-        "type": "thinking",
-        "thinking": "Step 1 reasoning",
+        "type": "text",
+        "text": "Step 1 reasoning",
     }
     assert assistant_msg["content"][1] == {
-        "type": "thinking",
-        "thinking": "Step 2 reasoning",
+        "type": "text",
+        "text": "Step 2 reasoning",
     }
     assert assistant_msg["content"][2] == {"type": "text", "text": "Response text"}
+    assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_redacted_thinking_blocks_dropped():
+    """
+    Test that redacted_thinking blocks are dropped since they contain
+    opaque data with no value for non-Anthropic providers.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Final answer.",
+            "thinking_blocks": [
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque_signature_data_abc123",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Useful reasoning here",
+                    "signature": "sig1",
+                },
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    # Redacted thinking is dropped, only real thinking + original content remain
+    assert len(assistant_msg["content"]) == 2
+    assert assistant_msg["content"][0] == {
+        "type": "text",
+        "text": "Useful reasoning here",
+    }
+    assert assistant_msg["content"][1] == {
+        "type": "text",
+        "text": "Final answer.",
+    }
     assert "thinking_blocks" not in assistant_msg
