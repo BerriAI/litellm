@@ -68,14 +68,13 @@ def test_build_config_basic_openai():
     config = SetupWizard._build_config(
         [_OPENAI],
         {"OPENAI_API_KEY": "sk-test"},
-        4000,
         "sk-master",
     )
     assert "model_list:" in config
     assert "model_name: gpt-4o" in config
     assert "model: gpt-4o" in config
     assert "api_key: os.environ/OPENAI_API_KEY" in config
-    assert "master_key: sk-master" in config
+    assert 'master_key: "sk-master"' in config
 
 
 def test_build_config_skipped_provider_omitted():
@@ -83,7 +82,6 @@ def test_build_config_skipped_provider_omitted():
     config = SetupWizard._build_config(
         [_OPENAI, _ANTHROPIC],
         {"ANTHROPIC_API_KEY": "sk-ant-test"},  # OpenAI key missing
-        4000,
         "sk-master",
     )
     assert "gpt-4o" not in config
@@ -95,10 +93,19 @@ def test_build_config_env_vars_written_escaped():
     config = SetupWizard._build_config(
         [_OPENAI],
         {"OPENAI_API_KEY": 'sk-ab"cd'},
-        4000,
         "sk-master",
     )
     assert 'OPENAI_API_KEY: "sk-ab\\"cd"' in config
+
+
+def test_build_config_master_key_quoted():
+    """master_key must be quoted in YAML to handle special characters."""
+    config = SetupWizard._build_config(
+        [_OPENAI],
+        {"OPENAI_API_KEY": "sk-test"},
+        'sk-master"special',
+    )
+    assert 'master_key: "sk-master\\"special"' in config
 
 
 def test_build_config_does_not_mutate_env_vars():
@@ -109,7 +116,7 @@ def test_build_config_does_not_mutate_env_vars():
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-deployment",
     }
     original_keys = set(env_vars.keys())
-    SetupWizard._build_config([_AZURE], env_vars, 4000, "sk-master")
+    SetupWizard._build_config([_AZURE], env_vars, "sk-master")
     assert set(env_vars.keys()) == original_keys
 
 
@@ -119,7 +126,7 @@ def test_build_config_azure_uses_deployment_name():
         "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
     }
-    config = SetupWizard._build_config([_AZURE], env_vars, 4000, "sk-master")
+    config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
     assert "model: azure/my-gpt4o" in config
     assert "model_name: azure-my-gpt4o" in config
 
@@ -131,22 +138,22 @@ def test_build_config_no_display_name_collision_openai_and_azure():
         "AZURE_API_KEY": "az-key",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "gpt-4o",
     }
-    config = SetupWizard._build_config([_OPENAI, _AZURE], env_vars, 4000, "sk-master")
-    assert "model_name: gpt-4o" in config        # OpenAI
+    config = SetupWizard._build_config([_OPENAI, _AZURE], env_vars, "sk-master")
+    assert "model_name: gpt-4o" in config  # OpenAI
     assert "model_name: azure-gpt-4o" in config  # Azure — qualified
 
 
 def test_build_config_ollama_no_api_key_line():
     """Ollama has no env_key — config should not contain an api_key line for it."""
-    config = SetupWizard._build_config([_OLLAMA], {}, 4000, "sk-master")
+    config = SetupWizard._build_config([_OLLAMA], {}, "sk-master")
     assert "ollama/llama3.2" in config
     assert "api_key:" not in config
 
 
-def test_build_config_port_in_general_settings():
-    """Port is not currently written to general_settings, but master_key is."""
-    config = SetupWizard._build_config([_OPENAI], {"OPENAI_API_KEY": "k"}, 8080, "sk-m")
-    assert "master_key: sk-m" in config
+def test_build_config_master_key_in_general_settings():
+    """master_key is written to general_settings."""
+    config = SetupWizard._build_config([_OPENAI], {"OPENAI_API_KEY": "k"}, "sk-m")
+    assert 'master_key: "sk-m"' in config
 
 
 def test_build_config_internal_sentinel_keys_excluded():
@@ -155,5 +162,5 @@ def test_build_config_internal_sentinel_keys_excluded():
         "OPENAI_API_KEY": "sk-real",
         "_LITELLM_AZURE_API_BASE_AZURE": "https://x.azure.com",
     }
-    config = SetupWizard._build_config([_OPENAI], env_vars, 4000, "sk-master")
+    config = SetupWizard._build_config([_OPENAI], env_vars, "sk-master")
     assert "_LITELLM_" not in config

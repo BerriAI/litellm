@@ -13,10 +13,19 @@ import re
 import secrets
 import sys
 import sysconfig
-import termios
-import tty
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+# termios / tty are Unix-only; fall back gracefully on Windows
+try:
+    import termios
+    import tty
+
+    _HAS_RAW_TERMINAL: bool = True
+except ImportError:
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
+    _HAS_RAW_TERMINAL = False
 
 from litellm.utils import check_valid_key
 
@@ -221,7 +230,7 @@ class SetupWizard:
         config_path = Path(os.getcwd()) / "litellm_config.yaml"
         try:
             config_path.write_text(
-                SetupWizard._build_config(providers, env_vars, port, master_key)
+                SetupWizard._build_config(providers, env_vars, master_key)
             )
         except OSError as exc:
             print(f"\n  {bold(_CROSS + ' Could not write config:')} {exc}")
@@ -251,14 +260,19 @@ class SetupWizard:
     @staticmethod
     def _select_providers() -> List[Dict]:
         """Arrow-key multi-select. Falls back to number input if /dev/tty unavailable."""
+        if not _HAS_RAW_TERMINAL:
+            return SetupWizard._select_fallback()
         try:
             return SetupWizard._select_interactive()
-        except (OSError, termios.error):
+        except OSError:
             return SetupWizard._select_fallback()
 
     @staticmethod
     def _read_key() -> str:
         """Read one keypress from /dev/tty in raw mode."""
+        assert (
+            termios is not None and tty is not None
+        )  # only called when _HAS_RAW_TERMINAL
         with open("/dev/tty", "rb") as tty_fh:
             fd = tty_fh.fileno()
             old = termios.tcgetattr(fd)
@@ -390,8 +404,6 @@ class SetupWizard:
             if not key:
                 continue
 
-            env_vars[p["env_key"]] = key
-
             for extra_key, extra_hint in zip(
                 p.get("extra_keys", []), p.get("extra_hints", [])
             ):
@@ -413,7 +425,8 @@ class SetupWizard:
                         deployment
                     )
 
-            SetupWizard._validate_and_report(p, key)
+            # Store the key returned by validation — may be a re-entered replacement
+            env_vars[p["env_key"]] = SetupWizard._validate_and_report(p, key)
 
         return env_vars
 
@@ -432,14 +445,14 @@ class SetupWizard:
                 return ""
 
     @staticmethod
-    def _validate_and_report(provider: Dict, api_key: str) -> None:
+    def _validate_and_report(provider: Dict, api_key: str) -> str:
         """
         Validate credentials using litellm.utils.check_valid_key and print result.
-        Offers a re-entry loop on failure.
+        Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
         """
         test_model: Optional[str] = provider.get("test_model")
         if not test_model:
-            return  # Azure / Bedrock / Ollama — skip
+            return api_key  # Azure / Bedrock / Ollama — skip validation
 
         while True:
             print(
@@ -451,21 +464,21 @@ class SetupWizard:
                 print(
                     f"  {green(_CHECK)} {bold(provider['name'])} connected successfully"
                 )
-                return
+                return api_key
 
             print(f"  {_CROSS} {bold(provider['name'])} {grey('— invalid API key')}")
             if (
                 _styled_input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").lower()
                 != "y"
             ):
-                return
+                return api_key
 
             hint = grey(provider.get("key_hint", ""))
             new_key = _styled_input(
                 f"  {blue('❯')} {bold(provider['name'])} API key {hint}: "
             )
             if not new_key:
-                return
+                return api_key
             api_key = new_key
 
     # ── proxy settings ───────────────────────────────────────────────────────
@@ -496,7 +509,6 @@ class SetupWizard:
     def _build_config(
         providers: List[Dict],
         env_vars: Dict[str, str],
-        port: int,
         master_key: str,
     ) -> str:
         env_copy = dict(env_vars)  # work on a copy — do not mutate caller's dict
@@ -535,7 +547,12 @@ class SetupWizard:
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")
 
-        lines += ["", "general_settings:", f"  master_key: {master_key}", ""]
+        lines += [
+            "",
+            "general_settings:",
+            f'  master_key: "{_yaml_escape(master_key)}"',
+            "",
+        ]
 
         real_vars = {k: v for k, v in env_copy.items() if not k.startswith("_LITELLM_")}
         if real_vars:
