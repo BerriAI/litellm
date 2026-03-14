@@ -62,7 +62,7 @@ async def batch_upsert_tools(
             key_hash = item.get("key_hash")
             team_id = item.get("team_id")
             key_alias = item.get("key_alias")
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             await prisma_client.db.execute_raw(
                 'INSERT INTO "LiteLLM_ToolTable" '
                 "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias, created_at, updated_at) "
@@ -140,7 +140,7 @@ async def update_tool_policy(
     """Update the call_policy for a tool. Upserts the row if it does not exist yet."""
     try:
         _updated_by = updated_by or "system"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         await prisma_client.db.execute_raw(
             'INSERT INTO "LiteLLM_ToolTable" (tool_id, tool_name, call_policy, created_by, updated_by, created_at, updated_at) '
             "VALUES ($4, $1, $2, $3, $3, $5, $5) "
