@@ -554,6 +554,43 @@ def test_get_user_agent_tags():
     assert "User-Agent: litellm/0.1.0" in tags
 
 
+def test_get_user_agent_tags_case_insensitive():
+    """
+    Test that _get_user_agent_tags handles headers with different casing.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23553
+    HTTP headers are case-insensitive, so 'User-Agent' should be treated the
+    same as 'user-agent'.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test with capitalized 'User-Agent' header (common in HTTP clients)
+    tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "User-Agent": "pydantic-ai/1.0.0",
+            }
+        }
+    )
+
+    assert tags is not None, "Tags should not be None for capitalized User-Agent header"
+    assert "User-Agent: pydantic-ai" in tags
+    assert "User-Agent: pydantic-ai/1.0.0" in tags
+
+    # Test with all-caps 'USER-AGENT' header
+    tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "USER-AGENT": "some-client/2.0",
+            }
+        }
+    )
+
+    assert tags is not None, "Tags should not be None for all-caps USER-AGENT header"
+    assert "User-Agent: some-client" in tags
+    assert "User-Agent: some-client/2.0" in tags
+
+
 def test_get_request_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
