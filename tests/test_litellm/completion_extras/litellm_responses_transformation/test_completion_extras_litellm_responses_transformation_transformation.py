@@ -1995,3 +1995,91 @@ def test_map_optional_params_preserves_reasoning_summary():
     assert responses_api_request["reasoning"] == {"effort": "high", "summary": "detailed"}
     assert responses_api_request["reasoning"]["effort"] == "high"
     assert responses_api_request["reasoning"]["summary"] == "detailed"
+
+
+def test_convert_chat_completion_file_type_to_input_file():
+    """
+    Test that Chat Completion content with type 'file' is correctly mapped
+    to Responses API 'input_file' format, not stringified as 'input_text'.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23588
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this PDF?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                        "filename": "test.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        messages
+    )
+
+    assert len(input_items) == 1
+    msg = input_items[0]
+    assert msg["type"] == "message"
+    assert msg["role"] == "user"
+
+    content = msg["content"]
+    assert len(content) == 2
+
+    # First item should be the text
+    assert content[0]["type"] == "input_text"
+    assert content[0]["text"] == "What is in this PDF?"
+
+    # Second item should be input_file, NOT input_text with stringified dict
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_data"] == "data:application/pdf;base64,JVBERi0xLjQK"
+    assert content[1]["filename"] == "test.pdf"
+    # Ensure it does NOT have the nested 'file' key
+    assert "file" not in content[1]
+
+
+def test_convert_chat_completion_file_type_with_file_id():
+    """
+    Test that Chat Completion content with type 'file' using file_id is correctly mapped.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "file-abc123",
+                    },
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        messages
+    )
+
+    content = input_items[0]["content"]
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_id"] == "file-abc123"
+    assert "file_data" not in content[1]
