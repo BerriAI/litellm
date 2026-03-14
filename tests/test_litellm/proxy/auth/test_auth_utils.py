@@ -260,10 +260,7 @@ def test_get_customer_user_header_returns_sorted_customers_header_when_multiple_
     ]
     result = get_customer_user_header_from_mapping(mappings)
     assert result == ['x-user-id', 'x-openwebui-user-email']
-
-
-####################################
-
+    
 
 def test_get_end_user_id_returns_id_from_user_header_mappings():
     from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body

@@ -383,24 +383,3 @@ def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expec
 
     model = get_model_from_request(request_data, route)
     assert model == expected_model
-
-
-# def test_get_end_user_id_from_request_body_no_user_found():
-#     """Test that function returns None when no user ID is found anywhere"""
-#     from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-#     from fastapi import Request
-#     from unittest.mock import MagicMock, patch
-
-#     # Create a mock Request object with no relevant headers
-#     mock_request = MagicMock(spec=Request)
-#     mock_request.headers = {"X-Other-Header": "some-value"}
-    
-#     # Mock general_settings with user_header_name that doesn't match headers
-#     general_settings_config = {"user_header_name": "X-User-ID"}
-    
-#     # Request body with no user identifiers
-#     request_body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
-    
-#     with patch('litellm.proxy.proxy_server.general_settings', general_settings_config):
-#         end_user_id = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
-#         assert end_user_id is None
