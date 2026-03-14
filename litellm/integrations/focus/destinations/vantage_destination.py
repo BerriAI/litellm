@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from typing import Any, Optional
 
 import httpx
@@ -13,6 +15,77 @@ from .base import FocusDestination, FocusTimeWindow
 # Vantage enforces a 10,000-row / 2 MB limit per upload.
 VANTAGE_MAX_ROWS_PER_UPLOAD = 10_000
 VANTAGE_MAX_BYTES_PER_UPLOAD = 2 * 1024 * 1024  # 2 MB
+
+# Columns that Vantage actually supports for custom provider CSV uploads.
+# See: https://docs.vantage.sh/connecting_custom_providers
+# Columns not in this set are silently dropped before upload so Vantage
+# does not reject the file.
+VANTAGE_SUPPORTED_COLUMNS = {
+    # Required
+    "ChargeCategory",
+    "ChargePeriodStart",
+    "BilledCost",
+    "ServiceName",
+    # Optional
+    "BillingCurrency",
+    "BillingAccountId",
+    "BillingAccountName",
+    "ChargePeriodEnd",
+    "ChargeDescription",
+    "ChargeFrequency",
+    "ConsumedQuantity",
+    "ConsumedUnit",
+    "ContractedCost",
+    "EffectiveCost",
+    "ListCost",
+    "RegionId",
+    "RegionName",
+    "ResourceId",
+    "ResourceName",
+    "ResourceType",
+    "ServiceCategory",
+    "ServiceSubcategory",
+    "SubAccountId",
+    "SubAccountName",
+    "Tags",
+}
+
+
+def _strip_unsupported_columns(csv_bytes: bytes) -> bytes:
+    """Remove CSV columns not in VANTAGE_SUPPORTED_COLUMNS.
+
+    Parses the header row, identifies column indices to keep, and
+    rebuilds the CSV with only those columns.
+    """
+    lines = csv_bytes.split(b"\n")
+    if not lines:
+        return csv_bytes
+
+    header_cols = lines[0].decode("utf-8").split(",")
+    keep_indices = [
+        i
+        for i, col in enumerate(header_cols)
+        if col.strip('"') in VANTAGE_SUPPORTED_COLUMNS
+    ]
+
+    # If all columns are supported, return as-is
+    if len(keep_indices) == len(header_cols):
+        return csv_bytes
+
+    dropped = [col for i, col in enumerate(header_cols) if i not in keep_indices]
+    verbose_logger.debug(
+        "Vantage destination: dropping unsupported columns: %s", dropped
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    reader = csv.reader(io.StringIO(csv_bytes.decode("utf-8")))
+    for row in reader:
+        if not row:
+            continue
+        writer.writerow([row[i] for i in keep_indices])
+
+    return output.getvalue().encode("utf-8")
 
 
 class FocusVantageDestination(FocusDestination):
@@ -39,9 +112,7 @@ class FocusVantageDestination(FocusDestination):
             )
         self.api_key = api_key
         self.integration_token = integration_token
-        self.base_url = config.get(
-            "base_url", "https://api.vantage.sh"
-        )
+        self.base_url = config.get("base_url", "https://api.vantage.sh")
         self.prefix = prefix
 
     async def deliver(
@@ -55,6 +126,10 @@ class FocusVantageDestination(FocusDestination):
         if not content:
             verbose_logger.debug("Vantage destination: empty content, skipping upload")
             return
+
+        # Strip columns that Vantage does not support to avoid silent
+        # rejection (e.g. InvoiceIssuerName, ProviderName, PublisherName).
+        content = _strip_unsupported_columns(content)
 
         # Reuse a single HTTP client for the entire deliver() call
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -75,10 +150,7 @@ class FocusVantageDestination(FocusDestination):
     async def _upload_csv(
         self, client: httpx.AsyncClient, csv_bytes: bytes, filename: str
     ) -> None:
-        url = (
-            f"{self.base_url}/v2/integrations/"
-            f"{self.integration_token}/costs.csv"
-        )
+        url = f"{self.base_url}/v2/integrations/" f"{self.integration_token}/costs.csv"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
         }
@@ -86,15 +158,16 @@ class FocusVantageDestination(FocusDestination):
         response = await client.post(
             url,
             headers=headers,
-            files={"file": (filename, csv_bytes, "text/csv")},
+            files={"csv": (filename, csv_bytes, "text/csv")},
         )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             verbose_logger.error(
-                "Vantage destination: upload failed for %s — %s",
+                "Vantage destination: upload failed for %s — %s — response body: %s",
                 filename,
                 e,
+                response.text,
             )
             raise
 
@@ -174,7 +247,10 @@ class FocusVantageDestination(FocusDestination):
                 )
                 continue
 
-            if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
+            if (
+                current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD
+                and current_chunk
+            ):
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
                 try:
@@ -182,7 +258,8 @@ class FocusVantageDestination(FocusDestination):
                 except Exception as e:
                     verbose_logger.error(
                         "Vantage destination: sub-batch %s failed: %s",
-                        batch_filename, e,
+                        batch_filename,
+                        e,
                     )
                     if first_error is None:
                         first_error = e
@@ -200,7 +277,8 @@ class FocusVantageDestination(FocusDestination):
             except Exception as e:
                 verbose_logger.error(
                     "Vantage destination: sub-batch %s failed: %s",
-                    batch_filename, e,
+                    batch_filename,
+                    e,
                 )
                 if first_error is None:
                     first_error = e

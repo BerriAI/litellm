@@ -64,7 +64,9 @@ class FocusLogger(CustomLogger):
                 )
         env_prefix = os.getenv("FOCUS_PREFIX")
         self.prefix: str = (
-            prefix if prefix is not None else (env_prefix if env_prefix else "focus_exports")
+            prefix
+            if prefix is not None
+            else (env_prefix if env_prefix else "focus_exports")
         )
 
         self._destination_config = destination_config
@@ -90,7 +92,13 @@ class FocusLogger(CustomLogger):
         start_time_utc: Optional[datetime] = None,
         end_time_utc: Optional[datetime] = None,
     ) -> None:
-        """Public hook to trigger export immediately."""
+        """Public hook to trigger export immediately.
+
+        When called without time bounds (manual /vantage/export with no
+        start/end), exports **all** available data instead of the last
+        scheduled window.  The hourly/daily window only applies to
+        automatic scheduler runs.
+        """
         if bool(start_time_utc) ^ bool(end_time_utc):
             raise ValueError(
                 "start_time_utc and end_time_utc must be provided together"
@@ -102,9 +110,10 @@ class FocusLogger(CustomLogger):
                 end_time=end_time_utc,
                 frequency=self.frequency,
             )
+            await self._export_window(window=window, limit=limit)
         else:
-            window = self._compute_time_window(datetime.now(timezone.utc))
-        await self._export_window(window=window, limit=limit)
+            # No time bounds → export all available data
+            await self._export_all(limit=limit)
 
     async def dry_run_export_usage_data(
         self, limit: Optional[int] = DEFAULT_DRY_RUN_LIMIT
@@ -190,6 +199,15 @@ class FocusLogger(CustomLogger):
         window = self._compute_time_window(datetime.now(timezone.utc))
         await self._export_window(window=window, limit=None)
 
+    async def _export_all(
+        self,
+        *,
+        limit: Optional[int],
+    ) -> None:
+        """Export all available data without a time window filter."""
+        engine = self._ensure_engine()
+        await engine.export_all(limit=limit)
+
     async def _export_window(
         self,
         *,
@@ -219,5 +237,6 @@ class FocusLogger(CustomLogger):
             end_time=end_time,
             frequency=self.frequency,
         )
+
 
 __all__ = ["FocusLogger"]
