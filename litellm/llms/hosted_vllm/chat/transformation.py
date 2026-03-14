@@ -171,9 +171,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         new_content.extend(existing_content)
                     if new_content:
                         message["content"] = new_content  # type: ignore
-                    elif message.get("content") is None:
-                        # All thinking blocks were filtered out and no
-                        # existing content — ensure a valid content field
+                    elif not isinstance(message.get("content"), (str, list)):
+                        # All thinking blocks were filtered out and content
+                        # is missing or invalid — ensure a valid content field
                         # since thinking_blocks was already popped.
                         message["content"] = ""  # type: ignore
             elif message["role"] == "user":
