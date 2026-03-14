@@ -282,9 +282,9 @@ async def test_list_tags_with_dynamic_tags():
 
             # Setup dynamic tags via group_by — includes one that overlaps with stored
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[
-                {"tag": "dynamic-tag-1", "_min": {"created_at": datetime(2025, 2, 1)}, "_max": {"updated_at": datetime(2025, 3, 1)}},
-                {"tag": "dynamic-tag-2", "_min": {"created_at": datetime(2025, 2, 2)}, "_max": {"updated_at": datetime(2025, 3, 2)}},
-                {"tag": "stored-tag", "_min": {"created_at": datetime(2025, 1, 1)}, "_max": {"updated_at": datetime(2025, 1, 1)}},  # duplicate, should be excluded
+                {"tag": "dynamic-tag-1", "_min": {"created_at": "2025-02-01T00:00:00Z"}, "_max": {"updated_at": "2025-03-01T00:00:00Z"}},
+                {"tag": "dynamic-tag-2", "_min": {"created_at": "2025-02-02T00:00:00Z"}, "_max": {"updated_at": "2025-03-02T00:00:00Z"}},
+                {"tag": "stored-tag", "_min": {"created_at": "2025-01-01T00:00:00Z"}, "_max": {"updated_at": "2025-01-01T00:00:00Z"}},  # duplicate, should be excluded
             ])
 
             headers = {"Authorization": "Bearer sk-1234"}
