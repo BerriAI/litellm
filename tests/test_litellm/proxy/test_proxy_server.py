@@ -25,6 +25,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -106,8 +107,8 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "redirect_url": "http://testserver/ui/?login=success",
-        "token": "signed-token",
     }
+    assert "token" not in response.json()
     assert response.cookies.get("token") == "signed-token"
 
     mock_authenticate_user.assert_awaited_once_with(

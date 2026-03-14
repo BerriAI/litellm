@@ -11040,8 +11040,12 @@ async def login_v2(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "/ui/"
         litellm_dashboard_ui += "?login=success"
 
+        response_content: dict = {"redirect_url": litellm_dashboard_ui}
+        if len(proxy_config.worker_registry) > 0:
+            response_content["token"] = jwt_token
+
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+            content=response_content,
             status_code=status.HTTP_200_OK,
         )
         json_response.set_cookie(key="token", value=jwt_token)

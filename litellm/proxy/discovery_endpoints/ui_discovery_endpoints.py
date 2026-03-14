@@ -39,5 +39,5 @@ async def get_ui_config():
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,
         is_control_plane=is_control_plane,
-        workers=proxy_config.worker_registry,
+        workers=proxy_config.worker_registry if is_control_plane else [],
     )

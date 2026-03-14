@@ -281,6 +281,10 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
         assert response.status_code == 200
         data = response.json()
         assert data["is_control_plane"] is True
+        assert len(data["workers"]) == 1
+        assert data["workers"][0]["worker_id"] == "team-a"
+        assert data["workers"][0]["name"] == "Team A"
+        assert data["workers"][0]["url"] == "https://worker-1:4001"
 
 
 def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
@@ -302,3 +306,4 @@ def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
         assert response.status_code == 200
         data = response.json()
         assert data["is_control_plane"] is False
+        assert data["workers"] == []
