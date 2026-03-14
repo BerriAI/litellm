@@ -79,9 +79,10 @@ fi
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
 header "Installing litellm[proxy]…"
+info "This clones from GitHub and may take 2–3 minutes on first install."
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade --force-reinstall --no-cache-dir "${LITELLM_PACKAGE}" \
+"$PYTHON_BIN" -m pip install --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by pip for this Python ───────────────
