@@ -5,8 +5,9 @@ The ``_expand_model_aliases`` function processes ``aliases`` lists from model
 entries, creating shared dict references for alias entries at load time.
 """
 
-import logging
+from unittest.mock import patch
 
+from litellm import verbose_logger
 from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
 
 
@@ -118,7 +119,7 @@ class TestExpandModelAliases:
 class TestAliasConflicts:
     """Tests for alias conflict detection and handling."""
 
-    def test_alias_conflicts_with_canonical_entry(self, caplog):
+    def test_alias_conflicts_with_canonical_entry(self):
         """Alias that matches an existing canonical entry is skipped with a warning."""
         model_cost = {
             "model-latest": {
@@ -133,14 +134,17 @@ class TestAliasConflicts:
                 "mode": "chat",
             },
         }
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with patch.object(verbose_logger, "warning") as mock_warn:
             result = _expand_model_aliases(model_cost)
 
         # The canonical "model-dated" entry is preserved, not overwritten
         assert "model-dated" in result
-        assert "alias conflict" in caplog.text.lower()
+        # Verify a warning about the alias conflict was logged
+        mock_warn.assert_called()
+        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
+        assert "alias conflict" in warning_messages.lower()
 
-    def test_duplicate_alias_across_entries(self, caplog):
+    def test_duplicate_alias_across_entries(self):
         """Same alias claimed by two different entries: second one is skipped."""
         model_cost = {
             "model-a": {
@@ -156,13 +160,16 @@ class TestAliasConflicts:
                 "mode": "chat",
             },
         }
-        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with patch.object(verbose_logger, "warning") as mock_warn:
             result = _expand_model_aliases(model_cost)
 
         # "shared-alias" should point to model-a (first one wins)
         assert "shared-alias" in result
         assert result["shared-alias"]["input_cost_per_token"] == 1e-06
-        assert "alias conflict" in caplog.text.lower()
+        # Verify a warning about the alias conflict was logged
+        mock_warn.assert_called()
+        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
+        assert "alias conflict" in warning_messages.lower()
 
     def test_canonical_entry_not_overwritten_by_alias(self):
         """An alias must never overwrite an existing canonical entry's data."""
