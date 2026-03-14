@@ -2736,6 +2736,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "").endswith("_tool_result"):
                             assistant_content.append(m)  # type: ignore
+                        # handle tool_use blocks - prevent duplicate tool_use ids
+                        # This can happen when message history contains Anthropic-native tool_use blocks
+                        # alongside tool_calls field with the same ids
+                        elif m.get("type", "") == "tool_use":
+                            _tool_use_id = m.get("id")
+                            if _tool_use_id:
+                                if _tool_use_id in unique_tool_ids:
+                                    # Skip duplicate tool_use id to prevent
+                                    # "tool_use ids must be unique" error from Anthropic
+                                    continue
+                                unique_tool_ids.add(_tool_use_id)
+                            assistant_content.append(m)  # type: ignore
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)

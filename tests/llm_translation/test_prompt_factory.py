@@ -1944,3 +1944,125 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"
     assert content[3]["signature"] == "sig_2"
+
+
+def test_anthropic_messages_pt_tool_use_in_content_list_with_tool_calls():
+    """
+    Test that tool_use blocks in content list are properly deduplicated
+    when the message also has tool_calls field with the same id.
+
+    This prevents "tool_use ids must be unique" errors from Anthropic API.
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check the weather."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC123",
+                    "name": "get_weather",
+                    "input": {"location": "SF"},
+                },
+            ],
+            # Also has tool_calls with the SAME id
+            "tool_calls": [
+                {
+                    "id": "toolu_01ABC123",  # Same id as in content!
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "SF"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01ABC123",
+            "content": "72F and sunny",
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    # Find the assistant message
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    # Count tool_use blocks with id "toolu_01ABC123"
+    tool_use_count = sum(
+        1
+        for c in content
+        if c.get("type") == "tool_use" and c.get("id") == "toolu_01ABC123"
+    )
+
+    # There should be exactly ONE tool_use block with this id
+    assert (
+        tool_use_count == 1
+    ), f"Expected 1 tool_use block with id 'toolu_01ABC123', got {tool_use_count}"
+
+
+def test_anthropic_messages_pt_tool_use_in_content_list_different_ids():
+    """
+    Test that tool_use blocks in content list are preserved
+    when tool_calls has different ids.
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check the weather."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC123",
+                    "name": "get_weather",
+                    "input": {"location": "SF"},
+                },
+            ],
+            # tool_calls with a DIFFERENT id
+            "tool_calls": [
+                {
+                    "id": "toolu_01XYZ789",
+                    "type": "function",
+                    "function": {
+                        "name": "get_time",
+                        "arguments": '{"timezone": "PST"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01ABC123",
+            "content": "72F and sunny",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01XYZ789",
+            "content": "10:30 AM",
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    # Find the assistant message
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    # Count all tool_use blocks
+    tool_use_ids = [c.get("id") for c in content if c.get("type") == "tool_use"]
+
+    # Both tool_use blocks should be present
+    assert "toolu_01ABC123" in tool_use_ids
+    assert "toolu_01XYZ789" in tool_use_ids
+
+    # Each id should appear exactly once
+    assert tool_use_ids.count("toolu_01ABC123") == 1
+    assert tool_use_ids.count("toolu_01XYZ789") == 1
