@@ -124,14 +124,9 @@ async def get_deployments_for_tag(
         # behaviour for operators who use plain tags: a request that carries a
         # User-Agent (all proxy requests do) but targets deployments with no
         # tag_regex will continue to use the original tag-only code path.
-        _healthy_list = (
-            healthy_deployments
-            if isinstance(healthy_deployments, list)
-            else list(healthy_deployments)
-        )
         has_regex_deployments = any(
             d.get("litellm_params", {}).get("tag_regex")
-            for d in _healthy_list
+            for d in healthy_deployments
         )
         has_tag_filter = bool(request_tags) or (
             bool(header_strings) and has_regex_deployments
