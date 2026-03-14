@@ -8,8 +8,6 @@ returns in assistant responses but rejects on subsequent requests.
 
 import copy
 
-import pytest
-
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     _strip_empty_text_blocks_from_anthropic_messages,
 )
@@ -122,6 +120,27 @@ def test_user_messages_also_sanitized():
     result = _strip_empty_text_blocks_from_anthropic_messages(messages)
     assert len(result[0]["content"]) == 1
     assert result[0]["content"][0]["type"] == "image"
+
+
+def test_whitespace_only_text_blocks_removed():
+    """Whitespace-only text blocks (e.g. ' ') are treated as empty and removed."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": " "},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01D",
+                    "name": "search",
+                    "input": {"q": "test"},
+                },
+            ],
+        },
+    ]
+    result = _strip_empty_text_blocks_from_anthropic_messages(messages)
+    assert len(result[0]["content"]) == 1
+    assert result[0]["content"][0]["type"] == "tool_use"
 
 
 def test_empty_messages_list():

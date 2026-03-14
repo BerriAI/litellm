@@ -73,7 +73,7 @@ def _strip_empty_text_blocks_from_anthropic_messages(
             if not (
                 isinstance(block, dict)
                 and block.get("type") == "text"
-                and not block.get("text")
+                and not (block.get("text") or "").strip()
             )
         ]
         # Only replace if we actually removed something, and keep at
