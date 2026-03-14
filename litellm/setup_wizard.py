@@ -9,6 +9,7 @@ and generating a proxy config file — mirroring the Claude Code onboarding UX.
 
 import importlib.metadata
 import os
+import re
 import secrets
 import sys
 import sysconfig
@@ -97,6 +98,8 @@ PROVIDERS: List[Dict] = [
 # ANSI colour helpers
 # ---------------------------------------------------------------------------
 
+_ANSI_RE = re.compile(r"\033\[[^m]*m")
+
 _ORANGE = "\033[38;2;215;119;87m"
 _DIM = "\033[2m"
 _BOLD = "\033[1m"
@@ -144,6 +147,29 @@ def dim(t: str) -> str:
     return _c(_DIM, t)
 
 
+def _divider() -> str:
+    """Return a styled divider line (evaluated at call-time, not import-time)."""
+    return dim("  " + "╌" * 74)
+
+
+def _styled_input(prompt: str) -> str:
+    """
+    Like input() but wraps ANSI sequences in readline ignore markers
+    (\\001...\\002) so readline correctly tracks the cursor column.
+    In non-TTY contexts, strips ANSI entirely so no escape codes appear.
+    """
+    if sys.stdout.isatty():
+        rl_prompt = _ANSI_RE.sub(lambda m: f"\001{m.group()}\002", prompt)
+    else:
+        rl_prompt = _ANSI_RE.sub("", prompt)
+    return input(rl_prompt).strip()
+
+
+def _yaml_escape(value: str) -> str:
+    """Escape a string for safe embedding in a double-quoted YAML scalar."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 # ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
@@ -157,12 +183,11 @@ LITELLM_ASCII = r"""
   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
 """
 
-DIVIDER = dim("  " + "╌" * 74)
-
 
 # ---------------------------------------------------------------------------
 # Setup wizard
 # ---------------------------------------------------------------------------
+
 
 class SetupWizard:
     """
@@ -194,9 +219,14 @@ class SetupWizard:
         port, master_key = SetupWizard._proxy_settings()
 
         config_path = Path(os.getcwd()) / "litellm_config.yaml"
-        config_path.write_text(
-            SetupWizard._build_config(providers, env_vars, port, master_key)
-        )
+        try:
+            config_path.write_text(
+                SetupWizard._build_config(providers, env_vars, port, master_key)
+            )
+        except OSError as exc:
+            print(f"\n  {bold(_CROSS + ' Could not write config:')} {exc}")
+            print("  Try running from a directory you have write access to.\n")
+            return
 
         SetupWizard._print_success(config_path, port, master_key)
         SetupWizard._offer_start(config_path, port, master_key)
@@ -213,7 +243,7 @@ class SetupWizard:
         print(orange(LITELLM_ASCII.rstrip("\n")))
         print(f"  {orange('Welcome')} to {bold('LiteLLM')} {grey('v' + version)}")
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
 
     # ── provider selector ───────────────────────────────────────────────────
@@ -310,7 +340,7 @@ class SetupWizard:
         print()
 
         while True:
-            raw = input(f"  {blue('❯')} Provider(s): ").strip()
+            raw = _styled_input(f"  {blue('❯')} Provider(s): ")
             if not raw:
                 print(grey("  Please select at least one provider."))
                 continue
@@ -330,10 +360,11 @@ class SetupWizard:
     def _collect_keys(providers: List[Dict]) -> Dict[str, str]:
         env_vars: Dict[str, str] = {}
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
         print(f"  {bold('Enter your API keys')}")
         print(grey("  Keys are stored only in the generated config file."))
+        print(grey("  Tip: add litellm_config.yaml to .gitignore to avoid committing secrets."))
         print()
 
         for p in providers:
@@ -350,16 +381,21 @@ class SetupWizard:
             for extra_key, extra_hint in zip(
                 p.get("extra_keys", []), p.get("extra_hints", [])
             ):
-                val = input(f"  {blue('❯')} {extra_key} {grey(extra_hint)}: ").strip()
+                val = _styled_input(f"  {blue('❯')} {extra_key} {grey(extra_hint)}: ")
                 if val:
                     env_vars[extra_key] = val
 
             if p.get("needs_api_base"):
-                api_base = input(
+                api_base = _styled_input(
                     f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: "
-                ).strip()
+                )
                 if api_base:
                     env_vars[f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"] = api_base
+                deployment = _styled_input(
+                    f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: "
+                )
+                if deployment:
+                    env_vars[f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"] = deployment
 
             SetupWizard._validate_and_report(p, key)
 
@@ -370,17 +406,17 @@ class SetupWizard:
         """Prompt for a provider's API key, with skip option. Returns the key or ''."""
         hint = grey(provider.get("key_hint", ""))
         while True:
-            key = input(f"  {blue('❯')} {bold(provider['name'])} API key {hint}: ").strip()
+            key = _styled_input(f"  {blue('❯')} {bold(provider['name'])} API key {hint}: ")
             if key:
                 return key
             print(grey("  Key is required. Leave blank to skip this provider."))
-            if input(grey("  Skip? (y/N): ")).strip().lower() == "y":
+            if _styled_input(grey("  Skip? (y/N): ")).lower() == "y":
                 return ""
 
     @staticmethod
     def _validate_and_report(provider: Dict, api_key: str) -> None:
         """
-        Validate credentials using litellm.utils.check_valid_key.
+        Validate credentials using litellm.utils.check_valid_key and print result.
         Offers a re-entry loop on failure.
         """
         test_model: Optional[str] = provider.get("test_model")
@@ -388,20 +424,20 @@ class SetupWizard:
             return  # Azure / Bedrock / Ollama — skip
 
         while True:
-            print(f"  {grey('Testing credentials…')}", end="", flush=True)
+            print(f"  {grey('Testing connection to ' + provider['name'] + '...')}", flush=True)
             valid = check_valid_key(model=test_model, api_key=api_key)
             if valid:
-                print(f"\r  {green(_CHECK + ' ' + provider['name'])} credentials valid        ")
+                print(f"  {green(_CHECK)} {bold(provider['name'])} connected successfully")
                 return
 
-            print(f"\r  {_c(_BOLD, _CROSS)} {bold(provider['name'])} {grey('invalid API key')}")
-            if input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").strip().lower() != "y":
+            print(f"  {_CROSS} {bold(provider['name'])} {grey('— invalid API key')}")
+            if _styled_input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").lower() != "y":
                 return
 
             hint = grey(provider.get("key_hint", ""))
-            new_key = input(
+            new_key = _styled_input(
                 f"  {blue('❯')} {bold(provider['name'])} API key {hint}: "
-            ).strip()
+            )
             if not new_key:
                 return
             api_key = new_key
@@ -411,13 +447,20 @@ class SetupWizard:
     @staticmethod
     def _proxy_settings() -> "tuple[int, str]":
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
         print(f"  {bold('Proxy settings')}")
         print()
-        port_raw = input(f"  {blue('❯')} Port {grey('[4000]')}: ").strip()
-        port = int(port_raw) if port_raw.isdigit() else 4000
-        key_raw = input(f"  {blue('❯')} Master key {grey('[auto-generate]')}: ").strip()
+        port = 4000
+        while True:
+            port_raw = _styled_input(f"  {blue('❯')} Port {grey('[4000]')}: ")
+            if not port_raw:
+                break
+            if port_raw.isdigit() and 1 <= int(port_raw) <= 65535:
+                port = int(port_raw)
+                break
+            print(grey("  Enter a valid port number (1–65535)."))
+        key_raw = _styled_input(f"  {blue('❯')} Master key {grey('[auto-generate]')}: ")
         master_key = key_raw if key_raw else f"sk-{secrets.token_urlsafe(32)}"
         return port, master_key
 
@@ -430,34 +473,49 @@ class SetupWizard:
         port: int,
         master_key: str,
     ) -> str:
+        env_copy = dict(env_vars)  # work on a copy — do not mutate caller's dict
         lines = ["model_list:"]
         for p in providers:
-            models = p["models"] if p["models"] else (["azure/gpt-4o"] if p["id"] == "azure" else [])
+            # Only emit models for providers that actually have credentials
+            has_creds = p["env_key"] is None or p["env_key"] in env_copy
+            if not has_creds:
+                continue
+
+            if p["id"] == "azure":
+                deployment = env_copy.pop(
+                    f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}", "gpt-4o"
+                )
+                models = [f"azure/{deployment}"]
+            else:
+                models = p["models"]
+
             for model in models:
-                display = model.split("/")[-1] if "/" in model else model
+                raw_display = model.split("/")[-1] if "/" in model else model
+                # Qualify azure display names to avoid collision with OpenAI model names
+                display = f"azure-{raw_display}" if p["id"] == "azure" else raw_display
                 lines += [
                     f"  - model_name: {display}",
-                    f"    litellm_params:",
+                    "    litellm_params:",
                     f"      model: {model}",
                 ]
-                if p["env_key"] and p["env_key"] in env_vars:
+                if p["env_key"] and p["env_key"] in env_copy:
                     lines.append(f"      api_key: os.environ/{p['env_key']}")
                 if p.get("api_base"):
                     lines.append(f"      api_base: {p['api_base']}")
                 elif p.get("needs_api_base"):
-                    azure_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
-                    if azure_key in env_vars:
-                        lines.append(f"      api_base: {env_vars.pop(azure_key)}")
+                    azure_base_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
+                    if azure_base_key in env_copy:
+                        lines.append(f"      api_base: {env_copy.pop(azure_base_key)}")
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")
 
         lines += ["", "general_settings:", f"  master_key: {master_key}", ""]
 
-        real_vars = {k: v for k, v in env_vars.items() if not k.startswith("_LITELLM_")}
+        real_vars = {k: v for k, v in env_copy.items() if not k.startswith("_LITELLM_")}
         if real_vars:
             lines.append("environment_variables:")
             for k, v in real_vars.items():
-                lines.append(f'  {k}: "{v}"')
+                lines.append(f'  {k}: "{_yaml_escape(v)}"')
             lines.append("")
 
         return "\n".join(lines)
@@ -467,7 +525,7 @@ class SetupWizard:
     @staticmethod
     def _print_success(config_path: Path, port: int, master_key: str) -> None:
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
         print(f"  {green(_CHECK + ' Config saved')} → {bold(str(config_path))}")
         print()
@@ -480,12 +538,14 @@ class SetupWizard:
         print(f"    export OPENAI_BASE_URL=http://localhost:{port}")
         print(f"    export OPENAI_API_KEY={master_key}")
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
 
     @staticmethod
     def _offer_start(config_path: Path, port: int, master_key: str) -> None:
-        start = input(f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: ").strip().lower()
+        start = _styled_input(
+            f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: "
+        ).lower()
         if start not in ("", "y", "yes"):
             print()
             print(f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready.")
@@ -495,7 +555,7 @@ class SetupWizard:
             return
 
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
         print(f"  {bold('Proxy is starting on')} http://localhost:{port}")
         print()
@@ -512,21 +572,25 @@ class SetupWizard:
         print()
         print(f"    http://localhost:{port}/ui  {grey('(login with your master key)')}")
         print()
-        print(DIVIDER)
+        print(_divider())
         print()
         print(f"  {green(_CHECK)} Starting…  {grey('(Ctrl+C to stop)')}")
         print()
 
         scripts_dir = sysconfig.get_path("scripts")
-        litellm_bin = os.path.join(scripts_dir, "litellm")
-        os.execlp(litellm_bin, litellm_bin, "--config", str(config_path), "--port", str(port))  # noqa: S606
+        litellm_bin = os.path.join(scripts_dir or "", "litellm")
+        try:
+            os.execlp(litellm_bin, litellm_bin, "--config", str(config_path), "--port", str(port))  # noqa: S606
+        except OSError as exc:
+            print(f"\n  {bold(_CROSS + ' Could not start proxy:')} {exc}")
+            print(f"  Run manually:  litellm --config {config_path} --port {port}\n")
 
 
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
-def run_setup_wizard() -> Optional[str]:
+
+def run_setup_wizard() -> None:
     """Run the interactive setup wizard. Called by `litellm --setup`."""
     SetupWizard.run()
-    return None

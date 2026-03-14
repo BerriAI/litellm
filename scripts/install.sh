@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # LiteLLM Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
-set -euo pipefail
+#
+# NOTE: set -e without pipefail for POSIX sh compatibility (dash on Ubuntu/Debian
+# ignores the shebang when invoked as `sh` and does not support `pipefail`).
+set -eu
 
 MIN_PYTHON_MAJOR=3
 MIN_PYTHON_MINOR=9
 
-# NOTE: set to "litellm[proxy]" before merging to main (once --setup ships in a PyPI release).
-# On this branch we install from git so the installer gets the --setup flag.
-LITELLM_PACKAGE="litellm[proxy] @ git+https://github.com/BerriAI/litellm.git@worktree-dynamic-tickling-journal"
+# NOTE: before merging, this must stay as "litellm[proxy]" to install from PyPI.
+LITELLM_PACKAGE="litellm[proxy]"
 
 # ── colours ────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -79,10 +81,9 @@ fi
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
 header "Installing litellm[proxy]…"
-printf "  \033[38;2;177;185;249m  ℹ This clones from GitHub and may take 2–3 minutes on first install.\033[0m\n"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade --force-reinstall "${LITELLM_PACKAGE}" \
+"$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" \
   || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by pip for this Python ───────────────
@@ -116,7 +117,11 @@ fi
 # ── launch setup wizard ────────────────────────────────────────────────────
 echo ""
 printf "  ${BOLD}Run the interactive setup wizard?${RESET} ${GREY}(Y/n)${RESET}: "
-read -r answer </dev/tty
+# /dev/tty may be unavailable in Docker/CI — default to yes if it can't be read
+answer=""
+if [ -r /dev/tty ]; then
+  read -r answer </dev/tty || answer=""
+fi
 
 if [ -z "$answer" ] || [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   echo ""
