@@ -641,7 +641,7 @@ You can set:
 - tpm limits (tokens per minute)
 - rpm limits (requests per minute)
 - max parallel requests
-- rpm / tpm limits per model for a given key
+- rpm / tpm limits per model for a given key or team
 
 ### TPM Rate Limit Type (Input/Output/Total)
 
@@ -688,6 +688,62 @@ curl --location 'http://0.0.0.0:4000/team/new' \
     "team_id": "my-prod-team",
 }
 ```
+
+</TabItem>
+<TabItem value="per-team-model" label="Per Team Per Model">
+
+**Set rate limits per model for a team**
+
+Use `model_rpm_limit` and `model_tpm_limit` to set rate limits per model for all keys belonging to a team. These limits apply across all keys in the team and are inherited by keys unless overridden at the key level.
+
+Use `/team/new` or `/team/update` with `model_rpm_limit` and `model_tpm_limit` as dictionaries mapping model names to their limits:
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+}'
+```
+
+**Update existing team with per-model limits:**
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/update' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+}'
+```
+
+**Alternative: Use metadata**
+
+You can also pass per-model limits via the `metadata` field:
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/update' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "team_id": "my-prod-team",
+  "metadata": {
+    "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
+    "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+  }
+}'
+```
+
+**Resolution order:** When a key belongs to a team, rate limits are resolved as: **Key metadata > Key model_max_budget > Team metadata**. Keys can override team-level per-model limits with their own `model_rpm_limit` or `model_tpm_limit`.
+
+**Verify:** Make a `/chat/completions` request and check response headers `x-litellm-key-remaining-requests-{model}` and `x-litellm-key-remaining-tokens-{model}` for the model-specific limits.
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
 
 </TabItem>
 <TabItem value="per-user" label="Per Internal User">
