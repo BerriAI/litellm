@@ -514,12 +514,18 @@ class ProxyExtrasDBManager:
                                 )
                                 if migration_match:
                                     migration_name = migration_match.group(1)
-                                    logger.info(
-                                        f"Rolling back migration {migration_name}"
-                                    )
-                                    ProxyExtrasDBManager._roll_back_migration(
-                                        migration_name
-                                    )
+                                    try:
+                                        logger.info(
+                                            f"Rolling back migration {migration_name}"
+                                        )
+                                        ProxyExtrasDBManager._roll_back_migration(
+                                            migration_name
+                                        )
+                                    except subprocess.CalledProcessError as rollback_err:
+                                        logger.warning(
+                                            f"Failed to roll back migration {migration_name}: {rollback_err}. "
+                                            f"It may already be in a rolled-back state."
+                                        )
                                     logger.info(
                                         f"Resolving migration {migration_name} that failed "
                                         f"due to existing schema objects"
@@ -528,6 +534,7 @@ class ProxyExtrasDBManager:
                                         migration_name
                                     )
                                     logger.info("✅ Migration resolved.")
+                                    return True
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
                                 logger.warning(
