@@ -50,6 +50,38 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
+    def _remove_scope_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `scope` field from cache_control blocks.
+
+        Some providers (Vertex AI, Azure AI Foundry) do not support the `scope`
+        field in cache_control (e.g. "global" for cross-request caching).
+        Processes both `system` and `messages` content blocks.
+        """
+
+        def _sanitize(cache_control: Any) -> None:
+            if isinstance(cache_control, dict):
+                cache_control.pop("scope", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize(item["cache_control"])
+
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        _process_content_list(content)
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
