@@ -78,11 +78,7 @@ fi
 
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
-if [ -n "$LITELLM_BRANCH" ]; then
-  header "Installing litellm from branch '${LITELLM_BRANCH}'…"
-else
-  header "Installing litellm[proxy]…"
-fi
+header "Installing litellm[proxy]…"
 echo ""
 
 "$PYTHON_BIN" -m pip install --quiet --progress-bar off "${LITELLM_PACKAGE}" \
