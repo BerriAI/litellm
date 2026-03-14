@@ -224,3 +224,22 @@ def test_opus_4_6_bedrock_converse_registration():
     assert "us.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "eu.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
     assert "au.anthropic.claude-opus-4-6-v1" in litellm.bedrock_converse_models
+
+
+def test_vertex_ai_sonnet_4_6_has_1m_context_window():
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
+    with open(json_path) as f:
+        model_data = json.load(f)
+
+    for model_name in [
+        "vertex_ai/claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6@default",
+    ]:
+        assert model_name in model_data, f"Missing model entry: {model_name}"
+        info = model_data[model_name]
+        assert info["litellm_provider"] == "vertex_ai-anthropic_models"
+        assert info["max_input_tokens"] == 1000000
+        assert info["max_output_tokens"] == 64000
+        assert info["max_tokens"] == 64000
