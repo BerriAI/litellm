@@ -358,9 +358,7 @@ class ToolPolicyRegistry:
         blocked: set = set()
         for op_id in (object_permission_id, team_object_permission_id):
             if op_id and op_id.strip():
-                blocked.update(
-                    self._blocked_tools_by_op_id.get(op_id.strip(), [])
-                )
+                blocked.update(self._blocked_tools_by_op_id.get(op_id.strip(), []))
         result: Dict[str, str] = {}
         for name in tool_names:
             if name in blocked:

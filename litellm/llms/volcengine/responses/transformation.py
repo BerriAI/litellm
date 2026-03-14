@@ -92,7 +92,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> VolcEngineError:
         typed_headers: httpx.Headers = (
-            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
+            headers
+            if isinstance(headers, httpx.Headers)
+            else httpx.Headers(headers or {})
         )
         return VolcEngineError(
             status_code=status_code,
@@ -193,7 +195,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         allowed = set(self._SUPPORTED_OPTIONAL_PARAMS)
 
         sanitized_optional = {
-            k: v for k, v in response_api_optional_request_params.items() if k in allowed
+            k: v
+            for k, v in response_api_optional_request_params.items()
+            if k in allowed
         }
         # Ensure metadata never reaches provider
         sanitized_optional.pop("metadata", None)
@@ -203,7 +207,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # leaking unsupported params to the provider.
         if isinstance(sanitized_optional.get("extra_body"), dict):
             filtered_body = {
-                k: v for k, v in sanitized_optional["extra_body"].items() if k in allowed
+                k: v
+                for k, v in sanitized_optional["extra_body"].items()
+                if k in allowed
             }
             if filtered_body:
                 sanitized_optional["extra_body"] = filtered_body
@@ -438,9 +444,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return False
 
     @staticmethod
-    def _fill_missing_fields(
-        chunk: Any, event_model: Any
-    ) -> Dict[str, Any]:
+    def _fill_missing_fields(chunk: Any, event_model: Any) -> Dict[str, Any]:
         """
         Heuristically fill missing required fields with safe defaults based on the
         event model's field annotations. This keeps parsing tolerant of providers that
@@ -460,7 +464,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 continue
 
             # Explicit default or factory
-            if field.default is not pyd_fields.PydanticUndefined and field.default is not None:
+            if (
+                field.default is not pyd_fields.PydanticUndefined
+                and field.default is not None
+            ):
                 patched[name] = field.default
                 continue
             if (

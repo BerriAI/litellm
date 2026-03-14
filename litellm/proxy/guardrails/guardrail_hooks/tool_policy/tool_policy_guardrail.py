@@ -154,9 +154,10 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if not tool_names:
             return inputs
 
-        object_permission_id, team_object_permission_id = (
-            _get_request_object_permission_ids(request_data)
-        )
+        (
+            object_permission_id,
+            team_object_permission_id,
+        ) = _get_request_object_permission_ids(request_data)
         from litellm.proxy.db.tool_registry_writer import get_tool_policy_registry
 
         registry = get_tool_policy_registry()
@@ -172,7 +173,8 @@ class ToolPolicyGuardrail(CustomGuardrail):
         blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
-                "ToolPolicyGuardrail: blocking tool(s) %s (input_policy=blocked)", blocked
+                "ToolPolicyGuardrail: blocking tool(s) %s (input_policy=blocked)",
+                blocked,
             )
             raise HTTPException(
                 status_code=400,
@@ -199,7 +201,9 @@ class ToolPolicyGuardrail(CustomGuardrail):
                     if msg.get("role") != "tool":
                         continue
                     tool_call_id = msg.get("tool_call_id")
-                    source_tool = tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
+                    source_tool = (
+                        tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
+                    )
                     if not source_tool:
                         continue
                     if registry.get_output_policy(source_tool) == "untrusted":

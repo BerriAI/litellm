@@ -907,6 +907,7 @@ export const keyCreateForAgentCall = async (
   keyAlias: string,
   models: string[],
   metadata?: Record<string, any>,
+  teamId?: string | null,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
   const body: Record<string, any> = {
@@ -914,6 +915,9 @@ export const keyCreateForAgentCall = async (
     key_alias: keyAlias,
     models: models.length > 0 ? models : [],
   };
+  if (teamId) {
+    body.team_id = teamId;
+  }
   if (metadata && Object.keys(metadata).length > 0) {
     body.metadata = metadata;
   }
@@ -1195,6 +1199,65 @@ export const userListCall = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+/**
+ * Response type for /v2/user/info — lightweight endpoint that returns only the user object.
+ */
+export interface UserInfoV2Response {
+  user_id: string;
+  user_email: string | null;
+  user_alias: string | null;
+  user_role: string | null;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  budget_duration: string | null;
+  budget_reset_at: string | null;
+  metadata: Record<string, any> | null;
+  created_at: string | null;
+  updated_at: string | null;
+  sso_user_id: string | null;
+  teams: string[];
+}
+
+/**
+ * Lightweight user info fetch from /v2/user/info.
+ * Returns only the user object — no keys, no teams objects.
+ *
+ * @param accessToken - Bearer token for auth
+ * @param userId - Optional user ID to look up. If omitted, returns the caller's own info.
+ */
+export const userGetInfoV2 = async (
+  accessToken: string,
+  userId?: string,
+): Promise<UserInfoV2Response> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/user/info` : `/v2/user/info`;
+    if (userId) {
+      url += `?user_id=${encodeURIComponent(userId)}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch user info v2:", error);
     throw error;
   }
 };
@@ -9603,7 +9666,17 @@ export const storeMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to store OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to store OAuth credential");
   }
   return response.json();
 };
@@ -9621,7 +9694,17 @@ export const deleteMCPOAuthUserCredential = async (
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error((err as { detail?: { error?: string } })?.detail?.error || "Failed to revoke OAuth credential");
+    const errObj = err as { detail?: unknown };
+    const detail = errObj?.detail;
+    const detailMsg =
+      Array.isArray(detail)
+        ? detail.map((d: unknown) => (d && typeof d === "object" ? (d as Record<string, unknown>).msg ?? JSON.stringify(d) : String(d))).join("; ")
+        : typeof detail === "string"
+          ? detail
+          : detail && typeof (detail as Record<string, unknown>).error === "string"
+            ? (detail as Record<string, unknown>).error as string
+            : undefined;
+    throw new Error(detailMsg || "Failed to revoke OAuth credential");
   }
   return response.json();
 };

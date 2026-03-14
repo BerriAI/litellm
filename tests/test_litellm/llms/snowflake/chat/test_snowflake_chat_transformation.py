@@ -107,12 +107,19 @@ class TestSnowflakeToolTransformation:
         """
         Test that string tool_choice values are transformed to Snowflake object format.
 
-        Snowflake requires tool_choice to be an object, not a string.
-        Ref: https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/reference/cortex-inference#post--api-v2-cortex-inference-complete-req-body-schema
+        Snowflake's API (like Anthropic) requires tool_choice as an object
+        with a "type" field, not as a bare string. OpenAI's "required" maps
+        to Snowflake's "any".
         """
         config = SnowflakeConfig()
 
-        for value in ["auto", "required", "none"]:
+        expected_mappings = {
+            "auto": {"type": "auto"},
+            "required": {"type": "any"},
+            "none": {"type": "none"},
+        }
+
+        for value, expected in expected_mappings.items():
             optional_params = {"tool_choice": value}
 
             transformed_request = config.transform_request(
@@ -123,8 +130,10 @@ class TestSnowflakeToolTransformation:
                 headers={},
             )
 
-            # Snowflake requires object format: {"type": "auto"} not string "auto"
-            assert transformed_request["tool_choice"] == {"type": value}
+            assert transformed_request["tool_choice"] == expected, (
+                f"tool_choice='{value}' should be transformed to {expected}, "
+                f"got {transformed_request['tool_choice']}"
+            )
 
     def test_transform_response_with_tool_calls(self):
         """

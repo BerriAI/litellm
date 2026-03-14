@@ -1729,3 +1729,562 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     for condition in or_conditions:
         field = list(condition.keys())[0]
         assert condition[field] == {"in": ["admin-creator"]}
+
+
+# =====================================================================
+# /v2/user/info endpoint tests
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
+    """
+    Test that proxy admin can query any user via /v2/user/info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "target-user-123",
+        "user_email": "target@example.com",
+        "user_alias": "Target User",
+        "user_role": "internal_user",
+        "spend": 42.5,
+        "max_budget": 100.0,
+        "models": ["gpt-4"],
+        "budget_duration": "30d",
+        "budget_reset_at": None,
+        "metadata": {"team": "engineering"},
+        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        "sso_user_id": "sso-abc",
+        "teams": ["team-1", "team-2"],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        if kwargs.get("where", {}).get("user_id") == "target-user-123":
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="target-user-123",
+        user_api_key_dict=admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.user_id == "target-user-123"
+    assert response.user_email == "target@example.com"
+    assert response.user_alias == "Target User"
+    assert response.user_role == "internal_user"
+    assert response.spend == 42.5
+    assert response.max_budget == 100.0
+    assert response.models == ["gpt-4"]
+    assert response.teams == ["team-1", "team-2"]
+    assert response.sso_user_id == "sso-abc"
+    assert response.metadata == {"team": "engineering"}
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_internal_user_can_query_self(mocker):
+    """
+    Test that an internal user can query their own info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "self-user",
+        "user_email": "self@example.com",
+        "user_alias": None,
+        "user_role": "internal_user",
+        "spend": 10.0,
+        "max_budget": None,
+        "models": [],
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "metadata": None,
+        "created_at": None,
+        "updated_at": None,
+        "sso_user_id": None,
+        "teams": [],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        if kwargs.get("where", {}).get("user_id") == "self-user":
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    user_key = UserAPIKeyAuth(
+        user_id="self-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="self-user",
+        user_api_key_dict=user_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.user_id == "self-user"
+    assert response.user_email == "self@example.com"
+    assert response.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_internal_user_cannot_query_other(mocker):
+    """
+    Test that an internal user cannot query another user - returns 404.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Caller user has no teams (so no team admin access)
+    mock_caller_row = mocker.MagicMock()
+    mock_caller_row.teams = []
+
+    async def mock_find_unique(*args, **kwargs):
+        user_id = kwargs.get("where", {}).get("user_id")
+        if user_id == "caller-user":
+            return mock_caller_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    user_key = UserAPIKeyAuth(
+        user_id="caller-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mock_request,
+            user_id="other-user-456",
+            user_api_key_dict=user_key,
+        )
+
+    assert exc_info.value.code == "404"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_no_user_id_defaults_to_self(mocker):
+    """
+    Test that omitting user_id defaults to the caller's own user info.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "my-user-id",
+        "user_email": "me@example.com",
+        "user_alias": None,
+        "user_role": "internal_user",
+        "spend": 0.0,
+        "max_budget": None,
+        "models": [],
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "metadata": None,
+        "created_at": None,
+        "updated_at": None,
+        "sso_user_id": None,
+        "teams": [],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        if kwargs.get("where", {}).get("user_id") == "my-user-id":
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    user_key = UserAPIKeyAuth(
+        user_id="my-user-id", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    # Call without user_id
+    response = await user_info_v2(
+        request=mock_request,
+        user_id=None,
+        user_api_key_dict=user_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.user_id == "my-user-id"
+    assert response.user_email == "me@example.com"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_nonexistent_user_returns_404(mocker):
+    """
+    Test that querying a nonexistent user returns 404.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_find_unique(*args, **kwargs):
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mock_request,
+            user_id="nonexistent-user-id",
+            user_api_key_dict=admin_key,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "nonexistent-user-id" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_response_shape(mocker):
+    """
+    Test that the response shape contains expected fields and
+    does NOT contain keys or teams objects (only team IDs).
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "shape-test-user",
+        "user_email": "shape@example.com",
+        "user_alias": "Shape Test",
+        "user_role": "internal_user",
+        "spend": 5.0,
+        "max_budget": 50.0,
+        "models": ["gpt-3.5-turbo"],
+        "budget_duration": "7d",
+        "budget_reset_at": datetime(2024, 7, 1, tzinfo=timezone.utc),
+        "metadata": {"env": "test"},
+        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        "sso_user_id": None,
+        "teams": ["team-a", "team-b"],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        return mock_user_row
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="shape-test-user",
+        user_api_key_dict=admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+
+    # Verify all expected fields are present
+    response_dict = response.model_dump()
+    expected_fields = {
+        "user_id", "user_email", "user_alias", "user_role", "spend",
+        "max_budget", "models", "budget_duration", "budget_reset_at",
+        "metadata", "created_at", "updated_at", "sso_user_id", "teams",
+    }
+    assert set(response_dict.keys()) == expected_fields
+
+    # Verify teams is a list of strings (team IDs), not team objects
+    assert isinstance(response.teams, list)
+    assert all(isinstance(t, str) for t in response.teams)
+    assert response.teams == ["team-a", "team-b"]
+
+    # Verify models is a list of strings
+    assert isinstance(response.models, list)
+    assert response.models == ["gpt-3.5-turbo"]
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_admin_can_query_team_member(mocker):
+    """
+    Test that a team admin can query info of a user in their team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTable, UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Caller (team admin)
+    mock_caller = mocker.MagicMock()
+    mock_caller.teams = ["shared-team-id"]
+
+    # Target user (team member)
+    mock_target = mocker.MagicMock()
+    mock_target.teams = ["shared-team-id"]
+    mock_target.model_dump.return_value = {
+        "user_id": "target-member",
+        "user_email": "member@example.com",
+        "user_alias": None,
+        "user_role": "internal_user",
+        "spend": 0.0,
+        "max_budget": None,
+        "models": [],
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "metadata": None,
+        "created_at": None,
+        "updated_at": None,
+        "sso_user_id": None,
+        "teams": ["shared-team-id"],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        uid = kwargs.get("where", {}).get("user_id")
+        if uid == "team-admin-user":
+            return mock_caller
+        elif uid == "target-member":
+            return mock_target
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Mock team with caller as admin
+    mock_team = mocker.MagicMock()
+    mock_team.team_id = "shared-team-id"
+    mock_team.model_dump.return_value = {
+        "team_id": "shared-team-id",
+        "team_alias": "Shared Team",
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "role": "admin"},
+            {"user_id": "target-member", "role": "user"},
+        ],
+    }
+
+    async def mock_find_many_teams(*args, **kwargs):
+        return [mock_team]
+
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        side_effect=mock_find_many_teams
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    team_admin_key = UserAPIKeyAuth(
+        user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="target-member",
+        user_api_key_dict=team_admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.user_id == "target-member"
+    assert response.user_email == "member@example.com"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
+    """
+    Test that a team admin cannot query a user NOT in their team - returns 404.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Caller (team admin of team-A)
+    mock_caller = mocker.MagicMock()
+    mock_caller.teams = ["team-A"]
+
+    # Target user (in team-B only)
+    mock_target = mocker.MagicMock()
+    mock_target.teams = ["team-B"]
+
+    async def mock_find_unique(*args, **kwargs):
+        uid = kwargs.get("where", {}).get("user_id")
+        if uid == "team-admin-user":
+            return mock_caller
+        elif uid == "non-member-user":
+            return mock_target
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Mock team where caller is admin
+    mock_team = mocker.MagicMock()
+    mock_team.team_id = "team-A"
+    mock_team.model_dump.return_value = {
+        "team_id": "team-A",
+        "team_alias": "Team A",
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "role": "admin"},
+        ],
+    }
+
+    async def mock_find_many_teams(*args, **kwargs):
+        return [mock_team]
+
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        side_effect=mock_find_many_teams
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    team_admin_key = UserAPIKeyAuth(
+        user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info_v2(
+            request=mock_request,
+            user_id="non-member-user",
+            user_api_key_dict=team_admin_key,
+        )
+
+    assert exc_info.value.code == "404"
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_url_encoding_plus_character(mocker):
+    """
+    Test that /v2/user/info properly handles email addresses with + characters.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    expected_user_id = "machine-user+admin@example.com"
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": expected_user_id,
+        "user_email": expected_user_id,
+        "user_alias": None,
+        "user_role": "internal_user",
+        "spend": 0.0,
+        "max_budget": None,
+        "models": [],
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "metadata": None,
+        "created_at": None,
+        "updated_at": None,
+        "sso_user_id": None,
+        "teams": [],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        uid = kwargs.get("where", {}).get("user_id")
+        if uid == expected_user_id:
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+    mock_request.url.query = f"user_id={expected_user_id}"
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Simulate FastAPI converting + to space
+    decoded_user_id = "machine-user admin@example.com"
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id=decoded_user_id,
+        user_api_key_dict=admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.user_id == expected_user_id

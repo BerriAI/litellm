@@ -94,7 +94,7 @@ class RouteChecks:
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
         )
 
     @staticmethod
@@ -183,6 +183,9 @@ class RouteChecks:
                             user_id, valid_token.user_id
                         ),
                     )
+            elif route == "/v2/user/info":
+                # handled by the endpoint itself (full RBAC in handler)
+                pass
             elif route == "/model/info":
                 # /model/info just shows models user has access to
                 pass
@@ -292,7 +295,7 @@ class RouteChecks:
 
         if route in LiteLLMRoutes.anthropic_routes.value:
             return True
-        
+
         if route in LiteLLMRoutes.google_routes.value:
             return True
 
@@ -300,7 +303,7 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
-        
+
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
         ):

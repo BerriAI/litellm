@@ -342,7 +342,12 @@ class BlackForestLabsImageGeneration:
 
             if status == "Ready":
                 return response
-            elif status in ["Error", "Failed", "Content Moderated", "Request Moderated"]:
+            elif status in [
+                "Error",
+                "Failed",
+                "Content Moderated",
+                "Request Moderated",
+            ]:
                 raise BlackForestLabsError(
                     status_code=400,
                     message=f"Image generation failed: {status}",
@@ -422,7 +427,12 @@ class BlackForestLabsImageGeneration:
 
             if status == "Ready":
                 return response
-            elif status in ["Error", "Failed", "Content Moderated", "Request Moderated"]:
+            elif status in [
+                "Error",
+                "Failed",
+                "Content Moderated",
+                "Request Moderated",
+            ]:
                 raise BlackForestLabsError(
                     status_code=400,
                     message=f"Image generation failed: {status}",

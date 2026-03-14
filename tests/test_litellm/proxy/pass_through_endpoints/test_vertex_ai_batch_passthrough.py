@@ -243,7 +243,7 @@ class TestVertexAIBatchPassthroughHandler:
         ]
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            vertex_ai_batch_responses, model_name="gemini-1.5-flash-001"
+            vertex_ai_batch_responses, model_name="gemini-2.0-flash-001"
         )
 
         assert usage.total_tokens == 15
@@ -395,7 +395,7 @@ class TestVertexAIBatchCostCalculation:
         ]
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            responses, model_name="gemini-1.5-flash-001"
+            responses, model_name="gemini-2.0-flash-001"
         )
 
         assert usage.prompt_tokens == 18
@@ -430,7 +430,7 @@ class TestVertexAIBatchCostCalculation:
         ]
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            responses, model_name="gemini-1.5-flash-001"
+            responses, model_name="gemini-2.0-flash-001"
         )
 
         assert usage.prompt_tokens == 18
@@ -443,7 +443,7 @@ class TestVertexAIBatchCostCalculation:
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            [], model_name="gemini-1.5-flash-001"
+            [], model_name="gemini-2.0-flash-001"
         )
 
         assert total_cost == 0.0
@@ -460,7 +460,7 @@ class TestVertexAIBatchCostCalculation:
         ]
 
         total_cost, usage = calculate_vertex_ai_batch_cost_and_usage(
-            responses, model_name="gemini-1.5-flash-001"
+            responses, model_name="gemini-2.0-flash-001"
         )
 
         assert usage.prompt_tokens == 0

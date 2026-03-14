@@ -80,7 +80,6 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
@@ -108,15 +107,26 @@ def get_key_models(
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
-        all_models = user_api_key_dict.models
+        all_models = list(
+            user_api_key_dict.models
+        )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_team_models.value in all_models:
-            all_models = user_api_key_dict.team_models
+            all_models = list(
+                user_api_key_dict.team_models
+            )  # copy to avoid mutating cached objects
         if SpecialModelNames.all_proxy_models.value in all_models:
-            all_models = proxy_model_list
+            all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
+            if include_model_access_groups:
+                all_models.extend(model_access_groups.keys())
 
     all_models = _get_models_from_access_groups(
-        model_access_groups=model_access_groups, all_models=all_models
+        model_access_groups=model_access_groups,
+        all_models=all_models,
+        include_model_access_groups=include_model_access_groups,
     )
+
+    # deduplicate while preserving order
+    all_models = list(dict.fromkeys(all_models))
 
     verbose_proxy_logger.debug("ALL KEY MODELS - {}".format(len(all_models)))
     return all_models
@@ -141,14 +151,17 @@ def get_team_models(
             all_models_set.update(team_models)
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
-
-    all_models = list(all_models_set)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
         all_models=list(all_models_set),
         include_model_access_groups=include_model_access_groups,
     )
+
+    # deduplicate while preserving order
+    all_models = list(dict.fromkeys(all_models))
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
@@ -176,6 +189,7 @@ def get_complete_model_list(
     """
 
     unique_models = []
+
     def append_unique(models):
         for model in models:
             if model not in unique_models:
@@ -188,7 +202,7 @@ def get_complete_model_list(
     else:
         append_unique(proxy_model_list)
         if include_model_access_groups:
-            append_unique(list(model_access_groups.keys())) # TODO: keys order
+            append_unique(list(model_access_groups.keys()))  # TODO: keys order
 
         if user_model:
             append_unique([user_model])

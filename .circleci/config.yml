@@ -4337,7 +4337,8 @@ jobs:
           name: Check for expected error
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
+               (grep -q "Database setup failed after multiple retries" docker_output.log || \
+                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."

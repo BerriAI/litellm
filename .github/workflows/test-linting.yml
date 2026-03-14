@@ -33,10 +33,10 @@ jobs:
         poetry lock
         poetry install --with dev
 
-    - name: Run Black formatting
+    - name: Check Black formatting
       run: |
         cd litellm
-        poetry run black .
+        poetry run black --check --exclude '/enterprise/' .
         cd ..
 
     - name: Debug - Check file state

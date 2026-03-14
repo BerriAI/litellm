@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
@@ -246,6 +247,26 @@ async def create_response(
     )
 
 
+def _is_azure_model_router_request(model: str) -> bool:
+    """
+    Check if the requested model is an Azure Model Router.
+
+    Azure Model Router models follow the pattern:
+    - azure_ai/model_router/<deployment-name>
+    - azure_ai/model-router
+    - model_router/<deployment-name>
+    - model-router
+
+    Args:
+        model: The requested model name
+
+    Returns:
+        bool: True if this is an Azure Model Router request
+    """
+    model_lower = model.lower()
+    return "model-router" in model_lower or "model_router" in model_lower
+
+
 def _override_openai_response_model(
     *,
     response_obj: Any,
@@ -265,9 +286,11 @@ def _override_openai_response_model(
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
 
-    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-    we should preserve the actual model that was used (the fallback model) rather than
-    overriding it with the originally requested model.
+    Exceptions:
+    1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+       we preserve the actual model that was used (the fallback model).
+    2. If the request was to an Azure Model Router, we preserve the actual model
+       that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     """
     if not requested_model:
         return
@@ -287,6 +310,14 @@ def _override_openai_response_model(
                 attempted_fallbacks,
             )
             return
+
+    # Check if this is an Azure Model Router request - if so, preserve the actual model used
+    if _is_azure_model_router_request(requested_model):
+        verbose_proxy_logger.debug(
+            "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
+            log_context,
+        )
+        return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
@@ -352,6 +383,32 @@ def _get_cost_breakdown_from_logging_obj(
     margin_percent = cost_breakdown.get("margin_percent")
 
     return original_cost, discount_amount, margin_total_amount, margin_percent
+
+
+def _has_attribute_error_in_chain(exc: Exception) -> bool:
+    """Walk the exception chain to find an AttributeError at any depth.
+
+    Checks __cause__, __context__, and the litellm-specific original_exception
+    attribute iteratively. Depth is capped at DEFAULT_MAX_RECURSE_DEPTH to
+    avoid infinite loops from circular exception references.
+    """
+    stack: list[BaseException] = [exc]
+    seen: set[int] = set()
+    depth = 0
+    while stack and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        current = stack.pop()
+        exc_id = id(current)
+        if exc_id in seen:
+            continue
+        seen.add(exc_id)
+        if isinstance(current, AttributeError):
+            return True
+        for attr in ("__cause__", "__context__", "original_exception"):
+            inner = getattr(current, attr, None)
+            if inner is not None and isinstance(inner, BaseException):
+                stack.append(inner)
+        depth += 1
+    return False
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -500,6 +557,8 @@ class ProxyBaseLLMRequestProcessing:
             "aresponses",
             "_arealtime",
             "_aresponses_websocket",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -523,6 +582,10 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -744,18 +807,36 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
             "acompact_responses",
+            "acreate_batch",
+            "aretrieve_batch",
+            "alist_batches",
+            "acancel_batch",
+            "afile_content",
+            "afile_retrieve",
+            "afile_delete",
             "atext_completion",
-            "aimage_edit",
+            "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
             "alist_input_items",
+            "aimage_edit",
             "agenerate_content",
             "agenerate_content_stream",
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -783,8 +864,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
-            "acancel_batch",
-            "afile_delete",
+            "asend_message",
+            "call_mcp_tool",
             "acreate_eval",
             "alist_evals",
             "aget_eval",
@@ -920,6 +1001,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=dict(request.headers),
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -1028,6 +1110,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=dict(request.headers),
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1196,6 +1279,9 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=(self.data.get("proxy_server_request") or {}).get(
+                    "headers", {}
+                ),
             )
             if callback_headers:
                 headers.update(callback_headers)
@@ -1222,23 +1308,11 @@ class ProxyBaseLLMRequestProcessing:
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
-        # Check for AttributeError in various places:
-        # 1. Direct AttributeError (already handled above)
-        # 2. In underlying exception (__cause__, __context__, original_exception)
-        has_attribute_error = (
-            (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__cause__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__context__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "original_exception", None), AttributeError)
-            )
-        )
+        # Check for AttributeError in the exception chain.
+        # The AttributeError may be wrapped in multiple layers
+        # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
+        # so walk __cause__, __context__, and original_exception recursively.
+        has_attribute_error = _has_attribute_error_in_chain(e)
 
         if has_attribute_error:
             raise ProxyException(

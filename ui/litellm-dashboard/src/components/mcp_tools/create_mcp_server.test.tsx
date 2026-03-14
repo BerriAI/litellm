@@ -53,8 +53,24 @@ const getServerNameInput = () => document.getElementById("server_name") as HTMLI
 /** Helper: select a dropdown option by opening a select near a label and clicking an option */
 async function selectAntOption(labelText: string, optionText: string) {
   const label = screen.getByText(labelText);
-  const formItem = label.closest(".ant-form-item")!;
-  const select = formItem.querySelector(".ant-select");
+  // First try to find a .ant-form-item ancestor (standard form fields)
+  let select: Element | null = null;
+  const formItem = label.closest(".ant-form-item");
+  if (formItem) {
+    select = formItem.querySelector(".ant-select");
+  }
+  // If not found, try .ant-collapse-content ancestor (auth type is inside a Collapse panel)
+  if (!select) {
+    const collapseContent = label.closest(".ant-collapse-item");
+    if (collapseContent) {
+      select = collapseContent.querySelector(".ant-select");
+    }
+  }
+  // Fallback: look for a sibling or nearby select
+  if (!select) {
+    const parent = label.closest("div");
+    select = parent?.querySelector(".ant-select") ?? null;
+  }
   act(() => {
     fireEvent.mouseDown(select!.querySelector(".ant-select-selector")!);
   });

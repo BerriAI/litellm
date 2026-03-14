@@ -148,9 +148,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         return None
 
-    def _get_max_iterations(
-        self, user_api_key_dict: UserAPIKeyAuth
-    ) -> Optional[int]:
+    def _get_max_iterations(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[int]:
         """Extract max_iterations from agent litellm_params, with fallback to key metadata."""
         # Try agent litellm_params first
         agent_id = user_api_key_dict.agent_id

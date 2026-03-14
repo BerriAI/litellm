@@ -21,8 +21,12 @@ class UpdateUsefulLinksRequest(BaseModel):
 
 class NewModelGroupRequest(BaseModel):
     access_group: str  # The access group name (e.g., "production-models")
-    model_names: Optional[List[str]] = None  # Existing model groups to include - tags ALL deployments for each name
-    model_ids: Optional[List[str]] = None  # Specific deployment IDs to tag (more precise than model_names)
+    model_names: Optional[
+        List[str]
+    ] = None  # Existing model groups to include - tags ALL deployments for each name
+    model_ids: Optional[
+        List[str]
+    ] = None  # Specific deployment IDs to tag (more precise than model_names)
 
 
 class NewModelGroupResponse(BaseModel):
@@ -33,8 +37,12 @@ class NewModelGroupResponse(BaseModel):
 
 
 class UpdateModelGroupRequest(BaseModel):
-    model_names: Optional[List[str]] = None  # Updated list of model groups to include - tags ALL deployments for each name
-    model_ids: Optional[List[str]] = None  # Specific deployment IDs to tag (more precise than model_names)
+    model_names: Optional[
+        List[str]
+    ] = None  # Updated list of model groups to include - tags ALL deployments for each name
+    model_ids: Optional[
+        List[str]
+    ] = None  # Specific deployment IDs to tag (more precise than model_names)
 
 
 class DeleteModelGroupResponse(BaseModel):

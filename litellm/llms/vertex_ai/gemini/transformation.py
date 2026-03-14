@@ -335,7 +335,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
                                 detail = img_element["image_url"].get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                                media_resolution_enum = (
+                                    _convert_detail_to_media_resolution_enum(detail)
+                                )
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_media(
@@ -384,7 +386,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
 
                             # Convert detail to media_resolution_enum
-                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                            media_resolution_enum = (
+                                _convert_detail_to_media_resolution_enum(detail)
+                            )
 
                             try:
                                 _part = _process_gemini_media(
@@ -402,10 +406,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     )
                                 )
                     user_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -473,19 +474,26 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _parts.append(_part)
 
                     assistant_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
                     # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    provider_specific_fields = assistant_msg.get(
+                        "provider_specific_fields"
+                    )
                     thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
-                    
+                    if provider_specific_fields and isinstance(
+                        provider_specific_fields, dict
+                    ):
+                        thought_signatures = provider_specific_fields.get(
+                            "thought_signatures"
+                        )
+
                     # If we have thought signatures, add them to the part
-                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                    if (
+                        thought_signatures
+                        and isinstance(thought_signatures, list)
+                        and len(thought_signatures) > 0
+                    ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
                     else:
@@ -502,7 +510,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 assistant_image_url = image_url_obj.get("url")
                                 format = image_url_obj.get("format")
                                 detail = image_url_obj.get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                                media_resolution_enum = (
+                                    _convert_detail_to_media_resolution_enum(detail)
+                                )
                                 if assistant_image_url:
                                     _part = _process_gemini_media(
                                         image_url=assistant_image_url,
@@ -583,13 +593,23 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
+# Keys that LiteLLM consumes internally and must never be forwarded to the
+_LITELLM_INTERNAL_EXTRA_BODY_KEYS: frozenset = frozenset({"cache", "tags"})
+
+
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
     """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
     extra_body: Optional[dict] = optional_params.pop("extra_body", None)
     if extra_body is not None:
         data_dict: dict = data  # type: ignore[assignment]
         for k, v in extra_body.items():
-            if k in data_dict and isinstance(data_dict[k], dict) and isinstance(v, dict):
+            if k in _LITELLM_INTERNAL_EXTRA_BODY_KEYS:
+                continue
+            if (
+                k in data_dict
+                and isinstance(data_dict[k], dict)
+                and isinstance(v, dict)
+            ):
                 data_dict[k].update(v)
             else:
                 data_dict[k] = v
@@ -665,7 +685,9 @@ def _transform_request_body(  # noqa: PLR0915
                 labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
+            k: v
+            for k, v in optional_params.items()
+            if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(
@@ -682,7 +704,9 @@ def _transform_request_body(  # noqa: PLR0915
                     max_media_resolution
                 )
                 if media_resolution_value and generation_config is not None:
-                    generation_config["mediaResolution"] = media_resolution_value["level"]
+                    generation_config["mediaResolution"] = media_resolution_value[
+                        "level"
+                    ]
 
         data = RequestBody(contents=content)
         if system_instructions is not None:
@@ -728,9 +752,9 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
         optional_params=optional_params,
@@ -747,7 +771,6 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
     )
-
 
     return _transform_request_body(
         messages=messages,
@@ -780,9 +803,9 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
         optional_params=optional_params,

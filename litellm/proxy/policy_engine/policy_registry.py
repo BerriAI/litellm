@@ -12,14 +12,18 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
-from litellm.types.proxy.policy_engine import (GuardrailPipeline, PipelineStep,
-                                               Policy, PolicyCondition,
-                                               PolicyCreateRequest,
-                                               PolicyDBResponse,
-                                               PolicyGuardrails,
-                                               PolicyUpdateRequest,
-                                               PolicyVersionCompareResponse,
-                                               PolicyVersionListResponse)
+from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
+    PipelineStep,
+    Policy,
+    PolicyCondition,
+    PolicyCreateRequest,
+    PolicyDBResponse,
+    PolicyGuardrails,
+    PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionListResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -468,7 +472,9 @@ class PolicyRegistry:
             verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
             raise Exception(f"Error getting policy from DB: {str(e)}")
 
-    def get_policy_by_id_for_request(self, policy_id: str) -> Optional[Tuple[str, Policy]]:
+    def get_policy_by_id_for_request(
+        self, policy_id: str
+    ) -> Optional[Tuple[str, Policy]]:
         """
         Return a policy version by ID from in-memory cache (no DB access).
 

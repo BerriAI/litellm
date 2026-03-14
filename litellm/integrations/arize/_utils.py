@@ -14,12 +14,12 @@ from litellm.types.utils import StandardLoggingPayload
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 from litellm.integrations._types.open_inference import (
-        MessageAttributes,
-        ImageAttributes,
-        SpanAttributes,
-        AudioAttributes,
-        EmbeddingAttributes,
-        OpenInferenceSpanKindValues
+    MessageAttributes,
+    ImageAttributes,
+    SpanAttributes,
+    AudioAttributes,
+    EmbeddingAttributes,
+    OpenInferenceSpanKindValues,
 )
 
 
@@ -158,7 +158,9 @@ def _set_audio_outputs(span: "Span", response_obj, audio_attrs, span_attrs):
 
         audio_transcript = audio_item.get("transcript")
         if audio_transcript:
-            safe_set_attribute(span, f"{audio_attrs.AUDIO_TRANSCRIPT}.{i}", audio_transcript)
+            safe_set_attribute(
+                span, f"{audio_attrs.AUDIO_TRANSCRIPT}.{i}", audio_transcript
+            )
 
 
 def _set_embedding_outputs(span: "Span", response_obj, embedding_attrs, span_attrs):
@@ -212,7 +214,9 @@ def _set_structured_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
                 message_content = getattr(first_content, "text", "")
             message_role = getattr(item, "role", "assistant")
             safe_set_attribute(span, span_attrs.OUTPUT_VALUE, message_content)
-            safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_CONTENT}", message_content)
+            safe_set_attribute(
+                span, f"{prefix}.{msg_attrs.MESSAGE_CONTENT}", message_content
+            )
             safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_ROLE}", message_role)
 
 
@@ -221,16 +225,24 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     if not usage:
         return
 
-    safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens"))
+    safe_set_attribute(
+        span, span_attrs.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens")
+    )
     completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
     if completion_tokens:
-        safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
+        safe_set_attribute(
+            span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        )
     prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
     if prompt_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
     reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
     if reasoning_tokens:
-        safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+            reasoning_tokens,
+        )
 
 
 def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
@@ -281,10 +293,14 @@ def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     ):
         return OpenInferenceSpanKindValues.LLM.value
 
-    if any(keyword in lowered for keyword in ("file", "batch", "container", "fine_tuning_job")):
+    if any(
+        keyword in lowered
+        for keyword in ("file", "batch", "container", "fine_tuning_job")
+    ):
         return OpenInferenceSpanKindValues.CHAIN.value
 
     return OpenInferenceSpanKindValues.UNKNOWN.value
+
 
 def _set_tool_attributes(
     span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]
@@ -294,18 +310,30 @@ def _set_tool_attributes(
         for idx, tool in enumerate(optional_tools):
             if not isinstance(tool, dict):
                 continue
-            function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+            function = (
+                tool.get("function") if isinstance(tool.get("function"), dict) else None
+            )
             if not function:
                 continue
             tool_name = function.get("name")
             if tool_name:
-                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.name", tool_name)
+                safe_set_attribute(
+                    span, f"{SpanAttributes.LLM_TOOLS}.{idx}.name", tool_name
+                )
             tool_description = function.get("description")
             if tool_description:
-                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.description", tool_description)
+                safe_set_attribute(
+                    span,
+                    f"{SpanAttributes.LLM_TOOLS}.{idx}.description",
+                    tool_description,
+                )
             params = function.get("parameters")
             if params is not None:
-                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.parameters", json.dumps(params))
+                safe_set_attribute(
+                    span,
+                    f"{SpanAttributes.LLM_TOOLS}.{idx}.parameters",
+                    json.dumps(params),
+                )
 
     if metadata_tools and isinstance(metadata_tools, list):
         for idx, tool in enumerate(metadata_tools):
@@ -343,7 +371,11 @@ def set_attributes(
         if standard_logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
-        metadata = standard_logging_payload.get("metadata") if standard_logging_payload else None
+        metadata = (
+            standard_logging_payload.get("metadata")
+            if standard_logging_payload
+            else None
+        )
         _set_metadata_attributes(span, metadata, SpanAttributes)
 
         metadata_tools = _extract_metadata_tools(metadata)
@@ -362,13 +394,19 @@ def set_attributes(
 
         span_kind = _infer_open_inference_span_kind(call_type=call_type)
         _set_tool_attributes(span, optional_tools, metadata_tools)
-        if (optional_tools or metadata_tools) and span_kind != OpenInferenceSpanKindValues.TOOL.value:
+        if (
+            optional_tools or metadata_tools
+        ) and span_kind != OpenInferenceSpanKindValues.TOOL.value:
             span_kind = OpenInferenceSpanKindValues.TOOL.value
 
         safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)
 
-        model_params = standard_logging_payload.get("model_parameters") if standard_logging_payload else None
+        model_params = (
+            standard_logging_payload.get("model_parameters")
+            if standard_logging_payload
+            else None
+        )
         _set_model_params(span, model_params, SpanAttributes)
 
         _set_response_attributes(span=span, response_obj=response_obj)
@@ -418,17 +456,29 @@ def _set_request_attributes(
     if kwargs.get("model"):
         safe_set_attribute(span, span_attrs.LLM_MODEL_NAME, kwargs.get("model"))
 
-    safe_set_attribute(span, "llm.request.type", standard_logging_payload.get("call_type"))
-    safe_set_attribute(span, span_attrs.LLM_PROVIDER, litellm_params.get("custom_llm_provider", "Unknown"))
+    safe_set_attribute(
+        span, "llm.request.type", standard_logging_payload.get("call_type")
+    )
+    safe_set_attribute(
+        span,
+        span_attrs.LLM_PROVIDER,
+        litellm_params.get("custom_llm_provider", "Unknown"),
+    )
 
     if optional_params.get("max_tokens"):
-        safe_set_attribute(span, "llm.request.max_tokens", optional_params.get("max_tokens"))
+        safe_set_attribute(
+            span, "llm.request.max_tokens", optional_params.get("max_tokens")
+        )
     if optional_params.get("temperature"):
-        safe_set_attribute(span, "llm.request.temperature", optional_params.get("temperature"))
+        safe_set_attribute(
+            span, "llm.request.temperature", optional_params.get("temperature")
+        )
     if optional_params.get("top_p"):
         safe_set_attribute(span, "llm.request.top_p", optional_params.get("top_p"))
 
-    safe_set_attribute(span, "llm.is_streaming", str(optional_params.get("stream", False)))
+    safe_set_attribute(
+        span, "llm.is_streaming", str(optional_params.get("stream", False))
+    )
 
     if optional_params.get("user"):
         safe_set_attribute(span, "llm.user", optional_params.get("user"))
@@ -443,7 +493,9 @@ def _set_model_params(span: "Span", model_params: Optional[dict], span_attrs) ->
     if not model_params:
         return
 
-    safe_set_attribute(span, span_attrs.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params))
+    safe_set_attribute(
+        span, span_attrs.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params)
+    )
     if model_params.get("user"):
         user_id = model_params.get("user")
         if user_id is not None:

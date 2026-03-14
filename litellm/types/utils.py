@@ -492,6 +492,8 @@ CallTypesLiteral = Literal[
     "aresponses",
     "responses",
     "acreate_skill",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -1337,7 +1339,9 @@ class Choices(SafeAttributeModel, OpenAIObject):
             mapped = map_finish_reason(finish_reason)
             params["finish_reason"] = mapped
             if finish_reason != mapped:
-                provider_specific_fields = dict(provider_specific_fields) if provider_specific_fields else {}
+                provider_specific_fields = (
+                    dict(provider_specific_fields) if provider_specific_fields else {}
+                )
                 provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"
@@ -1659,7 +1663,7 @@ class StreamingChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = None
+            self.finish_reason = None  # type: ignore[assignment]
         self.index = index
         if delta is not None:
             if isinstance(delta, Delta):
@@ -1702,7 +1706,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         kwargs["choices"] = new_choices
 
         super().__init__(**kwargs)
-
 
 
 class ModelResponseBase(OpenAIObject):

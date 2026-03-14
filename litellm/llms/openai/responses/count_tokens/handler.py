@@ -66,7 +66,9 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 llm_provider=litellm.LlmProviders.OPENAI
             )
 
-            request_timeout = timeout if timeout is not None else litellm.request_timeout
+            request_timeout = (
+                timeout if timeout is not None else litellm.request_timeout
+            )
 
             response = await async_client.post(
                 endpoint_url,

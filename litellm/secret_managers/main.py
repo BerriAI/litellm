@@ -21,10 +21,10 @@ def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandl
     """
     Factory function to create HTTPHandler for OIDC requests.
     This function can be mocked in tests.
-    
+
     Args:
         timeout: Optional timeout for HTTP requests. Defaults to 600.0 seconds with 5.0 connect timeout.
-    
+
     Returns:
         HTTPHandler instance configured for OIDC requests.
     """
@@ -148,7 +148,10 @@ def get_secret(  # noqa: PLR0915
             # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
             actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
             actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-            if actions_id_token_request_url is None or actions_id_token_request_token is None:
+            if (
+                actions_id_token_request_url is None
+                or actions_id_token_request_token is None
+            ):
                 raise ValueError(
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
@@ -215,7 +218,10 @@ def get_secret(  # noqa: PLR0915
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
+        if (
+            _should_read_secret_from_secret_manager()
+            and litellm.secret_manager_client is not None
+        ):
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -253,7 +259,9 @@ def get_secret(  # noqa: PLR0915
         else:
             secret = os.environ.get(secret_name)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
+            if secret_value_as_bool is not None and isinstance(
+                secret_value_as_bool, bool
+            ):
                 return secret_value_as_bool
             else:
                 return secret

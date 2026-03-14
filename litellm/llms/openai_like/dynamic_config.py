@@ -44,11 +44,11 @@ def create_config_class(provider: SimpleProviderConfig):
             self, messages: List[AllMessageValues], model: str, is_async: bool = False
         ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
             """Transform messages based on special_handling config"""
-            
+
             # Handle content list to string conversion if configured
             if provider.special_handling.get("convert_content_list_to_string"):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
-            
+
             if is_async:
                 return super()._transform_messages(
                     messages=messages, model=model, is_async=True
@@ -108,7 +108,13 @@ def create_config_class(provider: SimpleProviderConfig):
             )
 
             if not _supports_fc:
-                tool_params = ["tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"]
+                tool_params = [
+                    "tools",
+                    "tool_choice",
+                    "function_call",
+                    "functions",
+                    "parallel_tool_calls",
+                ]
                 for param in tool_params:
                     if param in supported_params:
                         supported_params.remove(param)
@@ -129,7 +135,7 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params = self.get_supported_openai_params(model)
-            
+
             # Apply supported params
             for param, value in non_default_params.items():
                 # Check parameter mappings first
@@ -197,10 +203,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             litellm_params: Optional[GenericLiteLLMParams],
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key = (
-                litellm_params.api_key
-                or get_secret_str(provider.api_key_env)
-            )
+            api_key = litellm_params.api_key or get_secret_str(provider.api_key_env)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers
@@ -217,9 +220,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
                     api_base = provider.base_url
 
             if api_base is None:
-                raise ValueError(
-                    f"api_base is required for provider {provider.slug}"
-                )
+                raise ValueError(f"api_base is required for provider {provider.slug}")
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"

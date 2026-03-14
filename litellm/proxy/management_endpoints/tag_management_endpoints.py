@@ -25,7 +25,6 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.types.tag_management import (
-    LiteLLM_DailyTagSpendTable,
     TagConfig,
     TagDeleteRequest,
     TagInfoRequest,
@@ -96,7 +95,7 @@ async def new_tag(
     - description: Optional[str] - Description of what this tag represents
     - models: List[str] - List of either 'model_id' or 'model_name' allowed for this tag
     - budget_id: Optional[str] - The id for a budget (tpm/rpm/max budget) for the tag
-    
+
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
     - tpm_limit: Optional[int] - Max tpm limit for tag
@@ -208,7 +207,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
         if db_model is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Model {deployment.model_info.id} not found in database"
+                detail=f"Model {deployment.model_info.id} not found in database",
             )
 
         # Prisma returns litellm_params as dict (already parsed from JSON)
@@ -252,7 +251,7 @@ async def update_tag(
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
     - budget_id: Optional[str] - The id for a budget to associate with the tag
-    
+
     ### BUDGET UPDATE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
     - tpm_limit: Optional[int] - Max tpm limit for tag
@@ -295,7 +294,7 @@ async def update_tag(
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
         }
-        
+
         # Add budget_id if it changed
         if budget_id != existing_tag.budget_id:
             update_data["budget_id"] = budget_id
@@ -383,7 +382,10 @@ async def info_tag(
             }
 
             # Add budget info if available
-            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+            if (
+                hasattr(tag_record, "litellm_budget_table")
+                and tag_record.litellm_budget_table
+            ):
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             requested_tags[tag_record.tag_name] = tag_dict
@@ -438,31 +440,39 @@ async def list_tags(
             }
 
             # Add budget info if available
-            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+            if (
+                hasattr(tag_record, "litellm_budget_table")
+                and tag_record.litellm_budget_table
+            ):
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             list_of_tags.append(tag_dict)
 
         ## QUERY DYNAMIC TAGS ##
-        dynamic_tags = await prisma_client.db.litellm_dailytagspend.find_many(
-            distinct=["tag"],
+        # Use group_by instead of find_many(distinct=["tag"]).
+        # Prisma's distinct fetches all columns for all rows and deduplicates
+        # in application code, which is extremely slow on large tables.
+        # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
+        dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
+            by=["tag"],
+            where={"tag": {"not": None}},
+            # The old find_many(distinct=...) returned arbitrary timestamps from
+            # whichever row Prisma happened to pick. MIN/MAX give more meaningful
+            # values: earliest appearance and most recent activity.
+            _min={"created_at": True},
+            _max={"updated_at": True},
         )
-
-        dynamic_tags_list = [
-            LiteLLM_DailyTagSpendTable(**dynamic_tag.model_dump())
-            for dynamic_tag in dynamic_tags
-        ]
 
         dynamic_tag_config = [
             {
-                "name": tag.tag,
+                "name": row["tag"],
                 "description": "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
                 "models": None,
-                "created_at": tag.created_at.isoformat(),
-                "updated_at": tag.updated_at.isoformat(),
+                "created_at": row["_min"]["created_at"].isoformat(),
+                "updated_at": row["_max"]["updated_at"].isoformat(),
             }
-            for tag in dynamic_tags_list
-            if tag.tag not in stored_tag_names
+            for row in dynamic_tag_rows
+            if row["tag"] not in stored_tag_names
         ]
 
         return list_of_tags + dynamic_tag_config
