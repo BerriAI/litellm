@@ -1021,6 +1021,11 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
+| VANTAGE_API_KEY | API key for Vantage cost-import integration
+| VANTAGE_BASE_URL | Base URL for Vantage API. Default is `https://api.vantage.sh`
+| VANTAGE_EXPORT_FREQUENCY | Export frequency for Vantage — `hourly` (default), `daily`, or `interval`
+| VANTAGE_EXPORT_INTERVAL_SECONDS | Interval in seconds when VANTAGE_EXPORT_FREQUENCY is `interval`
+| VANTAGE_INTEGRATION_TOKEN | Vantage integration token for the cost-import endpoint
 | WANDB_API_KEY | API key for Weights & Biases (W&B) logging integration
 | WANDB_HOST | Host URL for Weights & Biases (W&B) service
 | WANDB_PROJECT_ID | Project ID for Weights & Biases (W&B) logging integration

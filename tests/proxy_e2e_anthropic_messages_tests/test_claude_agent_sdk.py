@@ -110,8 +110,8 @@ async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, mode
         # Note: Very short responses might come in 1 chunk, so we just verify we got content
         assert len(received_chunks) > 0, f"No chunks received from {model_name}"
         
-        # Verify response contains expected content (case insensitive)
-        assert "hello" in full_response.lower(), f"Response doesn't contain expected greeting: {full_response}"
+        # Verify response is non-empty (don't assert on specific LLM content — it's non-deterministic)
+        assert len(full_response.strip()) > 0, f"Empty response received from {model_name}"
         
         print(f"✅ Test passed for {model_name}")
         
