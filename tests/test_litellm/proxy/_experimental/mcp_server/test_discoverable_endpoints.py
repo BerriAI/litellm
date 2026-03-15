@@ -1755,3 +1755,52 @@ async def test_token_endpoint_refresh_token_grant():
     token_data = json.loads(response.body)
     assert token_data["access_token"] == "new_access_token"
     assert token_data["refresh_token"] == "new_refresh_token"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_authorization_code_missing_code():
+    """Test that authorization_code grant rejects missing code param."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    server = MCPServer(
+        server_id="test_server",
+        name="test_server",
+        server_name="test_server",
+        alias="test_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://proxy.example/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code=None,
+            redirect_uri="https://example.com/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "code is required" in str(exc_info.value.detail)

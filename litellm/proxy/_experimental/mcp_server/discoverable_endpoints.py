@@ -238,6 +238,11 @@ async def exchange_token_with_server(
         if scope:
             token_data["scope"] = scope
     else:
+        if not code:
+            raise HTTPException(
+                status_code=400,
+                detail="code is required for authorization_code grant",
+            )
         proxy_base_url = get_request_base_url(request)
         token_data: dict = {
             "grant_type": "authorization_code",
