@@ -2107,11 +2107,13 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
 
-    ```
-    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
-    ```
+    Tests that:
+    1. deployment_callback_on_failure reads retry-after header and uses it as cooldown time
+    2. Cooled-down deployments appear in get_cooldown_deployments
+    3. RouterRateLimitError is raised with the correct cooldown_time when all deployments are cooled down
     """
-    litellm.set_verbose = True
+    from httpx import Headers, Request, Response
+
     cooldown_time = 30.0
     router = Router(
         model_list=[
@@ -2128,104 +2130,75 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 },
             },
         ],
-        set_verbose=True,
-        debug_level="DEBUG",
         cooldown_time=cooldown_time,
     )
 
-    openai_client = openai.OpenAI(api_key="")
-
-    def _return_exception(*args, **kwargs):
-        from httpx import Headers, Request, Response
-
-        kwargs = {
-            "request": Request("POST", "https://www.google.com"),
-            "message": "Error code: 429 - Rate Limit Error!",
-            "body": {"detail": "Rate Limit Error!"},
-            "code": None,
-            "param": None,
-            "type": None,
-            "response": Response(
-                status_code=429,
-                headers=Headers(
-                    {
-                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
-                        "server": "uvicorn",
-                        "retry-after": f"{cooldown_time}",
-                        "content-length": "30",
-                        "content-type": "application/json",
-                    }
-                ),
-                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+    # Build a 429 exception with retry-after header, matching what the OpenAI SDK raises
+    mock_exception = litellm.RateLimitError(
+        message="Rate Limit Error!",
+        llm_provider="openai",
+        model="text-embedding-ada-002",
+        response=Response(
+            status_code=429,
+            headers=Headers(
+                {
+                    "retry-after": f"{cooldown_time}",
+                    "content-type": "application/json",
+                }
             ),
-            "status_code": 429,
-            "request_id": None,
+            request=Request("POST", "https://api.openai.com/v1/embeddings"),
+        ),
+    )
+
+    # Directly invoke the Router's failure callback for each deployment,
+    # simulating what the logging framework would do on failure.
+    # This tests the cooldown logic without depending on the global customLogger state.
+    model_ids = router.get_model_ids()
+    for model_id in model_ids:
+        deployment_kwargs = {
+            "exception": mock_exception,
+            "litellm_params": {
+                "model_info": {"id": model_id},
+            },
         }
-
-        exception = Exception()
-        for k, v in kwargs.items():
-            setattr(exception, k, v)
-        raise exception
-
-    with patch.object(
-        openai_client.embeddings.with_raw_response,
-        "create",
-        side_effect=_return_exception,
-    ):
-        for _ in range(1):
-            try:
-                if sync_mode:
-                    router.embedding(
-                        model="text-embedding-ada-002",
-                        input="Hello world!",
-                        client=openai_client,
-                    )
-                else:
-                    await router.aembedding(
-                        model="text-embedding-ada-002",
-                        input="Hello world!",
-                        client=openai_client,
-                    )
-            except litellm.RateLimitError:
-                pass
-
-        await asyncio.sleep(5)
-
-        if sync_mode:
-            cooldown_deployments = _get_cooldown_deployments(
-                litellm_router_instance=router, parent_otel_span=None
-            )
-        else:
-            cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=router, parent_otel_span=None
-            )
-        print(
-            "Cooldown deployments - {}\n{}".format(
-                cooldown_deployments, len(cooldown_deployments)
-            )
+        router.deployment_callback_on_failure(
+            kwargs=deployment_kwargs,
+            completion_response=None,
+            start_time=None,
+            end_time=None,
         )
 
-        assert len(cooldown_deployments) > 0
-        exception_raised = False
-        try:
-            if sync_mode:
-                router.embedding(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
-            else:
-                await router.aembedding(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
-        except litellm.types.router.RouterRateLimitError as e:
-            print(e)
-            exception_raised = True
-            assert e.cooldown_time == cooldown_time
+    if sync_mode:
+        cooldown_deployments = _get_cooldown_deployments(
+            litellm_router_instance=router, parent_otel_span=None
+        )
+    else:
+        cooldown_deployments = await _async_get_cooldown_deployments(
+            litellm_router_instance=router, parent_otel_span=None
+        )
 
-        assert exception_raised
+    assert len(cooldown_deployments) > 0
+
+    # Verify that a subsequent call raises RouterRateLimitError with correct cooldown_time
+    exception_raised = False
+    try:
+        if sync_mode:
+            router.embedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                mock_response=[0.1, 0.2, 0.3],
+            )
+        else:
+            await router.aembedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                mock_response=[0.1, 0.2, 0.3],
+            )
+    except litellm.types.router.RouterRateLimitError as e:
+        exception_raised = True
+        assert e.cooldown_time == cooldown_time
+
+    assert exception_raised
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
