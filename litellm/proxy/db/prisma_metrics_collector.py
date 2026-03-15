@@ -28,7 +28,8 @@ def _get_or_create_gauge(
     except ValueError:
         from prometheus_client import REGISTRY
 
-        return REGISTRY._names_to_collectors.get(name)
+        names_map = getattr(REGISTRY, "_names_to_collectors", None)
+        return names_map.get(name) if names_map is not None else None
 
 
 def _get_or_create_counter(name: str, description: str):
@@ -39,7 +40,8 @@ def _get_or_create_counter(name: str, description: str):
     except ValueError:
         from prometheus_client import REGISTRY
 
-        return REGISTRY._names_to_collectors.get(name)
+        names_map = getattr(REGISTRY, "_names_to_collectors", None)
+        return names_map.get(name) if names_map is not None else None
 
 
 _POOL_METRICS_SQL = """
@@ -108,6 +110,7 @@ class PrismaMetricsCollector:
         self._engine_up = _get_or_create_gauge(
             "litellm_db_engine_up",
             "Whether the Prisma query engine process is alive (1=up, 0=down)",
+            multiprocess_mode="min",
         )
         self._engine_restarts = _get_or_create_counter(
             "litellm_db_engine_restarts_total",
