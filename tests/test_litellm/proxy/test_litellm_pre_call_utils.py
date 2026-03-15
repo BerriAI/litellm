@@ -1817,3 +1817,78 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+def test_safe_key_metadata_strips_logging_key():
+    """
+    _safe_key_metadata must strip the `logging` key (contains raw callback_vars /
+    credentials) before the dict is stored in StandardLoggingUserAPIKeyMetadata
+    and propagated to every logger integration.
+    """
+    raw_metadata = {
+        "team": "engineering",
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "langfuse_secret_key": "sk-lf-super-secret",
+                "langfuse_public_key": "pk-lf-public",
+            }
+        ],
+    }
+    result = LiteLLMProxyRequestSetup._safe_key_metadata(raw_metadata)
+    assert result is not None
+    assert "logging" not in result, "logging key with raw credentials must be stripped"
+    assert result.get("team") == "engineering", "non-sensitive keys must be preserved"
+
+
+def test_safe_key_metadata_strips_callback_settings_key():
+    """
+    _safe_key_metadata must strip `callback_settings` (team-level callback secrets).
+    """
+    raw_metadata = {
+        "project": "demo",
+        "callback_settings": {
+            "langfuse": {"langfuse_secret_key": "sk-lf-team-secret"}
+        },
+    }
+    result = LiteLLMProxyRequestSetup._safe_key_metadata(raw_metadata)
+    assert result is not None
+    assert "callback_settings" not in result, "callback_settings must be stripped"
+    assert result.get("project") == "demo"
+
+
+def test_safe_key_metadata_none_and_empty():
+    """
+    _safe_key_metadata must handle None and empty dicts without error.
+    """
+    assert LiteLLMProxyRequestSetup._safe_key_metadata(None) is None
+    assert LiteLLMProxyRequestSetup._safe_key_metadata({}) == {}
+
+
+def test_get_sanitized_user_information_from_key_excludes_credentials():
+    """
+    get_sanitized_user_information_from_key must not expose per-key callback
+    credentials (e.g. langfuse_secret_key) in user_api_key_auth_metadata.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        key_alias="my-key",
+        metadata={
+            "team": "engineering",
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "langfuse_secret_key": "sk-lf-should-not-appear",
+                }
+            ],
+        },
+    )
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict
+    )
+    auth_metadata = result.get("user_api_key_auth_metadata") or {}
+    assert "logging" not in auth_metadata, (
+        "logging key (contains raw credentials) must not appear in "
+        "user_api_key_auth_metadata exposed to loggers"
+    )
+    assert auth_metadata.get("team") == "engineering"

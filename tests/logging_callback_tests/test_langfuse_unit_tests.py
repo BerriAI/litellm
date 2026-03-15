@@ -512,3 +512,77 @@ def test_masking_function_not_in_metadata_when_not_provided():
 
     # Original metadata should be unchanged
     assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_scrub_sensitive_keys_user_api_key_auth_metadata():
+    """
+    Test that scrub_sensitive_keys_in_metadata scrubs the 'logging' key from
+    user_api_key_auth_metadata to prevent langfuse_secret_key from leaking into
+    Langfuse traces on 429 errors.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key_auth_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-lf-test",
+                            "langfuse_secret_key": "sk-lf-secret",
+                        },
+                    }
+                ],
+                "other_key": "other_value",
+            },
+            "some_other_metadata": "value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    auth_metadata = result["metadata"]["user_api_key_auth_metadata"]
+    # logging key should be scrubbed (contains callback credentials)
+    assert auth_metadata["logging"] == "scrubbed_by_litellm_for_sensitive_keys"
+    # other keys should remain
+    assert auth_metadata["other_key"] == "other_value"
+    # unrelated metadata should be unchanged
+    assert result["metadata"]["some_other_metadata"] == "value"
+
+
+def test_scrub_sensitive_keys_user_api_key_team_metadata():
+    """
+    Test that scrub_sensitive_keys_in_metadata scrubs the 'callback_settings' key from
+    user_api_key_team_metadata to prevent langfuse_secret_key from leaking into
+    Langfuse traces (deprecated team callback format).
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key_team_metadata": {
+                "callback_settings": {
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-lf-test",
+                        "langfuse_secret_key": "sk-lf-secret",
+                    },
+                    "success_callback": ["langfuse"],
+                    "failure_callback": [],
+                },
+                "team_name": "my-team",
+            },
+            "some_other_metadata": "value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    team_metadata = result["metadata"]["user_api_key_team_metadata"]
+    # callback_settings should be scrubbed (contains callback_vars with credentials)
+    assert team_metadata["callback_settings"] == "scrubbed_by_litellm_for_sensitive_keys"
+    # other keys should remain
+    assert team_metadata["team_name"] == "my-team"
+    # unrelated metadata should be unchanged
+    assert result["metadata"]["some_other_metadata"] == "value"

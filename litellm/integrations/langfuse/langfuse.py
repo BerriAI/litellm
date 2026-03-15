@@ -20,16 +20,16 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
-from litellm.litellm_core_utils.core_helpers import (
-    safe_deep_copy,
-    reconstruct_model_name,
-    filter_exceptions_from_params,
-)
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    reconstruct_model_name,
+    safe_deep_copy,
+)
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -87,7 +87,7 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
             ):
                 cache_read_input_tokens = cached_tokens
 
-    return cache_read_input_tokens
+    return cache_read_input_tokens  # type: ignore[return-value]
 
 
 class LangFuseLogger:
@@ -285,7 +285,18 @@ class LangFuseLogger:
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
-            optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
+            # Prefer model_parameters from standard_logging_object — it is pre-filtered
+            # through ModelParamHelper.get_standard_logging_model_parameters() which
+            # whitelists only real OpenAI API params. This structurally prevents callback
+            # credentials (langfuse_secret_key, api keys, etc.) from ever reaching
+            # modelParameters, regardless of what per-key callback_vars are set.
+            _standard_logging_object = kwargs.get("standard_logging_object")
+            if _standard_logging_object is not None:
+                optional_params = dict(
+                    _standard_logging_object.get("model_parameters") or {}
+                )
+            else:
+                optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -293,6 +304,13 @@ class LangFuseLogger:
             tools = optional_params.pop("tools", None)
             # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
             optional_params.pop("secret_fields", None)
+            # Belt-and-suspenders: also pop any credential keys that may be present
+            # in the fallback path (direct litellm usage without standard_logging_object)
+            optional_params.pop("langfuse_secret_key", None)
+            optional_params.pop("langfuse_secret", None)
+            optional_params.pop("langfuse_public_key", None)
+            optional_params.pop("langfuse_host", None)
+            optional_params.pop("litellm_logging_obj", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
@@ -591,6 +609,15 @@ class LangFuseLogger:
                         "endpoint",
                         "caching_groups",
                         "previous_models",
+                        # user_api_key_auth is the full UserAPIKeyAuth object — it contains
+                        # metadata.logging[].callback_vars with per-key secrets such as
+                        # langfuse_secret_key, api keys, etc. Never log this object.
+                        "user_api_key_auth",
+                        # user_api_key_auth_metadata carries the raw virtual-key metadata
+                        # dict including the `logging` key with callback_vars/credentials.
+                        # The per-key identity fields (alias, team, spend, etc.) are already
+                        # captured in the dedicated user_api_key_* generation fields.
+                        "user_api_key_auth_metadata",
                     ]:
                         continue
                     else:
