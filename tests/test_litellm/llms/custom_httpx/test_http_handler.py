@@ -59,13 +59,19 @@ async def test_ssl_security_level(monkeypatch):
 @pytest.mark.asyncio
 async def test_force_ipv4_transport():
     """Test transport creation with force_ipv4 enabled"""
+    original_force_ipv4 = litellm.force_ipv4
+    original_disable = litellm.disable_aiohttp_transport
     litellm.force_ipv4 = True
     litellm.disable_aiohttp_transport = True
 
-    transport = AsyncHTTPHandler._create_async_transport()
+    try:
+        transport = AsyncHTTPHandler._create_async_transport()
 
-    # Should get an AsyncHTTPTransport (no real HTTP call — avoids CI hangs)
-    assert isinstance(transport, httpx.AsyncHTTPTransport)
+        # Should get an AsyncHTTPTransport (no real HTTP call — avoids CI hangs)
+        assert isinstance(transport, httpx.AsyncHTTPTransport)
+    finally:
+        litellm.force_ipv4 = original_force_ipv4
+        litellm.disable_aiohttp_transport = original_disable
 
 
 @pytest.mark.asyncio
@@ -93,13 +99,19 @@ async def test_ssl_context_transport():
 @pytest.mark.asyncio
 async def test_aiohttp_disabled_transport():
     """Test transport creation with aiohttp disabled"""
+    original_disable = litellm.disable_aiohttp_transport
+    original_force_ipv4 = litellm.force_ipv4
     litellm.disable_aiohttp_transport = True
     litellm.force_ipv4 = False
 
-    transport = AsyncHTTPHandler._create_async_transport()
+    try:
+        transport = AsyncHTTPHandler._create_async_transport()
 
-    # Should get None when both aiohttp is disabled and force_ipv4 is False
-    assert transport is None
+        # Should get None when both aiohttp is disabled and force_ipv4 is False
+        assert transport is None
+    finally:
+        litellm.disable_aiohttp_transport = original_disable
+        litellm.force_ipv4 = original_force_ipv4
 
 
 @pytest.mark.asyncio
@@ -117,25 +129,27 @@ async def test_ssl_verification_with_aiohttp_transport():
     litellm.disable_aiohttp_transport = False
     
     try:
-        # Create a test SSL context
         litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
 
-        transport = litellm_async_client.client._transport
-        assert isinstance(transport, LiteLLMAiohttpTransport)
-        transport_connector = transport._get_valid_client_session().connector
-        assert isinstance(transport_connector, TCPConnector)
-
-        aiohttp_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(ssl=False)
-        )
         try:
-            aiohttp_connector = aiohttp_session.connector
-            assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
+            transport = litellm_async_client.client._transport
+            assert isinstance(transport, LiteLLMAiohttpTransport)
+            transport_connector = transport._get_valid_client_session().connector
+            assert isinstance(transport_connector, TCPConnector)
 
-            # assert both litellm transport and aiohttp session have ssl_verify=False
-            assert transport_connector._ssl == aiohttp_connector._ssl
+            aiohttp_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=False)
+            )
+            try:
+                aiohttp_connector = aiohttp_session.connector
+                assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
+
+                # assert both litellm transport and aiohttp session have ssl_verify=False
+                assert transport_connector._ssl == aiohttp_connector._ssl
+            finally:
+                await aiohttp_session.close()
         finally:
-            await aiohttp_session.close()
+            await litellm_async_client.close()
     finally:
         # Restore original setting
         litellm.disable_aiohttp_transport = original_disable
