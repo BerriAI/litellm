@@ -3817,7 +3817,7 @@ jobs:
               --maxfail=3 \
               --durations=10 \
               --junitxml=test-results/junit.xml
-          no_output_timeout: 30m
+          no_output_timeout: 15m
 
   upload-coverage:
     docker:
