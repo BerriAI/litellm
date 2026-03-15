@@ -13465,7 +13465,7 @@
         "input_cost_per_token_priority": 5.4e-07,
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 4.5e-06,
-        "cache_read_input_token_cost_priority": 5e-08,
+        "cache_read_input_token_cost_priority": 5.4e-08,
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_audio_token_flex": 5e-07,
         "output_cost_per_token_flex": 1.25e-06,
@@ -13518,7 +13518,9 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "cache_read_input_token_cost_priority": 5.4e-08,
+        "cache_read_input_token_cost_flex": 1.5e-08
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -13718,7 +13720,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 1.8e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -13771,7 +13773,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 1.8000000000000002e-08,
+        "cache_read_input_token_cost_priority": 1.8e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -14444,7 +14446,11 @@
         "cache_read_input_token_cost_priority": 2.25e-07,
         "cache_read_input_token_cost_flex": 6.25e-08,
         "input_cost_per_audio_token_priority": 1.26e-06,
-        "input_cost_per_audio_token_flex": 3.5e-07
+        "input_cost_per_audio_token_flex": 3.5e-07,
+        "input_cost_per_token_priority": 2.25e-06,
+        "input_cost_per_token_flex": 6.25e-07,
+        "output_cost_per_token_priority": 1.8e-05,
+        "output_cost_per_token_flex": 5e-06
     },
     "gemini-robotics-er-1.5-preview": {
         "cache_read_input_token_cost": 0,
@@ -14804,7 +14810,7 @@
         "input_cost_per_token_priority": 5.4e-07,
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 4.5e-06,
-        "cache_read_input_token_cost_priority": 5e-08,
+        "cache_read_input_token_cost_priority": 5.4e-08,
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_audio_token_flex": 5e-07,
         "output_cost_per_token_flex": 1.25e-06,
@@ -14858,7 +14864,9 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "cache_read_input_token_cost_priority": 5.4e-08,
+        "cache_read_input_token_cost_flex": 1.5e-08
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -15017,7 +15025,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 1.8e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -15072,7 +15080,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 1.8000000000000002e-08,
+        "cache_read_input_token_cost_priority": 1.8e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -15746,7 +15754,11 @@
         "cache_read_input_token_cost_priority": 2.25e-07,
         "cache_read_input_token_cost_flex": 6.25e-08,
         "input_cost_per_audio_token_priority": 1.26e-06,
-        "input_cost_per_audio_token_flex": 3.5e-07
+        "input_cost_per_audio_token_flex": 3.5e-07,
+        "input_cost_per_token_priority": 2.25e-06,
+        "input_cost_per_token_flex": 6.25e-07,
+        "output_cost_per_token_priority": 1.8e-05,
+        "output_cost_per_token_flex": 5e-06
     },
     "gemini/gemini-exp-1114": {
         "input_cost_per_token": 0,
@@ -30594,7 +30606,9 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "cache_read_input_token_cost_priority": 5.4e-08,
+        "cache_read_input_token_cost_flex": 1.5e-08
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
