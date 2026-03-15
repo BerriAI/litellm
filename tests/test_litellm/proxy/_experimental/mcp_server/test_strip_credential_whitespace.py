@@ -2,7 +2,9 @@
 Tests for _strip_credential_value and whitespace handling in credential storage.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from litellm.proxy._experimental.mcp_server.db import (
     _strip_credential_value,
