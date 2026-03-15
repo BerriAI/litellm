@@ -181,3 +181,7 @@ Expect to see this metric on prometheus to track the Remaining Budget for the te
 ```shell
 litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-6ca8-4f47-b804-2b79d07aa99a"} 9.699999999999992e-06
 ```
+
+## See Also
+
+- [Per-model TPM/RPM for teams](./users.md#per-team-model) - Set rate limits per model for all keys in a team

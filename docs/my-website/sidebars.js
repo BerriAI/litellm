@@ -193,6 +193,19 @@ const sidebars = {
         "projects/openai-agents"
       ]
     },
+    {
+      type: "category",
+      label: "Manage with AI Agents",
+      link: {
+        type: "generated-index",
+        title: "Manage with AI Agents",
+        description: "Use AI agents to manage your LiteLLM deployment — create users, teams, keys, models, and more via natural language.",
+        slug: "/manage_with_ai_agents"
+      },
+      items: [
+        "tutorials/claude_code_skills",
+      ]
+    },
 
   ],
   // But you can create a sidebar manually

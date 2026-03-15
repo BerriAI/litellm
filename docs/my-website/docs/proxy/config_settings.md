@@ -782,6 +782,7 @@ router_settings:
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
 | LITELLM_DISABLE_LAZY_LOADING | When set to "1", "true", "yes", or "on", disables lazy loading of attributes (currently only affects encoding/tiktoken). This ensures encoding is initialized before VCR starts recording HTTP requests, fixing VCR cassette creation issues. See [issue #18659](https://github.com/BerriAI/litellm/issues/18659)
+| LITELLM_DISABLE_REDACT_SECRETS | When set to "true", disables automatic redaction of secrets (API keys, tokens, credentials) from proxy log output. Secret redaction is enabled by default.
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELLM_UI_API_DOC_BASE_URL | Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy. Defaults to `PROXY_BASE_URL` when unset.
@@ -1025,6 +1026,11 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
+| VANTAGE_API_KEY | API key for Vantage cost-import integration
+| VANTAGE_BASE_URL | Base URL for Vantage API. Default is `https://api.vantage.sh`
+| VANTAGE_EXPORT_FREQUENCY | Export frequency for Vantage — `hourly` (default), `daily`, or `interval`
+| VANTAGE_EXPORT_INTERVAL_SECONDS | Interval in seconds when VANTAGE_EXPORT_FREQUENCY is `interval`
+| VANTAGE_INTEGRATION_TOKEN | Vantage integration token for the cost-import endpoint
 | WANDB_API_KEY | API key for Weights & Biases (W&B) logging integration
 | WANDB_HOST | Host URL for Weights & Biases (W&B) service
 | WANDB_PROJECT_ID | Project ID for Weights & Biases (W&B) logging integration

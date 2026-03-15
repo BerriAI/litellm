@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -1492,13 +1493,36 @@ class Router:
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
+
+        Guarantee metadata isolation: safe_deep_copy falls back to the original
+        reference when deepcopy fails (e.g. metadata contains UserAPIKeyAuth with
+        parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
+        copy of the metadata dict so mutations (model_group, is_silent_experiment)
+        never corrupt the main call's metadata.
         """
-        # Copy kwargs to ensure isolation (use safe_deep_copy to handle non-serializable objects like OTEL spans)
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
         silent_kwargs = safe_deep_copy(kwargs)
+
+        # safe_deep_copy may fall back to the original metadata reference when
+        # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
+        # Detect this via identity check and force a shallow copy so that setting
+        # model_group / is_silent_experiment on the silent dict doesn't corrupt
+        # the primary call's metadata.
+        original_metadata = kwargs.get("metadata")
+        if (
+            original_metadata is not None
+            and silent_kwargs.get("metadata") is original_metadata
+        ):
+            silent_kwargs["metadata"] = dict(original_metadata)
+
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
+
+        # OTel spans are not safe to use across event loops. The silent
+        # experiment runs in a new event loop, so strip the span to prevent
+        # cross-loop tracing races or span corruption.
+        silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
@@ -1551,7 +1575,9 @@ class Router:
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
                     # scheduled via asyncio.create_task during acompletion.
                     pending = asyncio.all_tasks()
-                    pending.discard(asyncio.current_task())
+                    current = asyncio.current_task()
+                    if current is not None:
+                        pending.discard(current)
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -4846,10 +4872,6 @@ class Router:
             "generate_content_stream",
             "vector_store_search",
             "vector_store_create",
-            "vector_store_retrieve",
-            "vector_store_list",
-            "vector_store_update",
-            "vector_store_delete",
             "ocr",
             "search",
             "video_generation",
@@ -4873,6 +4895,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_retrieve",
+            "vector_store_list",
+            "vector_store_update",
+            "vector_store_delete",
+        ):
+
+            def vector_store_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(
+                        original_function=original_function, **kwargs
+                    )
+                return original_function(**kwargs)
+
+            return vector_store_sync_wrapper
 
         if call_type in (
             "vector_store_file_create",
@@ -6523,6 +6567,18 @@ class Router:
                     f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
                 )
                 return None
+
+            # Validate tag_regex patterns BEFORE adding the deployment so we never
+            # have partially-initialised router state if a pattern is invalid.
+            _tag_regex = deployment.litellm_params.get("tag_regex") or []
+            for pattern in _tag_regex:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"{pattern!r} — {exc}"
+                    ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
 

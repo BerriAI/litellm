@@ -83,6 +83,7 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
+@pytest.mark.skip(reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)")
 @pytest.mark.asyncio
 async def test_azure_img_gen_health_check():
     """

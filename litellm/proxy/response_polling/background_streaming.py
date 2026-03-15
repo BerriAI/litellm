@@ -9,7 +9,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 """
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional, cast
 
 from fastapi import Request, Response
 
@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+from litellm.types.llms.openai import ResponsesAPIStatus
 
 
 async def background_streaming_task(  # noqa: PLR0915
@@ -113,6 +114,16 @@ async def background_streaming_task(  # noqa: PLR0915
         last_update_time = asyncio.get_event_loop().time()
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
+        # Track the terminal event from the stream (may not be "completed")
+        terminal_status: Optional[ResponsesAPIStatus] = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_error = None
+        _event_to_status = {
+            "response.completed": "completed",
+            "response.failed": "failed",
+            "response.incomplete": "incomplete",
+            "response.cancelled": "cancelled",
+        }
+
         async def flush_state_if_needed(force: bool = False) -> None:
             """Flush accumulated state to Redis if interval elapsed or forced"""
             nonlocal state_dirty, last_update_time
@@ -131,6 +142,12 @@ async def background_streaming_task(  # noqa: PLR0915
                 last_update_time = current_time
 
         # Handle StreamingResponse
+        if not hasattr(response, "body_iterator"):
+            verbose_proxy_logger.warning(
+                f"background_streaming_task: response for {polling_id} has no "
+                "body_iterator; this may indicate a misconfiguration or provider error"
+            )
+
         if hasattr(response, "body_iterator"):
             async for chunk in response.body_iterator:
                 # Parse chunk
@@ -224,10 +241,26 @@ async def background_streaming_task(  # noqa: PLR0915
                                 status="in_progress",
                             )
 
-                        elif event_type == "response.completed":
-                            # Response completed - extract all ResponsesAPIResponse fields
-                            # https://platform.openai.com/docs/api-reference/responses-streaming/response-completed
+                        elif event_type in (
+                            "response.completed",
+                            "response.failed",
+                            "response.incomplete",
+                            "response.cancelled",
+                        ):
+                            # Terminal event - extract all ResponsesAPIResponse fields
+                            # https://platform.openai.com/docs/api-reference/responses-streaming
                             response_data = event.get("response", {})
+                            terminal_status = cast(
+                                ResponsesAPIStatus,
+                                response_data.get(
+                                    "status",
+                                    _event_to_status.get(event_type, "completed"),
+                                ),
+                            )
+
+                            # Extract error for failed responses
+                            if event_type == "response.failed":
+                                terminal_error = response_data.get("error")
 
                             # Core response fields
                             usage_data = response_data.get("usage")
@@ -278,11 +311,14 @@ async def background_streaming_task(  # noqa: PLR0915
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
 
-        # Mark as completed with all ResponsesAPIResponse fields
+        # Use the terminal status from the stream, default to "completed"
+        final_status = terminal_status or "completed"
+
         await polling_handler.update_state(
             polling_id=polling_id,
-            status="completed",
+            status=final_status,
             usage=usage_data,
+            error=terminal_error,
             reasoning=reasoning_data,
             tool_choice=tool_choice_data,
             tools=tools_data,
@@ -301,7 +337,7 @@ async def background_streaming_task(  # noqa: PLR0915
         )
 
         verbose_proxy_logger.info(
-            f"Completed background streaming for {polling_id}, output_items={len(output_items)}"
+            f"Finished background streaming for {polling_id}, status={final_status}, output_items={len(output_items)}"
         )
 
     except Exception as e:
