@@ -14584,7 +14584,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
