@@ -522,6 +522,7 @@ def test_redis_cache_completion_stream():
             temperature=0.2,
             stream=True,
             caching=True,
+            mock_response="In the stillness of numbers, the world turns quietly.",
         )
         response_1_content = ""
         response_1_id = None
@@ -531,7 +532,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(5)  # sleep for cache write to propagate
+        time.sleep(1)  # sleep for cache write to propagate
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -553,9 +554,9 @@ def test_redis_cache_completion_stream():
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-        # assert (
-        #     response_1_content == response_2_content
-        # ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        assert (
+            response_1_content == response_2_content
+        ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None
