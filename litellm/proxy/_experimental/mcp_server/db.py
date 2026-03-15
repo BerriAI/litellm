@@ -95,7 +95,8 @@ def _strip_credential_value(value: Optional[str]) -> Optional[str]:
     """
     if value is None:
         return None
-    return re.sub(r"\s+", "", value)
+    stripped = re.sub(r"\s+", "", value)
+    return stripped or None
 
 
 def encrypt_credentials(
@@ -518,6 +519,7 @@ async def store_user_credential(
     credential: str,
 ) -> None:
     """Store a user credential for a BYOK MCP server."""
+    credential = re.sub(r"\s+", "", credential)
 
     encoded = base64.urlsafe_b64encode(credential.encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
@@ -604,6 +606,10 @@ async def store_user_oauth_credential(
         expires_at = (
             datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         ).isoformat()
+
+    access_token = re.sub(r"\s+", "", access_token)
+    if refresh_token:
+        refresh_token = re.sub(r"\s+", "", refresh_token)
 
     payload: Dict[str, Any] = {
         "type": "oauth2",

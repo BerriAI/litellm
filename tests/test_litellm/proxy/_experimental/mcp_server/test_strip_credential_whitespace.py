@@ -34,7 +34,12 @@ class TestStripCredentialValue:
         assert _strip_credential_value("my\ttoken") == "mytoken"
 
     def test_empty_string(self):
-        assert _strip_credential_value("") == ""
+        assert _strip_credential_value("") is None
+
+    def test_whitespace_only_returns_none(self):
+        """All-whitespace input should be treated as absent."""
+        assert _strip_credential_value("   ") is None
+        assert _strip_credential_value("\n\t ") is None
 
 
 class TestEncryptCredentialsStripsWhitespace:
