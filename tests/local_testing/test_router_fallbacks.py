@@ -536,18 +536,18 @@ async def test_async_fallbacks_streaming():
             "rpm": 1800,
         },
         {
-            "model_name": "gpt-3.5-turbo",  # openai model name
+            "model_name": "gpt-4o-mini",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4o-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "tpm": 1000000,
             "rpm": 9000,
         },
         {
-            "model_name": "gpt-3.5-turbo-16k",  # openai model name
+            "model_name": "gpt-4o-mini-context",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "gpt-3.5-turbo-16k",
+                "model": "gpt-4o-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "tpm": 1000000,
@@ -557,10 +557,10 @@ async def test_async_fallbacks_streaming():
 
     router = Router(
         model_list=model_list,
-        fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}],
+        fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-4o-mini"]}],
         context_window_fallbacks=[
-            {"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]},
-            {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]},
+            {"azure/gpt-3.5-turbo-context-fallback": ["gpt-4o-mini-context"]},
+            {"gpt-4o-mini": ["gpt-4o-mini-context"]},
         ],
         set_verbose=False,
     )
@@ -569,7 +569,11 @@ async def test_async_fallbacks_streaming():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
-        response = await router.acompletion(**kwargs, stream=True)
+        response = await router.acompletion(
+            model="azure/gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_message}],
+            stream=True,
+        )
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         await asyncio.sleep(
             0.05
@@ -840,8 +844,6 @@ def test_ausage_based_routing_fallbacks():
             set_verbose=True,
             debug_level="DEBUG",
             routing_strategy="usage-based-routing-v2",
-            redis_host=os.environ["REDIS_HOST"],
-            redis_port=int(os.environ["REDIS_PORT"]),
             num_retries=0,
         )
 
