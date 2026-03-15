@@ -55,7 +55,8 @@ class MyCustomHandler(
             if text and "running inside OpenClaw" in text:
                 return HTTPException(
                     status_code=403,
-                    detail="当前Key无法在 OpenClaw 中使用，请在配置程序中添加 --assistant-openclaw 参数生成新的 Key。",
+                    # detail="当前Key无法在 OpenClaw 中使用，请在配置程序中添加 --assistant-openclaw 参数生成新的 Key。",
+                    detail="当前Key无法在 OpenClaw 中使用。",
                 )
         return data
 
