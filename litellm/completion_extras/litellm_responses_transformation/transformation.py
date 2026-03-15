@@ -687,6 +687,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         verbose_logger.debug(
                             f"Chat provider:   image_url -> {converted}"
                         )
+                    elif original_type == "file":
+                        # Map chat completions {"type": "file", "file": {"file_data": ..., "filename": ...}}
+                        # to Responses API {"type": "input_file", "file_data": ..., "filename": ...}
+                        file_obj = item.get("file", {})
+                        converted = {"type": "input_file", **file_obj}
+                        result.append(converted)
+                        verbose_logger.debug(
+                            f"Chat provider:   file -> {converted}"
+                        )
                     else:
                         # Try to map other types to responses API format
                         item_type = original_type or "input_text"
