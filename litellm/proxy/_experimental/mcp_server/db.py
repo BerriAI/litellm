@@ -1,5 +1,6 @@
 import base64
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
@@ -85,41 +86,55 @@ def _prepare_mcp_server_data(
     return data_dict
 
 
+def _strip_credential_value(value: Optional[str]) -> Optional[str]:
+    """Strip whitespace from credential values.
+
+    Tokens and secrets copied from terminals or UIs often contain
+    accidental whitespace or embedded newlines from line-wrapping.
+    Stripping these prevents hard-to-debug auth failures.
+    """
+    if value is None:
+        return None
+    return re.sub(r"\s+", "", value)
+
+
 def encrypt_credentials(
     credentials: MCPCredentials, encryption_key: Optional[str]
 ) -> MCPCredentials:
-    auth_value = credentials.get("auth_value")
+    auth_value = _strip_credential_value(credentials.get("auth_value"))
     if auth_value is not None:
         credentials["auth_value"] = encrypt_value_helper(
             value=auth_value,
             new_encryption_key=encryption_key,
         )
-    client_id = credentials.get("client_id")
+    client_id = _strip_credential_value(credentials.get("client_id"))
     if client_id is not None:
         credentials["client_id"] = encrypt_value_helper(
             value=client_id,
             new_encryption_key=encryption_key,
         )
-    client_secret = credentials.get("client_secret")
+    client_secret = _strip_credential_value(credentials.get("client_secret"))
     if client_secret is not None:
         credentials["client_secret"] = encrypt_value_helper(
             value=client_secret,
             new_encryption_key=encryption_key,
         )
     # AWS SigV4 credential fields
-    aws_access_key_id = credentials.get("aws_access_key_id")
+    aws_access_key_id = _strip_credential_value(credentials.get("aws_access_key_id"))
     if aws_access_key_id is not None:
         credentials["aws_access_key_id"] = encrypt_value_helper(
             value=aws_access_key_id,
             new_encryption_key=encryption_key,
         )
-    aws_secret_access_key = credentials.get("aws_secret_access_key")
+    aws_secret_access_key = _strip_credential_value(
+        credentials.get("aws_secret_access_key")
+    )
     if aws_secret_access_key is not None:
         credentials["aws_secret_access_key"] = encrypt_value_helper(
             value=aws_secret_access_key,
             new_encryption_key=encryption_key,
         )
-    aws_session_token = credentials.get("aws_session_token")
+    aws_session_token = _strip_credential_value(credentials.get("aws_session_token"))
     if aws_session_token is not None:
         credentials["aws_session_token"] = encrypt_value_helper(
             value=aws_session_token,
@@ -188,12 +203,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
-        where={
-            "server_id": server_id,
-        }
+    mcp_server: Optional[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={
+                "server_id": server_id,
+            }
+        )
     )
     return mcp_server
 
@@ -204,12 +219,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={
-            "server_id": {"in": server_ids},
-        }
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "server_id": {"in": server_ids},
+            }
+        )
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
