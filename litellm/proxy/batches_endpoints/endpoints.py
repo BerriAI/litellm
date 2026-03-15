@@ -32,6 +32,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_original_file_id,
     prepare_data_with_credentials,
     resolve_input_file_id_to_unified,
+    resolve_output_file_ids_to_unified,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -412,31 +413,16 @@ async def retrieve_batch(  # noqa: PLR0915
             "cancelled",
             "expired",
         ]:
-            # Populate _hidden_params so managed files hook can translate IDs.
-            # When the response comes from the DB, _hidden_params is empty.
-            # Only set if output_file_id is still a raw provider ID (not yet unified).
-            # The DB may store unified IDs after a previous hook run; setting
-            # _hidden_params in that case would cause double-encoding.
-            if unified_batch_id:
-                _output_fid = getattr(response, "output_file_id", None)
-                _needs_translation = _output_fid and not _is_base64_encoded_unified_file_id(_output_fid)
-                if _needs_translation:
-                    response._hidden_params["unified_batch_id"] = unified_batch_id
-                    model_id_from_batch = get_model_id_from_unified_batch_id(
-                        unified_batch_id
-                    )
-                    if model_id_from_batch:
-                        response._hidden_params["model_id"] = model_id_from_batch
-
             # Call hooks and return
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
-            # but not input_file_id. Resolve raw provider ID to unified ID.
+            # The DB may store raw provider file IDs (before hooks translate them).
+            # Resolve any raw input/output/error file IDs to unified IDs.
             if unified_batch_id:
                 await resolve_input_file_id_to_unified(response, prisma_client)
+                await resolve_output_file_ids_to_unified(response, prisma_client)
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(

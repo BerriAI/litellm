@@ -697,6 +697,28 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
+async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+    """
+    If the batch response contains raw provider output_file_id or error_file_id
+    (not already unified IDs), look up the corresponding unified file IDs from
+    the managed file table and replace them in-place.
+    """
+    if not prisma_client:
+        return
+    for attr in ("output_file_id", "error_file_id"):
+        raw_id = getattr(response, attr, None)
+        if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
+            continue
+        try:
+            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                where={"flat_model_file_ids": {"has": raw_id}}
+            )
+            if managed_file:
+                setattr(response, attr, managed_file.unified_file_id)
+        except Exception:
+            pass
+
+
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: Union[str, Literal[False]],
