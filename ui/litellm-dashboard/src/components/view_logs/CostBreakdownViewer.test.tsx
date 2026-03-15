@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../tests/test-utils";
-import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { CostBreakdownViewer, CostBreakdown } from "./CostBreakdownViewer";
 
 async function expandCostBreakdown() {
   const user = userEvent.setup();
@@ -10,6 +10,22 @@ async function expandCostBreakdown() {
 }
 
 describe("CostBreakdownViewer", () => {
+  it("renders nothing when costBreakdown is null", () => {
+    const { container } = renderWithProviders(
+      <CostBreakdownViewer costBreakdown={null} totalSpend={0} />
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders nothing when costBreakdown is undefined", () => {
+    const { container } = renderWithProviders(
+      <CostBreakdownViewer costBreakdown={undefined} totalSpend={0} />
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("renders cost breakdown with input and output costs", async () => {
     renderWithProviders(
       <CostBreakdownViewer
@@ -30,6 +46,27 @@ describe("CostBreakdownViewer", () => {
     expect(screen.getByText("Input Cost:")).toBeInTheDocument();
     expect(screen.getByText("Output Cost:")).toBeInTheDocument();
     expect(screen.getByText("Final Calculated Cost:")).toBeInTheDocument();
+  });
+
+  it("shows token counts when the panel is expanded", async () => {
+    renderWithProviders(
+      <CostBreakdownViewer
+        costBreakdown={{
+          input_cost: 0.001,
+          output_cost: 0.002,
+        }}
+        totalSpend={0.003}
+        promptTokens={500}
+        completionTokens={200}
+      />
+    );
+
+    await expandCostBreakdown();
+
+    expect(screen.getByText("Input Cost:")).toBeInTheDocument();
+    expect(screen.getByText("Output Cost:")).toBeInTheDocument();
+    expect(screen.getByText(/500 prompt tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/200 completion tokens/)).toBeInTheDocument();
   });
 
   it("shows non-null, non-zero additional_costs", async () => {
@@ -102,17 +139,6 @@ describe("CostBreakdownViewer", () => {
     expect(container).not.toBeEmptyDOMElement();
   });
 
-  it("returns null when no meaningful data", () => {
-    const { container } = renderWithProviders(
-      <CostBreakdownViewer
-        costBreakdown={undefined}
-        totalSpend={0}
-      />
-    );
-
-    expect(container).toBeEmptyDOMElement();
-  });
-
   it("returns null when additional_costs are all null/zero", () => {
     const { container } = renderWithProviders(
       <CostBreakdownViewer
@@ -150,5 +176,58 @@ describe("CostBreakdownViewer", () => {
     expect(screen.queryByText("Azure Model Router Flat Cost:")).not.toBeInTheDocument();
     await expandCostBreakdown();
     expect(screen.getByText("Azure Model Router Flat Cost:")).toBeInTheDocument();
+  });
+
+  it("shows '(Cached)' in the header when cacheHit is true", () => {
+    const breakdown: CostBreakdown = {
+      input_cost: 0.001,
+      output_cost: 0.002,
+      total_cost: 0.003,
+    };
+
+    renderWithProviders(
+      <CostBreakdownViewer
+        costBreakdown={breakdown}
+        totalSpend={0}
+        cacheHit="true"
+      />
+    );
+
+    expect(screen.getByText(/\(Cached\)/)).toBeInTheDocument();
+  });
+
+  it("shows discount label with percentage when panel is expanded", async () => {
+    const breakdown: CostBreakdown = {
+      input_cost: 0.01,
+      output_cost: 0.02,
+      discount_percent: 0.1,
+      discount_amount: 0.003,
+    };
+
+    renderWithProviders(
+      <CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.027} />
+    );
+
+    await expandCostBreakdown();
+
+    expect(screen.getByText(/Discount \(10\.00%\)/)).toBeInTheDocument();
+  });
+
+  it("shows margin label with percentage when panel is expanded", async () => {
+    const breakdown: CostBreakdown = {
+      input_cost: 0.01,
+      output_cost: 0.02,
+      margin_percent: 0.15,
+      margin_total_amount: 0.005,
+    };
+
+    renderWithProviders(
+      <CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.035} />
+    );
+
+    await expandCostBreakdown();
+
+    expect(screen.getByText(/Margin \(15\.00%\)/)).toBeInTheDocument();
+    expect(screen.getByText("Final Calculated Cost:")).toBeInTheDocument();
   });
 });

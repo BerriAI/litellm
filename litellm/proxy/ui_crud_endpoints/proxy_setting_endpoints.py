@@ -328,11 +328,34 @@ async def _get_settings_with_schema(
     }
 
     # Add property descriptions
+    defs = schema.get("$defs", schema.get("definitions", {}))
     for field_name, field_info in schema["properties"].items():
-        result["field_schema"]["properties"][field_name] = {
+        # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
+        # Resolve the non-null variant to get the real type and items.
+        resolved = field_info
+        if "anyOf" in field_info:
+            for variant in field_info["anyOf"]:
+                if variant.get("type") != "null":
+                    resolved = variant
+                    break
+
+        prop_entry: dict = {
             "description": field_info.get("description", ""),
-            "type": field_info.get("type", "string"),
+            "type": resolved.get("type", "string"),
         }
+        # Pass through items info (including enum values) for array fields
+        # so the UI can render a multi-select dropdown
+        if "items" in resolved:
+            items = resolved["items"]
+            # Resolve $ref to enum definitions if needed
+            if "$ref" in items:
+                ref_name = items["$ref"].split("/")[-1]
+                ref_def = defs.get(ref_name, {})
+                if "enum" in ref_def:
+                    prop_entry["items"] = {"enum": ref_def["enum"]}
+            else:
+                prop_entry["items"] = items
+        result["field_schema"]["properties"][field_name] = prop_entry
 
     # Add nested object descriptions
     for def_name, def_schema in schema.get("definitions", {}).items():
@@ -427,7 +450,6 @@ async def _update_litellm_setting(
         DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings
     ],
     settings_key: str,
-    in_memory_var: Any,
     success_message: str,
 ):
     """
@@ -436,7 +458,6 @@ async def _update_litellm_setting(
     Args:
         settings: The settings object to update
         settings_key: The key in litellm_settings to update
-        in_memory_var: The in-memory variable to update
         success_message: Message to return on success
     """
     from litellm.proxy.proxy_server import proxy_config, store_model_in_db
@@ -449,12 +470,15 @@ async def _update_litellm_setting(
             },
         )
 
-    # Update the in-memory settings
     in_memory_var = settings.model_dump(exclude_none=True)
-    setattr(litellm, settings_key, in_memory_var)
 
-    # Load existing config
+    # Load existing config first, then set in-memory value after,
+    # because get_config() may overwrite litellm.<key> with stale DB values
+    # via LITELLM_SETTINGS_SAFE_DB_OVERRIDES.
     config = await proxy_config.get_config()
+
+    # Update the in-memory settings (after get_config to avoid stale override)
+    setattr(litellm, settings_key, in_memory_var)
 
     # Update config with new settings
     if "litellm_settings" not in config:
@@ -495,7 +519,6 @@ async def update_internal_user_settings(
     return await _update_litellm_setting(
         settings=settings,
         settings_key="default_internal_user_params",
-        in_memory_var=litellm.default_internal_user_params,
         success_message="Internal user settings updated successfully",
     )
 
@@ -513,7 +536,6 @@ async def update_default_team_settings(settings: DefaultTeamSSOParams):
     return await _update_litellm_setting(
         settings=settings,
         settings_key="default_team_params",
-        in_memory_var=litellm.default_team_params,
         success_message="Default team settings updated successfully",
     )
 
@@ -935,7 +957,6 @@ async def update_mcp_semantic_filter_settings(
     result = await _update_litellm_setting(
         settings=settings,
         settings_key="mcp_semantic_tool_filter",
-        in_memory_var=None,
         success_message="MCP Semantic Filter settings updated successfully. Changes will be applied across all pods within 10 seconds.",
     )
     try:

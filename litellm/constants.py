@@ -505,6 +505,7 @@ LITELLM_CHAT_PROVIDERS = [
     "azure_ai",
     "sagemaker",
     "sagemaker_chat",
+    "sagemaker_nova",
     "bedrock",
     "vllm",
     "nlp_cloud",
@@ -1417,6 +1418,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "default_team_params",
     "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",

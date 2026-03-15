@@ -231,6 +231,56 @@ class TestProxySettingEndpoints:
         # Verify save_config was called exactly once
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_get_default_team_settings_includes_team_member_permissions_schema(
+        self, mock_proxy_config, mock_auth
+    ):
+        """Test that team_member_permissions field appears in schema with enum items"""
+        response = client.get("/get/default_team_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check that team_member_permissions is in the schema
+        props = data["field_schema"]["properties"]
+        assert "team_member_permissions" in props
+
+        perm_schema = props["team_member_permissions"]
+        assert perm_schema["type"] == "array"
+        assert "items" in perm_schema
+        assert "enum" in perm_schema["items"]
+        # Verify some known enum values are present
+        enum_values = perm_schema["items"]["enum"]
+        assert "/key/generate" in enum_values
+        assert "/key/info" in enum_values
+        assert "/key/delete" in enum_values
+
+    def test_update_default_team_settings_with_permissions(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating default team settings with team_member_permissions"""
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+
+        new_settings = {
+            "models": ["gpt-4"],
+            "team_member_permissions": ["/key/generate", "/key/update", "/key/delete"],
+        }
+
+        response = client.patch("/update/default_team_settings", json=new_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        settings = data["settings"]
+        assert settings["team_member_permissions"] == [
+            "/key/generate",
+            "/key/update",
+            "/key/delete",
+        ]
+
     def test_get_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting the SSO settings from the dedicated database table"""
         from unittest.mock import AsyncMock, MagicMock
