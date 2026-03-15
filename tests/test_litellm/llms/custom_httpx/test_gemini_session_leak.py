@@ -81,5 +81,7 @@ def test_new_event_loop_atexit():
 
 
 if __name__ == "__main__":
-    success = asyncio.run(test_aiohttp_handler_cleanup())
-    sys.exit(0 if success else 1)
+    asyncio.run(test_aiohttp_handler_cleanup())
+    # If the assertion inside the test fails, asyncio.run raises;
+    # reaching here means success.
+    sys.exit(0)
