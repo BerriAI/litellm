@@ -247,9 +247,6 @@ class LiteLLMCompletionResponsesConfig:
             if litellm_logging_obj:
                 litellm_logging_obj.stream_options = stream_options
 
-        litellm_completion_request.pop("context_management", None)
-        kwargs.pop("context_management", None)  # Ensure context_management is not forwarded to litellm.completion
-        
         # only pass non-None values
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
