@@ -495,6 +495,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    parallelism: 2
 
     steps:
       - checkout
@@ -512,7 +513,8 @@ jobs:
 
       - restore_cache:
           keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - v2-caching-deps-{{ checksum ".circleci/requirements.txt" }}
+            - v2-caching-deps-
       - run:
           name: Install Dependencies
           command: |
@@ -563,8 +565,9 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+            - /home/circleci/.pyenv/versions
+            - /home/circleci/.local
+          key: v2-caching-deps-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -579,13 +582,26 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "caching or cache"
+            mkdir -p test-results
+
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -k 'caching or cache'"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml caching_coverage.xml
-            mv .coverage caching_coverage
+            mv coverage.xml caching_coverage.xml || true
+            mv .coverage caching_coverage || true
 
       # Store test results
       - store_test_results:
