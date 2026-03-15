@@ -17,10 +17,7 @@
   },
   "veniceai": {
     "base_url": "https://api.venice.ai/api/v1",
-    "api_key_env": "VENICE_AI_API_KEY",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_response_schema": true
+    "api_key_env": "VENICE_AI_API_KEY"
   },
   "xiaomi_mimo": {
     "base_url": "https://api.xiaomimimo.com/v1",

@@ -164,6 +164,7 @@ response = completion(
     response_format={"type": "json_object"}
 )
 print(response.choices[0].message.content)
+```
 
 ## Function Calling
 
@@ -222,7 +223,6 @@ print(response.choices[0].message.tool_calls)
 | MiniMax M2.5 | `veniceai/minimax-m25` | 198K | Coding, Agents, Reasoning |
 | Llama 3.3 70B | `veniceai/llama-3.3-70b` | 128K | General purpose |
 | Llama 3.2 3B | `veniceai/llama-3.2-3b` | 128K | Lightweight |
-| Venice Uncensored | `veniceai/venice-uncensored` | 32K | No content filtering |
 
 ### Uncensored Models
 
