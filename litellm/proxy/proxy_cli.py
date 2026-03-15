@@ -45,7 +45,9 @@ def append_query_params(url: Optional[str], params: dict) -> str:
     if not isinstance(url, str) or url == "":
         # Preserve previous startup behavior when DATABASE_URL is absent.
         # Returning an empty string avoids urlparse type errors in test/dev flows.
-        verbose_proxy_logger.warning("append_query_params received empty or non-string URL, returning empty string")
+        verbose_proxy_logger.warning(
+            "append_query_params received empty or non-string URL, returning empty string"
+        )
         return ""
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
@@ -347,9 +349,8 @@ class ProxyInitializationHelpers:
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        multiproc_dir = (
-            os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            or os.environ.get("prometheus_multiproc_dir")
+        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
+            "prometheus_multiproc_dir"
         )
 
         auto_created = not multiproc_dir
@@ -555,6 +556,13 @@ class ProxyInitializationHelpers:
     help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
+@click.option(
+    "--skip_db_migration_check",
+    is_flag=True,
+    default=False,
+    help="Warn and continue instead of exiting when database migration fails.",
+    envvar="SKIP_DB_MIGRATION_CHECK",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -594,6 +602,7 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
     max_requests_before_restart,
+    skip_db_migration_check: bool,
 ):
     args = locals()
     if local:
@@ -853,7 +862,20 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                    if not PrismaManager.setup_database(
+                        use_migrate=not use_prisma_db_push
+                    ):
+                        if skip_db_migration_check:
+                            print(  # noqa
+                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
+                                "Pass --skip_db_migration_check to allow this.\033[0m"
+                            )
+                        else:
+                            print(  # noqa
+                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            )
+                            sys.exit(1)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

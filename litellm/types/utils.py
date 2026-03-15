@@ -253,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     tpm: Optional[int]
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
+    uses_embed_content: Optional[bool]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -491,6 +492,8 @@ CallTypesLiteral = Literal[
     "aresponses",
     "responses",
     "acreate_skill",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -1234,6 +1237,13 @@ class Delta(SafeAttributeModel, OpenAIObject):
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
+        # Map 'reasoning' to 'reasoning_content' for providers that return
+        # delta.reasoning (e.g., Cerebras, Groq gpt-oss models).
+        # Must be done before super().__init__ to prevent 'reasoning' from
+        # leaking as an extra attribute on the parent model.
+        if reasoning_content is None and "reasoning" in params:
+            reasoning_content = params.pop("reasoning", None)
+
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
@@ -1326,7 +1336,13 @@ class Choices(SafeAttributeModel, OpenAIObject):
         **params,
     ):
         if finish_reason is not None:
-            params["finish_reason"] = map_finish_reason(finish_reason)
+            mapped = map_finish_reason(finish_reason)
+            params["finish_reason"] = mapped
+            if finish_reason != mapped:
+                provider_specific_fields = (
+                    dict(provider_specific_fields) if provider_specific_fields else {}
+                )
+                provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"
         if index is not None:
@@ -1647,7 +1663,7 @@ class StreamingChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = None
+            self.finish_reason = None  # type: ignore[assignment]
         self.index = index
         if delta is not None:
             if isinstance(delta, Delta):
@@ -1690,7 +1706,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         kwargs["choices"] = new_choices
 
         super().__init__(**kwargs)
-
 
 
 class ModelResponseBase(OpenAIObject):
@@ -3110,11 +3125,13 @@ class LlmProviders(str, Enum):
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
+    BLACK_FOREST_LABS = "black_forest_labs"
     AZURE = "azure"
     AZURE_TEXT = "azure_text"
     AZURE_AI = "azure_ai"
     SAGEMAKER = "sagemaker"
     SAGEMAKER_CHAT = "sagemaker_chat"
+    SAGEMAKER_NOVA = "sagemaker_nova"
     BEDROCK = "bedrock"
     VLLM = "vllm"
     NLP_CLOUD = "nlp_cloud"
