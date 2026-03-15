@@ -1540,5 +1540,5 @@ DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
 
 # After compaction, target this fraction of compact_threshold so there is
 # headroom before the next compaction triggers (e.g. 0.25 = 25% of threshold).
-_COMPACT_TARGET_RATIO = 0.25
+COMPACT_TARGET_RATIO = 0.25
 
