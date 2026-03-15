@@ -8,7 +8,7 @@ sys.path.insert(
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
-    _COMPACT_TARGET_RATIO,
+    LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO,
 )
 
 
@@ -106,8 +106,8 @@ class TestApplyClientSideCompaction:
         assert cm is context_management
 
     def test_compact_target_ratio_is_25_percent(self):
-        """_COMPACT_TARGET_RATIO should be 0.25 so trimming targets 25% of the threshold."""
-        assert _COMPACT_TARGET_RATIO == 0.25
+        """LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO should be 0.25 so trimming targets 25% of the threshold."""
+        assert LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO == 0.25
 
     def test_target_tokens_computed_correctly(self):
         """History target = floor(compact_threshold * 0.25) - latest_message_tokens."""

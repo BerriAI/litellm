@@ -1538,7 +1538,8 @@ MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
 
+
 # After compaction, target this fraction of compact_threshold so there is
 # headroom before the next compaction triggers (e.g. 0.25 = 25% of threshold).
-COMPACT_TARGET_RATIO = 0.25
+LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO = float(os.getenv("LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO", 0.25))
 

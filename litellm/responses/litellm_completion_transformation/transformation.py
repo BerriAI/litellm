@@ -11,7 +11,7 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
-from litellm.constants import COMPACT_TARGET_RATIO
+from litellm.constants import LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import cheap_token_counter, trim_messages
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -301,7 +301,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Tuple[List, Optional[List[ContextManagementEntry]]]:
         """
         If context_management contains a compaction entry, trim messages to
-        COMPACT_TARGET_RATIO * compact_threshold tokens so there is headroom
+        LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO * compact_threshold tokens so there is headroom
         before the next compaction triggers.
 
         Returns (trimmed_messages, None) when compaction is applied so that
@@ -328,7 +328,7 @@ class LiteLLMCompletionResponsesConfig:
         if current_tokens < compact_threshold:
             return messages, context_management
 
-        target_tokens = int(compact_threshold * COMPACT_TARGET_RATIO)
+        target_tokens = int(compact_threshold * LITELLM_TOKEN_REDUCTION_COMPACTION_TARGET_RATIO)
         # Always preserve the latest (current-turn) message; only trim history.
         latest_message = messages[-1]
         history = messages[:-1]
