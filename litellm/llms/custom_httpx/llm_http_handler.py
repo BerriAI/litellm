@@ -22,9 +22,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -1889,6 +1887,7 @@ class BaseLLMHTTPHandler:
             optional_params=dict(anthropic_messages_optional_request_params),
             litellm_params={
                 "metadata": kwargs.get("metadata", {}),
+                "litellm_metadata": kwargs.get("litellm_metadata", {}),
                 "preset_cache_key": None,
                 "stream_response": {},
                 **anthropic_messages_optional_request_params,

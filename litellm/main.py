@@ -1370,6 +1370,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
+        ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        responses_api_model_info, model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
+        )
+
         if not _should_allow_input_examples(
             custom_llm_provider=custom_llm_provider, model=model
         ):
@@ -1606,15 +1613,20 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-            tools=tools,
-            reasoning_effort=reasoning_effort,
-        )
+        # Only run the second bridge check if the first one didn't already
+        # detect responses mode (e.g. via the "responses/" prefix).  The second
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
+        # the first (early) check doesn't cover.
+        if responses_api_model_info.get("mode") != "responses":
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+            )
 
-        if model_info.get("mode") == "responses":
+        if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
@@ -3712,8 +3724,10 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "sagemaker_chat":
+        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
+            # sagemaker_chat: HF Messages API endpoints
+            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
             model_response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3723,7 +3737,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="sagemaker_chat",
+                custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
                 encoding=_get_encoding(),
