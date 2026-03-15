@@ -4348,12 +4348,14 @@ class DBSpendUpdateTransactions(TypedDict):
     org_list_transactions: Optional[Dict[str, float]]
     tag_list_transactions: Optional[Dict[str, float]]
     agent_list_transactions: Optional[Dict[str, float]]
+    end_user_budget_updates: Optional[Dict[str, str]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: Optional[float]
+    budget_id: Optional[str]
 
 
 class ToolDiscoveryQueueItem(TypedDict, total=False):

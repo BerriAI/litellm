@@ -71,6 +71,9 @@ from litellm.utils import get_utc_datetime
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
 
+# [Budget Reset Fix]
+# Persistence handled via batched SpendUpdateQueue to follow project performance guidelines.
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -824,20 +827,7 @@ async def get_default_end_user_budget(
         verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
         return None
 
-
-async def _persist_end_user_budget_id(
-    prisma_client: PrismaClient,
-    user_id: str,
-    budget_id: str,
-):
-    try:
-        await prisma_client.db.litellm_endusertable.update(
-            where={"user_id": user_id},
-            data={"budget_id": budget_id},
-        )
-    except Exception as e:
-        verbose_proxy_logger.error(f"Error persisting end user budget id: {str(e)}")
-
+# (removed _persist_end_user_budget_id - now handled via batched SpendUpdateQueue)
 
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
@@ -875,20 +865,20 @@ async def _apply_default_budget_to_end_user(
     if default_budget is not None:
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
-        # end_user_obj.budget_id = litellm.max_end_user_budget_id
+        end_user_obj.budget_id = litellm.max_end_user_budget_id
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
         )
 
-        # [Budget Reset Fix]
-        # Persist the budget_id to the database. This ensures the ResetBudgetJob
-        # (which queries by budget_id) can identify and reset this user's spend.
-        # Fire-and-forget: we use asyncio.create_task to avoid blocking the
-        # latency-sensitive authentication hot-path with a database write.
-        asyncio.create_task(
-            _persist_end_user_budget_id(
-                prisma_client=prisma_client,
-                user_id=end_user_obj.user_id,
+        # Persist budget_id to DB via SpendUpdateQueue to avoid direct DB writes in the auth path.
+        # This routes the update through the existing batching mechanism.
+        from litellm.proxy._types import SpendUpdateQueueItem
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
+            update=SpendUpdateQueueItem(
+                entity_type=Litellm_EntityType.END_USER,
+                entity_id=end_user_obj.user_id,
                 budget_id=litellm.max_end_user_budget_id,
             )
         )
@@ -974,7 +964,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # [Budget Reset Fix]
         # Synchronization: If a default budget was newly applied above during the
         # auth-check, we update the cache immediately so subsequent requests
         # recognize the budget_id without triggering another DB write task.

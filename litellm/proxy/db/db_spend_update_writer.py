@@ -1113,8 +1113,13 @@ class DBSpendUpdateWriter:
         end_user_list_transactions = db_spend_update_transactions[
             "end_user_list_transactions"
         ]
+        end_user_budget_updates = db_spend_update_transactions.get(
+            "end_user_budget_updates"
+        )
         verbose_proxy_logger.debug(
-            "End-User Spend transactions: {}".format(end_user_list_transactions)
+            "End-User Spend transactions: {}. End-User Budget updates: {}".format(
+                end_user_list_transactions, end_user_budget_updates
+            )
         )
         if (
             end_user_list_transactions is not None
@@ -1125,6 +1130,7 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 end_user_list_transactions=end_user_list_transactions,
+                end_user_budget_updates=end_user_budget_updates,
             )
         ### UPDATE KEY TABLE ###
         key_list_transactions = db_spend_update_transactions["key_list_transactions"]

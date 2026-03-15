@@ -124,6 +124,13 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 update_cost = update.get("response_cost", 0) or 0
                 _in_memory_map[_key]["response_cost"] = current_cost + update_cost
 
+                # [Budget Reset Fix]
+                # If the update has a budget_id, preserve it in the aggregated item.
+                # Since budget_id is typically static for an end-user during a session,
+                # taking the latest one is safe.
+                if update.get("budget_id") is not None:
+                    _in_memory_map[_key]["budget_id"] = update.get("budget_id")
+
         for _key, update in _in_memory_map.items():
             aggregated_spend_updates.append(update)
 
@@ -146,6 +153,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             org_list_transactions={},
             tag_list_transactions={},
             agent_list_transactions={},
+            end_user_budget_updates={},
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -226,6 +234,20 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict[entity_id] = 0
 
             transactions_dict[entity_id] += response_cost or 0
+
+            # [Budget Reset Fix]
+            # Capture the budget_id update for end-users.
+            # This allows LiteLLM to persist the budget_id (foreign key) in the background
+            # during the spend update batch, satisfying Greptile's request for decentralized writes.
+            budget_id = update.get("budget_id")
+            if (
+                entity_type == Litellm_EntityType.END_USER
+                and budget_id is not None
+                and db_spend_update_transactions["end_user_budget_updates"] is not None
+            ):
+                db_spend_update_transactions["end_user_budget_updates"][
+                    entity_id
+                ] = budget_id
 
         return db_spend_update_transactions
 

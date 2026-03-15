@@ -4526,6 +4526,7 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
         end_user_list_transactions: Dict[str, float],
+        end_user_budget_updates: Optional[Dict[str, str]] = None,
     ):
         for i in range(n_retry_times + 1):
             start_time = time.time()
@@ -4546,18 +4547,29 @@ class ProxyUpdateSpend:
                                 "blocked": False,
                             }
                             if litellm.max_end_user_budget_id is not None:
-                                # [Budget Reset Fix] Proactive Persistence
-                                # Assign the default budget_id during initial user creation
-                                # to ensure they are immediately traceable by the ResetBudgetJob.
+                                # Proactively assign default budget_id during creation for ResetBudgetJob visibility
                                 create_data["budget_id"] = (
                                     litellm.max_end_user_budget_id
                                 )
+                            update_data: Dict[str, Any] = {
+                                "spend": {"increment": response_cost}
+                            }
+                            # [Budget Reset Fix]
+                            # If we have a pending budget_id update for this user (scheduled from the auth path),
+                            # apply it now during the batched spend update.
+                            if (
+                                end_user_budget_updates is not None
+                                and end_user_id in end_user_budget_updates
+                            ):
+                                update_data["budget_id"] = end_user_budget_updates[
+                                    end_user_id
+                                ]    
 
                             batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
                                 data={
-                                    "create": create_data,  # type: ignore
-                                    "update": {"spend": {"increment": response_cost}},
+                                    "create": create_data,
+                                    "update": update_data,
                                 },
                             )
 

@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +28,8 @@ mock_proxy_server.litellm_proxy_admin_name = "admin"
 mock_proxy_logging_obj = MagicMock()
 mock_proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
 mock_proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+# Mock spend_update_queue for budget persistence
+mock_proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update = AsyncMock()
 mock_proxy_server.proxy_logging_obj = mock_proxy_logging_obj
 
 sys.modules["litellm.proxy.proxy_server"] = mock_proxy_server
@@ -106,10 +109,6 @@ async def test_apply_default_budget_persistence():
         return_value=mock_record(default_budget)
     )
 
-    # Mock update to check if it's called
-    mock_update = AsyncMock()
-    mock_proxy_server.prisma_client.db.litellm_endusertable.update = mock_update
-
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
@@ -123,13 +122,13 @@ async def test_apply_default_budget_persistence():
             route="/chat/completions",
         )
 
-    # Allow some time for the background task to run
-    await asyncio.sleep(0.1)
-
-    # Verify that prisma_client.db.litellm_endusertable.update was called with the correct budget_id
-    mock_proxy_server.prisma_client.db.litellm_endusertable.update.assert_called_with(
-        where={"user_id": end_user_id}, data={"budget_id": default_budget_id}
-    )
+    # Verify that spend_update_queue.add_update was called with the correct budget_id [Budget Reset Fix]
+    mock_proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update.assert_called()
+    called_update = mock_proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update.call_args[1]["update"]
+    assert called_update["entity_id"] == end_user_id
+    assert called_update["budget_id"] == default_budget_id
+    from litellm.proxy._types import Litellm_EntityType
+    assert called_update["entity_type"] == Litellm_EntityType.END_USER
 
     litellm.max_end_user_budget_id = None
 
@@ -161,11 +160,13 @@ async def test_update_end_user_spend_persistence():
     mock_proxy_logging_obj.failure_handler = AsyncMock()
 
     # Call update_end_user_spend
+    # Call update_end_user_spend with budget updates
     await ProxyUpdateSpend.update_end_user_spend(
         n_retry_times=0,
         prisma_client=mock_proxy_server.prisma_client,
         proxy_logging_obj=mock_proxy_logging_obj,
         end_user_list_transactions={end_user_id: 10.0},
+        end_user_budget_updates={end_user_id: default_budget_id},
     )
 
     # Verify that upsert was called with budget_id in the create block
@@ -174,6 +175,7 @@ async def test_update_end_user_spend_persistence():
 
     assert kwargs["where"] == {"user_id": end_user_id}
     assert kwargs["data"]["create"]["budget_id"] == default_budget_id
+    assert kwargs["data"]["update"]["budget_id"] == default_budget_id
     assert kwargs["data"]["create"]["user_id"] == end_user_id
     assert kwargs["data"]["update"]["spend"]["increment"] == 10.0
 
