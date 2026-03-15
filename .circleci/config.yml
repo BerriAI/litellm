@@ -4050,29 +4050,38 @@ jobs:
             - litellm/proxy/_experimental/out
 
   ui_unit_tests:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: medium
+    docker:
+      - image: cimg/node:20.19
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    resource_class: medium+
     working_directory: ~/project
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - ui-unit-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-unit-deps-v1-
+      - run:
+          name: Install dependencies
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+      - save_cache:
+          key: ui-unit-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
       - run:
           name: Run UI unit tests (Vitest)
           command: |
-            # Use Node 20 (several deps require >=20)
-            export NVM_DIR="/opt/circleci/.nvm"
-            source "$NVM_DIR/nvm.sh"
-            nvm install 20
-            nvm use 20
-
             cd ui/litellm-dashboard
-            # Remove node_modules and package-lock to ensure clean install (fixes optional deps issue)
-            rm -rf node_modules package-lock.json
-            npm install
 
             # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
-            CI=true npm run test -- --run --coverage \
+            CI=true npm run test -- --run \
+              --pool forks --poolOptions.forks.maxForks=3 \
+              --coverage \
               --coverage.provider=v8 \
               --coverage.reporter=lcov \
               --coverage.reporter=html \
@@ -4443,8 +4452,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - ui_unit_tests:
-          requires:
-            - ui_build
           filters:
             branches:
               only:
