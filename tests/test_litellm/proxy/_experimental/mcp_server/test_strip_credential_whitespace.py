@@ -4,8 +4,6 @@ Tests for _strip_credential_value and whitespace handling in encrypt_credentials
 
 from unittest.mock import patch
 
-import pytest
-
 from litellm.proxy._experimental.mcp_server.db import (
     _strip_credential_value,
     encrypt_credentials,
