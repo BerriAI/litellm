@@ -1,5 +1,5 @@
 """
-Tests for _strip_credential_value and whitespace handling in encrypt_credentials.
+Tests for _strip_credential_value and whitespace handling in credential storage.
 """
 
 from unittest.mock import patch
@@ -7,6 +7,8 @@ from unittest.mock import patch
 from litellm.proxy._experimental.mcp_server.db import (
     _strip_credential_value,
     encrypt_credentials,
+    store_user_credential,
+    store_user_oauth_credential,
 )
 
 
@@ -79,3 +81,59 @@ class TestEncryptCredentialsStripsWhitespace:
         assert result["aws_access_key_id"] == "AKIA123"
         assert result["aws_secret_access_key"] == "secretkey"
         assert result["aws_session_token"] == "tokenvalue"
+
+
+class TestStoreUserCredentialStripsWhitespace:
+    """Verify that store_user_credential strips whitespace."""
+
+    @pytest.mark.asyncio
+    async def test_strips_whitespace_before_storing(self):
+        mock_prisma = AsyncMock()
+        await store_user_credential(mock_prisma, "user1", "server1", " my-token\n ")
+        call_args = mock_prisma.db.litellm_mcpusercredentials.upsert.call_args
+        create_data = call_args.kwargs["data"]["create"]
+        import base64
+
+        stored = base64.urlsafe_b64decode(create_data["credential_b64"]).decode()
+        assert stored == "my-token"
+
+    @pytest.mark.asyncio
+    async def test_rejects_whitespace_only_credential(self):
+        mock_prisma = AsyncMock()
+        with pytest.raises(ValueError, match="must not be empty"):
+            await store_user_credential(mock_prisma, "user1", "server1", "   \n  ")
+
+
+class TestStoreUserOAuthCredentialStripsWhitespace:
+    """Verify that store_user_oauth_credential strips whitespace."""
+
+    @pytest.mark.asyncio
+    async def test_strips_whitespace_from_tokens(self):
+        mock_prisma = AsyncMock()
+        mock_prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(
+            return_value=None
+        )
+        await store_user_oauth_credential(
+            mock_prisma,
+            "user1",
+            "server1",
+            access_token=" token\n123 ",
+            refresh_token=" refresh\n456 ",
+        )
+        call_args = mock_prisma.db.litellm_mcpusercredentials.upsert.call_args
+        create_data = call_args.kwargs["data"]["create"]
+        import base64, json
+
+        payload = json.loads(
+            base64.urlsafe_b64decode(create_data["credential_b64"]).decode()
+        )
+        assert payload["access_token"] == "token123"
+        assert payload["refresh_token"] == "refresh456"
+
+    @pytest.mark.asyncio
+    async def test_rejects_whitespace_only_access_token(self):
+        mock_prisma = AsyncMock()
+        with pytest.raises(ValueError, match="must not be empty"):
+            await store_user_oauth_credential(
+                mock_prisma, "user1", "server1", access_token="   "
+            )
