@@ -28,6 +28,22 @@ import json
 import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
+
+@pytest.fixture(autouse=True)
+def _clear_http_client_cache():
+    """
+    Clear the shared HTTP client cache before each test so that cached clients
+    from other tests (running in the same pytest-xdist worker) do not bypass
+    class-level mocks on AsyncHTTPHandler.post.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -301,6 +317,7 @@ async def test_encrypted_content_affinity_tracks_and_routes():
             },
         ],
         optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
     )
 
     selected_deployments = []
@@ -376,6 +393,7 @@ async def test_encrypted_content_affinity_no_effect_on_chat_completions():
             },
         ],
         optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
     )
 
     response1 = await router.acompletion(
@@ -435,6 +453,7 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
         ],
         optional_pre_call_checks=["encrypted_content_affinity"],
         routing_strategy="usage-based-routing-v2",
+        num_retries=0,
     )
 
     selected_deployments = []
@@ -527,6 +546,7 @@ async def test_encrypted_content_affinity_no_match_normal_routing():
             },
         ],
         optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
     )
 
     with patch(
@@ -588,6 +608,7 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
             },
         ],
         optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
     )
 
     selected_deployments = []
