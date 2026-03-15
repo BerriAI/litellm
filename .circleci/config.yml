@@ -4060,7 +4060,7 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-    resource_class: medium
+    resource_class: medium+
     working_directory: ~/project
     steps:
       - checkout
@@ -4102,7 +4102,7 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-    resource_class: medium+
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -4127,7 +4127,7 @@ jobs:
 
             # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
             CI=true npm run test -- --run \
-              --pool forks --poolOptions.forks.maxForks=3 \
+              --pool forks --poolOptions.forks.maxForks=5 \
               --coverage \
               --coverage.provider=v8 \
               --coverage.reporter=lcov \
