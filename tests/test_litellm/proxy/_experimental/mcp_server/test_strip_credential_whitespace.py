@@ -36,6 +36,11 @@ class TestStripCredentialValue:
         expected = "ya29.a0ATkoCc6VikZRWgeS5J9dd_gxP9w"
         assert _strip_credential_value(token_with_wrap) == expected
 
+    def test_strips_crlf_line_endings(self):
+        """Handles Windows-style CRLF line endings from copy-paste."""
+        assert _strip_credential_value("token\r\nvalue") == "tokenvalue"
+        assert _strip_credential_value("abc\r\n  def") == "abc  def"
+
     def test_strips_tabs(self):
         assert _strip_credential_value("my\ttoken") == "mytoken"
 
