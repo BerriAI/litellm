@@ -4015,34 +4015,33 @@ jobs:
             twine upload --verbose dist/*
 
   ui_build:
-    machine:
-      image: ubuntu-2204:2023.10.1
+    docker:
+      - image: cimg/node:20.19
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - ui-build-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-build-deps-v1-
+      - run:
+          name: Install dependencies
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+      - save_cache:
+          key: ui-build-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
       - run:
           name: Build UI
           command: |
-            # Set up nvm
-            export NVM_DIR="/opt/circleci/.nvm"
-            source "$NVM_DIR/nvm.sh"
-            source "$NVM_DIR/bash_completion"
-
-            # Install and use Node version
-            nvm install v20
-            nvm use v20
-
             cd ui/litellm-dashboard
-
-            # Remove node_modules and package-lock to ensure clean install (fixes dependency resolution issues)
-            rm -rf node_modules package-lock.json
-
-            # Install dependencies first
-            npm install
-
-            # Now source the build script
             source ./build_ui.sh
       - persist_to_workspace:
           root: .
@@ -4452,6 +4451,8 @@ workflows:
                 - main
                 - /litellm_.*/
       - ui_unit_tests:
+          requires:
+            - ui_build
           filters:
             branches:
               only:
