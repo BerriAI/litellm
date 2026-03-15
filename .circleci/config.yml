@@ -120,6 +120,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: medium
     steps:
       - checkout
       - setup_google_dns
