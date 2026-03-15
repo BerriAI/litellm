@@ -46,6 +46,7 @@ class TestBlockRunProvider:
 
         assert hasattr(LlmProviders, "BLOCKRUN")
         assert LlmProviders.BLOCKRUN.value == "blockrun"
+        assert "blockrun" in litellm.provider_list
 
     def test_blockrun_in_providers_set(self):
         """Test that blockrun is in LlmProvidersSet for param mapping"""
