@@ -103,20 +103,32 @@ class LiteLLMSidecarTransport(httpx.AsyncBaseTransport):
         else:
             timeout_secs = 300
 
+        # Forward the original HTTP method so the sidecar uses the correct verb
+        method = request.method.upper()
+
         headers = {
             "X-LiteLLM-Provider-URL": provider_base,
             "X-LiteLLM-API-Key": api_key,
             "X-LiteLLM-Timeout": str(timeout_secs),
             "X-LiteLLM-Stream": "true" if is_stream else "false",
             "X-LiteLLM-Path": path,
+            "X-LiteLLM-Method": method,
             "Content-Type": request.headers.get("content-type", "application/json"),
         }
 
-        # Copy provider-specific headers the sidecar should forward
-        for key in ("x-api-key", "anthropic-version", "x-goog-api-key"):
-            val = request.headers.get(key)
-            if val:
-                headers[f"X-LiteLLM-Fwd-{key}"] = val
+        # Forward all non-host, non-internal headers to the sidecar
+        _skip_headers = {
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "content-type",  # already set above
+            "authorization",  # sent via X-LiteLLM-API-Key
+        }
+        for key, val in request.headers.items():
+            lower_key = key.lower()
+            if lower_key not in _skip_headers:
+                headers[f"X-LiteLLM-Fwd-{lower_key}"] = val
 
         session = await self._get_session()
         resp = await session.post(

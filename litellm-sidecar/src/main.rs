@@ -117,6 +117,13 @@ async fn handle_request(
         .map(|v| v == "true")
         .unwrap_or(false);
 
+    let method = req
+        .headers()
+        .get("x-litellm-method")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("POST")
+        .to_uppercase();
+
     let content_type = req
         .headers()
         .get("content-type")
@@ -157,11 +164,17 @@ async fn handle_request(
     let client = sidecar.get_or_create_client(&host);
     let full_url = format!("{}{}", provider_url.trim_end_matches('/'), request_path);
 
-    let mut req_builder = client
-        .post(&full_url)
-        .header("content-type", &content_type)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .body(body_bytes.to_vec());
+    let mut req_builder = match method.as_str() {
+        "GET" => client.get(&full_url),
+        "PUT" => client.put(&full_url),
+        "PATCH" => client.patch(&full_url),
+        "DELETE" => client.delete(&full_url),
+        "HEAD" => client.head(&full_url),
+        _ => client.post(&full_url),
+    }
+    .header("content-type", &content_type)
+    .timeout(std::time::Duration::from_secs(timeout_secs))
+    .body(body_bytes.to_vec());
 
     if !api_key.is_empty() {
         req_builder = req_builder.header("authorization", format!("Bearer {}", api_key));

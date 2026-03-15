@@ -735,7 +735,7 @@ class UserAPIKeyLabelValues(BaseModel):
         """Return cached model_dump() dict to avoid re-serializing on every prometheus_label_factory call."""
         if self._cached_dump is None:
             self._cached_dump = self.model_dump()
-        return self._cached_dump
+        return dict(self._cached_dump)
 
 
 class PrometheusMetricsConfig(BaseModel):
