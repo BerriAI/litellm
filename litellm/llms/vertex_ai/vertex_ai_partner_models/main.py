@@ -135,11 +135,25 @@ class VertexAIPartnerModels(VertexBase):
         try:
             vertex_httpx_logic = VertexLLM()
 
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
-                credentials=vertex_credentials,
-                project_id=vertex_project,
-                custom_llm_provider="vertex_ai",
-            )
+            # If the caller already injected a pre-fetched Authorization header
+            # (e.g. via Workload Identity Federation or a custom auth chain),
+            # skip _ensure_access_token so we don't overwrite the supplied token
+            # or fail when ADC is not configured.
+            _pre_fetched_auth = (headers or {}).get("Authorization")
+            if _pre_fetched_auth:
+                # Extract bearer token for paths that pass it as api_key
+                access_token = (
+                    _pre_fetched_auth.removeprefix("Bearer ").strip()
+                    if _pre_fetched_auth.startswith("Bearer ")
+                    else _pre_fetched_auth
+                )
+                project_id = vertex_project or ""
+            else:
+                access_token, project_id = vertex_httpx_logic._ensure_access_token(
+                    credentials=vertex_credentials,
+                    project_id=vertex_project,
+                    custom_llm_provider="vertex_ai",
+                )
 
             openai_like_chat_completions = OpenAILikeChatHandler()
             codestral_fim_completions = CodestralTextCompletion()
@@ -198,7 +212,8 @@ class VertexAIPartnerModels(VertexBase):
             elif "claude" in model:
                 if headers is None:
                     headers = {}
-                headers.update({"Authorization": "Bearer {}".format(access_token)})
+                if "Authorization" not in headers:
+                    headers["Authorization"] = "Bearer {}".format(access_token)
 
                 optional_params.update(
                     {
