@@ -406,7 +406,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.passthrough_guardrails_config: Optional[Dict[str, Any]] = None
 
         self.model_call_details: Dict[str, Any] = {
-            "litellm_trace_id": litellm_trace_id,
+            "litellm_trace_id": self.litellm_trace_id,
             "litellm_call_id": litellm_call_id,
             "input": _input,
             "litellm_params": litellm_params,
@@ -2950,7 +2950,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             user_id=kwargs.get("user", None),
                             status_message=str(exception),
                             level="ERROR",
-                            kwargs=self.model_call_details,
+                            kwargs=kwargs,
                         )
                         if _response is not None and isinstance(_response, dict):
                             _trace_id = _response.get("trace_id", None)
@@ -3868,11 +3868,20 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.focus.focus_logger import FocusLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, FocusLogger):
+                if type(callback) is FocusLogger:  # exact match; exclude subclasses like VantageLogger
                     return callback  # type: ignore
             focus_logger = FocusLogger()
             _in_memory_loggers.append(focus_logger)
             return focus_logger  # type: ignore
+        elif logging_integration == "vantage":
+            from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VantageLogger):
+                    return callback  # type: ignore
+            vantage_logger = VantageLogger()
+            _in_memory_loggers.append(vantage_logger)
+            return vantage_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -4241,7 +4250,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.focus.focus_logger import FocusLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, FocusLogger):
+                if type(callback) is FocusLogger:  # exact match; exclude subclasses like VantageLogger
+                    return callback
+        elif logging_integration == "vantage":
+            from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VantageLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
