@@ -17,6 +17,16 @@
     {
       "url": "http://localhost:4000",
       "description": "Local LiteLLM Proxy"
+    },
+    {
+      "url": "https://{proxyHost}",
+      "description": "Your LiteLLM Proxy",
+      "variables": {
+        "proxyHost": {
+          "default": "your-proxy.example.com",
+          "description": "Your LiteLLM proxy hostname"
+        }
+      }
     }
   ],
   "security": [
