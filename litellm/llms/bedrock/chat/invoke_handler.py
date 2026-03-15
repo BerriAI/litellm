@@ -401,22 +401,24 @@ class BedrockLLM(BaseAWSLLM):
         - Regional prefixes: eu.anthropic.claude-*, us.anthropic.claude-*
         - Claude 3 models: claude-3-haiku, claude-3-sonnet, claude-3-opus, claude-3-5-*, claude-3-7-*
         - Claude 4 models: claude-opus-4, claude-sonnet-4, claude-haiku-4
+        - Proxy aliases with underscores or dots: opus_4_6, sonnet.4, etc.
         """
-        # Normalize model string to lowercase for matching
-        model_lower = model.lower()
+        # Normalize to lowercase and replace underscores/dots with hyphens so that
+        # proxy model-group aliases like "opus_4_6" or "claude.3.sonnet" match the
+        # same indicators as their canonical hyphenated equivalents.
+        model_lower = model.lower().replace("_", "-").replace(".", "-")
 
         # Claude 3+ indicators (all use Messages API).
-        # We intentionally include bare family names ("opus-4", "sonnet-4", "haiku-4")
-        # to handle cases where the model string is an alias or stripped of its
-        # "claude-" prefix (e.g. a LiteLLM proxy model_group named "opus_4_6").
+        # Bare family names ("opus-4", "sonnet-4", "haiku-4") cover aliases whose
+        # "claude-" prefix has been stripped (e.g. a LiteLLM proxy model_group).
         messages_api_indicators = [
-            "claude-3",       # Claude 3.x models
-            "claude-opus-4",  # Claude Opus 4.x (with prefix)
-            "claude-sonnet-4",  # Claude Sonnet 4.x (with prefix)
+            "claude-3",        # Claude 3.x models
+            "claude-opus-4",   # Claude Opus 4.x (with prefix)
+            "claude-sonnet-4", # Claude Sonnet 4.x (with prefix)
             "claude-haiku-4",  # Claude Haiku 4.x (with prefix)
-            "claude-4",       # Claude 4.x (generic, future-proofing)
-            "claude-5",       # Claude 5.x (future-proofing)
-            # Handle aliases / stripped model IDs (no "claude-" prefix):
+            "claude-4",        # Claude 4.x (generic, future-proofing)
+            "claude-5",        # Claude 5.x (future-proofing)
+            # Bare aliases (no "claude-" prefix, after normalization):
             "opus-4",
             "sonnet-4",
             "haiku-4",
