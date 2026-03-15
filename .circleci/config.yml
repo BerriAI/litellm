@@ -4324,7 +4324,7 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            docker build -t myapp . -f ./docker/Dockerfile.non_root
+            docker build -t myapp . -f ./docker/Dockerfile.database
       - run:
           name: Run Docker container with bad DATABASE_URL
           command: |
