@@ -43,6 +43,12 @@ def isolate_litellm_state():
         if hasattr(litellm, attr):
             original_state[attr] = getattr(litellm, attr)
 
+    # Save rules that tests may set (e.g. test_rules.py)
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+
     # Save transport/network globals
     for attr in ("disable_aiohttp_transport", "force_ipv4"):
         if hasattr(litellm, attr):
@@ -52,13 +58,15 @@ def isolate_litellm_state():
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
-    # Clear callbacks before test
+    # Clear callbacks and rules before test
     for attr in (
         "callbacks",
         "success_callback",
         "failure_callback",
         "_async_success_callback",
         "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
     ):
         if hasattr(litellm, attr):
             setattr(litellm, attr, [])
