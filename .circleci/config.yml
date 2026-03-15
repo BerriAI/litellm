@@ -4828,6 +4828,7 @@ workflows:
             - langfuse_logging_unit_tests
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
+            - ui_unit_tests
             - db_migration_disable_update_check
             - e2e_ui_testing_chromium
             - e2e_ui_testing_firefox
