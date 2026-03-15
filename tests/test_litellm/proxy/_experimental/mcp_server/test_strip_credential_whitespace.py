@@ -84,6 +84,17 @@ class TestEncryptCredentialsStripsWhitespace:
         assert result["aws_secret_access_key"] == "secretkey"
         assert result["aws_session_token"] == "tokenvalue"
 
+    @patch(
+        "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+        side_effect=lambda value, new_encryption_key: value,
+    )
+    def test_whitespace_only_field_removed_from_dict(self, mock_encrypt):
+        """Whitespace-only values must be removed, not left unencrypted."""
+        creds = {"auth_value": "   \n  ", "client_id": "valid-id"}
+        result = encrypt_credentials(creds, encryption_key=None)
+        assert "auth_value" not in result
+        assert result["client_id"] == "valid-id"
+
 
 class TestStoreUserCredentialStripsWhitespace:
     """Verify that store_user_credential strips whitespace."""

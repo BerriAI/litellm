@@ -99,48 +99,42 @@ def _strip_credential_value(value: Optional[str]) -> Optional[str]:
     return stripped or None
 
 
+def _encrypt_credential_field(
+    credentials: MCPCredentials,
+    field: str,
+    encryption_key: Optional[str],
+) -> None:
+    """Strip, validate, and encrypt a single credential field in-place.
+
+    If the raw value is ``None`` the field is left untouched.  If it becomes
+    ``None`` after stripping (i.e. whitespace-only input), the field is removed
+    from the dict so that no unencrypted data is persisted.
+    """
+    raw = credentials.get(field)
+    if raw is None:
+        return
+    stripped = _strip_credential_value(raw)
+    if stripped is None:
+        credentials.pop(field, None)
+    else:
+        credentials[field] = encrypt_value_helper(
+            value=stripped,
+            new_encryption_key=encryption_key,
+        )
+
+
 def encrypt_credentials(
     credentials: MCPCredentials, encryption_key: Optional[str]
 ) -> MCPCredentials:
-    auth_value = _strip_credential_value(credentials.get("auth_value"))
-    if auth_value is not None:
-        credentials["auth_value"] = encrypt_value_helper(
-            value=auth_value,
-            new_encryption_key=encryption_key,
-        )
-    client_id = _strip_credential_value(credentials.get("client_id"))
-    if client_id is not None:
-        credentials["client_id"] = encrypt_value_helper(
-            value=client_id,
-            new_encryption_key=encryption_key,
-        )
-    client_secret = _strip_credential_value(credentials.get("client_secret"))
-    if client_secret is not None:
-        credentials["client_secret"] = encrypt_value_helper(
-            value=client_secret,
-            new_encryption_key=encryption_key,
-        )
-    # AWS SigV4 credential fields
-    aws_access_key_id = _strip_credential_value(credentials.get("aws_access_key_id"))
-    if aws_access_key_id is not None:
-        credentials["aws_access_key_id"] = encrypt_value_helper(
-            value=aws_access_key_id,
-            new_encryption_key=encryption_key,
-        )
-    aws_secret_access_key = _strip_credential_value(
-        credentials.get("aws_secret_access_key")
-    )
-    if aws_secret_access_key is not None:
-        credentials["aws_secret_access_key"] = encrypt_value_helper(
-            value=aws_secret_access_key,
-            new_encryption_key=encryption_key,
-        )
-    aws_session_token = _strip_credential_value(credentials.get("aws_session_token"))
-    if aws_session_token is not None:
-        credentials["aws_session_token"] = encrypt_value_helper(
-            value=aws_session_token,
-            new_encryption_key=encryption_key,
-        )
+    for field in (
+        "auth_value",
+        "client_id",
+        "client_secret",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+    ):
+        _encrypt_credential_field(credentials, field, encryption_key)
     # aws_region_name and aws_service_name are NOT secrets — stored as-is
     return credentials
 
