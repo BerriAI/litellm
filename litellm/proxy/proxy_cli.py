@@ -716,6 +716,7 @@ def run_server(  # noqa: PLR0915
             for k, v in new_env_var.items():
                 os.environ[k] = v
 
+        litellm_settings = None
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -830,7 +831,9 @@ def run_server(  # noqa: PLR0915
                         "pool_timeout": db_connection_timeout,
                     }
                     database_url = get_secret("DATABASE_URL", default_value=None)
-                    modified_url = append_query_params(database_url, params)
+                    modified_url = append_query_params(
+                        str(database_url) if database_url else None, params
+                    )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
                     ### add connection pool + pool timeout args
@@ -867,13 +870,14 @@ def run_server(  # noqa: PLR0915
                     ):
                         if skip_db_migration_check:
                             print(  # noqa
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Pass --skip_db_migration_check to allow this.\033[0m"
+                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup "
+                                "because --skip_db_migration_check is set.\033[0m"
                             )
                         else:
                             print(  # noqa
                                 "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                                "The proxy cannot start safely. Please check your database connection and migration status. "
+                                "Pass --skip_db_migration_check or set SKIP_DB_MIGRATION_CHECK=true to warn and continue instead of exiting.\033[0m"
                             )
                             sys.exit(1)
             else:
