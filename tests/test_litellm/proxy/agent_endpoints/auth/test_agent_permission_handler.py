@@ -4,16 +4,15 @@ Unit tests for AgentRequestHandler - Agent permission management for keys and te
 
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-    AgentRequestHandler,
-)
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
+    AgentRequestHandler
 
 
 @pytest.mark.asyncio
@@ -165,3 +164,186 @@ class TestAgentRequestHandler:
                 user_api_key_auth=mock_user_auth
             )
             assert sorted(result) == ["agent-from-ag", "native-agent-1"]
+
+    async def test_calling_agent_restricts_allowed_sub_agents(self):
+        """
+        When a key is scoped to an agent that has sub-agent restrictions,
+        the result is intersected with key/team permissions.
+        """
+        from litellm.types.agents import AgentResponse
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="parent-agent",
+        )
+
+        parent_agent = AgentResponse(
+            agent_id="parent-agent",
+            agent_name="parent",
+            agent_card_params={"name": "parent"},
+            object_permission={
+                "agents": ["sub-agent-1", "sub-agent-2"],
+            },
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent_by_id.return_value = parent_agent
+
+        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                with patch(
+                    "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                    mock_registry,
+                ):
+                    mock_key.return_value = []
+                    mock_team.return_value = []
+
+                    result = await AgentRequestHandler.get_allowed_agents(
+                        user_api_key_auth=mock_user_auth
+                    )
+                    assert sorted(result) == ["sub-agent-1", "sub-agent-2"]
+
+    async def test_calling_agent_intersects_with_key_team(self):
+        """
+        When both key/team and calling agent have restrictions,
+        the final result is the intersection.
+        """
+        from litellm.types.agents import AgentResponse
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="parent-agent",
+        )
+
+        parent_agent = AgentResponse(
+            agent_id="parent-agent",
+            agent_name="parent",
+            agent_card_params={"name": "parent"},
+            object_permission={
+                "agents": ["sub-agent-1", "sub-agent-2", "sub-agent-3"],
+            },
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent_by_id.return_value = parent_agent
+
+        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                with patch(
+                    "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                    mock_registry,
+                ):
+                    mock_key.return_value = ["sub-agent-1", "sub-agent-4"]
+                    mock_team.return_value = []
+
+                    result = await AgentRequestHandler.get_allowed_agents(
+                        user_api_key_auth=mock_user_auth
+                    )
+                    assert result == ["sub-agent-1"]
+
+    async def test_calling_agent_no_restrictions_passes_through(self):
+        """
+        When the calling agent has no object_permission (no sub-agent restrictions),
+        key/team permissions pass through unchanged.
+        """
+        from litellm.types.agents import AgentResponse
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="parent-agent",
+        )
+
+        parent_agent = AgentResponse(
+            agent_id="parent-agent",
+            agent_name="parent",
+            agent_card_params={"name": "parent"},
+            object_permission=None,
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent_by_id.return_value = parent_agent
+
+        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                with patch(
+                    "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                    mock_registry,
+                ):
+                    mock_key.return_value = ["agent-a", "agent-b"]
+                    mock_team.return_value = []
+
+                    result = await AgentRequestHandler.get_allowed_agents(
+                        user_api_key_auth=mock_user_auth
+                    )
+                    assert sorted(result) == ["agent-a", "agent-b"]
+
+    async def test_calling_agent_with_access_groups(self):
+        """
+        When the calling agent's object_permission uses agent_access_groups,
+        those are resolved to agent IDs and used for intersection.
+        """
+        from litellm.types.agents import AgentResponse
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="parent-agent",
+        )
+
+        parent_agent = AgentResponse(
+            agent_id="parent-agent",
+            agent_name="parent",
+            agent_card_params={"name": "parent"},
+            object_permission={
+                "agents": ["sub-agent-1"],
+                "agent_access_groups": ["group-a"],
+            },
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_agent_by_id.return_value = parent_agent
+
+        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                with patch(
+                    "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+                    mock_registry,
+                ):
+                    with patch.object(
+                        AgentRequestHandler,
+                        "_get_agents_from_access_groups",
+                        new_callable=AsyncMock,
+                        return_value=["sub-agent-from-group"],
+                    ):
+                        mock_key.return_value = []
+                        mock_team.return_value = []
+
+                        result = await AgentRequestHandler.get_allowed_agents(
+                            user_api_key_auth=mock_user_auth
+                        )
+                        assert sorted(result) == [
+                            "sub-agent-1",
+                            "sub-agent-from-group",
+                        ]
+
+    async def test_no_agent_id_on_key_skips_agent_level_check(self):
+        """
+        When the key has no agent_id, the agent-level check is skipped entirely.
+        """
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+        )
+
+        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
+                mock_key.return_value = ["agent-x"]
+                mock_team.return_value = []
+
+                result = await AgentRequestHandler.get_allowed_agents(
+                    user_api_key_auth=mock_user_auth
+                )
+                assert result == ["agent-x"]

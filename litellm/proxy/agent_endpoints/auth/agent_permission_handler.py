@@ -8,12 +8,8 @@ Follows the same pattern as MCP permission handling.
 from typing import List, Optional, Set
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import (
-    LiteLLM_ObjectPermissionTable,
-    LiteLLM_TeamTable,
-    UI_TEAM_ID,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import (UI_TEAM_ID, LiteLLM_ObjectPermissionTable,
+                                  LiteLLM_TeamTable, UserAPIKeyAuth)
 
 
 class AgentRequestHandler:
@@ -28,6 +24,11 @@ class AgentRequestHandler:
     - If team has restrictions and key has none: inherit from team
     - If team has no restrictions: use key restrictions
     - If no restrictions: allow all agents
+
+    Additionally supports agent-level sub-agent restrictions:
+    - If the key is scoped to an agent (agent_id on the key), the calling agent's
+      own object_permission is checked for allowed sub-agents.
+    - The agent-level restriction is intersected with the key/team result.
     """
 
     @staticmethod
@@ -36,6 +37,11 @@ class AgentRequestHandler:
     ) -> List[str]:
         """
         Get list of allowed agent IDs for the given user/key based on permissions.
+
+        Checks three layers:
+        1. Key-level permissions
+        2. Team-level permissions (intersected/inherited with key)
+        3. Calling-agent-level permissions (intersected with key/team result)
 
         Returns:
             List[str]: List of allowed agent IDs. Empty list means no restrictions (allow all).
@@ -63,6 +69,11 @@ class AgentRequestHandler:
                     allowed_agents = allowed_agents_for_team
             else:
                 allowed_agents = allowed_agents_for_key
+
+            # Apply calling-agent-level sub-agent restrictions
+            allowed_agents = await AgentRequestHandler._apply_calling_agent_restrictions(
+                allowed_agents, user_api_key_auth
+            )
 
             return list(set(allowed_agents))
         except Exception as e:
@@ -118,11 +129,9 @@ class AgentRequestHandler:
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
@@ -179,9 +188,8 @@ class AgentRequestHandler:
             # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
             key_access_group_ids = user_api_key_auth.access_group_ids or []
             if key_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
-                    _get_agent_ids_from_access_groups,
-                )
+                from litellm.proxy.auth.auth_checks import \
+                    _get_agent_ids_from_access_groups
 
                 unified_agents = await _get_agent_ids_from_access_groups(
                     access_group_ids=key_access_group_ids,
@@ -213,11 +221,9 @@ class AgentRequestHandler:
 
         try:
             from litellm.proxy.auth.auth_checks import get_team_object
-            from litellm.proxy.proxy_server import (
-                prisma_client,
-                proxy_logging_obj,
-                user_api_key_cache,
-            )
+            from litellm.proxy.proxy_server import (prisma_client,
+                                                    proxy_logging_obj,
+                                                    user_api_key_cache)
 
             if not prisma_client:
                 return []
@@ -254,9 +260,8 @@ class AgentRequestHandler:
             # 2. Also include agents from team's access_group_ids (unified access groups)
             team_access_group_ids = team_obj.access_group_ids or []
             if team_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
-                    _get_agent_ids_from_access_groups,
-                )
+                from litellm.proxy.auth.auth_checks import \
+                    _get_agent_ids_from_access_groups
 
                 unified_agents = await _get_agent_ids_from_access_groups(
                     access_group_ids=team_access_group_ids,
@@ -271,6 +276,87 @@ class AgentRequestHandler:
                 verbose_logger.warning(
                     f"Failed to get allowed agents for team: {str(e)}"
                 )
+            return []
+
+    @staticmethod
+    async def _apply_calling_agent_restrictions(
+        key_team_allowed: List[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        If the key is scoped to an agent (user_api_key_auth.agent_id), look up
+        that agent's object_permission to get its allowed sub-agents, then
+        intersect with the key/team result.
+
+        Returns the narrowed list, or the original list if the calling agent
+        has no sub-agent restrictions.
+        """
+        agent_level_allowed = (
+            await AgentRequestHandler._get_allowed_agents_for_calling_agent(
+                user_api_key_auth
+            )
+        )
+        if len(agent_level_allowed) == 0:
+            return key_team_allowed
+
+        if len(key_team_allowed) == 0:
+            return agent_level_allowed
+
+        agent_level_set = set(agent_level_allowed)
+        return [a for a in key_team_allowed if a in agent_level_set]
+
+    @staticmethod
+    async def _get_allowed_agents_for_calling_agent(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed sub-agents for the calling agent.
+
+        When a key is scoped to an agent (agent_id on the key), the agent
+        itself may have an object_permission restricting which other agents
+        (sub-agents) it can invoke.
+
+        Reads the agent's object_permission from the registry and resolves
+        both direct agent IDs and agent_access_groups.
+        """
+        if user_api_key_auth is None:
+            return []
+
+        calling_agent_id = getattr(user_api_key_auth, "agent_id", None)
+        if not calling_agent_id:
+            return []
+
+        try:
+            from litellm.proxy.agent_endpoints.agent_registry import \
+                global_agent_registry
+
+            agent = global_agent_registry.get_agent_by_id(
+                agent_id=calling_agent_id
+            )
+            if agent is None:
+                return []
+
+            obj_perm = agent.object_permission
+            if not obj_perm or not isinstance(obj_perm, dict):
+                return []
+
+            all_agents: List[str] = []
+
+            direct_agents = obj_perm.get("agents") or []
+            all_agents.extend(direct_agents)
+
+            access_groups = obj_perm.get("agent_access_groups") or []
+            if access_groups:
+                resolved = await AgentRequestHandler._get_agents_from_access_groups(
+                    access_groups
+                )
+                all_agents.extend(resolved)
+
+            return list(set(all_agents))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed agents for calling agent: {str(e)}"
+            )
             return []
 
     @staticmethod
@@ -314,7 +400,8 @@ class AgentRequestHandler:
         """
         Resolve agent access groups to agent IDs by querying BOTH the agent table (DB) AND config-loaded agents.
         """
-        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+        from litellm.proxy.agent_endpoints.agent_registry import \
+            global_agent_registry
         from litellm.proxy.proxy_server import prisma_client
 
         try:
@@ -371,11 +458,9 @@ class AgentRequestHandler:
     ) -> List[str]:
         """Get agent access groups for the key."""
         from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if user_api_key_auth is None:
             return []
@@ -411,11 +496,9 @@ class AgentRequestHandler:
     ) -> List[str]:
         """Get agent access groups for the team."""
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if user_api_key_auth is None:
             return []
