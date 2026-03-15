@@ -8,7 +8,7 @@
 | Provider Route on LiteLLM | `blockrun/` |
 | Link to Provider Doc | [BlockRun Website ↗](https://blockrun.ai) |
 | Base URL | `https://blockrun.ai/api/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | [`/chat/completions`](#usage---litellm-python-sdk) |
 
 <br />
 
@@ -39,6 +39,8 @@ os.environ["BLOCKRUN_WALLET_KEY"] = ""  # your BlockRun wallet private key
 ```
 
 Get a wallet key by visiting [blockrun.ai](https://blockrun.ai) and funding a Base chain wallet with USDC.
+
+> **Security Warning**: `BLOCKRUN_WALLET_KEY` is a cryptographic private key that controls a Base chain wallet. Never commit it to source control, print it in logs, or expose it in error messages. Consider using a dedicated wallet with a small balance for API usage only.
 
 ## Usage - LiteLLM Python SDK
 
