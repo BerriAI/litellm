@@ -2,6 +2,8 @@
 Tests for _strip_credential_value and whitespace handling in credential storage.
 """
 
+import base64
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -105,8 +107,6 @@ class TestStoreUserCredentialStripsWhitespace:
         await store_user_credential(mock_prisma, "user1", "server1", " my-token\n ")
         call_args = mock_prisma.db.litellm_mcpusercredentials.upsert.call_args
         create_data = call_args.kwargs["data"]["create"]
-        import base64
-
         stored = base64.urlsafe_b64decode(create_data["credential_b64"]).decode()
         assert stored == "my-token"
 
@@ -135,8 +135,6 @@ class TestStoreUserOAuthCredentialStripsWhitespace:
         )
         call_args = mock_prisma.db.litellm_mcpusercredentials.upsert.call_args
         create_data = call_args.kwargs["data"]["create"]
-        import base64, json
-
         payload = json.loads(
             base64.urlsafe_b64decode(create_data["credential_b64"]).decode()
         )
