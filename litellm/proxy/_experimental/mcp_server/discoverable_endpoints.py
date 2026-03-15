@@ -243,8 +243,8 @@ async def exchange_token_with_server(
             "redirect_uri": f"{proxy_base_url}/callback",
         }
 
-    if code_verifier:
-        token_data["code_verifier"] = code_verifier
+        if code_verifier:
+            token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
