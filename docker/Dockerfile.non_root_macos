@@ -150,6 +150,8 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
   pip install --no-index --find-links=/wheels/ "PyJWT==${PYJWT_VERSION}" && \
   rm -rf /wheels
 
+RUN python3 -m prisma generate
+
 RUN python3 - <<'PY'
 import site, pathlib, subprocess, tarfile, tempfile, shutil, sys, inspect
 
@@ -249,7 +251,7 @@ RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
   mkdir -p /app/.litellm_migrations /app/.cache/npm && \
   chown -R 65534:65534 /app /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache/prisma-python
 
-RUN apt-get purge -y --auto-remove nodejs npm && \
+RUN apt-get purge -y --auto-remove npm && \
   rm -rf /var/lib/apt/lists/* /app/.cache/npm
 
 USER 65534:65534
