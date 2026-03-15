@@ -4029,6 +4029,10 @@ jobs:
           keys:
             - ui-build-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
             - ui-build-deps-v1-
+      - restore_cache:
+          keys:
+            - ui-nextjs-cache-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-nextjs-cache-v1-
       - run:
           name: Install dependencies
           command: |
@@ -4043,6 +4047,10 @@ jobs:
           command: |
             cd ui/litellm-dashboard
             source ./build_ui.sh
+      - save_cache:
+          key: ui-nextjs-cache-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/.next/cache
       - persist_to_workspace:
           root: .
           paths:
