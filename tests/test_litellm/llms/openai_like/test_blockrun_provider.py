@@ -5,11 +5,6 @@ Tests for BlockRun provider configuration.
 import os
 import sys
 
-try:
-    import pytest
-except ImportError:
-    pytest = None
-
 workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 sys.path.insert(0, workspace_path)
 

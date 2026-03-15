@@ -35,6 +35,7 @@ Free models require no environment variables:
 ### Paid Models
 
 ```python showLineNumbers title="Environment Variables"
+import os
 os.environ["BLOCKRUN_WALLET_KEY"] = ""  # your BlockRun wallet private key
 ```
 
