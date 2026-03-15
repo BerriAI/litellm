@@ -825,8 +825,9 @@ def test_router_context_window_check_pre_call_check_out_group():
             {
                 "model_name": "gpt-3.5-turbo-large",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
+                    "model": "gpt-4.1-mini",
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Alexander was a great conqueror.",
                 },
             },
         ]
