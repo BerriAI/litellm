@@ -13771,7 +13771,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 1.8000000000000002e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -13824,11 +13824,11 @@
         "input_cost_per_token_priority": 5.4e-07,
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 4.5e-06,
-        "cache_read_input_token_cost_priority": 5e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_audio_token_flex": 5e-07,
         "output_cost_per_token_flex": 1.25e-06,
-        "cache_read_input_token_cost_flex": 1.5e-08
+        "cache_read_input_token_cost_flex": 3.75e-08
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -13966,13 +13966,13 @@
         "supports_vision": true,
         "supports_web_search": true,
         "input_cost_per_token_priority": 1.8e-07,
-        "input_cost_per_audio_token_priority": 5.4e-07,
+        "input_cost_per_audio_token_priority": 9e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 4.5e-08,
         "input_cost_per_token_flex": 5e-08,
-        "input_cost_per_audio_token_flex": 1.5e-07,
+        "input_cost_per_audio_token_flex": 2.5e-07,
         "output_cost_per_token_flex": 2e-07,
-        "cache_read_input_token_cost_flex": 5e-09
+        "cache_read_input_token_cost_flex": 1.25e-08
     },
     "gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -14440,7 +14440,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "cache_read_input_token_cost_flex": 6.25e-08,
+        "input_cost_per_audio_token_priority": 1.26e-06,
+        "input_cost_per_audio_token_flex": 3.5e-07
     },
     "gemini-robotics-er-1.5-preview": {
         "cache_read_input_token_cost": 0,
@@ -14567,17 +14571,14 @@
         "uses_embed_content": true
     },
     "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_audio_per_second": 0.00016,
-        "input_cost_per_image": 0.00012,
-        "input_cost_per_token": 2e-07,
-        "input_cost_per_video_per_second": 0.00079,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -14592,18 +14593,6 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "uses_embed_content": true
-    },
-    "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "vertex_ai",
-        "max_input_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "embedding",
-        "output_cost_per_token": 0,
-        "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
-        "supports_multimodal": true,
         "uses_embed_content": true
     },
     "gemini/gemini-embedding-001": {
@@ -15083,7 +15072,7 @@
         "input_cost_per_token_priority": 1.8e-07,
         "input_cost_per_audio_token_priority": 5.4e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 1.8000000000000002e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_audio_token_flex": 1.5e-07,
         "output_cost_per_token_flex": 2e-07,
@@ -15138,11 +15127,11 @@
         "input_cost_per_token_priority": 5.4e-07,
         "input_cost_per_audio_token_priority": 1.8e-06,
         "output_cost_per_token_priority": 4.5e-06,
-        "cache_read_input_token_cost_priority": 5e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_audio_token_flex": 5e-07,
         "output_cost_per_token_flex": 1.25e-06,
-        "cache_read_input_token_cost_flex": 1.5e-08
+        "cache_read_input_token_cost_flex": 3.75e-08
     },
     "gemini/gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -15286,13 +15275,13 @@
         "supports_web_search": true,
         "tpm": 250000,
         "input_cost_per_token_priority": 1.8e-07,
-        "input_cost_per_audio_token_priority": 5.4e-07,
+        "input_cost_per_audio_token_priority": 9e-07,
         "output_cost_per_token_priority": 7.2e-07,
-        "cache_read_input_token_cost_priority": 2e-08,
+        "cache_read_input_token_cost_priority": 4.5e-08,
         "input_cost_per_token_flex": 5e-08,
-        "input_cost_per_audio_token_flex": 1.5e-07,
+        "input_cost_per_audio_token_flex": 2.5e-07,
         "output_cost_per_token_flex": 2e-07,
-        "cache_read_input_token_cost_flex": 5e-09
+        "cache_read_input_token_cost_flex": 1.25e-08
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
@@ -15753,7 +15742,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 10000000
+        "tpm": 10000000,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "cache_read_input_token_cost_flex": 6.25e-08,
+        "input_cost_per_audio_token_priority": 1.26e-06,
+        "input_cost_per_audio_token_flex": 3.5e-07
     },
     "gemini/gemini-exp-1114": {
         "input_cost_per_token": 0,
@@ -31018,7 +31011,9 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#glm-models",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -36624,7 +36619,9 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -36648,7 +36645,9 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07
     },
     "gemini/gemini-2.5-flash-native-audio-latest": {
         "input_cost_per_audio_token": 1e-06,
@@ -36700,7 +36699,9 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -36726,7 +36727,9 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "tpm": 250000,
-        "rpm": 10
+        "rpm": 10,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07
     },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
