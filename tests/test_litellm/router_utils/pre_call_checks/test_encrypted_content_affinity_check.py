@@ -23,41 +23,26 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-import json
-
 import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import ResponsesAPIResponse
 
-
-@pytest.fixture(autouse=True)
-def _clear_http_client_cache():
-    """
-    Clear the shared HTTP client cache before each test so that cached clients
-    from other tests (running in the same pytest-xdist worker) do not bypass
-    class-level mocks on AsyncHTTPHandler.post.
-    """
-    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-    if cache is not None:
-        cache.flush_cache()
-    yield
-    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-    if cache is not None:
-        cache.flush_cache()
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-class MockResponse:
-    def __init__(self, json_data, status_code):
-        self._json_data = json_data
-        self.status_code = status_code
-        self.text = json.dumps(json_data)
-        self.headers = {}
-
-    def json(self):
-        return self._json_data
+def _build_mock_response(output_items, response_id="resp_mock-123"):
+    """Build a ResponsesAPIResponse that ``async_response_api_handler`` would return."""
+    return ResponsesAPIResponse(
+        id=response_id,
+        created_at=1741476542,
+        status="completed",
+        model="openai/gpt-5.1-codex",
+        output=output_items,
+        usage={"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
+    )
 
 
 def _get_item_id(item) -> str:
@@ -67,18 +52,8 @@ def _get_item_id(item) -> str:
     return getattr(item, "id", "") or ""
 
 
-def _has_encrypted_content(item) -> bool:
-    """Check whether an output item carries encrypted_content."""
-    if isinstance(item, dict):
-        return "encrypted_content" in item
-    return hasattr(item, "encrypted_content") and getattr(item, "encrypted_content") is not None
-
-
 def _extract_encoded_item_id(response) -> str:
-    """
-    Walk the response output and return the first litellm-encoded item ID
-    (i.e. one that starts with ``encitem_``).
-    """
+    """Return the first ``encitem_``-prefixed item ID from the response output."""
     for item in response.output or []:
         item_id = _get_item_id(item)
         if item_id.startswith("encitem_"):
@@ -270,14 +245,14 @@ async def test_encrypted_content_affinity_tracks_and_routes():
     """
     The first response rewrites encrypted-content item IDs to encoded form.
     The follow-up request with those encoded IDs is pinned to the same deployment.
+
+    Mocks ``async_response_api_handler`` (the method that makes the HTTP call)
+    so the test is deterministic regardless of the HTTP transport in use.
+    The ``@client`` decorator and ``_update_responses_api_response_id_with_model_id``
+    post-processing still run, so item-ID rewriting is exercised end-to-end.
     """
-    mock_response_data = {
-        "id": "resp_mock-123",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "openai/gpt-5.1-codex",
-        "output": [
+    mock_resp = _build_mock_response(
+        output_items=[
             {
                 "type": "message",
                 "id": "msg_abc123",
@@ -292,10 +267,7 @@ async def test_encrypted_content_affinity_tracks_and_routes():
                 "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
             },
         ],
-        "parallel_tool_calls": True,
-        "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
-        "error": None,
-    }
+    )
 
     router = litellm.Router(
         model_list=[
@@ -328,14 +300,13 @@ async def test_encrypted_content_affinity_tracks_and_routes():
         return seq[1] if len(seq) > 1 else seq[0]
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
-    ) as mock_post, patch(
+        return_value=mock_resp,
+    ), patch(
         "litellm.router_strategy.simple_shuffle.random.choice",
         side_effect=deterministic_choice,
     ):
-        mock_post.return_value = MockResponse(mock_response_data, 200)
-
         # First request — goes to deployment-1 via deterministic_choice
         first_response = await router.aresponses(
             model="openai.gpt-5.1-codex",
@@ -412,15 +383,10 @@ async def test_encrypted_content_affinity_no_effect_on_chat_completions():
 async def test_encrypted_content_affinity_bypasses_rpm_limits():
     """
     When encrypted content affinity pins to a deployment, the request
-    goes through even if normal routing would avoid it.
+    goes through even if normal routing would avoid it (usage-based-routing-v2).
     """
-    mock_response_data = {
-        "id": "resp_mock-rpm-test",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "openai/gpt-5.1-codex",
-        "output": [
+    mock_resp = _build_mock_response(
+        output_items=[
             {
                 "type": "reasoning",
                 "id": "rs_encrypted_must_pin",
@@ -428,9 +394,8 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
                 "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
             },
         ],
-        "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
-        "error": None,
-    }
+        response_id="resp_mock-rpm-test",
+    )
 
     router = litellm.Router(
         model_list=[
@@ -464,14 +429,13 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
         return seq[1] if len(seq) > 1 else seq[0]
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
-    ) as mock_post, patch(
+        return_value=mock_resp,
+    ), patch(
         "litellm.router_strategy.simple_shuffle.random.choice",
         side_effect=deterministic_choice,
     ):
-        mock_post.return_value = MockResponse(mock_response_data, 200)
-
         first_response = await router.aresponses(
             model="openai.gpt-5.1-codex",
             input="Initial request",
@@ -507,13 +471,8 @@ async def test_encrypted_content_affinity_no_match_normal_routing():
     Input items with non-encoded IDs (no encitem_ prefix) fall through to
     normal load balancing.
     """
-    mock_response_data = {
-        "id": "resp_mock-no-match",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "openai/gpt-5.1-codex",
-        "output": [
+    mock_resp = _build_mock_response(
+        output_items=[
             {
                 "type": "message",
                 "id": "msg_new",
@@ -522,9 +481,8 @@ async def test_encrypted_content_affinity_no_match_normal_routing():
                 "content": [{"type": "output_text", "text": "Response"}],
             },
         ],
-        "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
-        "error": None,
-    }
+        response_id="resp_mock-no-match",
+    )
 
     router = litellm.Router(
         model_list=[
@@ -550,11 +508,10 @@ async def test_encrypted_content_affinity_no_match_normal_routing():
     )
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(mock_response_data, 200)
-
+        return_value=mock_resp,
+    ):
         # Non-encoded item ID — no affinity should kick in
         response = await router.aresponses(
             model="openai.gpt-5.1-codex",
@@ -571,22 +528,16 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
     Test affinity routing when items have wrapped encrypted_content but no ID.
     This simulates Codex client behavior where IDs are omitted.
     """
-    mock_response_data = {
-        "id": "resp_mock-wrapped-content",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "openai/gpt-5.1-codex",
-        "output": [
+    mock_resp = _build_mock_response(
+        output_items=[
             {
                 "type": "reasoning",
                 "status": "completed",
                 "encrypted_content": "gAAAAABpnW_yEYmSNEyOG_original_content",
             },
         ],
-        "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
-        "error": None,
-    }
+        response_id="resp_mock-wrapped-content",
+    )
 
     router = litellm.Router(
         model_list=[
@@ -619,14 +570,13 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
         return seq[1] if len(seq) > 1 else seq[0]
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
-    ) as mock_post, patch(
+        return_value=mock_resp,
+    ), patch(
         "litellm.router_strategy.simple_shuffle.random.choice",
         side_effect=deterministic_choice,
     ):
-        mock_post.return_value = MockResponse(mock_response_data, 200)
-
         # First request — goes to deployment-1
         first_response = await router.aresponses(
             model="openai.gpt-5.1-codex",
