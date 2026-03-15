@@ -4563,7 +4563,7 @@ class ProxyUpdateSpend:
                             ):
                                 update_data["budget_id"] = end_user_budget_updates[
                                     end_user_id
-                                ]    
+                                ]
 
                             batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},

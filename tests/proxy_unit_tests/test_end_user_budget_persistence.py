@@ -119,6 +119,7 @@ async def test_apply_default_budget_persistence():
             end_user_id=end_user_id,
             prisma_client=mock_proxy_server.prisma_client,
             user_api_key_cache=mock_cache,
+            proxy_logging_obj=mock_proxy_logging_obj,
             route="/chat/completions",
         )
 

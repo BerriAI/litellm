@@ -235,10 +235,32 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
             transactions_dict[entity_id] += response_cost or 0
 
+        # [REFINEMENT] Optimize database writes: if the total response_cost for an entity is 0,
+        # we don't need to include it in the increment logic.
+        # This prevents unnecessary DB overhead for metadata-only updates (like budget_id).
+        for dict_key in [
+            "user_list_transactions",
+            "end_user_list_transactions",
+            "key_list_transactions",
+            "team_list_transactions",
+            "team_member_list_transactions",
+            "org_list_transactions",
+            "tag_list_transactions",
+        ]:
+            _dict = db_spend_update_transactions.get(dict_key)
+            if _dict:
+                filtered_dict = {k: v for k, v in _dict.items() if v > 0}
+                db_spend_update_transactions[dict_key] = filtered_dict  # type: ignore
+
+        # Second pass to capture metadata-only updates (budget_id)
+        for update in updates:    
+
             # [Budget Reset Fix]
             # Capture the budget_id update for end-users.
             # This allows LiteLLM to persist the budget_id (foreign key) in the background
             # during the spend update batch, satisfying Greptile's request for decentralized writes.
+            entity_type = update.get("entity_type")
+            entity_id = update.get("entity_id") or ""
             budget_id = update.get("budget_id")
             if (
                 entity_type == Litellm_EntityType.END_USER

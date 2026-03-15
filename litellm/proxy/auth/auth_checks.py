@@ -70,6 +70,7 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
+from litellm.proxy._types import SpendUpdateQueueItem
 
 # [Budget Reset Fix]
 # Persistence handled via batched SpendUpdateQueue to follow project performance guidelines.
@@ -833,6 +834,7 @@ async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
     user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
     parent_otel_span: Optional[Span] = None,
 ) -> LiteLLM_EndUserTable:
     """
@@ -872,16 +874,14 @@ async def _apply_default_budget_to_end_user(
 
         # Persist budget_id to DB via SpendUpdateQueue to avoid direct DB writes in the auth path.
         # This routes the update through the existing batching mechanism.
-        from litellm.proxy._types import SpendUpdateQueueItem
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
-        await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
-            update=SpendUpdateQueueItem(
-                entity_type=Litellm_EntityType.END_USER,
-                entity_id=end_user_obj.user_id,
-                budget_id=litellm.max_end_user_budget_id,
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.END_USER,
+                    entity_id=end_user_obj.user_id,
+                    budget_id=litellm.max_end_user_budget_id,
+                )
             )
-        )
 
     return end_user_obj
 
@@ -961,6 +961,7 @@ async def get_end_user_object(
             end_user_obj=return_obj,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
             parent_otel_span=parent_otel_span,
         )
 
@@ -995,6 +996,7 @@ async def get_end_user_object(
             end_user_obj=_response,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
             parent_otel_span=parent_otel_span,
         )
 
