@@ -47,6 +47,11 @@ class MyCustomHandler(
                 if input_msg and len(input_msg) > 0:
                     if input_msg[0].get("role") == "developer":
                         text = input_msg[0].get("content")
+            if text is None:
+                input_msg = data.get("messages", [])
+                if input_msg and len(input_msg) > 0:
+                    if input_msg[0].get("role") == "system":
+                        text = input_msg[0].get("content")
             if text and "running inside OpenClaw" in text:
                 return HTTPException(
                     status_code=403,
