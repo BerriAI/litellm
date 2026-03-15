@@ -657,6 +657,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
@@ -671,6 +672,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
       # Run pytest and generate JUnit XML report
@@ -680,13 +682,25 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                -k 'router' \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                --timeout=300 --timeout_method=thread"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_router_coverage.xml
-            mv .coverage litellm_router_coverage
+            mv coverage.xml litellm_router_coverage.xml || true
+            mv .coverage litellm_router_coverage || true
       # Store test results
       - store_test_results:
           path: test-results
@@ -1459,13 +1473,15 @@ jobs:
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
             pip install "semantic_router==0.1.10"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/guardrails_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            LITELLM_LOG=WARNING python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 4 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
