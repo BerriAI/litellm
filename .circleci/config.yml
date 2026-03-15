@@ -1108,7 +1108,7 @@ jobs:
             pwd
             ls
             # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
-            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -vv --log-cli-level=INFO
+            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 4 --timeout=300 -vv --log-cli-level=INFO
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1498,7 +1498,7 @@ jobs:
           command: |
             pwd
             ls
-            LITELLM_LOG=WARNING python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 4 --timeout=120 --timeout_method=thread
+            LITELLM_LOG=WARNING python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1761,7 +1761,7 @@ jobs:
       - run:
           name: Run LLM provider tests
           command: |
-            python -m pytest tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-llms.xml --durations=10 -n 8 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-llms.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1788,7 +1788,7 @@ jobs:
       - run:
           name: Run core tests
           command: |
-            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 8 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1869,7 +1869,7 @@ jobs:
       - run:
           name: Run integrations tests
           command: |
-            python -m pytest tests/test_litellm/integrations --cov=litellm --cov-report=xml --junitxml=test-results/junit-integrations.xml --durations=10 -n 8 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm/integrations --cov=litellm --cov-report=xml --junitxml=test-results/junit-integrations.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1920,7 +1920,7 @@ jobs:
             pwd
             ls
             prisma generate
-            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 8
+            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -2100,7 +2100,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/image_gen_tests -n 4 --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/image_gen_tests -n 2 --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -2151,7 +2151,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 4 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 2 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
