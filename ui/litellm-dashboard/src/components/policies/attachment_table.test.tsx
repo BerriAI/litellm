@@ -15,6 +15,10 @@ vi.mock("@heroicons/react/outline", () => ({
   SwitchVerticalIcon: function SwitchVerticalIcon() { return null; },
   ChevronUpIcon: function ChevronUpIcon() { return null; },
   ChevronDownIcon: function ChevronDownIcon() { return null; },
+  PencilAltIcon: function PencilAltIcon() { return null; },
+  PlayIcon: function PlayIcon() { return null; },
+  RefreshIcon: function RefreshIcon() { return null; },
+  ExternalLinkIcon: function ExternalLinkIcon() { return null; },
 }));
 
 vi.mock("@tremor/react", async (importOriginal) => {

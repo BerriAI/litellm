@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon, Badge } from "@tremor/react";
-import { TrashIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Badge } from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip, Tag } from "antd";
 import {
   ColumnDef,
@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-table";
 import { PolicyAttachment } from "./types";
 import ImpactPopover from "./impact_popover";
+import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface AttachmentTableProps {
   attachments: PolicyAttachment[];
@@ -201,14 +202,11 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
           <div className="flex space-x-2">
             <ImpactPopover attachment={attachment} accessToken={accessToken} />
             {isAdmin && (
-              <Tooltip title="Delete attachment">
-                <Icon
-                  icon={TrashIcon}
-                  size="sm"
-                  onClick={() => onDeleteClick(attachment.attachment_id)}
-                  className="cursor-pointer hover:text-red-500"
-                />
-              </Tooltip>
+              <TableIconActionButton
+                variant="Delete"
+                tooltipText="Delete attachment"
+                onClick={() => onDeleteClick(attachment.attachment_id)}
+              />
             )}
           </div>
         );
