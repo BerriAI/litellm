@@ -379,6 +379,7 @@ li.tabs__item--active {
   align-items: center !important;
   justify-content: space-between !important;
   gap: 0.5rem;
+  padding-right: 0.625rem !important;
 }
 
 .menu__link--sublist-caret::after {

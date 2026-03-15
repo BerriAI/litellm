@@ -295,11 +295,6 @@ const config = {
           { to: '/blog', label: 'Blog', position: 'left' },
           { to: '/api-reference', label: 'API Reference', position: 'left' },
           {
-            href: 'https://models.litellm.ai/',
-            label: '💸 Cost Map',
-            position: 'right',
-          },
-          {
             href: 'https://github.com/BerriAI/litellm',
             position: 'right',
             className: 'header-github-link',

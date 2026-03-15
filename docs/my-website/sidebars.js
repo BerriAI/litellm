@@ -219,6 +219,12 @@ const sidebars = {
       type: "category",
       label: "LiteLLM Python SDK",
       collapsed: true,
+      link: {
+        type: "generated-index",
+        title: "LiteLLM Python SDK",
+        description: "Unified interface to call 100+ LLMs with a single Python SDK.",
+        slug: "/sdk",
+      },
       items: [
         {
           type: "link",
@@ -956,6 +962,12 @@ const sidebars = {
       type: "category",
       label: "Reference",
       collapsed: true,
+      link: {
+        type: "generated-index",
+        title: "Reference",
+        description: "Troubleshooting, contributing guides, migration notes, and security docs.",
+        slug: "/reference",
+      },
       items: [
         {
           type: "category",
@@ -1116,20 +1128,12 @@ const learnSidebar = {
                 "completion/prompt_formatting",
               ],
             },
-            {
-              type: "category",
-              label: "Request Handling",
-              collapsible: true,
-              collapsed: true,
-              items: [
-                "completion/drop_params",
-                "completion/message_trimming",
-                "completion/message_sanitization",
-                "completion/model_alias",
-                "completion/mock_requests",
-                "completion/reliable_completions",
-              ],
-            },
+            "completion/drop_params",
+            "completion/message_trimming",
+            "completion/message_sanitization",
+            "completion/model_alias",
+            "completion/mock_requests",
+            "completion/reliable_completions",
           ],
         },
         {
