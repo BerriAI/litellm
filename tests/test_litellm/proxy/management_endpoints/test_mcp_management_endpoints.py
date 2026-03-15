@@ -1520,6 +1520,7 @@ class TestTemporaryMCPSessionEndpoints:
                 client_secret="secret",
                 code_verifier="verifier",
                 refresh_token=None,
+                scope=None,
             )
 
         assert result is exchange_response
@@ -1534,6 +1535,7 @@ class TestTemporaryMCPSessionEndpoints:
             client_secret="secret",
             code_verifier="verifier",
             refresh_token=None,
+            scope=None,
         )
 
     @pytest.mark.asyncio
@@ -1566,6 +1568,7 @@ class TestTemporaryMCPSessionEndpoints:
                 client_secret="secret",
                 code_verifier=None,
                 refresh_token="rt-123",
+                scope=None,
             )
 
         assert result is exchange_response
@@ -1580,6 +1583,7 @@ class TestTemporaryMCPSessionEndpoints:
             client_secret="secret",
             code_verifier=None,
             refresh_token="rt-123",
+            scope=None,
         )
 
     @pytest.mark.asyncio

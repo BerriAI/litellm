@@ -1736,6 +1736,7 @@ async def test_token_endpoint_refresh_token_grant():
             mcp_server_name="google_mcp",
             client_secret="test_secret",
             refresh_token="rt-test",
+            scope="openid email",
         )
 
     # Verify the POST was called with refresh_token grant data
@@ -1746,6 +1747,7 @@ async def test_token_endpoint_refresh_token_grant():
     assert call_args[1]["data"]["refresh_token"] == "rt-test"
     assert call_args[1]["data"]["client_id"] == "test_client_id"
     assert call_args[1]["data"]["client_secret"] == "test_secret"
+    assert call_args[1]["data"]["scope"] == "openid email"
 
     # Verify response contains the new tokens
     import json

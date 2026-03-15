@@ -209,6 +209,7 @@ async def exchange_token_with_server(
     client_secret: Optional[str],
     code_verifier: Optional[str],
     refresh_token: Optional[str] = None,
+    scope: Optional[str] = None,
 ):
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
@@ -227,22 +228,25 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data = {
+        token_data: dict = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": resolved_client_id,
-            "client_secret": resolved_client_secret,
         }
+        if resolved_client_secret is not None:
+            token_data["client_secret"] = resolved_client_secret
+        if scope:
+            token_data["scope"] = scope
     else:
         proxy_base_url = get_request_base_url(request)
-        token_data = {
+        token_data: dict = {
             "grant_type": "authorization_code",
             "client_id": resolved_client_id,
-            "client_secret": resolved_client_secret,
             "code": code,
             "redirect_uri": f"{proxy_base_url}/callback",
         }
-
+        if resolved_client_secret is not None:
+            token_data["client_secret"] = resolved_client_secret
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
@@ -393,6 +397,7 @@ async def token_endpoint(
     client_secret: Optional[str] = Form(None),
     code_verifier: str = Form(None),
     refresh_token: Optional[str] = Form(None),
+    scope: Optional[str] = Form(None),
     mcp_server_name: Optional[str] = None,
 ):
     """
@@ -427,6 +432,7 @@ async def token_endpoint(
         client_secret=client_secret,
         code_verifier=code_verifier,
         refresh_token=refresh_token,
+        scope=scope,
     )
 
 
