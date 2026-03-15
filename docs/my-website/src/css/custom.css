@@ -793,3 +793,23 @@ video {
 [data-theme='dark'] .levo-logo-dark {
   display: block !important;
 }
+
+/* =========================================
+   DOC CONTENT — wider reading column
+   ========================================= */
+
+/* On large screens the default col--7 grid leaves too much dead space.
+   Expand the content column; the TOC column fills the remainder via flex. */
+@media (min-width: 1200px) {
+  .docItemCol {
+    --ifm-col-width: calc(8 / 12 * 100%) !important;
+    max-width: calc(8 / 12 * 100%) !important;
+  }
+}
+
+@media (min-width: 1600px) {
+  .docItemCol {
+    --ifm-col-width: calc(9 / 12 * 100%) !important;
+    max-width: calc(9 / 12 * 100%) !important;
+  }
+}

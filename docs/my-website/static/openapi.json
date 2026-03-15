@@ -2731,7 +2731,7 @@
         "tags": [
           "Evaluations"
         ],
-      "operationId": "cancelEval",
+        "operationId": "cancelEval",
         "parameters": [
           {
             "name": "eval_id",
@@ -5104,6 +5104,240 @@
           "metadata": {
             "type": "object",
             "description": "LiteLLM-specific metadata for logging, routing, and tagging"
+          },
+          "stream_options": {
+            "type": "object",
+            "description": "Options for streaming response. Only set when `stream: true`.",
+            "properties": {
+              "include_usage": {
+                "type": "boolean",
+                "description": "If set, an extra chunk with token usage stats is streamed before [DONE]."
+              }
+            }
+          },
+          "parallel_tool_calls": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to enable parallel function calling during tool use."
+          },
+          "functions": {
+            "type": "array",
+            "deprecated": true,
+            "description": "Deprecated \u2014 use `tools` instead. List of functions the model may generate JSON inputs for.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "name",
+                "parameters"
+              ]
+            }
+          },
+          "function_call": {
+            "deprecated": true,
+            "description": "Deprecated \u2014 use `tool_choice` instead. Controls how the model responds to function calls.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "auto"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            ]
+          },
+          "timeout": {
+            "type": "number",
+            "nullable": true,
+            "description": "Request timeout in seconds. Defaults to None (uses provider default)."
+          },
+          "base_url": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure endpoints)."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Additional HTTP headers to include in the request to the LLM provider."
+          },
+          "num_retries": {
+            "type": "integer",
+            "description": "Number of retries on APIError, TimeoutError, or ServiceUnavailableError.",
+            "default": 0
+          },
+          "fallbacks": {
+            "type": "array",
+            "description": "Ordered list of fallback model names (or model+params dicts) to try if the primary call fails.",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "drop_params": {
+            "type": "boolean",
+            "description": "If true, silently drop unsupported OpenAI params instead of raising an error.",
+            "default": false
+          },
+          "safety_identifier": {
+            "type": "string",
+            "description": "Unique identifier for tracking and managing safety-related requests."
+          },
+          "modalities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text",
+                "audio"
+              ]
+            },
+            "description": "Output modalities the model should return. E.g. `['text', 'audio']` for audio responses."
+          },
+          "prediction": {
+            "type": "object",
+            "description": "Configuration for predicted output to speed up responses when large parts of the output are known in advance.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "content"
+                ]
+              },
+              "content": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "audio": {
+            "type": "object",
+            "description": "Parameters for audio output. Required when `modalities` includes `audio`.",
+            "properties": {
+              "voice": {
+                "type": "string",
+                "description": "Voice to use for audio output (e.g. alloy, echo, fable)."
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "wav",
+                  "mp3",
+                  "flac",
+                  "opus",
+                  "pcm16"
+                ],
+                "description": "Audio output format."
+              }
+            }
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "default"
+            ],
+            "nullable": true,
+            "description": "Constrains effort on reasoning for reasoning models. Supported by OpenAI o-series and Anthropic thinking models."
+          },
+          "web_search_options": {
+            "type": "object",
+            "description": "Options for web search tool use (OpenAI models). Enables the model to search the web for up-to-date information.",
+            "properties": {
+              "search_context_size": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "description": "Amount of search context to include."
+              }
+            }
+          },
+          "thinking": {
+            "type": "object",
+            "description": "Anthropic extended thinking configuration. Enables Claude to reason through complex problems before responding.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "disabled"
+                ]
+              },
+              "budget_tokens": {
+                "type": "integer",
+                "description": "Maximum number of tokens to use for thinking. Must be >= 1024."
+              }
+            }
+          },
+          "verbosity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "nullable": true,
+            "description": "Controls the verbosity of the model's response."
+          },
+          "service_tier": {
+            "type": "string",
+            "nullable": true,
+            "description": "Specifies the latency tier to use for processing the request (e.g. 'auto', 'default'). Relevant for OpenAI models."
+          },
+          "enable_json_schema_validation": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Per-request override for JSON schema validation of structured outputs. Overrides the global `litellm.enable_json_schema_validation` setting."
           }
         }
       },
@@ -5187,7 +5421,6 @@
       "TextCompletionRequest": {
         "type": "object",
         "required": [
-          "model",
           "prompt"
         ],
         "properties": {
@@ -5262,6 +5495,37 @@
           },
           "user": {
             "type": "string"
+          },
+          "logit_bias": {
+            "type": "object",
+            "description": "Map of token IDs to bias scores (-100 to 100) to adjust generation probability."
+          },
+          "seed": {
+            "type": "integer",
+            "description": "If specified, the system makes a best-effort attempt to sample deterministically."
+          },
+          "stream_options": {
+            "type": "object",
+            "nullable": true,
+            "description": "Options for streaming response. Only set when `stream: true`.",
+            "properties": {
+              "include_usage": {
+                "type": "boolean",
+                "description": "If set, an extra chunk with token usage stats is streamed before [DONE]."
+              }
+            }
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure endpoints)."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
           }
         }
       },
@@ -5375,6 +5639,107 @@
             "items": {
               "$ref": "#/components/schemas/Tool"
             }
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional fields to include in response"
+          },
+          "instructions": {
+            "type": "string",
+            "description": "System instructions for the model"
+          },
+          "prompt": {
+            "type": "object",
+            "description": "Prompt template object"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Key-value metadata to attach to the response"
+          },
+          "parallel_tool_calls": {
+            "type": "boolean",
+            "description": "Whether to allow parallel tool calls"
+          },
+          "previous_response_id": {
+            "type": "string",
+            "description": "ID of previous response for multi-turn conversations"
+          },
+          "reasoning": {
+            "type": "object",
+            "description": "Reasoning configuration"
+          },
+          "store": {
+            "type": "boolean",
+            "description": "Whether to store the response"
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Run the request in the background"
+          },
+          "text": {
+            "type": "object",
+            "description": "Text output configuration"
+          },
+          "text_format": {
+            "type": "object",
+            "description": "Text format configuration"
+          },
+          "tool_choice": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ],
+            "description": "Controls which tool the model calls"
+          },
+          "truncation": {
+            "type": "string",
+            "description": "Truncation strategy for long context"
+          },
+          "user": {
+            "type": "string",
+            "description": "Unique identifier for the end user"
+          },
+          "service_tier": {
+            "type": "string",
+            "description": "Latency tier to use for processing"
+          },
+          "safety_identifier": {
+            "type": "string",
+            "description": "Identifier for safety filtering"
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Additional headers to send with the request"
+          },
+          "extra_query": {
+            "type": "object",
+            "description": "Additional query parameters"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "Additional body fields to send with the request"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Timeout in seconds for the request"
+          },
+          "allowed_openai_params": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of OpenAI params to forward"
+          },
+          "custom_llm_provider": {
+            "type": "string",
+            "description": "LiteLLM provider override"
           }
         }
       },
@@ -5457,9 +5822,47 @@
             "default": "json"
           },
           "temperature": {
-            "type": "number",
+            "type": "integer",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "Sampling temperature (0 or 1). Higher values produce more random output."
+          },
+          "timestamp_granularities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "word",
+                "segment"
+              ]
+            },
+            "description": "Timestamp granularities to populate in verbose_json response format. Requires `response_format: verbose_json`."
+          },
+          "user": {
+            "type": "string",
+            "description": "Unique end-user identifier for tracking and logging."
+          },
+          "timeout": {
+            "type": "number",
+            "default": 600,
+            "description": "Request timeout in seconds. Defaults to 600."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure endpoints)."
+          },
+          "max_retries": {
+            "type": "integer",
+            "description": "Number of retries on failure.",
+            "default": 0
           }
         }
       },
@@ -5501,17 +5904,26 @@
             "description": "Text to synthesize. Max 4096 characters."
           },
           "voice": {
-            "type": "string",
-            "enum": [
-              "alloy",
-              "ash",
-              "coral",
-              "echo",
-              "fable",
-              "onyx",
-              "nova",
-              "sage",
-              "shimmer"
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "alloy",
+                  "ash",
+                  "coral",
+                  "echo",
+                  "fable",
+                  "onyx",
+                  "nova",
+                  "sage",
+                  "shimmer"
+                ],
+                "description": "Preset voice name (e.g. alloy, echo, fable)."
+              },
+              {
+                "type": "object",
+                "description": "Provider-specific voice configuration object."
+              }
             ],
             "description": "Voice preset"
           },
@@ -5528,11 +5940,53 @@
             "default": "mp3"
           },
           "speed": {
-            "type": "number",
+            "type": "integer",
             "minimum": 0.25,
             "maximum": 4.0,
             "default": 1.0,
             "description": "Speech speed multiplier"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure endpoints)."
+          },
+          "timeout": {
+            "type": "number",
+            "nullable": true,
+            "description": "Request timeout in seconds."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "Additional instructions for controlling voice style, tone, or pronunciation (supported by select providers)."
+          },
+          "organization": {
+            "type": "string",
+            "description": "OpenAI organization ID."
+          },
+          "project": {
+            "type": "string",
+            "description": "OpenAI project ID."
+          },
+          "max_retries": {
+            "type": "integer",
+            "description": "Number of retries on failure.",
+            "default": 0
+          },
+          "metadata": {
+            "type": "object",
+            "description": "LiteLLM-specific metadata for logging and routing."
+          },
+          "headers": {
+            "type": "object",
+            "description": "Additional HTTP headers to include in the request."
           }
         }
       },
@@ -5594,6 +6048,23 @@
           },
           "user": {
             "type": "string"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Request timeout in seconds. Defaults to 600.",
+            "default": 600
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure DALL-E endpoints)."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
           }
         }
       },
@@ -5643,6 +6114,30 @@
           },
           "user": {
             "type": "string"
+          },
+          "quality": {
+            "type": "string",
+            "description": "Image quality level"
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Additional headers to send with the request"
+          },
+          "extra_query": {
+            "type": "object",
+            "description": "Additional query parameters"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "Additional body fields to send with the request"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Timeout in seconds for the request"
+          },
+          "custom_llm_provider": {
+            "type": "string",
+            "description": "LiteLLM provider override"
           }
         }
       },
@@ -5755,6 +6250,32 @@
           },
           "user": {
             "type": "string"
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Request timeout in seconds. Defaults to 600.",
+            "default": 600
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Override the provider API base URL."
+          },
+          "api_version": {
+            "type": "string",
+            "description": "API version (required for Azure endpoints)."
+          },
+          "api_key": {
+            "type": "string",
+            "description": "API key \u2014 overrides the key set via environment variable."
+          },
+          "api_type": {
+            "type": "string",
+            "description": "API type (e.g. `azure` for Azure OpenAI embeddings)."
+          },
+          "caching": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, enables caching for this embedding request."
           }
         }
       },
@@ -5863,6 +6384,21 @@
             "type": "boolean",
             "default": true,
             "description": "Include document text in response"
+          },
+          "rank_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields to use for ranking when documents are objects"
+          },
+          "max_chunks_per_doc": {
+            "type": "integer",
+            "description": "Maximum number of chunks per document"
+          },
+          "max_tokens_per_doc": {
+            "type": "integer",
+            "description": "Maximum number of tokens per document"
           }
         }
       },
@@ -6165,9 +6701,15 @@
       "AssistantCreateRequest": {
         "type": "object",
         "required": [
+          "custom_llm_provider",
           "model"
         ],
         "properties": {
+          "custom_llm_provider": {
+            "type": "string",
+            "enum": ["openai", "azure"],
+            "description": "LiteLLM provider — required to route to the correct backend"
+          },
           "model": {
             "type": "string",
             "example": "gpt-4o"
@@ -6206,6 +6748,18 @@
           },
           "response_format": {
             "type": "object"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Provider API key"
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Provider API base URL"
+          },
+          "api_version": {
+            "type": "string",
+            "description": "Provider API version (e.g. Azure API version)"
           }
         }
       },
@@ -6409,6 +6963,22 @@
           },
           "metadata": {
             "type": "object"
+          },
+          "custom_llm_provider": {
+            "type": "string",
+            "description": "LiteLLM provider override (e.g. 'openai', 'azure')"
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Additional headers to send with the request"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "Additional body fields to send with the request"
+          },
+          "output_expires_after": {
+            "type": "object",
+            "description": "Expiration policy for the output file"
           }
         }
       },
@@ -6548,6 +7118,25 @@
           },
           "seed": {
             "type": "integer"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Integrations to enable for the fine-tuning job"
+          },
+          "custom_llm_provider": {
+            "type": "string",
+            "description": "LiteLLM provider override (e.g. 'openai', 'azure')"
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Additional headers to send with the request"
+          },
+          "extra_body": {
+            "type": "object",
+            "description": "Additional body fields to send with the request"
           }
         }
       },
@@ -6733,6 +7322,14 @@
             "type": "string",
             "default": "omni-moderation-latest",
             "description": "Moderation model to use"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Provider API key"
+          },
+          "api_base": {
+            "type": "string",
+            "description": "Provider API base URL"
           }
         }
       },
