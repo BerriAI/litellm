@@ -54,6 +54,7 @@ def isolate_litellm_state():
 
     # Clear callbacks before test
     for attr in (
+        "callbacks",
         "success_callback",
         "failure_callback",
         "_async_success_callback",
