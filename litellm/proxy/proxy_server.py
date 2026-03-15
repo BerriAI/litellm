@@ -13414,7 +13414,11 @@ class _MCPTrailingSlashMiddleware:
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] == "http" and scope.get("path") == BASE_MCP_ROUTE:
-            scope = dict(scope, path=BASE_MCP_ROUTE + "/")
+            scope = dict(
+                scope,
+                path=BASE_MCP_ROUTE + "/",
+                raw_path=(scope.get("raw_path") or BASE_MCP_ROUTE.encode()) + b"/",
+            )
         await self.app(scope, receive, send)
 
 
