@@ -1,7 +1,7 @@
 ---
 id: index
 title: Getting Started
-sidebar_label: Getting Started
+sidebar_label: Quickstart
 ---
 
 import Tabs from '@theme/Tabs';
@@ -9,9 +9,7 @@ import TabItem from '@theme/TabItem';
 import NavigationCards from '@site/src/components/NavigationCards';
 import Image from '@theme/IdealImage';
 
-<!-- <div style={{maxWidth: '900px', maxHeight: '600px', margin: '0 0 1.5rem'}}> -->
 <Image style={{padding: '10px', margin: '0 0 2.5rem'}} img={require('../img/hero.png')} />
-<!-- </div> -->
 
 **LiteLLM** is an open-source library that gives you a single, unified interface to call 100+ LLMs — OpenAI, Anthropic, Vertex AI, Bedrock, and more — using the OpenAI format.
 
@@ -158,14 +156,16 @@ Non-streaming responses return a `ModelResponse` object:
   "object": "chat.completion",
   "created": 1677858242,
   "model": "gpt-4o",
-  "choices": [{
-    "index": 0,
-    "message": {
-      "role": "assistant",
-      "content": "Hello! I'm doing well, thanks for asking."
-    },
-    "finish_reason": "stop"
-  }],
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! I'm doing well, thanks for asking."
+      },
+      "finish_reason": "stop"
+    }
+  ],
   "usage": {
     "prompt_tokens": 13,
     "completion_tokens": 12,
@@ -182,14 +182,16 @@ Streaming responses (`stream=True`) yield `ModelResponseStream` chunks:
   "object": "chat.completion.chunk",
   "created": 1677858242,
   "model": "gpt-4o",
-  "choices": [{
-    "index": 0,
-    "delta": {
-      "role": "assistant",
-      "content": "Hello"
-    },
-    "finish_reason": null
-  }]
+  "choices": [
+    {
+      "index": 0,
+      "delta": {
+        "role": "assistant",
+        "content": "Hello"
+      },
+      "finish_reason": null
+    }
+  ]
 }
 ```
 

@@ -27,6 +27,9 @@
   --ifm-font-size-base: 15px;
   --ifm-line-height-base: 1.65;
   --ifm-border-radius: 6px;
+  /* Wider reading column — reduces excessive whitespace on large monitors */
+  --ifm-container-width: 1380px;
+  --ifm-container-width-xl: 1560px;
 }
 
 /* =========================================
@@ -478,6 +481,39 @@ li.tabs__item--active {
 
 [data-theme='dark'] [class*='sidebar-item-'] ul:not(:first-child) {
   border-left-color: #2d3748;
+}
+
+/* ─── Sidebar link colour & hover fixes ─────────────────────── */
+
+/* Doc links: ensure a visible colour in both themes */
+.menu__link {
+  color: var(--ifm-menu-color);
+}
+
+.menu__link:hover {
+  color: var(--ifm-color-primary);
+  background-color: var(--ifm-menu-color-background-hover);
+  text-decoration: none;
+}
+
+/* External / type:"link" items — subtle right-arrow hint */
+.menu__list-item--collapsed ~ .menu__link[href^="http"],
+.menu__link[href^="http"] {
+  color: var(--ifm-menu-color);
+}
+
+/* .menu__link[href^="http"]::after {
+  content: ' ↗';
+  font-size: 11px;
+  opacity: 0.55;
+} */
+
+[data-theme='dark'] .menu__link {
+  color: #9ca3af;
+}
+
+[data-theme='dark'] .menu__link:hover {
+  color: var(--ifm-color-primary);
 }
 
 /* =========================================
