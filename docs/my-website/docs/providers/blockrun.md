@@ -8,7 +8,7 @@
 | Provider Route on LiteLLM | `blockrun/` |
 | Link to Provider Doc | [BlockRun Website ↗](https://blockrun.ai) |
 | Base URL | `https://blockrun.ai/api/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage), [`/images/generations`](#image-generation) |
+| Supported Operations | [`/chat/completions`](#sample-usage) |
 
 <br />
 

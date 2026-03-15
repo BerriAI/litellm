@@ -4,7 +4,6 @@ Tests for BlockRun provider configuration.
 
 import os
 import sys
-from unittest.mock import patch
 
 try:
     import pytest
@@ -116,3 +115,23 @@ class TestBlockRunProvider:
 
         assert model == "nvidia/gpt-oss-120b"
         assert provider == "blockrun"
+
+    def test_blockrun_router_config(self):
+        """Test that blockrun can be used in Router configuration (fixes Router/Proxy support)"""
+        from litellm import Router
+
+        # This should not raise "Unsupported provider - blockrun"
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "blockrun/openai/gpt-4o",
+                        "api_key": "test-key",
+                    },
+                }
+            ]
+        )
+
+        assert len(router.model_list) == 1
+        assert router.model_list[0]["model_name"] == "gpt-4o"
