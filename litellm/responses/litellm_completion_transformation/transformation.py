@@ -11,6 +11,7 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
+from litellm.constants import _COMPACT_TARGET_RATIO
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import cheap_token_counter, trim_messages
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -60,10 +61,6 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
-
-# After compaction, target this fraction of compact_threshold so there is
-# headroom before the next compaction triggers (e.g. 0.25 = 25% of threshold).
-_COMPACT_TARGET_RATIO = 0.25
 
 
 class ChatCompletionSession(TypedDict, total=False):
