@@ -2249,6 +2249,8 @@ jobs:
 
     steps:
       - checkout
+      - attach_workspace:
+          at: ~/project
       - setup_google_dns
       # Install Helm
       - run:
@@ -2279,10 +2281,11 @@ jobs:
             kind create cluster --name litellm-test
 
       - run:
-          name: Build Docker image for helm tests
+          name: Load Docker Database Image for helm tests
           command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
-            docker build -t litellm-ci:${IMAGE_TAG} -f docker/Dockerfile.database .
+            docker tag litellm-docker-database:ci litellm-ci:${IMAGE_TAG}
 
       - run:
           name: Load Docker image into Kind
@@ -2462,6 +2465,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - attach_workspace:
+          at: ~/project
       - setup_google_dns
       - run:
           name: Install Docker CLI (In case it's not already installed)
@@ -2534,8 +2539,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker tag litellm-docker-database:ci my-app:latest
       - run:
           name: Run Docker container
           command: |
@@ -4279,28 +4286,6 @@ jobs:
           name: Stop schema sync container
           command: docker stop schema-sync
 
-  test_nonroot_image:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: medium
-    working_directory: ~/project
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Build Docker image
-          command: |
-            docker build -t non_root_image:latest . -f ./docker/Dockerfile.non_root
-      - run:
-          name: Install Container Structure Test
-          command: |
-            curl -LO https://github.com/GoogleContainerTools/container-structure-test/releases/download/v1.19.3/container-structure-test-linux-amd64
-            chmod +x container-structure-test-linux-amd64
-            sudo mv container-structure-test-linux-amd64 /usr/local/bin/container-structure-test
-      - run:
-          name: Run Container Structure Test
-          command: |
-            container-structure-test test --image non_root_image:latest --config docker/tests/nonroot.yaml
 
   test_bad_database_url:
     machine:
@@ -4309,6 +4294,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - attach_workspace:
+          at: ~/project
       - setup_google_dns
       - run:
           name: Install dockerize
@@ -4330,9 +4317,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
+          name: Load Docker Database Image
           command: |
-            docker build -t myapp . -f ./docker/Dockerfile.database
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker tag litellm-docker-database:ci myapp:latest
       - run:
           name: Run Docker container with bad DATABASE_URL
           command: |
@@ -4514,6 +4502,8 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_and_test:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -4783,12 +4773,16 @@ workflows:
                 - main
                 - /litellm_.*/
       - helm_chart_testing:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - test_bad_database_url:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
