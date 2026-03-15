@@ -696,6 +696,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             verbose_logger.debug(
                                 f"Chat provider:   image -> {converted}"
                             )
+                        elif item_type == "file":
+                            # Map Chat Completions `{"type": "file", "file": {...}}` to
+                            # Responses API `{"type": "input_file", ...}`.
+                            # The nested "file" dict contains file_data/filename/file_id.
+                            file_payload = item.get("file", {})
+                            converted = {"type": "input_file", **file_payload}
+                            result.append(converted)
+                            verbose_logger.debug(
+                                f"Chat provider:   file -> {converted}"
+                            )
                         elif item_type in [
                             "input_text",
                             "input_image",
