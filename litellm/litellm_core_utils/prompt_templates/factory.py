@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
@@ -33,6 +34,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionUserMessage,
+    ChatCompletionVideoObject,
     OpenAIMessageContentListBlock,
 )
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
@@ -3468,6 +3470,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
+from litellm.types.llms.bedrock import S3Location as BedrockS3Location
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
@@ -3481,6 +3484,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
+from litellm.utils import supports_s3_input
 
 
 def _parse_content_type(content_type: str) -> str:
@@ -3498,7 +3502,14 @@ def _parse_mime_type(base64_data: str) -> Optional[str]:
 
 
 class BedrockImageProcessor:
-    """Handles both sync and async image processing for Bedrock conversations."""
+    """Handles both sync and async image/media processing for Bedrock conversations."""
+
+    @staticmethod
+    def _extract_video_url(element: Union[dict, "ChatCompletionVideoObject"]) -> str:
+        """Extract the URL string from a video_url content element."""
+        if isinstance(element["video_url"], dict):
+            return element["video_url"]["url"]
+        return element["video_url"]
 
     @staticmethod
     def _post_call_image_processing(
@@ -3717,20 +3728,98 @@ class BedrockImageProcessor:
                 image=BedrockImageBlock(source=_blob, format=image_format)
             )
 
+    @staticmethod
+    def _get_bedrock_format_from_extension(extension: str) -> str:
+        """Map file extension to Bedrock format enum value."""
+        # 3gpp is an alias for 3gp
+        if extension == "3gpp":
+            return "3gp"
+        # jpg → jpeg
+        if extension == "jpg":
+            return "jpeg"
+        return extension
+
+    @classmethod
+    def _create_s3_bedrock_block(
+        cls, s3_url: str, format: Optional[str] = None
+    ) -> BedrockContentBlock:
+        """
+        Create a Bedrock content block referencing an S3 object.
+        Determines block type (image/document/video) from file extension,
+        or from the explicit ``format`` override if provided.
+        """
+        # If explicit format override provided (e.g. from file.format field),
+        # use it directly instead of requiring a file extension.
+        if format:
+            raw_format = format.split("/")[-1] if "/" in format else format
+            bedrock_format = cls._get_bedrock_format_from_extension(raw_format.lower())
+        else:
+            extension = os.path.splitext(s3_url)[-1].lstrip(".").lower()
+            if not extension:
+                raise ValueError(
+                    f"Cannot determine file type from S3 URL (no extension): {s3_url}"
+                )
+            bedrock_format = cls._get_bedrock_format_from_extension(extension)
+
+        s3_source = BedrockSourceBlock(s3Location=BedrockS3Location(uri=s3_url))
+
+        config = litellm.AmazonConverseConfig()
+        supported_image_formats = config.get_supported_image_types()
+        supported_doc_formats = config.get_supported_document_types()
+        supported_video_formats = config.get_supported_video_types()
+
+        if bedrock_format in supported_image_formats:
+            return BedrockContentBlock(
+                image=BedrockImageBlock(source=s3_source, format=bedrock_format)
+            )
+        elif bedrock_format in supported_doc_formats:
+            doc_name = f"s3doc_{hashlib.sha256(s3_url.encode()).hexdigest()[:16]}_{bedrock_format}"
+            return BedrockContentBlock(
+                document=BedrockDocumentBlock(
+                    source=s3_source, format=bedrock_format, name=doc_name
+                )
+            )
+        elif bedrock_format in supported_video_formats:
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(source=s3_source, format=bedrock_format)
+            )
+        else:
+            raise ValueError(
+                f"Unsupported file format '{bedrock_format}' for Bedrock S3 content. "
+                f"Supported: images={supported_image_formats}, "
+                f"documents={supported_doc_formats}, "
+                f"videos={supported_video_formats}"
+            )
+
+    # TODO: Rename to process_media_sync/async — these methods now handle images, documents, and videos (not just images).
     @classmethod
     def process_image_sync(
-        cls, image_url: str, format: Optional[str] = None
+        cls,
+        image_url: str,
+        format: Optional[str] = None,
+        model: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> BedrockContentBlock:
-        """Synchronous image processing."""
+        """Synchronous processing of media URLs (images, documents, videos) for Bedrock."""
 
-        if "base64" in image_url:
+        if image_url.startswith("s3://"):
+            if model and not supports_s3_input(
+                model=model, custom_llm_provider=custom_llm_provider
+            ):
+                raise ValueError(
+                    f"Model '{model}' does not support s3:// URLs. "
+                    "Only Amazon Nova models (with vision) support S3 input via Bedrock Converse API. "
+                    "Please use a base64-encoded or https:// URL instead."
+                )
+            return cls._create_s3_bedrock_block(image_url, format)
+        elif "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
             img_bytes, mime_type = BedrockImageProcessor.get_image_details(image_url)
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError(
-                "Unsupported image type. Expected either image url or base64 encoded string"
+                "Unsupported image type. Expected either image url, base64 encoded string, or s3:// URL"
             )
 
         if format:
@@ -3742,11 +3831,25 @@ class BedrockImageProcessor:
 
     @classmethod
     async def process_image_async(
-        cls, image_url: str, format: Optional[str]
+        cls,
+        image_url: str,
+        format: Optional[str],
+        model: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ) -> BedrockContentBlock:
-        """Asynchronous image processing."""
+        """Asynchronous processing of media URLs (images, documents, videos) for Bedrock."""
 
-        if "base64" in image_url:
+        if image_url.startswith("s3://"):
+            if model and not supports_s3_input(
+                model=model, custom_llm_provider=custom_llm_provider
+            ):
+                raise ValueError(
+                    f"Model '{model}' does not support s3:// URLs. "
+                    "Only Amazon Nova models (with vision) support S3 input via Bedrock Converse API. "
+                    "Please use a base64-encoded or https:// URL instead."
+                )
+            return cls._create_s3_bedrock_block(image_url, format)
+        elif "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
             img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(
@@ -3755,7 +3858,7 @@ class BedrockImageProcessor:
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError(
-                "Unsupported image type. Expected either image url or base64 encoded string"
+                "Unsupported image type. Expected either image url, base64 encoded string, or s3:// URL"
             )
 
         if format:  # override with user-defined params
@@ -4396,14 +4499,30 @@ class BedrockConverseMessagesProcessor:
                                 else:
                                     image_url = element["image_url"]
                                 _part = await BedrockImageProcessor.process_image_async(  # type: ignore
-                                    image_url=image_url, format=format
+                                    image_url=image_url,
+                                    format=format,
+                                    model=model,
+                                    custom_llm_provider=llm_provider,
                                 )
                                 _parts.append(_part)  # type: ignore
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
-                                    message=cast(ChatCompletionFileObject, element)
+                                    message=cast(ChatCompletionFileObject, element),
+                                    model=model,
+                                    llm_provider=llm_provider,
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "video_url":
+                                video_url = BedrockImageProcessor._extract_video_url(
+                                    element
+                                )
+                                _part = await BedrockImageProcessor.process_image_async(  # type: ignore
+                                    image_url=video_url,
+                                    format=None,
+                                    model=model,
+                                    custom_llm_provider=llm_provider,
+                                )
+                                _parts.append(_part)  # type: ignore
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -4645,7 +4764,11 @@ class BedrockConverseMessagesProcessor:
         return reasoning_content_blocks
 
     @staticmethod
-    def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
+    def _process_file_message(
+        message: ChatCompletionFileObject,
+        model: Optional[str] = None,
+        llm_provider: Optional[str] = None,
+    ) -> BedrockContentBlock:
         file_message = message["file"]
         file_data = file_message.get("file_data")
         file_id = file_message.get("file_id")
@@ -4660,12 +4783,17 @@ class BedrockConverseMessagesProcessor:
             )
         format = file_message.get("format")
         return BedrockImageProcessor.process_image_sync(
-            image_url=cast(str, file_id or file_data), format=format
+            image_url=cast(str, file_id or file_data),
+            format=format,
+            model=model,
+            custom_llm_provider=llm_provider,
         )
 
     @staticmethod
     async def _async_process_file_message(
         message: ChatCompletionFileObject,
+        model: Optional[str] = None,
+        llm_provider: Optional[str] = None,
     ) -> BedrockContentBlock:
         file_message = message["file"]
         file_data = file_message.get("file_data")
@@ -4680,7 +4808,10 @@ class BedrockConverseMessagesProcessor:
                 llm_provider="bedrock",
             )
         return await BedrockImageProcessor.process_image_async(
-            image_url=cast(str, file_id or file_data), format=format
+            image_url=cast(str, file_id or file_data),
+            format=format,
+            model=model,
+            custom_llm_provider=llm_provider,
         )
 
     @staticmethod
@@ -4771,15 +4902,30 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockImageProcessor.process_image_sync(  # type: ignore
                                 image_url=image_url,
                                 format=format,
+                                model=model,
+                                custom_llm_provider=llm_provider,
                             )
                             _parts.append(_part)  # type: ignore
                         elif element["type"] == "file":
                             _part = (
                                 BedrockConverseMessagesProcessor._process_file_message(
-                                    message=cast(ChatCompletionFileObject, element)
+                                    message=cast(ChatCompletionFileObject, element),
+                                    model=model,
+                                    llm_provider=llm_provider,
                                 )
                             )
                             _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            video_url = BedrockImageProcessor._extract_video_url(
+                                element
+                            )
+                            _part = BedrockImageProcessor.process_image_sync(  # type: ignore
+                                image_url=video_url,
+                                format=None,
+                                model=model,
+                                custom_llm_provider=llm_provider,
+                            )
+                            _parts.append(_part)  # type: ignore
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(

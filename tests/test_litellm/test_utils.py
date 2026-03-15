@@ -734,6 +734,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
+                "supports_s3_input": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},

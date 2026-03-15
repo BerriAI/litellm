@@ -16,8 +16,14 @@ class SystemContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
 
 
-class SourceBlock(TypedDict):
+class S3Location(TypedDict, total=False):
+    uri: Required[str]  # s3://bucket/key
+
+
+class SourceBlock(TypedDict, total=False):
+    # Mutually exclusive: provide either `bytes` (inline base64) or `s3Location` (S3 reference), not both.
     bytes: Optional[str]  # base 64 encoded string
+    s3Location: S3Location  # S3 reference for large content
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]

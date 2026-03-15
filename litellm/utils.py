@@ -2590,6 +2590,13 @@ def supports_pdf_input(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_s3_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """Check if a given model supports s3:// URLs as content source in Bedrock Converse API"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_s3_input"
+    )
+
+
 def supports_audio_output(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:

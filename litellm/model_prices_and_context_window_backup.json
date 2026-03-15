@@ -335,7 +335,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -352,7 +353,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "amazon.nova-2-pro-preview-20251202-v1:0": {
         "cache_read_input_token_cost": 5.46875e-07,
@@ -371,7 +373,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "apac.amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 8.25e-08,
@@ -388,7 +391,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "apac.amazon.nova-2-pro-preview-20251202-v1:0": {
         "cache_read_input_token_cost": 5.46875e-07,
@@ -407,7 +411,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "eu.amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 8.25e-08,
@@ -424,7 +429,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "eu.amazon.nova-2-pro-preview-20251202-v1:0": {
         "cache_read_input_token_cost": 5.46875e-07,
@@ -443,7 +449,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "us.amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 8.25e-08,
@@ -460,7 +467,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "us.amazon.nova-2-pro-preview-20251202-v1:0": {
         "cache_read_input_token_cost": 5.46875e-07,
@@ -479,7 +487,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "amazon.nova-2-multimodal-embeddings-v1:0": {
         "litellm_provider": "bedrock",
@@ -522,7 +531,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "amazon.rerank-v1:0": {
         "input_cost_per_query": 0.001,
@@ -1478,7 +1488,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "apac.amazon.nova-micro-v1:0": {
         "input_cost_per_token": 3.7e-08,
@@ -1504,7 +1515,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -7582,7 +7594,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "bedrock/us-gov-east-1/amazon.titan-embed-text-v1": {
         "input_cost_per_token": 1e-07,
@@ -7713,7 +7726,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": {
         "input_cost_per_token": 1e-07,
@@ -12115,7 +12129,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "eu.amazon.nova-micro-v1:0": {
         "input_cost_per_token": 4.6e-08,
@@ -12142,7 +12157,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "input_cost_per_token": 2.5e-07,
@@ -14599,17 +14615,14 @@
         "uses_embed_content": true
     },
     "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_audio_per_second": 0.00016,
-        "input_cost_per_image": 0.00012,
-        "input_cost_per_token": 2e-07,
-        "input_cost_per_video_per_second": 0.00079,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
         "supports_multimodal": true,
         "uses_embed_content": true
     },
@@ -14624,18 +14637,6 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "uses_embed_content": true
-    },
-    "vertex_ai/gemini-embedding-2-preview": {
-        "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "vertex_ai",
-        "max_input_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "embedding",
-        "output_cost_per_token": 0,
-        "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
-        "supports_multimodal": true,
         "uses_embed_content": true
     },
     "gemini/gemini-embedding-001": {
@@ -16834,7 +16835,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "gpt-3.5-turbo": {
         "input_cost_per_token": 5e-07,
@@ -28050,7 +28052,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "us.amazon.nova-micro-v1:0": {
         "input_cost_per_token": 3.5e-08,
@@ -28076,7 +28079,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "us.amazon.nova-pro-v1:0": {
         "input_cost_per_token": 8e-07,
@@ -28090,7 +28094,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_s3_input": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "cache_creation_input_token_cost": 1e-06,
@@ -31013,7 +31018,9 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#glm-models",
-        "supported_regions": ["global"],
+        "supported_regions": [
+            "global"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
