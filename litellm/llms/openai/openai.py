@@ -431,6 +431,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        # Strip params that are not recognized by the OpenAI chat completions API
+        # (e.g. Anthropic-specific params leaking through the pass-through adapter)
+        _non_openai_params = {
+            "output_config", "output_format", "context_management",
+            "inference_geo", "speed",
+        }
+        for _p in _non_openai_params:
+            data.pop(_p, None)
+
         start_time = time.time()
         try:
             raw_response = (

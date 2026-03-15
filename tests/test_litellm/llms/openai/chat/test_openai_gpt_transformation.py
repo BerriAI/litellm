@@ -511,3 +511,76 @@ class TestGPT5ReasoningEffortPreservation:
 
         assert optional_params.get("temperature") == 0.5
         assert non_default_params.get("reasoning_effort") == "none"
+
+
+def test_make_openai_chat_completion_request_strips_anthropic_params():
+    """
+    Test that Anthropic-specific parameters (output_config, context_management, etc.)
+    are stripped before calling AsyncCompletions.create().
+
+    When routing Anthropic /v1/messages requests to OpenAI-compatible backends
+    (e.g. llama.cpp via custom_openai), Anthropic-specific parameters leak through
+    the pass-through adapter and cause "unexpected keyword argument" errors.
+
+    Ref: https://github.com/BerriAI/litellm/issues/22963
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    handler = OpenAIChatCompletion()
+
+    # Simulate data dict with Anthropic-specific params that leak through
+    data = {
+        "model": "custom_openai/test-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "output_config": {"format": {"type": "json_schema"}},
+        "context_management": {"edits": []},
+        "output_format": {"type": "text"},
+        "inference_geo": "us",
+        "speed": "fast",
+        "temperature": 0.7,  # legitimate OpenAI param, should NOT be stripped
+    }
+
+    import asyncio
+
+    captured_data = {}
+
+    async def mock_create(**kwargs):
+        captured_data.update(kwargs)
+        mock_response = MagicMock()
+        mock_response.headers = {}
+        mock_response.parse.return_value = MagicMock(
+            model_dump=lambda: {"choices": []}
+        )
+        return mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create = mock_create
+
+    mock_logging = MagicMock()
+    mock_logging.model_call_details = {}
+
+    try:
+        asyncio.run(
+            handler.make_openai_chat_completion_request(
+                openai_aclient=mock_client,
+                data=data,
+                timeout=30,
+                logging_obj=mock_logging,
+            )
+        )
+    except Exception:
+        pass  # We only care about what was passed to create()
+
+    # Anthropic-specific params should be stripped
+    assert "output_config" not in data, "output_config should be stripped"
+    assert "context_management" not in data, "context_management should be stripped"
+    assert "output_format" not in data, "output_format should be stripped"
+    assert "inference_geo" not in data, "inference_geo should be stripped"
+    assert "speed" not in data, "speed should be stripped"
+
+    # Legitimate OpenAI params should remain
+    assert "model" in data, "model should not be stripped"
+    assert "messages" in data, "messages should not be stripped"
+    assert "temperature" in data, "temperature should not be stripped"
