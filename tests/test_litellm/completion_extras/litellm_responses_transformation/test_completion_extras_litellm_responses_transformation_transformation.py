@@ -1995,3 +1995,90 @@ def test_map_optional_params_preserves_reasoning_summary():
     assert responses_api_request["reasoning"] == {"effort": "high", "summary": "detailed"}
     assert responses_api_request["reasoning"]["effort"] == "high"
     assert responses_api_request["reasoning"]["summary"] == "detailed"
+
+
+def test_convert_system_message_string_to_instructions():
+    """
+    Test that a system message with plain string content is extracted into instructions.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions == "You are a helpful assistant."
+    # System message should not appear in input_items
+    assert all(item.get("role") != "system" for item in input_items)
+
+
+def test_convert_system_message_content_blocks_to_instructions():
+    """
+    Test that a system message with list content blocks is extracted into instructions.
+
+    Clients like Claude Code send system prompts as structured content blocks:
+        [{"type": "text", "text": "..."}]
+
+    Without this fix, list content was passed through as a role=system input item,
+    which the ChatGPT Codex API rejects with "System messages are not allowed".
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a coding assistant."},
+                {"type": "text", "text": "Be concise."},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions is not None
+    assert "You are a coding assistant." in instructions
+    assert "Be concise." in instructions
+    # System message should not appear in input_items
+    assert all(item.get("role") != "system" for item in input_items)
+
+
+def test_convert_multiple_system_messages_mixed_formats():
+    """
+    Test that multiple system messages (string and list) are concatenated into instructions.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "system", "content": "First instruction."},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Second instruction."},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions is not None
+    assert "First instruction." in instructions
+    assert "Second instruction." in instructions
+    assert all(item.get("role") != "system" for item in input_items)
