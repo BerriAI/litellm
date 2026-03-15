@@ -749,6 +749,8 @@ async def byok_token(
             )
 
             _invalidate_byok_cred_cache(user_id, server_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             verbose_proxy_logger.error(
                 "byok_token: failed to store user credential for user=%s server=%s: %s",

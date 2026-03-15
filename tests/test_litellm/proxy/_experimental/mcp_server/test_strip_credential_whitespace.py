@@ -32,12 +32,16 @@ class TestStripCredentialValue:
 
     def test_strips_embedded_newline_from_line_wrap(self):
         """Simulates terminal line-wrapping that inserts newline in the middle."""
-        token_with_wrap = "ya29.a0ATkoCc6Vik\n  ZRWgeS5J9dd_gxP9w"
+        token_with_wrap = "ya29.a0ATkoCc6Vik\nZRWgeS5J9dd_gxP9w"
         expected = "ya29.a0ATkoCc6VikZRWgeS5J9dd_gxP9w"
         assert _strip_credential_value(token_with_wrap) == expected
 
     def test_strips_tabs(self):
         assert _strip_credential_value("my\ttoken") == "mytoken"
+
+    def test_preserves_internal_spaces(self):
+        """Internal spaces are preserved for passphrase-style credentials."""
+        assert _strip_credential_value("my secret passphrase") == "my secret passphrase"
 
     def test_empty_string(self):
         assert _strip_credential_value("") is None
@@ -55,9 +59,9 @@ class TestEncryptCredentialsStripsWhitespace:
         "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
         side_effect=lambda value, new_encryption_key: value,
     )
-    def test_auth_value_whitespace_stripped(self, mock_encrypt):
-        """Ensure whitespace in auth_value is removed before encryption."""
-        creds = {"auth_value": "ya29.abc123\n  def456ghi789"}
+    def test_auth_value_newlines_stripped(self, mock_encrypt):
+        """Ensure newlines in auth_value are removed before encryption."""
+        creds = {"auth_value": "ya29.abc123\ndef456ghi789"}
         result = encrypt_credentials(creds, encryption_key=None)
         assert result["auth_value"] == "ya29.abc123def456ghi789"
 
@@ -79,7 +83,7 @@ class TestEncryptCredentialsStripsWhitespace:
         creds = {
             "aws_access_key_id": " AKIA123 ",
             "aws_secret_access_key": "secret\nkey",
-            "aws_session_token": " token\n  value ",
+            "aws_session_token": " token\n\tvalue ",
         }
         result = encrypt_credentials(creds, encryption_key=None)
         assert result["aws_access_key_id"] == "AKIA123"
@@ -148,3 +152,24 @@ class TestStoreUserOAuthCredentialStripsWhitespace:
             await store_user_oauth_credential(
                 mock_prisma, "user1", "server1", access_token="   "
             )
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_refresh_token_discarded(self):
+        """Whitespace-only refresh_token should be silently discarded."""
+        mock_prisma = AsyncMock()
+        mock_prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(
+            return_value=None
+        )
+        await store_user_oauth_credential(
+            mock_prisma,
+            "user1",
+            "server1",
+            access_token="valid-token",
+            refresh_token="   \n  ",
+        )
+        call_args = mock_prisma.db.litellm_mcpusercredentials.upsert.call_args
+        create_data = call_args.kwargs["data"]["create"]
+        payload = json.loads(
+            base64.urlsafe_b64decode(create_data["credential_b64"]).decode()
+        )
+        assert "refresh_token" not in payload

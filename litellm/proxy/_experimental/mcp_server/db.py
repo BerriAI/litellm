@@ -87,15 +87,16 @@ def _prepare_mcp_server_data(
 
 
 def _strip_credential_value(value: Optional[str]) -> Optional[str]:
-    """Strip whitespace from credential values.
+    """Strip copy-paste artifacts from credential values.
 
     Tokens and secrets copied from terminals or UIs often contain
-    accidental whitespace or embedded newlines from line-wrapping.
-    Stripping these prevents hard-to-debug auth failures.
+    accidental newlines, tabs, or leading/trailing spaces from
+    line-wrapping.  Internal spaces are preserved to avoid corrupting
+    passphrase-style credentials.
     """
     if value is None:
         return None
-    stripped = re.sub(r"\s+", "", value)
+    stripped = re.sub(r"[\r\n\t]", "", value).strip()
     return stripped or None
 
 
@@ -606,7 +607,12 @@ async def store_user_oauth_credential(
     access_token = _strip_credential_value(access_token) or ""
     if not access_token:
         raise ValueError("access_token must not be empty or whitespace-only")
+    raw_refresh_token = refresh_token
     refresh_token = _strip_credential_value(refresh_token)
+    if raw_refresh_token is not None and refresh_token is None:
+        verbose_proxy_logger.warning(
+            "refresh_token was whitespace-only and has been discarded"
+        )
 
     payload: Dict[str, Any] = {
         "type": "oauth2",
