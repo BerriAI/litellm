@@ -2265,6 +2265,35 @@ def create_tokenizer(json: str):
     tokenizer = Tokenizer.from_str(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
+def cheap_token_counter(
+    text: str = "",
+    messages: Optional[List[AllMessageValues]] = None,
+) -> int:
+    """
+    Estimate token count using character-to-token ratios without any tokenizer overhead.
+
+    Ratios (chars per token):
+      - Code / structured data (JSON, XML): ~2.75
+      - Non-Latin scripts: ~2.0
+      - Mixed / formatted English: ~3.5
+    """
+    if messages is not None:
+        text = json.dumps(messages)
+    if not text:
+        return 0
+
+    total_chars = len(text)
+
+    if not text.isascii():
+        non_latin_chars = len(re.findall(r"[^\x00-\x24F]", text))
+        if non_latin_chars / total_chars > 0.2:
+            return max(1, int(total_chars / 2.0))
+
+    code_chars = len(re.findall(r"[{}\[\]<>;:]", text))
+    chars_per_token = 2.75 if code_chars / total_chars > 0.05 else 3.5
+
+    return max(1, int(total_chars / chars_per_token))
+
 
 def token_counter(
     model="",

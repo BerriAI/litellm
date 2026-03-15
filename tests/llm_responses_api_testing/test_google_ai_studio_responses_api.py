@@ -253,8 +253,9 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
 async def test_google_ai_studio_responses_api_context_management_server_side_compaction():
     """
     E2E test for server-side compaction (context_management) on Google AI Studio Responses API.
-    Passes context_management with compact_threshold; validates that the request is
-    accepted and returns a valid response. Compaction may not run for short inputs.
+    Uses a long message history to exceed the compact_threshold while keeping the
+    final user turn short ("Ping."), then verifies that input_tokens after compaction
+    is well below the threshold.
     """
     if not os.getenv("GEMINI_API_KEY"):
         pytest.skip("GEMINI_API_KEY not set")
@@ -262,11 +263,19 @@ async def test_google_ai_studio_responses_api_context_management_server_side_com
     compact_threshold = 1000
     context_management = [{"type": "compaction", "compact_threshold": compact_threshold}]
 
-    long_input = "Long ping to verify context_management is accepted. Please provide a detailed response that exceeds the compaction threshold to trigger server-side compaction. " * 200
+    # Build a long message history to push well past the compaction threshold,
+    # with a short final user turn so the recent input itself is minimal.
+    history_turn = "This is a historical message in the conversation that provides background context. " * 10
+    message_history = []
+    for i in range(20):
+        message_history.append({"role": "user", "content": f"Turn {i}: {history_turn}"})
+        message_history.append({"role": "assistant", "content": f"Acknowledged turn {i}. {history_turn}"})
+    message_history.append({"role": "user", "content": "Ping."})
+
     try:
         response = await litellm.aresponses(
-            model="gemini/gemini-2.5-flash-lite",
-            input=long_input,
+            model="gemini/gemini-2.5-flash",
+            input=message_history,
             max_output_tokens=20,
             context_management=context_management,
         )
