@@ -412,6 +412,22 @@ async def retrieve_batch(  # noqa: PLR0915
             "cancelled",
             "expired",
         ]:
+            # Populate _hidden_params so managed files hook can translate IDs.
+            # When the response comes from the DB, _hidden_params is empty.
+            # Only set if output_file_id is still a raw provider ID (not yet unified).
+            # The DB may store unified IDs after a previous hook run; setting
+            # _hidden_params in that case would cause double-encoding.
+            if unified_batch_id:
+                _output_fid = getattr(response, "output_file_id", None)
+                _needs_translation = _output_fid and not _is_base64_encoded_unified_file_id(_output_fid)
+                if _needs_translation:
+                    response._hidden_params["unified_batch_id"] = unified_batch_id
+                    model_id_from_batch = get_model_id_from_unified_batch_id(
+                        unified_batch_id
+                    )
+                    if model_id_from_batch:
+                        response._hidden_params["model_id"] = model_id_from_batch
+
             # Call hooks and return
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
