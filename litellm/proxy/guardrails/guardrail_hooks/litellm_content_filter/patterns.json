@@ -568,7 +568,7 @@
       "pattern": "\\b[A-Z]\\d{4}[\\-\\s]\\d{5}[\\-\\s]\\d{5}\\b",
       "category": "Canadian PII Patterns",
       "description": "Detects Ontario driver's licence numbers (1 letter + 14 digits, dashed format)",
-      "keyword_pattern": "\\b(?:driver'?s?\\s*licen[cs]e\\s*number|ontario\\s*licen[cs]e\\s*number|driver'?s?\\s*licen[cs]e|licen[cs]e\\s*number|DL\\s*number|ontario\\s*licen[cs]e|permis\\s*de\\s*conduire|numéro\\s*de\\s*permis)\\b",
+      "keyword_pattern": "\\b(?:driver'?s?\\s*licen[cs]es?\\s*number|ontario\\s*licen[cs]es?\\s*number|driver'?s?\\s*licen[cs]es?|licen[cs]es?\\s*number|DL\\s*number|ontario\\s*licen[cs]es?|permis\\s*de\\s*conduire|numéro\\s*de\\s*permis)\\b",
       "allow_word_numbers": false
     },
     {

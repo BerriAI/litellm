@@ -230,6 +230,22 @@ class TestCanadianPIIPolicyE2E:
         assert "A1234-56789-01234" not in output
 
     @pytest.mark.asyncio
+    async def test_drivers_licences_plural_masked(self):
+        """Ontario driver's licence with plural 'licenses' is detected and masked"""
+        guardrail = self.setup_canadian_guardrail()
+
+        text = "My name is Jose Lujan and my drivers licenses is A1234-56789-01234."
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        output = result.get("texts", [])[0]
+
+        assert "[CA_ON_DRIVERS_LICENCE_REDACTED]" in output
+        assert "A1234-56789-01234" not in output
+
+    @pytest.mark.asyncio
     async def test_drivers_licence_question_passes(self):
         """Question about driver's licence without actual number passes through"""
         guardrail = self.setup_canadian_guardrail()
