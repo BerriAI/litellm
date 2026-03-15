@@ -229,7 +229,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": context_management,
+            # "context_management": None, #responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -247,10 +247,16 @@ class LiteLLMCompletionResponsesConfig:
             if litellm_logging_obj:
                 litellm_logging_obj.stream_options = stream_options
 
+        litellm_completion_request.pop("context_management", None)
+        kwargs.pop("context_management", None)  # Ensure context_management is not forwarded to litellm.completion
+        
         # only pass non-None values
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
+        
+        
+        
         return litellm_completion_request
 
     @staticmethod
@@ -411,6 +417,7 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
             "litellm_session_id"
         )
+        
         return litellm_completion_request
 
     @staticmethod

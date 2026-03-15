@@ -47,24 +47,20 @@ class LiteLLMCompletionTransformationHandler:
             extra_headers=extra_headers,
             **kwargs,
         )
-
+        kwargs.pop("context_management", None)
         if _is_async:
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
                 request_input=input,
                 responses_api_request=responses_api_request,
-                **kwargs,
+                **litellm_completion_request,
             )
-
-        completion_args = {}
-        completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
             **litellm_completion_request,
-            **kwargs,
+            # **kwargs,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
