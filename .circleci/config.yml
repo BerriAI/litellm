@@ -747,7 +747,7 @@ jobs:
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -1693,7 +1693,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: xlarge
+    resource_class: large
     steps:
       - setup_litellm_test_deps
       - run:
@@ -1803,7 +1803,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: xlarge
+    resource_class: large
     steps:
       - setup_litellm_test_deps
       - run:
@@ -2378,7 +2378,7 @@ jobs:
   db_migration_disable_update_check:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -2458,7 +2458,7 @@ jobs:
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -2599,7 +2599,7 @@ jobs:
   e2e_openai_endpoints:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -2746,7 +2746,7 @@ jobs:
   proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -2935,7 +2935,7 @@ jobs:
   proxy_spend_accuracy_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3048,7 +3048,7 @@ jobs:
   proxy_multi_instance_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3186,7 +3186,7 @@ jobs:
   proxy_store_model_in_db_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3303,7 +3303,7 @@ jobs:
     # Change from docker to machine executor
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3400,7 +3400,7 @@ jobs:
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3588,7 +3588,7 @@ jobs:
   proxy_e2e_anthropic_messages_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -3694,7 +3694,7 @@ jobs:
   proxy_e2e_azure_batches_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -4021,7 +4021,7 @@ jobs:
   ui_build:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -4056,7 +4056,7 @@ jobs:
   ui_unit_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -4085,7 +4085,7 @@ jobs:
   build_docker_database_image:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -4116,7 +4116,7 @@ jobs:
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: large
     working_directory: ~/project
     parameters:
       browser:
@@ -4213,7 +4213,7 @@ jobs:
   prisma_schema_sync:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -4270,7 +4270,7 @@ jobs:
   test_nonroot_image:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -4293,7 +4293,7 @@ jobs:
   test_bad_database_url:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
