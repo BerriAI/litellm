@@ -224,7 +224,8 @@ async def exchange_token_with_server(
     if grant_type == "refresh_token":
         if not refresh_token:
             raise HTTPException(
-                status_code=400, detail="refresh_token is required for refresh_token grant"
+                status_code=400,
+                detail="refresh_token is required for refresh_token grant",
             )
         token_data = {
             "grant_type": "refresh_token",
