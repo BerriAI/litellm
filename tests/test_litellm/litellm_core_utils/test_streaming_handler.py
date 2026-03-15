@@ -1491,3 +1491,39 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
     )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
+
+
+def test_is_chunk_non_empty_with_reasoning_content_in_delta(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Unit test that is_chunk_non_empty returns True when model_response delta has
+    'reasoning_content' set.
+
+    This is the actual path for hosted_vllm / vLLM reasoning chunks:
+    OpenAIChatCompletionStreamingHandler.chunk_parser maps delta.reasoning ->
+    delta.reasoning_content before the ModelResponseStream reaches chunk_creator.
+    is_chunk_non_empty must therefore accept chunks with only reasoning_content.
+
+    See: https://github.com/BerriAI/litellm/issues/20246
+    """
+    from litellm.types.utils import ModelResponseStream
+
+    model_response_with_reasoning = ModelResponseStream(**{
+        "id": "test-id",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "Qwen3.5-27B-FP8",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": None, "reasoning_content": "Let me think..."},
+                "finish_reason": None,
+            }
+        ],
+    })
+    result = initialized_custom_stream_wrapper.is_chunk_non_empty(
+        completion_obj={"content": ""},
+        model_response=model_response_with_reasoning,
+        response_obj={},
+    )
+    assert result is True
