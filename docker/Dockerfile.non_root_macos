@@ -1,6 +1,6 @@
 # ---- shared versions ----
 ARG PYJWT_VERSION=2.12.0
-ARG PRISMA_VERSION=0.11.0
+ARG PRISMA_PY_VERSION=0.13.1
 ARG NODEJS_WHEEL_BINARIES_VERSION=24.13.1
 ARG SEMANTIC_ROUTER_VERSION=0.1.11
 ARG AURELIO_SDK_VERSION=0.0.19
@@ -9,7 +9,7 @@ ARG AURELIO_SDK_VERSION=0.0.19
 FROM python:3.13-slim AS builder
 ARG PROXY_EXTRAS_SOURCE=published
 ARG PYJWT_VERSION
-ARG PRISMA_VERSION
+ARG PRISMA_PY_VERSION
 ARG NODEJS_WHEEL_BINARIES_VERSION
 ARG SEMANTIC_ROUTER_VERSION
 ARG AURELIO_SDK_VERSION
@@ -71,11 +71,9 @@ ENV HOME=/app \
   NPM_CONFIG_CACHE=/app/.cache/npm
 
 RUN pip install --no-cache-dir \
-    "prisma==${PRISMA_VERSION}" \
+    "prisma==${PRISMA_PY_VERSION}" \
     "nodejs-wheel-binaries==${NODEJS_WHEEL_BINARIES_VERSION}" \
   && mkdir -p /app/.cache/npm
-
-RUN python3 -c "import prisma.cli.prisma as p; p.ensure_cached()"
 
 RUN python3 - <<'PY'
 import re
@@ -99,6 +97,8 @@ RUN python3 -m prisma generate && \
 FROM python:3.13-slim AS runtime
 ARG PROXY_EXTRAS_SOURCE=published
 ARG PYJWT_VERSION
+ARG PRISMA_PY_VERSION
+ARG NODEJS_WHEEL_BINARIES_VERSION
 ARG SEMANTIC_ROUTER_VERSION
 ARG AURELIO_SDK_VERSION
 
@@ -139,6 +139,9 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
   pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
   pip install --no-index --find-links=/wheels/ --no-deps "semantic_router==${SEMANTIC_ROUTER_VERSION}" && \
   pip install --no-index --find-links=/wheels/ "aurelio-sdk==${AURELIO_SDK_VERSION}" && \
+  pip install --no-cache-dir \
+    "prisma==${PRISMA_PY_VERSION}" \
+    "nodejs-wheel-binaries==${NODEJS_WHEEL_BINARIES_VERSION}" && \
   if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
     if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
       pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
@@ -240,15 +243,14 @@ with tempfile.TemporaryDirectory() as tmpdir:
     warn(f"Soft-mode npm patch complete. Total directories replaced: {total_replaced}")
 PY
 
-RUN apt-get update && \
-  apt-get purge -y --auto-remove nodejs npm && \
-  rm -rf /var/lib/apt/lists/*
-
 RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
   sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && \
   chmod +x /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh && \
-  mkdir -p /app/.litellm_migrations && \
+  mkdir -p /app/.litellm_migrations /app/.cache/npm && \
   chown -R 65534:65534 /app /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache/prisma-python
+
+RUN apt-get purge -y --auto-remove nodejs npm && \
+  rm -rf /var/lib/apt/lists/* /app/.cache/npm
 
 USER 65534:65534
 
