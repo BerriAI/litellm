@@ -648,6 +648,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             googleSearchRetrieval = None
             enterpriseWebSearch = None
             urlContext = None
+            # Note: code_execution, computerUse, and googleMaps are NOT search
+            # tools and CAN coexist with function declarations in separate Tool
+            # objects, so they are intentionally preserved here.
 
         # Function declarations can be grouped together in one Tool
         if gtool_func_declarations:
