@@ -1,9 +1,14 @@
 # conftest.py
+#
+# xdist-compatible test isolation for llm_translation tests.
+# Mirrors the pattern in tests/local_testing/conftest.py:
+#   - Function-scoped fixture resets litellm globals to true defaults
+#   - Module-scoped reload only in single-process mode
 
 import importlib
 import os
 import sys
-import asyncio
+
 import pytest
 
 sys.path.insert(
@@ -12,6 +17,21 @@ sys.path.insert(
 import litellm
 
 import asyncio
+
+# ---------------------------------------------------------------------------
+# Capture TRUE defaults at conftest import time (before test modules pollute).
+# ---------------------------------------------------------------------------
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+}
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -29,19 +49,62 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
-    from litellm import Router
 
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    # ---- Save current state (for teardown restore) ----
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
 
-    importlib.reload(litellm)
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+
+    # ---- Reset to true defaults before the test ----
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        # Single-process mode: reload for full reset
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+        importlib.reload(litellm)
+    else:
+        # xdist mode: reset globals without reload
+        for attr in (
+            "callbacks",
+            "success_callback",
+            "failure_callback",
+            "_async_success_callback",
+            "_async_failure_callback",
+        ):
+            if hasattr(litellm, attr):
+                setattr(litellm, attr, [])
+
+        for attr, default_val in _SCALAR_DEFAULTS.items():
+            if hasattr(litellm, attr):
+                setattr(litellm, attr, default_val)
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
     # Set the event loop from the fixture
     asyncio.set_event_loop(event_loop)
 
-    print(litellm)
     yield
+
+    # ---- Teardown ----
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
 
     # Clean up any pending tasks
     pending = asyncio.all_tasks(event_loop)
