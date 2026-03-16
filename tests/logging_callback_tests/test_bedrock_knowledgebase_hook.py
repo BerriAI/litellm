@@ -424,6 +424,7 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
                     "T37J8R4WTM"
                 ],
                 client=client,
+                num_retries=0,  # Prevent retry interference from parallel tests
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -497,6 +498,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
                     "vector_store_ids": ["T37J8R4WTM"]
                 }],
                 client=client,
+                num_retries=0,  # Prevent retry interference from parallel tests
             )
         except Exception as e:
             print(f"Error: {e}")
@@ -569,6 +571,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
                     {"type": "file_search", "vector_store_ids": ["unknownVS"]},
                 ],
                 client=client,
+                num_retries=0,  # Prevent retry interference from parallel tests
             )
         except Exception as e:
             print(f"Error: {e}")

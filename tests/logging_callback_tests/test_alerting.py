@@ -602,6 +602,9 @@ async def test_outage_alerting_called(
 
     If multiple calls fail, outage alert is sent
     """
+    # Ensure no global retries interfere (defense-in-depth against xdist pollution)
+    litellm.num_retries = None
+
     slack_alerting = SlackAlerting(alerting=["webhook"])
 
     litellm.callbacks = [slack_alerting]
@@ -708,6 +711,9 @@ async def test_region_outage_alerting_called(
 
     If multiple calls fail, outage alert is sent
     """
+    # Ensure no global retries interfere (defense-in-depth against xdist pollution)
+    litellm.num_retries = None
+
     slack_alerting = SlackAlerting(
         alerting=["webhook"], alert_types=[AlertType.region_outage_alerts]
     )

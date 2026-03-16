@@ -38,8 +38,6 @@ from litellm.integrations.custom_logger import CustomLogger
 ## 1. router.completion() + router.embeddings()
 ## 2. proxy.completions + proxy.embeddings
 
-litellm.num_retries = 0
-
 
 class CompletionCustomHandler(
     CustomLogger

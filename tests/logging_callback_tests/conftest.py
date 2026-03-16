@@ -76,6 +76,26 @@ def isolate_litellm_state():
         if hasattr(litellm, attr):
             setattr(litellm, attr, [])
 
+    # Reset scalar attrs to safe defaults before test.
+    # This prevents module-level assignments (e.g. `litellm.num_retries = 3`
+    # in test_langfuse_e2e_test.py) from leaking into unrelated tests running
+    # in the same xdist worker.  The save/restore above ensures the original
+    # value is put back after the test finishes.
+    _SCALAR_DEFAULTS = {
+        "num_retries": None,
+        "set_verbose": False,
+        "cache": None,
+        "turn_off_message_logging": False,
+        "redact_messages_in_exceptions": False,
+        "redact_user_api_key_info": False,
+        "s3_callback_params": None,
+        "datadog_params": None,
+        "vector_store_registry": None,
+    }
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+
     yield
 
     # Restore all saved state

@@ -18,7 +18,6 @@ from litellm import completion
 from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
 import time
