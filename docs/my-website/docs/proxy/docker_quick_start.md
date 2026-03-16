@@ -1,6 +1,7 @@
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # Getting Started Tutorial
 
@@ -37,7 +38,41 @@ $ pip install 'litellm[proxy]'
 
 <TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
 
-Use this docker compose to spin up the proxy with a postgres database running locally. 
+### Step 1 — Pull the LiteLLM database image
+
+LiteLLM provides a pre-built image with Postgres bundled in. Pull it before starting.
+
+```bash
+docker pull ghcr.io/berriai/litellm-database:main-latest
+```
+
+See all available tags on the [GitHub Container Registry](https://github.com/BerriAI/litellm/pkgs/container/litellm-database).
+
+---
+
+### Step 2 — Set up your config.yaml (do this before starting the server)
+
+Create a `litellm_config.yaml` file. You **must** add your model and database settings here before starting the proxy.
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/my_azure_deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2025-01-01-preview"
+
+general_settings:
+  master_key: sk-1234   # 🔑 your proxy admin key (must start with sk-)
+  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"  # 👈 required for virtual keys
+```
+
+:::tip
+`database_url` is required for virtual keys, spend tracking, and the UI. Use [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) for a free managed Postgres instance.
+:::
+
+Get the docker compose file and create your `.env`:
 
 ```bash
 # Get the docker compose file
@@ -46,15 +81,54 @@ curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.ym
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
-# Add the litellm salt key - you cannot change this after adding a model
-# It is used to encrypt / decrypt your LLM API Key credentials
-# We recommend - https://1password.com/password-generator/ 
-# password generator to get a random hash for litellm salt key
+# Add the litellm salt key — cannot be changed after adding a model
+# Used to encrypt/decrypt your LLM API key credentials
+# Generate a strong random value: https://1password.com/password-generator/
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
+```
 
-# Start
+---
+
+### Step 3 — Start the proxy server and test it
+
+```bash
 docker compose up
 ```
+
+Once running, test it with a curl request:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+**Expected response:**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "choices": [{"message": {"role": "assistant", "content": "Hello! How can I help you?"}, "finish_reason": "stop"}],
+  "usage": {"prompt_tokens": 10, "completion_tokens": 9, "total_tokens": 19}
+}
+```
+
+---
+
+### Optional — Navigate to the LiteLLM UI and generate a virtual key
+
+Open [http://localhost:4000/ui](http://localhost:4000/ui) in your browser and log in with your master key (`sk-1234`).
+
+Navigate to **Virtual Keys** and click **+ Create New Key**:
+
+<Image img={require('../../img/litellm_ui_create_key.png')} alt="LiteLLM UI — Create Virtual Key" />
+
+Virtual keys let you track spend, set rate limits, and control model access per user or team.
 
 </TabItem>
 </Tabs>
@@ -645,6 +719,5 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
-
 
 

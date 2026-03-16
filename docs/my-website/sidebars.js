@@ -44,70 +44,39 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Guardrails",
+      label: "Guardrail Providers",
       items: [
-        "proxy/guardrails/quick_start",
-        "proxy/guardrails/team_based_guardrails",
-        "proxy/guardrails/guardrail_load_balancing",
-        "proxy/guardrails/test_playground",
-        "proxy/guardrails/litellm_content_filter",
-        "proxy/guardrails/realtime_guardrails",
-        {
-          type: "category",
-          label: "Providers",
-          items: [
-            ...[
-              "proxy/guardrails/qualifire",
-              "proxy/guardrails/aim_security",
-              "proxy/guardrails/onyx_security",
-              "proxy/guardrails/aporia_api",
-              "proxy/guardrails/azure_content_guardrail",
-              "proxy/guardrails/bedrock",
-              "proxy/guardrails/crowdstrike_aidr",
-              "proxy/guardrails/enkryptai",
-              "proxy/guardrails/ibm_guardrails",
-              "proxy/guardrails/grayswan",
-              "proxy/guardrails/hiddenlayer",
-              "proxy/guardrails/lasso_security",
-              "proxy/guardrails/guardrails_ai",
-              "proxy/guardrails/lakera_ai",
-              "proxy/guardrails/model_armor",
-              "proxy/guardrails/noma_security",
-              "proxy/guardrails/dynamoai",
-              "proxy/guardrails/openai_moderation",
-              "proxy/guardrails/pangea",
-              "proxy/guardrails/pillar_security",
-              "proxy/guardrails/pii_masking_v2",
-              "proxy/guardrails/panw_prisma_airs",
-              "proxy/guardrails/secret_detection",
-              "proxy/guardrails/custom_guardrail",
-              "proxy/guardrails/custom_code_guardrail",
-              "proxy/guardrails/prompt_injection",
-              "proxy/guardrails/tool_permission",
-              "proxy/guardrails/zscaler_ai_guard",
-              "proxy/guardrails/javelin"
-            ].sort(),
-          ],
-        },
-        {
-          type: "category",
-          label: "Contributing to Guardrails",
-          items: [
-            "adding_provider/generic_guardrail_api",
-            "adding_provider/simple_guardrail_tutorial",
-            "adding_provider/adding_guardrail_support",
-          ]
-        },
-      ],
-    },
-    {
-      type: "category",
-      label: "Policies",
-      items: [
-        "proxy/guardrails/guardrail_policies",
-        "proxy/guardrails/policy_flow_builder",
-        "proxy/guardrails/policy_templates",
-        "proxy/guardrails/policy_tags",
+        ...[
+          "proxy/guardrails/qualifire",
+          "proxy/guardrails/aim_security",
+          "proxy/guardrails/onyx_security",
+          "proxy/guardrails/aporia_api",
+          "proxy/guardrails/azure_content_guardrail",
+          "proxy/guardrails/bedrock",
+          "proxy/guardrails/crowdstrike_aidr",
+          "proxy/guardrails/enkryptai",
+          "proxy/guardrails/ibm_guardrails",
+          "proxy/guardrails/grayswan",
+          "proxy/guardrails/hiddenlayer",
+          "proxy/guardrails/lasso_security",
+          "proxy/guardrails/guardrails_ai",
+          "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/model_armor",
+          "proxy/guardrails/noma_security",
+          "proxy/guardrails/dynamoai",
+          "proxy/guardrails/openai_moderation",
+          "proxy/guardrails/pangea",
+          "proxy/guardrails/pillar_security",
+          "proxy/guardrails/pii_masking_v2",
+          "proxy/guardrails/panw_prisma_airs",
+          "proxy/guardrails/secret_detection",
+          "proxy/guardrails/custom_guardrail",
+          "proxy/guardrails/custom_code_guardrail",
+          "proxy/guardrails/prompt_injection",
+          "proxy/guardrails/tool_permission",
+          "proxy/guardrails/zscaler_ai_guard",
+          "proxy/guardrails/javelin"
+        ].sort(),
       ],
     },
     {
@@ -293,11 +262,6 @@ const sidebars = {
         },
         "completion/token_usage",
         "exception_mapping",
-        {
-          type: "category",
-          label: "LangChain, LlamaIndex, Instructor",
-          items: ["langchain/langchain", "tutorials/instructor"],
-        }
       ],
     },
     {
@@ -310,16 +274,41 @@ const sidebars = {
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/docker_quick_start",
+        { type: "doc", id: "proxy/docker_quick_start", label: "Getting Started Tutorial" },
         {
-          type: "link",
-          label: "A2A Agent Gateway",
-          href: "https://docs.litellm.ai/docs/a2a",
-        },
-        {
-          type: "link",
-          label: "MCP Gateway",
-          href: "https://docs.litellm.ai/docs/mcp",
+          type: "category",
+          label: "Agent & MCP Gateway",
+          items: [
+            {
+              type: "category",
+              label: "A2A Agent Gateway",
+              items: [
+                "a2a",
+                "a2a_invoking_agents",
+                "a2a_agent_headers",
+                "a2a_cost_tracking",
+                "a2a_agent_permissions",
+                "a2a_iteration_budgets",
+              ],
+            },
+            {
+              type: "category",
+              label: "MCP Gateway",
+              items: [
+                "mcp",
+                "mcp_usage",
+                "mcp_openapi",
+                "mcp_oauth",
+                "mcp_aws_sigv4",
+                "mcp_public_internet",
+                "mcp_semantic_filter",
+                "mcp_control",
+                "mcp_cost",
+                "mcp_guardrail",
+                "mcp_troubleshoot",
+              ],
+            },
+          ],
         },
         {
           "type": "category",
@@ -461,14 +450,40 @@ const sidebars = {
         },
         "proxy/caching",
         {
-          type: "link",
+          type: "category",
           label: "Guardrails",
-          href: "https://docs.litellm.ai/docs/proxy/guardrails/quick_start",
+          items: [
+            "proxy/guardrails/quick_start",
+            "proxy/guardrails/team_based_guardrails",
+            "proxy/guardrails/guardrail_load_balancing",
+            "proxy/guardrails/test_playground",
+            "proxy/guardrails/litellm_content_filter",
+            "proxy/guardrails/realtime_guardrails",
+            {
+              type: "link",
+              label: "Providers →",
+              href: "/docs/integrations#guardrail-providers",
+            },
+            {
+              type: "category",
+              label: "Contributing to Guardrails",
+              items: [
+                "adding_provider/generic_guardrail_api",
+                "adding_provider/simple_guardrail_tutorial",
+                "adding_provider/adding_guardrail_support",
+              ]
+            },
+          ],
         },
         {
-          type: "link",
+          type: "category",
           label: "Policies",
-          href: "https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies",
+          items: [
+            "proxy/guardrails/guardrail_policies",
+            "proxy/guardrails/policy_flow_builder",
+            "proxy/guardrails/policy_templates",
+            "proxy/guardrails/policy_tags",
+          ],
         },
         {
           type: "category",
@@ -564,16 +579,9 @@ const sidebars = {
       },
       items: [
         {
-          type: "category",
+          type: "link",
           label: "/a2a - A2A Agent Gateway",
-          items: [
-            "a2a",
-            "a2a_invoking_agents",
-            "a2a_agent_headers",
-            "a2a_cost_tracking",
-            "a2a_agent_permissions",
-            "a2a_iteration_budgets"
-          ],
+          href: "/docs/simple_proxy#agent--mcp-gateway",
         },
         "assistants",
         "audio_transcription",
@@ -636,21 +644,9 @@ const sidebars = {
         "vector_stores/create",
         "vector_stores/search",
         {
-          type: "category",
+          type: "link",
           label: "/mcp - Model Context Protocol",
-          items: [
-            "mcp",
-            "mcp_usage",
-            "mcp_openapi",
-            "mcp_oauth",
-            "mcp_aws_sigv4",
-            "mcp_public_internet",
-            "mcp_semantic_filter",
-            "mcp_control",
-            "mcp_cost",
-            "mcp_guardrail",
-            "mcp_troubleshoot",
-          ]
+          href: "/docs/simple_proxy#agent--mcp-gateway",
         },
         {
           type: "category",
@@ -990,10 +986,10 @@ const sidebars = {
 
     {
       type: "category",
-      label: "Routing, Loadbalancing & Fallbacks",
+      label: "Routing & Load Balancing",
       link: {
         type: "generated-index",
-        title: "Routing, Loadbalancing & Fallbacks",
+        title: "Routing & Load Balancing",
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
@@ -1232,7 +1228,8 @@ const learnSidebar = {
             "tutorials/copilotkit_sdk",
             "tutorials/google_adk",
             "tutorials/livekit_xai_realtime",
-            "tutorials/instructor",
+            { type: "doc", id: "tutorials/instructor", label: "Instructor with LiteLLM" },
+            { type: "doc", id: "langchain/langchain", label: "LangChain with LiteLLM" },
           ],
         },
         {

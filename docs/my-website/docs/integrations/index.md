@@ -113,19 +113,13 @@ items={[
 
 ---
 
-## Guardrails
+## Guardrail Providers
 
 Add safety and content filtering to LLM calls.
 
 <NavigationCards
 columns={3}
 items={[
-  {
-    icon: "⚡",
-    title: "Quick Start",
-    description: "Get started with guardrails.",
-    to: "../proxy/guardrails/quick_start",
-  },
   {
     icon: "🛡️",
     title: "Lakera AI",
