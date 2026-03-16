@@ -188,11 +188,12 @@ class FireworksAIConfig(OpenAIGPTConfig):
             # Skip base64 data URLs — appending #transform=inline corrupts the
             # base64 payload and causes an "Incorrect padding" decode error on
             # the Fireworks side.  Data URLs are already inlined by definition.
-            if not content["image_url"].startswith("data:"):
+            # Lower-case before checking: URI schemes are case-insensitive (RFC 3986).
+            if not content["image_url"].lower().startswith("data:"):
                 content["image_url"] = f"{content['image_url']}#transform=inline"
         elif isinstance(content["image_url"], dict):
             url = content["image_url"]["url"]
-            if not url.startswith("data:"):
+            if not url.lower().startswith("data:"):
                 content["image_url"]["url"] = f"{url}#transform=inline"
         return content
 
