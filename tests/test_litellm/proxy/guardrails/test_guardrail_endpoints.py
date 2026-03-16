@@ -951,6 +951,10 @@ async def test_patch_guardrail_endpoint(
             assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
             # Verify rollback attempted in-memory re-sync with old config
             assert mock_in_memory_handler.sync_guardrail_from_db.call_count == 2
+        elif scenario == "database_failure":
+            assert "Database error" in str(exc_info.value.detail)
+        elif scenario == "no_prisma_client":
+            assert "Prisma client not initialized" in str(exc_info.value.detail)
     else:
         result = await patch_guardrail(
             "test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
