@@ -970,6 +970,7 @@ const sidebars = {
         "providers/publicai",
         "providers/predibase",
         "providers/pydantic_ai_agent",
+        "providers/qiniu",
         "providers/ragflow",
         "providers/recraft",
         "providers/replicate",

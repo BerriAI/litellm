@@ -598,6 +598,7 @@ aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 bedrock_mantle_models: Set = set()
+qiniu_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -864,6 +865,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+        elif value.get("litellm_provider") == "qiniu":
+            qiniu_models.add(key)
 
 
 add_known_models()
@@ -973,6 +976,7 @@ model_list = list(
     | lemonade_models
     | docker_model_runner_models
     | bedrock_mantle_models
+    | qiniu_models
     | set(clarifai_models)
 )
 
@@ -1078,6 +1082,7 @@ models_by_provider: dict = {
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
     "bedrock_mantle": bedrock_mantle_models,
+    "qiniu": qiniu_models,
 }
 
 # mapping for those models which have larger equivalents
