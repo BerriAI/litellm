@@ -431,6 +431,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.tool_management_endpoints import (
     router as tool_management_router,
 )
+from litellm.proxy.management_endpoints.custom_team_endpoints import (
+    router as custom_team_router,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -13889,6 +13892,7 @@ app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
+app.include_router(custom_team_router)  # Custom team endpoints that bypass premium checks
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
