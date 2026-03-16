@@ -910,6 +910,10 @@ if MCP_AVAILABLE:
                     else None
                 )
             )
+            # client_credentials requires token_url to fetch a token; without it the
+            # incoming auth header would be dropped with nothing to replace it.
+            if _oauth2_flow == "client_credentials" and not request.token_url:
+                _oauth2_flow = None
 
             server_model = MCPServer(
                 server_id=request.server_id or "",
