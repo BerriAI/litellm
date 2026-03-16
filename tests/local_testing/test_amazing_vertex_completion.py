@@ -3691,6 +3691,8 @@ def test_vertex_ai_llama_tool_calling():
         response = completion(**args)
     except litellm.RateLimitError:
         pytest.skip("Rate limit error")
+    except litellm.NotFoundError:
+        pytest.skip("Model not found / resource unavailable")
     print(response)
 
     assert response.choices[0].message.tool_calls is not None

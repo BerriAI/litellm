@@ -838,7 +838,7 @@ async def test_gemini_image_generation_async():
     IMAGE_URL = response.choices[0].message.images[0]["image_url"]
     print("IMAGE_URL: ", IMAGE_URL)
 
-    assert CONTENT is not None, "CONTENT is not None"
+    # content may be None when the model returns only an image with no text
     assert IMAGE_URL is not None, "IMAGE_URL is not None"
     assert IMAGE_URL["url"] is not None, "IMAGE_URL['url'] is not None"
     assert IMAGE_URL["url"].startswith("data:image/png;base64,")

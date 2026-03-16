@@ -131,6 +131,10 @@ class CheckBatchCost:
         # every subsequent poll cycle.
         if self._has_batch_processed_column:
             try:
+                # Include "complete"/"completed" batches: the retrieve_batch
+                # endpoint may transition a batch to "complete" before
+                # CheckBatchCost runs.  The batch_processed=False filter
+                # already prevents reprocessing finished batches.
                 jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
                     where={
                         "file_purpose": "batch",
@@ -140,8 +144,6 @@ class CheckBatchCost:
                                 "failed",
                                 "expired",
                                 "cancelled",
-                                "complete",
-                                "completed",
                                 "stale_expired",
                             ]
                         },
