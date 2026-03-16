@@ -19,6 +19,35 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+
+class TestOpenRouterTransformRequest:
+    """OpenrouterConfig.transform_request must strip doubled openrouter/ prefix."""
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            # Non-native: prefix must be stripped
+            ("openrouter/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            ("openrouter/meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            # Native: prefix must be preserved
+            ("openrouter/auto", "openrouter/auto"),
+            ("openrouter/free", "openrouter/free"),
+            # No prefix: unchanged
+            ("anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+        ],
+    )
+    def test_transform_request_strips_non_native_prefix(self, input_model, expected_model):
+        config = OpenrouterConfig()
+        result = config.transform_request(
+            model=input_model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["model"] == expected_model
 
 
 class TestOpenRouterNativeModelRouting:
@@ -95,6 +124,8 @@ class TestOpenRouterNativeModelRouting:
             ("anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
             ("anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
             ("meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            # Pre-prefixed model passed with explicit custom_llm_provider
+            ("openrouter/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
         ],
     )
     def test_bridge_strips_prefix_for_non_native_models(
