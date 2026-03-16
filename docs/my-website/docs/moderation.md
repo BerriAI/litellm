@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /moderations
+# Content Moderation (OpenAI-compatible)
 
 
 ### Usage
