@@ -5276,6 +5276,9 @@ def completion(  # type: ignore
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
             aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            is_centralized_redis_cache_incremented=kwargs.get(
+                "is_centralized_redis_cache_incremented"
+            ),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
