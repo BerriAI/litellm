@@ -560,6 +560,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         ## EARLY EXIT: Pass-through routes with auth disabled must skip all auth parsing.
         ## This avoids NoneType.split() when api_key is None and JWT/OAuth2 parsing runs.
+        ## Align with registration logic (pass_through_endpoints.py): auth required when
+        ## auth is True or str(auth).lower() == "true".
         if pass_through_endpoints is not None:
             for ep in pass_through_endpoints:
                 if not isinstance(ep, dict):
@@ -569,7 +571,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     ep.get("include_subpath") is True
                     and route.startswith(ep_path + "/")
                 )
-                if route_matches and ep.get("auth") is not True:
+                ep_auth = ep.get("auth")
+                auth_required = ep_auth is True or (
+                    ep_auth is not None and str(ep_auth).lower() == "true"
+                )
+                if route_matches and not auth_required:
                     return UserAPIKeyAuth()
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(

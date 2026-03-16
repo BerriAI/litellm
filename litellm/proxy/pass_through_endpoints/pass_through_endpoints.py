@@ -1102,13 +1102,122 @@ def create_pass_through_route(
     default_query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
 ):
-    # check if target is an adapter.py or a url
     from litellm._uuid import uuid
     from litellm.proxy.types_utils.utils import get_instance_fn
 
-    # When auth is disabled (dependencies is None), skip user_api_key_auth to allow
-    # requests without Authorization header. Use a default UserAPIKeyAuth() instead.
     _require_auth = dependencies is not None and len(dependencies) > 0
+
+    def _resolve_user_api_key(
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+    ) -> UserAPIKeyAuth:
+        return user_api_key_dict or UserAPIKeyAuth()
+
+    async def _url_passthrough_handler_impl(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        subpath: str,
+        custom_body: Optional[dict],
+    ):
+        """Shared URL pass-through logic. user_api_key_dict is always valid (never None)."""
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        path = request.url.path
+        (
+            query_params_data,
+            custom_body_data,
+            file_data,
+            stream,
+        ) = await _parse_request_data_by_content_type(request)
+
+        if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            route=path
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
+            )
+
+        passthrough_params = (
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=path, method=request.method
+            )
+        )
+        target_params = {
+            "target": target,
+            "custom_headers": custom_headers,
+            "forward_headers": _forward_headers,
+            "merge_query_params": _merge_query_params,
+            "cost_per_request": cost_per_request,
+            "guardrails": None,
+        }
+        if passthrough_params is not None:
+            target_params.update(
+                passthrough_params.get("passthrough_params", {})
+            )
+
+        param_target = target_params.get("target") or target
+        param_custom_headers = target_params.get("custom_headers", custom_headers)
+        param_forward_headers = target_params.get(
+            "forward_headers", _forward_headers
+        )
+        param_merge_query_params = target_params.get(
+            "merge_query_params", _merge_query_params
+        )
+        param_cost_per_request = target_params.get(
+            "cost_per_request", cost_per_request
+        )
+        param_guardrails = target_params.get("guardrails", None)
+        param_default_query_params = target_params.get(
+            "default_query_params", None
+        )
+
+        full_target = (
+            HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+                base_target=cast(str, param_target),
+                subpath=subpath,
+                include_subpath=include_subpath,
+            )
+        )
+
+        headers_dict = (
+            param_custom_headers
+            if isinstance(param_custom_headers, dict)
+            else {}
+        )
+        final_query_params = (
+            query_params_data if isinstance(query_params_data, dict) else {}
+        )
+        if query_params:
+            final_query_params.update(query_params)
+        final_custom_body: Optional[dict] = None
+        if custom_body is not None:
+            final_custom_body = custom_body
+        elif isinstance(custom_body_data, dict):
+            final_custom_body = custom_body_data
+
+        return await pass_through_request(  # type: ignore
+            request=request,
+            target=full_target,
+            custom_headers=headers_dict,
+            user_api_key_dict=user_api_key_dict,
+            forward_headers=cast(Optional[bool], param_forward_headers),
+            merge_query_params=cast(
+                Optional[bool], param_merge_query_params
+            ),
+            query_params=final_query_params,
+            default_query_params=cast(
+                Optional[dict], param_default_query_params
+            ),
+            stream=is_streaming_request or stream,
+            custom_body=final_custom_body,
+            cost_per_request=cast(
+                Optional[float], param_cost_per_request
+            ),
+            custom_llm_provider=custom_llm_provider,
+            guardrails_config=cast(Optional[dict], param_guardrails),
+        )
 
     try:
         if isinstance(target, CustomLogger):
@@ -1124,10 +1233,8 @@ def create_pass_through_route(
                 request: Request,
                 fastapi_response: Response,
                 user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-                subpath: str = "",  # captures sub-paths when include_subpath=True
-                custom_body: Optional[
-                    dict
-                ] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
+                subpath: str = "",
+                custom_body: Optional[dict] = None,
             ):
                 return await chat_completion_pass_through_endpoint(
                     fastapi_response=fastapi_response,
@@ -1141,18 +1248,15 @@ def create_pass_through_route(
                 request: Request,
                 fastapi_response: Response,
                 user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-                subpath: str = "",  # captures sub-paths when include_subpath=True
-                custom_body: Optional[
-                    dict
-                ] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
+                subpath: str = "",
+                custom_body: Optional[dict] = None,
             ):
                 return await chat_completion_pass_through_endpoint(
                     fastapi_response=fastapi_response,
                     request=request,
                     adapter_id=adapter_id,
-                    user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(),
+                    user_api_key_dict=_resolve_user_api_key(user_api_key_dict),
                 )
-
     except Exception:
         verbose_proxy_logger.debug("Defaulting to target being a url.")
 
@@ -1162,120 +1266,11 @@ def create_pass_through_route(
                 request: Request,
                 fastapi_response: Response,
                 user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-                subpath: str = "",  # captures sub-paths when include_subpath=True
-                custom_body: Optional[
-                    dict
-                ] = None,  # caller-supplied body takes precedence over request-parsed body
+                subpath: str = "",
+                custom_body: Optional[dict] = None,
             ):
-                from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-                    InitPassThroughEndpointHelpers,
-                )
-
-                path = request.url.path
-
-                # Parse request data based on content type
-                (
-                    query_params_data,
-                    custom_body_data,
-                    file_data,
-                    stream,
-                ) = await _parse_request_data_by_content_type(request)
-
-                if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                    route=path
-                ):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
-                    )
-
-                passthrough_params = (
-                    InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                        route=path, method=request.method
-                    )
-                )
-                target_params = {
-                    "target": target,
-                    "custom_headers": custom_headers,
-                    "forward_headers": _forward_headers,
-                    "merge_query_params": _merge_query_params,
-                    "cost_per_request": cost_per_request,
-                    "guardrails": None,
-                }
-
-                if passthrough_params is not None:
-                    target_params.update(
-                        passthrough_params.get("passthrough_params", {})
-                    )
-
-                # Extract and cast parameters with proper types
-                param_target = target_params.get("target") or target
-                param_custom_headers = target_params.get(
-                    "custom_headers", custom_headers
-                )
-                param_forward_headers = target_params.get(
-                    "forward_headers", _forward_headers
-                )
-                param_merge_query_params = target_params.get(
-                    "merge_query_params", _merge_query_params
-                )
-                param_cost_per_request = target_params.get(
-                    "cost_per_request", cost_per_request
-                )
-                param_guardrails = target_params.get("guardrails", None)
-                param_default_query_params = target_params.get(
-                    "default_query_params", None
-                )
-
-                # Construct the full target URL with subpath if needed
-                full_target = (
-                    HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
-                        base_target=cast(str, param_target),
-                        subpath=subpath,
-                        include_subpath=include_subpath,
-                    )
-                )
-
-                # Ensure custom_headers is a dict
-                headers_dict = (
-                    param_custom_headers
-                    if isinstance(param_custom_headers, dict)
-                    else {}
-                )
-
-                # Ensure query_params and custom_body are dicts or None
-                final_query_params = (
-                    query_params_data if isinstance(query_params_data, dict) else {}
-                )
-                if query_params:
-                    final_query_params.update(query_params)
-                # Caller-supplied custom_body takes precedence over request-parsed body
-                final_custom_body: Optional[dict] = None
-                if custom_body is not None:
-                    final_custom_body = custom_body
-                elif isinstance(custom_body_data, dict):
-                    final_custom_body = custom_body_data
-
-                return await pass_through_request(  # type: ignore
-                    request=request,
-                    target=full_target,
-                    custom_headers=headers_dict,
-                    user_api_key_dict=user_api_key_dict,
-                    forward_headers=cast(Optional[bool], param_forward_headers),
-                    merge_query_params=cast(
-                        Optional[bool], param_merge_query_params
-                    ),
-                    query_params=final_query_params,
-                    default_query_params=cast(
-                        Optional[dict], param_default_query_params
-                    ),
-                    stream=is_streaming_request or stream,
-                    custom_body=final_custom_body,
-                    cost_per_request=cast(
-                        Optional[float], param_cost_per_request
-                    ),
-                    custom_llm_provider=custom_llm_provider,
-                    guardrails_config=cast(Optional[dict], param_guardrails),
+                return await _url_passthrough_handler_impl(
+                    request, user_api_key_dict, subpath, custom_body
                 )
         else:
 
@@ -1283,121 +1278,14 @@ def create_pass_through_route(
                 request: Request,
                 fastapi_response: Response,
                 user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-                subpath: str = "",  # captures sub-paths when include_subpath=True
-                custom_body: Optional[
-                    dict
-                ] = None,  # caller-supplied body takes precedence over request-parsed body
+                subpath: str = "",
+                custom_body: Optional[dict] = None,
             ):
-                from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-                    InitPassThroughEndpointHelpers,
-                )
-
-                path = request.url.path
-
-                # Parse request data based on content type
-                (
-                    query_params_data,
-                    custom_body_data,
-                    file_data,
-                    stream,
-                ) = await _parse_request_data_by_content_type(request)
-
-                if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                    route=path
-                ):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
-                    )
-
-                passthrough_params = (
-                    InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                        route=path, method=request.method
-                    )
-                )
-                target_params = {
-                    "target": target,
-                    "custom_headers": custom_headers,
-                    "forward_headers": _forward_headers,
-                    "merge_query_params": _merge_query_params,
-                    "cost_per_request": cost_per_request,
-                    "guardrails": None,
-                }
-
-                if passthrough_params is not None:
-                    target_params.update(
-                        passthrough_params.get("passthrough_params", {})
-                    )
-
-                # Extract and cast parameters with proper types
-                param_target = target_params.get("target") or target
-                param_custom_headers = target_params.get(
-                    "custom_headers", custom_headers
-                )
-                param_forward_headers = target_params.get(
-                    "forward_headers", _forward_headers
-                )
-                param_merge_query_params = target_params.get(
-                    "merge_query_params", _merge_query_params
-                )
-                param_cost_per_request = target_params.get(
-                    "cost_per_request", cost_per_request
-                )
-                param_guardrails = target_params.get("guardrails", None)
-                param_default_query_params = target_params.get(
-                    "default_query_params", None
-                )
-
-                # Construct the full target URL with subpath if needed
-                full_target = (
-                    HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
-                        base_target=cast(str, param_target),
-                        subpath=subpath,
-                        include_subpath=include_subpath,
-                    )
-                )
-
-                # Ensure custom_headers is a dict
-                headers_dict = (
-                    param_custom_headers
-                    if isinstance(param_custom_headers, dict)
-                    else {}
-                )
-
-                # Ensure query_params and custom_body are dicts or None
-                final_query_params = (
-                    query_params_data if isinstance(query_params_data, dict) else {}
-                )
-                if query_params:
-                    final_query_params.update(query_params)
-                # Caller-supplied custom_body takes precedence over request-parsed body
-                final_custom_body = None
-                if custom_body is not None:
-                    final_custom_body = custom_body
-                elif isinstance(custom_body_data, dict):
-                    final_custom_body = custom_body_data
-
-                _user_api_key_dict = user_api_key_dict or UserAPIKeyAuth()
-                return await pass_through_request(  # type: ignore
-                    request=request,
-                    target=full_target,
-                    custom_headers=headers_dict,
-                    user_api_key_dict=_user_api_key_dict,
-                    forward_headers=cast(Optional[bool], param_forward_headers),
-                    merge_query_params=cast(
-                        Optional[bool], param_merge_query_params
-                    ),
-                    query_params=final_query_params,
-                    default_query_params=cast(
-                        Optional[dict], param_default_query_params
-                    ),
-                    stream=is_streaming_request or stream,
-                    custom_body=final_custom_body,
-                    cost_per_request=cast(
-                        Optional[float], param_cost_per_request
-                    ),
-                    custom_llm_provider=custom_llm_provider,
-                    guardrails_config=cast(Optional[dict], param_guardrails),
+                return await _url_passthrough_handler_impl(
+                    request,
+                    _resolve_user_api_key(user_api_key_dict),
+                    subpath,
+                    custom_body,
                 )
 
     return endpoint_func
