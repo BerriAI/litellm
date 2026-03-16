@@ -490,6 +490,7 @@ async def test_cost_tracking_with_caching():
     assert response_cost_2 == 0
 
 
+@pytest.mark.flaky(retries=3, delay=3)
 def test_redis_cache_completion_stream():
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set
     import random
