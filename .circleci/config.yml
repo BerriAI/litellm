@@ -412,6 +412,7 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+    resource_class: large
     working_directory: ~/project
     parallelism: 2
 
@@ -480,6 +481,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
+            pip install "pytest-xdist==3.6.1"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -508,27 +510,16 @@ jobs:
               --split-by=timings \
               --verbose \
               --command="xargs python -m pytest \
-                -vv \
-                --cov=litellm \
-                --cov-report=xml \
+                -v \
+                -n 4 \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -k 'caching or cache'"
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml caching_coverage.xml || true
-            mv .coverage caching_coverage || true
 
       # Store test results
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - caching_coverage.xml
-            - caching_coverage
   auth_ui_unit_tests:
     docker:
       - image: cimg/python:3.11
@@ -2248,7 +2239,7 @@ jobs:
       - run:
           name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
           command: |
-            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+            python -m pytest -v tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
           no_output_timeout: 15m
 
   build_and_test:
@@ -2261,12 +2252,6 @@ jobs:
       - attach_workspace:
           at: ~/project
       - setup_google_dns
-      - run:
-          name: Install Docker CLI (In case it's not already installed)
-          command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
       - run:
           name: Install Python 3.9
           command: |
@@ -2390,7 +2375,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -v tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 15m
 
       # Store test results
@@ -2682,7 +2667,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -v tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
       - run:
@@ -2725,7 +2710,7 @@ jobs:
       - run:
           name: Run second round of tests
           command: |
-            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+            python -m pytest -v tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
           no_output_timeout: 15m
 
       # Store test results
@@ -3195,12 +3180,6 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
-          command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
-      - run:
           name: Install Python 3.10
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
@@ -3367,7 +3346,7 @@ jobs:
             conda activate myenv
             pwd
             ls
-            python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -v tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
       # Store test results
@@ -3609,7 +3588,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage caching_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage
+            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
