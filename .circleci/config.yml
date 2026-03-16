@@ -162,7 +162,7 @@ jobs:
               traceloop-sdk==0.21.1 opentelemetry-api==1.25.0 opentelemetry-sdk==1.25.0 \
               opentelemetry-exporter-otlp==1.25.0 openai==1.100.1 prisma==0.11.0 \
               "detect_secrets==1.5.0" "httpx==0.24.1" "respx==0.22.0" fastapi \
-              "gunicorn==21.2.0" "anyio==4.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
+              "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
               python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
               "diskcache==5.6.1" "Pillow==10.3.0" "jsonschema==4.22.0" \
@@ -258,7 +258,7 @@ jobs:
               traceloop-sdk==0.21.1 opentelemetry-api==1.25.0 opentelemetry-sdk==1.25.0 \
               opentelemetry-exporter-otlp==1.25.0 openai==1.100.1 prisma==0.11.0 \
               "detect_secrets==1.5.0" "httpx==0.24.1" "respx==0.22.0" fastapi \
-              "gunicorn==21.2.0" "anyio==4.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
+              "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
               python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
               "diskcache==5.6.1" "Pillow==10.3.0" "jsonschema==4.22.0" \
