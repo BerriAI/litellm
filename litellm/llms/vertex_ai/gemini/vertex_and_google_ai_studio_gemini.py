@@ -619,6 +619,36 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
         _tools_list: List[Tools] = []
 
+        # Vertex AI constraint: multiple Tool objects in a request must ALL be
+        # search tools. Mixing function declarations with search tools in the
+        # same request causes a 400 error:
+        #   "Multiple tools are supported only when they are all search tools."
+        # When both are present (e.g. deployment config has search tools and
+        # user request adds function calling tools via MCP), drop search tools
+        # and keep function declarations.
+        # Ref: https://github.com/BerriAI/litellm/issues/23337
+        has_search_tools = any(
+            v is not None
+            for v in [
+                googleSearch,
+                googleSearchRetrieval,
+                enterpriseWebSearch,
+                urlContext,
+            ]
+        )
+        if gtool_func_declarations and has_search_tools:
+            verbose_logger.warning(
+                "Vertex AI does not support mixing function declarations with "
+                "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+                "googleSearchRetrieval) in the same request. Dropping search "
+                "tools and keeping function declarations. To use search tools, "
+                "send a request without function calling tools."
+            )
+            googleSearch = None
+            googleSearchRetrieval = None
+            enterpriseWebSearch = None
+            urlContext = None
+
         # Function declarations can be grouped together in one Tool
         if gtool_func_declarations:
             func_tool = Tools()
