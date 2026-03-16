@@ -320,7 +320,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Previously, a throwaway dict was created here, causing post_call
             # guardrail entries to be lost (see GitHub issue #23561).
             if original_request_data is not None:
-                request_data: dict = original_request_data
+                request_data: dict = original_request_data.copy()
                 request_data["response"] = response
             else:
                 request_data = {"response": response}
@@ -462,7 +462,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if texts_to_check:
             # Use original request data as the base when available
             if original_request_data is not None:
-                request_data: dict = original_request_data
+                request_data: dict = original_request_data.copy()
                 request_data["responses"] = responses_so_far
             else:
                 request_data = {"responses": responses_so_far}

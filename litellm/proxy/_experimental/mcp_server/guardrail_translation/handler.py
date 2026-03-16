@@ -92,6 +92,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         verbose_proxy_logger.debug(
             "MCP Guardrail: Output processing not implemented for MCP tools",

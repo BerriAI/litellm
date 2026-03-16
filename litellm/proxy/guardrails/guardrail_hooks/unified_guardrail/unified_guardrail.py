@@ -398,7 +398,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                         guardrail_to_apply=guardrail_to_apply,
                         litellm_logging_obj=request_data.get("litellm_logging_obj"),
                         user_api_key_dict=user_api_key_dict,
-                        original_request_data=request_data,
+                        # Only pass original_request_data at end-of-stream to avoid
+                        # recording guardrail log entries at every sampling interval
                     )
                 except HTTPException as e:
                     # Response already started (we already yielded chunks); cannot send 400.

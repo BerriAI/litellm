@@ -139,6 +139,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional[Any] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
