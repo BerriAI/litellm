@@ -12,7 +12,7 @@ import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from litellm.proxy.utils import (
     _check_and_merge_model_level_guardrails,
