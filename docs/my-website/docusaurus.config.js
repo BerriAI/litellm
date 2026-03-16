@@ -195,6 +195,20 @@ const config = {
         };
       },
     }),
+    // Ensure gtag exists before the GA script loads.
+    () => ({
+      name: 'gtag-shim',
+      injectHtmlTags() {
+        return {
+          headTags: [
+            {
+              tagName: 'script',
+              innerHTML: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}if(!window.gtag){window.gtag=gtag;}`,
+            },
+          ],
+        };
+      },
+    }),
   ],
 
   presets: [
@@ -202,10 +216,13 @@ const config = {
       'classic',
       /** @type {import('@docusaurus/preset-classic').Options} */
       ({
-        gtag: {
-          trackingID: 'G-K7K215ZVNC',
-          anonymizeIP: true,
-        },
+        gtag:
+          process.env.NODE_ENV === 'production'
+            ? {
+                trackingID: 'G-K7K215ZVNC',
+                anonymizeIP: true,
+              }
+            : undefined,
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
@@ -247,6 +264,12 @@ const config = {
           },
           {
             type: 'docSidebar',
+            sidebarId: 'learnSidebar',
+            position: 'left',
+            label: 'Learn',
+          },
+          {
+            type: 'docSidebar',
             sidebarId: 'integrationsSidebar',
             position: 'left',
             label: 'Integrations',
@@ -256,7 +279,6 @@ const config = {
             label: 'Enterprise',
             to: "docs/enterprise"
           },
-          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
           {
             href: 'https://github.com/BerriAI/litellm',
