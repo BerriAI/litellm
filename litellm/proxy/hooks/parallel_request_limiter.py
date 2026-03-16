@@ -52,6 +52,23 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception:
             pass
 
+    @staticmethod
+    def _estimate_request_tokens(data: dict) -> int:
+        """Estimate tokens for a request to reserve at pre-call time.
+
+        Uses max_tokens/max_completion_tokens as the reservation amount.
+        This prevents concurrent requests from bypassing TPM limits by
+        ensuring tokens are accounted for before the request completes.
+
+        The reservation is reconciled in async_log_success_event (actual
+        tokens replace the estimate) and async_log_failure_event (estimate
+        is released).
+        """
+        estimated = data.get("max_tokens") or data.get("max_completion_tokens") or 0
+        if isinstance(estimated, int) and estimated > 0:
+            return estimated
+        return 0
+
     async def check_key_in_limits(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -69,6 +86,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         verbose_proxy_logger.info(
             f"Current Usage of {rate_limit_type} in this minute: {current}"
         )
+        # Estimate tokens to reserve at pre-call time to prevent concurrent
+        # requests from bypassing TPM limits (fixes TOCTOU race condition).
+        estimated_tokens = self._estimate_request_tokens(data)
+
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
@@ -77,19 +98,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
             new_val = {
                 "current_requests": 1,
-                "current_tpm": 0,
+                "current_tpm": estimated_tokens,
                 "current_rpm": 1,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
         elif (
             int(current["current_requests"]) < max_parallel_requests
-            and current["current_tpm"] < tpm_limit
+            and current["current_tpm"] + estimated_tokens <= tpm_limit
             and current["current_rpm"] < rpm_limit
         ):
-            # Increase count for this token
+            # Increase count for this token and reserve estimated TPM
             new_val = {
                 "current_requests": current["current_requests"] + 1,
-                "current_tpm": current["current_tpm"],
+                "current_tpm": current["current_tpm"] + estimated_tokens,
                 "current_rpm": current["current_rpm"] + 1,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
@@ -443,6 +464,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )  # don't block execution for cache updates
         )
 
+        # Store reserved token estimate in metadata for reconciliation
+        # in async_log_success_event / async_log_failure_event
+        estimated_tokens = self._estimate_request_tokens(data)
+        if estimated_tokens > 0:
+            if "metadata" not in data:
+                data["metadata"] = {}
+            data["metadata"]["_reserved_estimated_tokens"] = estimated_tokens
+
         return
 
     async def async_log_success_event(  # noqa: PLR0915
@@ -503,6 +532,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if isinstance(response_obj, ModelResponse):
                 total_tokens = response_obj.usage.total_tokens  # type: ignore
 
+            # Get the reserved token estimate from pre-call for reconciliation
+            reserved_tokens = (
+                kwargs.get("litellm_params", {})
+                .get("metadata", {})
+                .get("_reserved_estimated_tokens", 0)
+            )
+
             # ------------
             # Update usage - API Key
             # ------------
@@ -523,9 +559,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 0,
                 }
 
+                # Reconcile: subtract the pre-call reservation, add actual tokens
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0) + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -560,9 +597,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 0,
                 }
 
+                # Reconcile: subtract the pre-call reservation, add actual tokens
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0) + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -593,9 +631,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 1,
                 }
 
+                # Reconcile: subtract the pre-call reservation, add actual tokens
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0) + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -626,9 +665,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 1,
                 }
 
+                # Reconcile: subtract the pre-call reservation, add actual tokens
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0) + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -659,9 +699,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 1,
                 }
 
+                # Reconcile: subtract the pre-call reservation, add actual tokens
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0) + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -688,6 +729,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             global_max_parallel_requests = _metadata.get(
                 "global_max_parallel_requests", None
             )
+            # Get the reserved token estimate for release
+            reserved_tokens = _metadata.get("_reserved_estimated_tokens", 0)
             user_api_key = _metadata.get("user_api_key", None)
             self.print_verbose(f"user_api_key: {user_api_key}")
             if user_api_key is None:
@@ -742,9 +785,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "current_rpm": 0,
                 }
 
+                # Release the reserved tokens on failure
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"],
+                    "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
                     "current_rpm": current["current_rpm"],
                 }
 
