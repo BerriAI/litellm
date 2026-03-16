@@ -461,10 +461,13 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "avideo_create_character",
+                "avideo_get_character",
                 "avideo_edit",
                 "avideo_extension",
             ]:
-                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
+                # try router first to allow for multi-deployment load balancing
                 try:
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
