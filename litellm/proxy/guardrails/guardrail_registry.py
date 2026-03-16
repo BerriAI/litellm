@@ -234,10 +234,18 @@ class GuardrailRegistry:
     ########### DB management helpers for guardrails ###########
     ############################################################
     async def add_guardrail_to_db(
-        self, guardrail: Guardrail, prisma_client: PrismaClient
+        self,
+        guardrail: Guardrail,
+        prisma_client: PrismaClient,
+        guardrail_id: Optional[str] = None,
     ):
         """
-        Add a guardrail to the database
+        Add a guardrail to the database.
+
+        Args:
+            guardrail_id: If provided, the row is created with this specific ID
+                          (used by rollback paths to restore a deleted row with
+                          its original ID).
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
@@ -252,15 +260,19 @@ class GuardrailRegistry:
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
+            create_data: Dict[str, Any] = {
+                "guardrail_name": guardrail_name,
+                "litellm_params": litellm_params,
+                "guardrail_info": guardrail_info,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            if guardrail_id is not None:
+                create_data["guardrail_id"] = guardrail_id
+
             # Create guardrail in DB
             created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
-                data={
-                    "guardrail_name": guardrail_name,
-                    "litellm_params": litellm_params,
-                    "guardrail_info": guardrail_info,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                }
+                data=create_data
             )
 
             # Add guardrail_id to the returned guardrail object

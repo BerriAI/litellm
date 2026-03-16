@@ -556,11 +556,12 @@ async def delete_guardrail(
             verbose_proxy_logger.error(
                 f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
             )
-            # Rollback: re-create the DB entry so state stays consistent
+            # Rollback: re-create the DB entry with the ORIGINAL guardrail_id
             try:
                 await GUARDRAIL_REGISTRY.add_guardrail_to_db(
                     guardrail=cast(Guardrail, existing_guardrail),
                     prisma_client=prisma_client,
+                    guardrail_id=guardrail_id,
                 )
             except Exception:
                 verbose_proxy_logger.error(
