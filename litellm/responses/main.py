@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.responses.file_search_utils import FileSearchResponsesAPIUtils
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -698,6 +699,26 @@ def responses(
                 provider=custom_llm_provider,
             )
         )
+
+        #########################################################
+        # file_search tool interception for non-native providers
+        #########################################################
+        tools_list = list(tools) if tools else []
+        if tools_list and FileSearchResponsesAPIUtils.has_file_search_tools(tools_list):
+            native = (
+                responses_api_provider_config is not None
+                and responses_api_provider_config.supports_native_file_search()
+            )
+            if not native:
+                input, tools_list = run_async_function(
+                    FileSearchResponsesAPIUtils.asearch_and_inject_context,
+                    input=input,
+                    tools=tools_list,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
+                tools = cast(Optional[Iterable[ToolParam]], tools_list)
+                local_vars["input"] = input
+                local_vars["tools"] = tools
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set

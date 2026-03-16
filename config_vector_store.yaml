@@ -1,0 +1,17 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  set_verbose: true
+  master_key: sk-vector-store-demo
+
+# Add your vector store ID after running: python scripts/create_vector_store.py
+vector_store_registry:
+  - vector_store_name: "litellm-docs-openai"
+    litellm_params:
+      vector_store_id: "REPLACE_WITH_VS_ID"  # e.g. vs_687ae3b2439881918b433cb99d10662e
+      custom_llm_provider: "openai"
+      vector_store_description: "LiteLLM docs (CLAUDE.md) for RAG"

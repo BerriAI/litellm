@@ -60,6 +60,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(response_api_optional_params)
 
+    def supports_native_file_search(self) -> bool:
+        return True
+
     def transform_responses_api_request(
         self,
         model: str,

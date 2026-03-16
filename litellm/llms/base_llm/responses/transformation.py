@@ -230,6 +230,19 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def supports_native_file_search(self) -> bool:
+        """
+        Returns True if the provider natively handles file_search tools in the Responses API.
+
+        When True (OpenAI, Azure), file_search tools with vector_store_ids are forwarded to
+        the provider unchanged. When False (Claude, Gemini, etc.), LiteLLM intercepts the
+        request, searches the specified vector stores, injects the retrieved context into
+        the input, and strips the file_search tool before forwarding to the provider.
+
+        Default: False
+        """
+        return False
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################

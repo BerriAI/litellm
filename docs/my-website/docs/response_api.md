@@ -1556,6 +1556,129 @@ curl -X POST "http://localhost:4000/v1/responses" \
   }'
 ```
 
+## file_search (Vector Store RAG)
+
+The **`file_search` tool** lets any model use LiteLLM-managed vector stores for retrieval-augmented generation (RAG) via the standard OpenAI Responses API contract.
+
+| Provider | Behaviour |
+|----------|-----------|
+| `openai`, `azure` | `file_search` is forwarded to the provider **unchanged** — the provider handles retrieval natively. |
+| All other providers (`anthropic`, `gemini`, `vertex_ai`, `bedrock`, etc.) | LiteLLM **intercepts** the request: searches each `vector_store_id` using `litellm.vector_stores`, injects the retrieved context into `input`, strips the `file_search` tool, then forwards the enriched request to the model. |
+
+### How to use
+
+Pass `tools=[{"type": "file_search", "vector_store_ids": [...]}]` in your request. The vector stores must already exist and be accessible via [LiteLLM vector stores](./vector_stores/create.md).
+
+#### LiteLLM Python SDK
+
+```python showLineNumbers title="file_search with LiteLLM Python SDK (any provider)"
+import litellm
+
+# Works with OpenAI, Claude, Gemini, and any other LiteLLM provider
+response = litellm.responses(
+    model="anthropic/claude-opus-4-5",   # non-native provider example
+    input="What are the key points about RAG systems?",
+    tools=[
+        {
+            "type": "file_search",
+            "vector_store_ids": ["vs_abc123", "vs_def456"],
+        }
+    ],
+)
+
+print(response)
+```
+
+For native providers (OpenAI/Azure) the tool is passed through as-is:
+
+```python showLineNumbers title="file_search with OpenAI (native passthrough)"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-4.1",
+    input="Summarise the company handbook.",
+    tools=[
+        {
+            "type": "file_search",
+            "vector_store_ids": ["vs_handbook_abc"],
+        }
+    ],
+)
+```
+
+#### LiteLLM Proxy (AI Gateway)
+
+**OpenAI Python SDK (proxy as `base_url`):**
+
+```python showLineNumbers title="file_search via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="anthropic/claude-opus-4-5",
+    input="What does our refund policy say?",
+    tools=[
+        {
+            "type": "file_search",
+            "vector_store_ids": ["vs_policies_xyz"],
+        }
+    ],
+)
+```
+
+**curl:**
+
+```bash title="file_search via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "anthropic/claude-opus-4-5",
+    "input": "What does our refund policy say?",
+    "tools": [
+      {
+        "type": "file_search",
+        "vector_store_ids": ["vs_policies_xyz"]
+      }
+    ]
+  }'
+```
+
+### How the non-native path works
+
+```
+tools=[{type: file_search, vector_store_ids: [...]}]
+         │
+  check supports_native_file_search(provider)
+         │
+    ┌────┴──────────────────┐
+    │ native? (OpenAI/Azure)│──► pass file_search tool through unchanged
+    └───────────────────────┘
+    │ non-native?           │──► 1. extract query from input
+    │ (Claude, Gemini, …)   │    2. litellm.vector_stores.asearch() per vector_store_id
+    │                       │    3. inject retrieved context into input
+    │                       │    4. strip file_search from tools
+    └───────────────────────┘
+              │
+              ▼
+       call model with enriched input (no file_search tool)
+```
+
+1. LiteLLM extracts the query text from the last user message in `input`.
+2. It calls [`litellm.vector_stores.asearch`](./vector_stores/search.md) for every `vector_store_id` listed in the tool.
+3. Retrieved text chunks are prepended to `input` as a context user-message (`"Context:\n\n..."`).
+4. The `file_search` entry is removed from `tools` before the request is sent to the model (other tools are preserved).
+5. Search results are stored in `litellm_logging_obj.model_call_details["search_results"]` for downstream logging and observability hooks.
+
+### Prerequisites
+
+- Vector stores must be created and populated beforehand. See [Create a Vector Store](./vector_stores/create.md).
+- The `litellm.vector_store_registry` (or the proxy's `vector_stores` config block) must be configured so LiteLLM knows where to route each `vector_store_id`.
+
 ## Session Management
 
 LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
