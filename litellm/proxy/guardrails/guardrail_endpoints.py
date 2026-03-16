@@ -462,29 +462,38 @@ async def update_guardrail(
                 f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
             )
             # Rollback: restore previous guardrail data in DB
-            rollback_ok = False
+            db_rollback_ok = False
+            mem_rollback_ok = False
             try:
                 await GUARDRAIL_REGISTRY.update_guardrail_in_db(
                     guardrail_id=guardrail_id,
                     guardrail=cast(Guardrail, existing_guardrail),
                     prisma_client=prisma_client,
                 )
-                # Re-initialize the old guardrail in memory
-                IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                    guardrail_id=guardrail_id,
-                    guardrail=cast(Guardrail, existing_guardrail),
-                )
-                rollback_ok = True
+                db_rollback_ok = True
             except Exception:
                 verbose_proxy_logger.error(
                     "Failed to rollback guardrail DB entry after update failure"
                 )
 
-            status = (
-                "rolled back"
-                if rollback_ok
-                else "rollback also failed, DB/memory may be inconsistent"
-            )
+            if db_rollback_ok:
+                try:
+                    IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+                        guardrail_id=guardrail_id,
+                        guardrail=cast(Guardrail, existing_guardrail),
+                    )
+                    mem_rollback_ok = True
+                except Exception:
+                    verbose_proxy_logger.error(
+                        "Failed to rollback guardrail in memory after update failure"
+                    )
+
+            if db_rollback_ok and mem_rollback_ok:
+                status = "rolled back"
+            elif db_rollback_ok:
+                status = "DB rolled back but memory rollback failed"
+            else:
+                status = "rollback also failed, DB/memory may be inconsistent"
             raise HTTPException(
                 status_code=422,
                 detail=f"Guardrail update failed, {status}: {update_error}",
@@ -1043,7 +1052,7 @@ async def reject_guardrail_submission(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
 )
-async def patch_guardrail(
+async def patch_guardrail(  # noqa: PLR0915
     guardrail_id: str,
     request: PatchGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1169,28 +1178,37 @@ async def patch_guardrail(
                 f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
             )
             # Rollback: restore previous guardrail data in DB
-            rollback_ok = False
+            db_rollback_ok = False
+            mem_rollback_ok = False
             try:
                 await GUARDRAIL_REGISTRY.update_guardrail_in_db(
                     guardrail_id=guardrail_id,
                     guardrail=cast(Guardrail, existing_guardrail),
                     prisma_client=prisma_client,
                 )
-                # Re-sync the old guardrail in memory
-                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                    guardrail=cast(Guardrail, existing_guardrail),
-                )
-                rollback_ok = True
+                db_rollback_ok = True
             except Exception:
                 verbose_proxy_logger.error(
                     "Failed to rollback guardrail DB entry after patch failure"
                 )
 
-            status = (
-                "rolled back"
-                if rollback_ok
-                else "rollback also failed, DB/memory may be inconsistent"
-            )
+            if db_rollback_ok:
+                try:
+                    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                        guardrail=cast(Guardrail, existing_guardrail),
+                    )
+                    mem_rollback_ok = True
+                except Exception:
+                    verbose_proxy_logger.error(
+                        "Failed to rollback guardrail in memory after patch failure"
+                    )
+
+            if db_rollback_ok and mem_rollback_ok:
+                status = "rolled back"
+            elif db_rollback_ok:
+                status = "DB rolled back but memory rollback failed"
+            else:
+                status = "rollback also failed, DB/memory may be inconsistent"
             raise HTTPException(
                 status_code=422,
                 detail=f"Guardrail patch failed, {status}: {update_error}",

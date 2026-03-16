@@ -838,6 +838,10 @@ async def test_update_guardrail_endpoint(
         elif scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
             assert "Guardrail update failed" in str(exc_info.value.detail)
+            # DB rollback succeeds, memory rollback fails → accurate message
+            assert "DB rolled back but memory rollback failed" in str(
+                exc_info.value.detail
+            )
             # Verify rollback was attempted: update_in_db called twice (initial + rollback)
             assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
             # Verify rollback attempted in-memory re-init with old config
@@ -947,6 +951,10 @@ async def test_patch_guardrail_endpoint(
         if scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
             assert "Guardrail patch failed" in str(exc_info.value.detail)
+            # DB rollback succeeds, memory rollback fails → accurate message
+            assert "DB rolled back but memory rollback failed" in str(
+                exc_info.value.detail
+            )
             # Verify rollback was attempted: update_in_db called twice (initial + rollback)
             assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
             # Verify rollback attempted in-memory re-sync with old config
