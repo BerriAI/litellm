@@ -1,9 +1,12 @@
 # conftest.py
 #
 # xdist-compatible test isolation for logging callback tests.
-#   - Function-scoped fixture saves/restores litellm globals (no reload)
-#   - Module-scoped fixture reloads only in single-process mode
-#   - Clears _in_memory_loggers to prevent cached logger instance leaks
+#
+# Key design: capture litellm's true default values at conftest import time
+# (BEFORE test modules are imported) so we can reset to clean defaults before
+# each test. This is necessary because some test modules set module-level
+# globals like `litellm.num_retries = 3` which pollute state for all tests
+# in the same xdist worker.
 
 import importlib
 import os
@@ -32,6 +35,7 @@ _SCALAR_ATTRS = (
     "set_verbose",
     "cache",
     "num_retries",
+    "num_retries_per_request",
     "turn_off_message_logging",
     "redact_messages_in_exceptions",
     "redact_user_api_key_info",
@@ -40,29 +44,29 @@ _SCALAR_ATTRS = (
     "vector_store_registry",
 )
 
+# ---- Capture true defaults at conftest import time ----
+# This runs BEFORE any test modules are imported, so values are clean.
+_DEFAULTS: dict = {}
+for _attr in _LIST_ATTRS:
+    if hasattr(litellm, _attr):
+        _val = getattr(litellm, _attr)
+        _DEFAULTS[_attr] = _val.copy() if isinstance(_val, list) else _val
+for _attr in _SCALAR_ATTRS:
+    if hasattr(litellm, _attr):
+        _DEFAULTS[_attr] = getattr(litellm, _attr)
+
 
 @pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
     Per-function isolation fixture.
 
-    Saves and restores litellm callback/global state so tests don't leak
-    side effects. Works safely under pytest-xdist parallel execution.
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
     """
     from litellm.litellm_core_utils import litellm_logging as ll_logging
-
-    original_state = {}
-
-    # Save list-type attrs (callbacks)
-    for attr in _LIST_ATTRS:
-        if hasattr(litellm, attr):
-            val = getattr(litellm, attr)
-            original_state[attr] = val.copy() if isinstance(val, list) else val
-
-    # Save scalar attrs
-    for attr in _SCALAR_ATTRS:
-        if hasattr(litellm, attr):
-            original_state[attr] = getattr(litellm, attr)
 
     # Flush cache and clear internal logger instances before test
     if hasattr(litellm, "in_memory_llm_clients_cache"):
@@ -71,22 +75,33 @@ def isolate_litellm_state():
     # Clear cached logger instances (LangsmithLogger, SlackAlerting, etc.)
     ll_logging._in_memory_loggers.clear()
 
-    # Clear callbacks before test
+    # Reset ALL attrs to their true defaults before the test runs.
+    # This undoes any module-level mutations from test file imports.
     for attr in _LIST_ATTRS:
-        if hasattr(litellm, attr):
-            setattr(litellm, attr, [])
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
 
     yield
 
-    # Restore all saved state
+    # Teardown: reset back to defaults again (belt-and-suspenders)
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
     ll_logging._in_memory_loggers.clear()
 
-    for attr, original_value in original_state.items():
-        if hasattr(litellm, attr):
-            setattr(litellm, attr, original_value)
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
 
 
 @pytest.fixture(scope="module", autouse=True)
