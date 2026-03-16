@@ -2,6 +2,8 @@ import glob
 import os
 import re
 import sys
+import stat
+import tempfile
 
 import pytest
 
@@ -12,7 +14,11 @@ sys.path.insert(
     ),
 )
 
-from litellm_proxy_extras.utils import ProxyExtrasDBManager
+from litellm_proxy_extras.utils import (
+    ProxyExtrasDBManager,
+    _copy_with_permissions,
+    _copytree_with_permissions,
+)
 
 # Path to the migrations directory
 _MIGRATIONS_DIR = os.path.abspath(
@@ -307,3 +313,107 @@ class TestMigrationSQLIdempotency:
             "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
             + "\n".join(violations)
         )
+
+
+class TestReadOnlyFilesystemFix:
+    """Test cases for read-only root filesystem support (ECS Fargate)"""
+
+    def test_copy_with_permissions_makes_file_writable(self):
+        """Test that _copy_with_permissions makes copied files writable"""
+        with tempfile.TemporaryDirectory() as src_dir:
+            with tempfile.TemporaryDirectory() as dst_dir:
+                # Create a source file with read-only permissions (simulating read-only fs)
+                src_file = os.path.join(src_dir, "test_file.txt")
+                dst_file = os.path.join(dst_dir, "test_file.txt")
+
+                with open(src_file, "w") as f:
+                    f.write("test content")
+
+                # Make source file read-only (444 = r--r--r--)
+                os.chmod(src_file, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+                # Copy the file
+                _copy_with_permissions(src_file, dst_file)
+
+                # Verify destination file exists and is writable
+                assert os.path.exists(dst_file), "Destination file should exist"
+
+                dst_mode = os.stat(dst_file).st_mode
+                assert dst_mode & stat.S_IWUSR, (
+                    f"Destination file should be writable, got mode: {oct(dst_mode)}"
+                )
+
+                # Verify we can actually write to it
+                with open(dst_file, "w") as f:
+                    f.write("new content")
+
+    def test_copytree_with_permissions_makes_files_and_dirs_writable(self):
+        """Test that _copytree_with_permissions makes all files and dirs writable"""
+        with tempfile.TemporaryDirectory() as src_dir:
+            with tempfile.TemporaryDirectory() as dst_dir:
+                # Create directory structure with read-only permissions
+                subdir = os.path.join(src_dir, "subdir")
+                os.makedirs(subdir)
+
+                # Create files
+                src_file1 = os.path.join(src_dir, "file1.txt")
+                src_file2 = os.path.join(subdir, "file2.txt")
+
+                with open(src_file1, "w") as f:
+                    f.write("content1")
+                with open(src_file2, "w") as f:
+                    f.write("content2")
+
+                # Make everything read-only
+                os.chmod(src_file1, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+                os.chmod(src_file2, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+                os.chmod(subdir, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+                # Copy the tree
+                dst_tree = os.path.join(dst_dir, "copied_tree")
+                _copytree_with_permissions(src_dir, dst_tree)
+
+                # Verify all files and directories are writable
+                for root, dirs, files in os.walk(dst_tree):
+                    # Check directories
+                    for d in dirs:
+                        dir_path = os.path.join(root, d)
+                        dir_mode = os.stat(dir_path).st_mode
+                        assert dir_mode & stat.S_IWUSR, (
+                            f"Directory {dir_path} should be writable, got mode: {oct(dir_mode)}"
+                        )
+
+                    # Check files
+                    for f in files:
+                        file_path = os.path.join(root, f)
+                        file_mode = os.stat(file_path).st_mode
+                        assert file_mode & stat.S_IWUSR, (
+                            f"File {file_path} should be writable, got mode: {oct(file_mode)}"
+                        )
+
+    def test_get_prisma_dir_with_custom_dir_makes_writable(self, monkeypatch):
+        """Test that _get_prisma_dir makes copied files writable when using LITELLM_MIGRATION_DIR"""
+        import tempfile
+
+        # Create temp directories
+        with tempfile.TemporaryDirectory() as custom_dir:
+            monkeypatch.setenv("LITELLM_MIGRATION_DIR", custom_dir)
+
+            result = ProxyExtrasDBManager._get_prisma_dir()
+            assert result == custom_dir
+
+            # Check that files in the custom directory are writable
+            for root, dirs, files in os.walk(custom_dir):
+                for f in files:
+                    file_path = os.path.join(root, f)
+                    file_mode = os.stat(file_path).st_mode
+                    assert file_mode & stat.S_IWUSR, (
+                        f"File {file_path} should be writable, got mode: {oct(file_mode)}"
+                    )
+
+                for d in dirs:
+                    dir_path = os.path.join(root, d)
+                    dir_mode = os.stat(dir_path).st_mode
+                    assert dir_mode & stat.S_IWUSR, (
+                        f"Directory {dir_path} should be writable, got mode: {oct(dir_mode)}"
+                    )

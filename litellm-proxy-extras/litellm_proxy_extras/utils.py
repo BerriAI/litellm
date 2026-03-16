@@ -57,6 +57,36 @@ def _get_prisma_command() -> str:
     return "prisma"
 
 
+def _copy_with_permissions(src: str, dst: str) -> None:
+    """
+    Copy a file and ensure the destination is writable.
+
+    This is needed for read-only root filesystem scenarios where the source
+    files may have read-only permissions, but we need the destination to be
+    writable for Prisma migration operations (e.g., migration_lock.toml).
+    """
+    shutil.copy2(src, dst)
+    # Ensure the destination file is writable (owner, group, others)
+    current_mode = os.stat(dst).st_mode
+    os.chmod(dst, current_mode | 0o200)
+
+
+def _copytree_with_permissions(src: str, dst: str) -> None:
+    """
+    Copy a directory tree and ensure all files are writable.
+
+    Fixes permission issues when copying from read-only root filesystems
+    to writable volumes for ECS Fargate and similar environments.
+    """
+    shutil.copytree(src, dst, copy_function=_copy_with_permissions, dirs_exist_ok=True)
+    # Ensure directories are also writable
+    for root, dirs, files in os.walk(dst):
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            current_mode = os.stat(dir_path).st_mode
+            os.chmod(dir_path, current_mode | 0o200)
+
+
 class ProxyExtrasDBManager:
     @staticmethod
     def _get_prisma_dir() -> str:
@@ -75,12 +105,12 @@ class ProxyExtrasDBManager:
                     src_path = os.path.join(pkg_migrations_dir, item)
                     dst_path = os.path.join(custom_migrations_dir, item)
                     if os.path.isdir(src_path):
-                        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                        _copytree_with_permissions(src_path, dst_path)
                     else:
-                        shutil.copy2(src_path, dst_path)
+                        _copy_with_permissions(src_path, dst_path)
             else:
                 # If directory doesn't exist, create it and copy everything
-                shutil.copytree(pkg_migrations_dir, custom_migrations_dir)
+                _copytree_with_permissions(pkg_migrations_dir, custom_migrations_dir)
             return custom_migrations_dir
 
         return pkg_migrations_dir
