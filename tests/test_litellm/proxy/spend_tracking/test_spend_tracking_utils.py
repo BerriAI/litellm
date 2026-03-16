@@ -1469,3 +1469,101 @@ class TestIsMasterKey:
         master = "sk-master-key-123"
         hashed = hash_token(master)
         assert _is_master_key(api_key=hashed, _master_key=master) is True
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_api_base_populated_for_embedding_calls():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/23768
+
+    When call_type is 'aembedding', api_base must be populated in the
+    SpendLogsPayload so that per-endpoint monitoring dashboards (e.g. Grafana)
+    can break down embedding usage by Azure OpenAI endpoint.
+
+    Previously, the Azure and OpenAI embedding code paths did not pass
+    api_base in the logging_obj.pre_call() additional_args, causing
+    litellm_params["api_base"] to remain empty and the resulting
+    SpendLogs row to have an empty api_base column.
+    """
+    test_api_base = "https://my-azure-endpoint.openai.azure.com/"
+
+    kwargs = {
+        "model": "azure/text-embedding-3-large",
+        "call_type": "aembedding",
+        "custom_llm_provider": "azure",
+        "litellm_params": {
+            "api_base": test_api_base,
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "user_api_key_team_id": "test_team",
+                "model_group": "text-embedding-3-large",
+                "model_info": {"id": "model-id-123"},
+            },
+        },
+    }
+
+    response_obj = {
+        "id": "embd-test-123",
+        "object": "list",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+        "model": "text-embedding-3-large",
+        "usage": {
+            "prompt_tokens": 10,
+            "total_tokens": 10,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert payload["api_base"] == test_api_base, (
+        f"BUG: api_base is '{payload['api_base']}' but expected '{test_api_base}'. "
+        "Embedding calls must have api_base populated in SpendLogs for "
+        "per-endpoint monitoring to work."
+    )
+    assert payload["call_type"] == "aembedding"
+    assert payload["model_group"] == "text-embedding-3-large"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_api_base_empty_when_not_in_litellm_params():
+    """
+    Verify that when api_base is genuinely not available (e.g. some providers),
+    the payload gracefully defaults to empty string rather than raising.
+    """
+    kwargs = {
+        "model": "text-embedding-3-large",
+        "call_type": "aembedding",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            },
+        },
+    }
+
+    response_obj = {
+        "id": "embd-test-456",
+        "usage": {"prompt_tokens": 5, "total_tokens": 5},
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Should not raise; api_base should default to empty string
+    assert payload["api_base"] == ""

@@ -1270,7 +1270,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=stringified_response,
             )
             returned_response: EmbeddingResponse = convert_to_model_response_object(
@@ -1285,7 +1285,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=str(e),
             )
             raise e
@@ -1294,7 +1294,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=str(e),
             )
             status_code = getattr(e, "status_code", 500)
