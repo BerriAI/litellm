@@ -2406,7 +2406,7 @@ async def delete_key_fn(
         num_keys_to_be_deleted = 0
         deleted_keys = []
         if data.keys:
-            number_deleted_keys, _keys_being_deleted = await delete_verification_tokens(
+            deletion_response, _keys_being_deleted = await delete_verification_tokens(
                 tokens=data.keys,
                 user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
@@ -2415,7 +2415,7 @@ async def delete_key_fn(
             num_keys_to_be_deleted = len(data.keys)
             deleted_keys = data.keys
         elif data.key_aliases:
-            number_deleted_keys, _keys_being_deleted = await delete_key_aliases(
+            deletion_response, _keys_being_deleted = await delete_key_aliases(
                 key_aliases=data.key_aliases,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -2427,22 +2427,24 @@ async def delete_key_fn(
         else:
             raise ValueError("Invalid request type")
 
-        if number_deleted_keys is None:
+        if deletion_response is None:
             raise ProxyException(
                 message="Failed to delete keys got None response from delete_verification_token",
                 type=ProxyErrorTypes.internal_server_error,
                 param="keys",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        verbose_proxy_logger.debug(f"/key/delete - deleted_keys={number_deleted_keys}")
+        verbose_proxy_logger.debug(
+            f"/key/delete - deletion_response={deletion_response}"
+        )
 
-        try:
-            assert num_keys_to_be_deleted == len(deleted_keys)
-        except Exception:
+        actually_deleted = deletion_response.get("deleted_keys", [])
+        failed_tokens = deletion_response.get("failed_tokens", [])
+        if len(actually_deleted) != num_keys_to_be_deleted:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={num_keys_to_be_deleted}, Deleted keys ={number_deleted_keys}"
+                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={num_keys_to_be_deleted}, Deleted keys={len(actually_deleted)}, Failed tokens={failed_tokens}"
                 },
             )
 
@@ -2456,7 +2458,7 @@ async def delete_key_fn(
                 keys_being_deleted=_keys_being_deleted,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
-                response=number_deleted_keys,
+                response=deletion_response,
             )
         )
 
@@ -3185,7 +3187,14 @@ def _transform_verification_tokens_to_deleted_records(
     deleted_at = datetime.now(timezone.utc)
     records = []
     for key in keys:
-        key_payload = key.model_dump()
+        # Convert to dict (Prisma models may not have model_dump; support Pydantic v1/v2)
+        try:
+            key_payload = key.model_dump()
+        except Exception:
+            try:
+                key_payload = key.dict()
+            except Exception:
+                key_payload = dict(key)
         deleted_record = LiteLLM_DeletedVerificationToken(
             **key_payload,
             deleted_at=deleted_at,
