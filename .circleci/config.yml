@@ -564,7 +564,6 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
-            pip install "pytest-cov==5.0.0"
             pip install "pytest-xdist==3.6.1"
       - save_cache:
           paths:
@@ -583,24 +582,12 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/proxy_admin_ui_tests -x --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2
+            python -m pytest -v tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
-
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml auth_ui_unit_tests_coverage.xml
-            mv .coverage auth_ui_unit_tests_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
-
-      - persist_to_workspace:
-          root: .
-          paths:
-            - auth_ui_unit_tests_coverage.xml
-            - auth_ui_unit_tests_coverage
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
@@ -609,10 +596,14 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
     parallelism: 4
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-router-testing-deps-{{ checksum "requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -620,13 +611,17 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.22.0"
-            pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
+      - save_cache:
+          paths:
+            - /home/circleci/.pyenv
+            - /home/circleci/.local
+          key: v1-router-testing-deps-{{ checksum "requirements.txt" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -640,28 +635,16 @@ jobs:
               --split-by=timings \
               --verbose \
               --command="xargs python -m pytest \
-                -vv \
-                --cov=litellm \
-                --cov-report=xml \
+                -v \
                 -k 'router' \
+                -n 4 \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 --timeout=300 --timeout_method=thread"
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_router_coverage.xml || true
-            mv .coverage litellm_router_coverage || true
       # Store test results
       - store_test_results:
           path: test-results
-
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_router_coverage.xml
-            - litellm_router_coverage
 
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
@@ -670,10 +653,14 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
 
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-router-unit-deps-{{ checksum "requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -681,12 +668,16 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.22.0"
-            pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
             pip install "pytest-xdist==3.6.1"
+      - save_cache:
+          paths:
+            - /home/circleci/.pyenv
+            - /home/circleci/.local
+          key: v1-router-unit-deps-{{ checksum "requirements.txt" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -694,26 +685,15 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s --junitxml=test-results/junit.xml --durations=5 -n 2
+            python -m pytest -v tests/router_unit_tests -x --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_router_unit_coverage.xml
-            mv .coverage litellm_router_unit_coverage
       # Store test results
       - store_test_results:
           path: test-results
-
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_router_unit_coverage.xml
-            - litellm_router_unit_coverage
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
-    resource_class: large
+    resource_class: medium
     working_directory: ~/project
     steps:
       - checkout
@@ -827,21 +807,11 @@ jobs:
             conda activate myenv
             pwd
             ls
-            python -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/proxy_security_tests -v -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_security_tests_coverage.xml
-            mv .coverage litellm_security_tests_coverage
       # Store test results
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_security_tests_coverage.xml
-            - litellm_security_tests_coverage
   # Split proxy unit tests into 3 jobs for faster execution and better debugging
   # test_key_generate_prisma runs separately without parallel execution to avoid event loop issues with logging worker
   litellm_proxy_unit_testing_key_generation:
@@ -957,7 +927,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: medium
+    resource_class: xlarge
     steps:
       - checkout
       - setup_google_dns
@@ -1043,20 +1013,10 @@ jobs:
             pwd
             ls
             # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
-            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part1.xml --durations=10 -n 2 --timeout=300 -vv --log-cli-level=INFO
+            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -v
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_proxy_unit_tests_part1_coverage.xml
-            mv .coverage litellm_proxy_unit_tests_part1_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_proxy_unit_tests_part1_coverage.xml
-            - litellm_proxy_unit_tests_part1_coverage
   litellm_proxy_unit_testing_part2:
     docker:
       - image: cimg/python:3.11
@@ -1064,7 +1024,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: large
+    resource_class: xlarge
     steps:
       - checkout
       - setup_google_dns
@@ -1149,20 +1109,10 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --cov=litellm --cov-report=xml --junitxml=test-results/junit-part2.xml --durations=10 -n 4 --timeout=300 -vv --log-cli-level=INFO
+            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -v
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_proxy_unit_tests_part2_coverage.xml
-            mv .coverage litellm_proxy_unit_tests_part2_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_proxy_unit_tests_part2_coverage.xml
-            - litellm_proxy_unit_tests_part2_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
       - image: cimg/python:3.13.1
@@ -1215,10 +1165,14 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
 
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-llm-translation-deps-{{ checksum "requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -1226,11 +1180,15 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
+      - save_cache:
+          paths:
+            - /home/circleci/.pyenv
+            - /home/circleci/.local
+          key: v1-llm-translation-deps-{{ checksum "requirements.txt" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1247,22 +1205,12 @@ jobs:
             for dir in "${IGNORE_DIRS[@]}"; do
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
-            python -m pytest -vv tests/llm_translation $IGNORE_ARGS --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+            python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 8 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml llm_translation_coverage.xml
-            mv .coverage llm_translation_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - llm_translation_coverage.xml
-            - llm_translation_coverage
   realtime_translation_testing:
     docker:
       - image: cimg/python:3.11
@@ -1496,10 +1444,14 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: large
 
     steps:
       - checkout
       - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-llm-responses-deps-{{ checksum "requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -1507,32 +1459,26 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pytest-xdist==3.6.1"
+      - save_cache:
+          paths:
+            - /home/circleci/.pyenv
+            - /home/circleci/.local
+          key: v1-llm-responses-deps-{{ checksum "requirements.txt" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml llm_responses_api_coverage.xml
-            mv .coverage llm_responses_api_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - llm_responses_api_coverage.xml
-            - llm_responses_api_coverage
   ocr_testing:
     docker:
       - image: cimg/python:3.11
@@ -3770,7 +3716,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage realtime_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage langfuse_coverage caching_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -4016,7 +3962,7 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-    resource_class: large
+    resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
@@ -4039,14 +3985,8 @@ jobs:
           command: |
             cd ui/litellm-dashboard
 
-            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
             CI=true npm run test -- --run \
-              --pool forks --poolOptions.forks.maxForks=5 \
-              --coverage \
-              --coverage.provider=v8 \
-              --coverage.reporter=lcov \
-              --coverage.reporter=html \
-              --coverage.reportsDirectory=coverage/html
+              --pool forks --poolOptions.forks.maxForks=8
 
   build_docker_database_image:
     machine:
@@ -4658,13 +4598,11 @@ workflows:
                 - /litellm_.*/
       - upload-coverage:
           requires:
-            - llm_translation_testing
             - realtime_translation_testing
             - mcp_testing
             - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
-            - llm_responses_api_testing
             - ocr_testing
             - search_testing
             - litellm_mapped_tests_proxy_part1
@@ -4681,18 +4619,12 @@ workflows:
             - image_gen_testing
             - logging_testing
             - audio_testing
-            - litellm_router_testing
-            - litellm_router_unit_testing
             - caching_unit_tests
             - litellm_proxy_unit_testing_key_generation
-            - litellm_proxy_unit_testing_part1
-            - litellm_proxy_unit_testing_part2
-            - litellm_security_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
             - litellm_assistants_api_testing
-            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
