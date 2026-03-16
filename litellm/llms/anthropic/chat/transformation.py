@@ -195,6 +195,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "speed",
             "context_management",
             "cache_control",
+            "service_tier",
         ]
 
         if (
@@ -1035,6 +1036,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
+            elif param == "service_tier" and isinstance(value, str):
+                # Forward Anthropic Priority Tier selection ("auto" or "standard_only")
+                # https://platform.claude.com/docs/en/api/service-tiers
+                optional_params["service_tier"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
