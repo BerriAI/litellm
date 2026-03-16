@@ -16,6 +16,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports GPT-5.3-Codex on Day 0, including support for the new assistant `phase` metadata on Responses API output items.
 
+{/* truncate */}
+
 ## Why `phase` matters for GPT-5.3-Codex
 
 `phase` appears on assistant output items and helps distinguish preamble/commentary turns from final closeout responses.

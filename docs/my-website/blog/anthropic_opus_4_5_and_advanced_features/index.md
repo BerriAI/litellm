@@ -16,6 +16,8 @@ import TabItem from '@theme/TabItem';
 
 This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced features now available in LiteLLM: Tool Search, Programmatic Tool Calling, Tool Input Examples, and the Effort Parameter.
 
+{/* truncate */}
+
 ---
 
 | Feature | Supported Models |

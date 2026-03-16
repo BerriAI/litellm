@@ -16,6 +16,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports MiniMax-M2.5 on Day 0. Use it across OpenAI-compatible and Anthropic-compatible APIs through the LiteLLM AI Gateway.
 
+{/* truncate */}
+
 ## Supported Models
 
 LiteLLM supports the following MiniMax models:

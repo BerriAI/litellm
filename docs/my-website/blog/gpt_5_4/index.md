@@ -16,6 +16,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports fully GPT-5.4!
 
+{/* truncate */}
+
 ## Docker Image
 
 ```bash

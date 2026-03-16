@@ -23,6 +23,8 @@ A change to improve Redis connection pool cleanup introduced a regression that c
 
 **Impact:** Any proxy instance that hit the cache TTL (default 10 minutes) or capacity limit (200 entries) would have its httpx clients closed out from under it, causing requests to LLM providers to fail with connection errors.
 
+{/* truncate */}
+
 ---
 
 ## Background

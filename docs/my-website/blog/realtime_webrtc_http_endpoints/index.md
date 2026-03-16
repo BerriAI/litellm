@@ -15,6 +15,8 @@ import WebRTCTester from '@site/src/components/WebRTCTester';
 
 Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management.
 
+{/* truncate */}
+
 ## How it works
 
 ![WebRTC flow: Browser, LiteLLM Proxy, and OpenAI/Azure](../../img/webrtc_flow.png)
@@ -107,4 +109,3 @@ A: Set the correct `api_version` in `litellm_params` (or via the `AZURE_API_VERS
 
 **Q: What if I get no audio?**  
 A: Make sure you grant microphone permission, ensure `pc.ontrack` assigns the audio element with `autoplay` enabled, check your network/firewall for WebRTC traffic, and inspect the browser console for ICE or SDP errors.
-

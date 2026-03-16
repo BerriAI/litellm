@@ -20,6 +20,8 @@ This guide covers common questions and best practices for using `gemini-3-pro-pr
 
 :::
 
+{/* truncate */}
+
 ## Quick Start
 
 <Tabs>
