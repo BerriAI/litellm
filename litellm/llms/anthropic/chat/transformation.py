@@ -1419,6 +1419,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
+        optional_params.pop("vector_store_ids", None)
+        optional_params.pop("vector_store_id", None)
 
         data = {
             "model": model,

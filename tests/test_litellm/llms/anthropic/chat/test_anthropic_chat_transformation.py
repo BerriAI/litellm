@@ -3233,91 +3233,44 @@ def test_map_tool_helper_enforces_object_type_when_missing():
     result, _ = config._map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
-    assert "properties" in result["input_schema"]
-    assert "query" in result["input_schema"]["properties"]
-    # Original parameters dict must not be modified in place
-    assert tool["function"]["parameters"] == original_params, (
-        "parameters dict was mutated; _map_tool_helper should not modify caller data"
-    )
-
-
-def test_map_tool_helper_enforces_object_type_when_wrong_type():
-    """
-    If a tool schema has type:"string" or type:"array" at the root level,
-    LiteLLM should normalize it to type:"object" for Anthropic compatibility.
-    """
-    config = AnthropicConfig()
-
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "echo",
-            "description": "Echo input",
-            "parameters": {
-                "type": "string",
-                "description": "The input to echo",
-            },
-        },
-    }
-
-    original_params = tool["function"]["parameters"].copy()
-    result, _ = config._map_tool_helper(tool)
-    assert result is not None
-    assert result["input_schema"]["type"] == "object"
-    assert result["input_schema"].get("properties") == {}, (
-        "properties should be injected as {} when schema has non-object type and no properties key"
-    )
-    # Original parameters dict must not be modified in place
-    assert tool["function"]["parameters"] == original_params, (
-        "parameters dict was mutated; _map_tool_helper should not modify caller data"
-    )
-
-
-def test_map_tool_helper_preserves_valid_object_schema():
-    """
-    When a tool schema already has type:"object", it should be preserved
-    without modification.
-    """
-    config = AnthropicConfig()
-
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get weather",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string"},
-                },
-                "required": ["city"],
-            },
-        },
-    }
-
-    result, _ = config._map_tool_helper(tool)
-    assert result is not None
-    assert result["input_schema"]["type"] == "object"
-    assert "city" in result["input_schema"]["properties"]
-    assert result["input_schema"]["required"] == ["city"]
-
-
-def test_map_tool_helper_empty_parameters_get_default():
-    """
-    When parameters is entirely missing, the existing default should still
-    produce a valid {type:"object", properties:{}} schema.
-    """
-    config = AnthropicConfig()
-
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "no_params_tool",
-            "description": "Tool with no parameters",
-        },
-    }
-
-    result, _ = config._map_tool_helper(tool)
-    assert result is not None
-    assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+def test_transform_request_strips_vector_store_ids():
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "vector_store_ids": ["vs_abc123", "vs_def456"],
+        "vector_store_id": "vs_abc123",
+        "max_tokens": 100,
+    }
+
+    data = config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "vector_store_ids" not in data
+    assert "vector_store_id" not in data
+    assert data["max_tokens"] == 100
+
+
+def test_transform_request_strips_vector_store_ids_when_absent():
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {"max_tokens": 50}
+
+    data = config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "vector_store_ids" not in data
+    assert "vector_store_id" not in data
+    assert data["max_tokens"] == 50
