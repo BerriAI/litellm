@@ -131,6 +131,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return None
 
     def _is_reasoning_end(self, chunk):
+        # Guard against empty choices
+        if not chunk.choices:
+            return True
         delta = chunk.choices[0].delta
 
         # if this indicates reasoning content, don't consider reasoning ended
@@ -578,13 +581,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
+        # Guard against empty choices
+        if not litellm_complete_object.choices:
+            text = ""
+        else:
+            text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
+
         return OutputTextDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
             item_id=self._cached_item_id,
             output_index=0,
             content_index=0,
-            text=getattr(litellm_complete_object.choices[0].message, "content", "")  # type: ignore
-            or "",
+            text=text,
         )
 
     def create_output_content_part_done_event(
@@ -593,9 +601,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
-        text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
-        annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)  # type: ignore
+        # Guard against empty choices
+        if not litellm_complete_object.choices:
+            text = ""
+            reasoning_content = ""
+            annotations = None
+        else:
+            text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
+            reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
+            annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)  # type: ignore
 
         part: Optional[PART_UNION_TYPES] = None
         if reasoning_content:
@@ -629,8 +643,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
-        text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
-        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore
+        # Guard against empty choices
+        if not self.litellm_model_response.choices:
+            text = ""
+            annotations = None
+        else:
+            text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
+            annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore
 
         response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations
@@ -772,6 +791,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
+            return
+        # Guard against empty choices
+        if not chunk.choices:
             return
         delta = chunk.choices[0].delta
 
