@@ -71,27 +71,9 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
             original_state[attr] = getattr(litellm, attr)
 
     # ---- Reset to true defaults before the test ----
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
-    if worker_id is None:
-        # Single-process mode: reload for full reset
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-        asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-        importlib.reload(litellm)
-    else:
-        # xdist mode: reset globals without reload
-        for attr in (
-            "callbacks",
-            "success_callback",
-            "failure_callback",
-            "_async_success_callback",
-            "_async_failure_callback",
-        ):
-            if hasattr(litellm, attr):
-                setattr(litellm, attr, [])
-
-        for attr, default_val in _SCALAR_DEFAULTS.items():
-            if hasattr(litellm, attr):
-                setattr(litellm, attr, default_val)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
 
     # Set the event loop from the fixture
     asyncio.set_event_loop(event_loop)
