@@ -2,7 +2,7 @@ import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
+import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -113,6 +113,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     user_role: string;
     organization_ids?: string[];
     organizations?: string[];
+    send_invite_email?: boolean;
   }) => {
     try {
       NotificationsManager.info("Making API Call");
@@ -262,6 +263,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
             <Input />
+          </Form.Item>
+          <Form.Item
+            label={
+              <span>
+                Send Invite Email{" "}
+                <Tooltip title="Send an invitation email to the user with login instructions. Requires email settings to be configured.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="send_invite_email"
+            valuePropName="checked"
+            initialValue={false}
+          >
+            <Switch />
           </Form.Item>
           <Form.Item
             label={
