@@ -158,6 +158,9 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        if api_key and api_key.startswith("os.environ/"):
+            dynamic_api_key = get_secret_str(api_key)
+
         # When custom_llm_provider is already "openrouter" and model has the
         # "openrouter/" prefix (from the prepend above or from config), strip
         # it for non-native models so the OpenRouter API receives the correct
@@ -173,9 +176,6 @@ def get_llm_provider(  # noqa: PLR0915
                 # Non-native: e.g. "anthropic/claude-..." — strip prefix
                 model = stripped
             return model, custom_llm_provider, dynamic_api_key, api_base
-
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret_str(api_key)
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
