@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | Provider | [Microsoft Presidio](https://github.com/microsoft/presidio/) |
 | Supported Entity Types | All Presidio Entity Types |
 | Supported Actions | `MASK`, `BLOCK` |
-| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only`, `pre_mcp_call` |
+| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
 | Language Support | Configurable via `presidio_language` parameter (supports multiple languages including English, Spanish, German, etc.) |
 
 ## Deployment options
@@ -256,7 +256,7 @@ guardrails:
   - guardrail_name: "presidio-mask-guard"
     litellm_params:
       guardrail: presidio
-      mode: "pre_mcp_call"  # Use this mode for MCP requests
+      mode: "pre_call"  # Use pre_call for both LLM and MCP requests
       presidio_filter_scope: both  # input | output | both, optional
       presidio_score_thresholds: # Optional
         ALL: 0.7            # Default confidence threshold applied to all entities
@@ -373,10 +373,13 @@ The exception includes the entity type that was blocked (`CREDIT_CARD` in this c
 
 The Presidio guardrail supports the following modes:
 
-- `pre_call`: Run **before** LLM call, on **input**
+- `pre_call`: Run **before** LLM call, on **input**. This mode also works for MCP requests.
 - `post_call`: Run **after** LLM call, on **input & output**
 - `logging_only`: Run **after** LLM call, only apply PII Masking before logging to Langfuse, etc. Not on the actual llm api request / response
-- `pre_mcp_call`: Run **before** MCP call, on **input**. Use this mode when you want to apply PII masking/blocking for MCP requests
+
+:::warning Deprecated: `pre_mcp_call` mode
+The `pre_mcp_call` mode is **deprecated**. Use `pre_call` instead, which now works for both LLM calls and MCP tool calls.
+:::
 
 ### MCP Usage Example
 
@@ -387,7 +390,7 @@ guardrails:
   - guardrail_name: "presidio-mcp-guard"
     litellm_params:
       guardrail: presidio
-      mode: "pre_mcp_call"
+      mode: "pre_call"  # Use pre_call for MCP requests (pre_mcp_call is deprecated)
       presidio_filter_scope: both  # input | output | both
       presidio_score_thresholds:
         CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+

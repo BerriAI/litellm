@@ -104,8 +104,10 @@ On success, the guardrail name appears in the `x-litellm-applied-guardrails` res
 | `pre_call` | Before LLM call | Request input |
 | `during_call` | Parallel with LLM call | Request input |
 | `post_call` | After LLM call | Response output |
-| `pre_mcp_call` | Before MCP tool execution | MCP tool input |
-| `during_mcp_call` | Parallel with MCP tool execution | MCP tool input |
+
+:::warning Deprecated MCP Modes
+The MCP-specific modes `pre_mcp_call` and `during_mcp_call` are **deprecated**. Use `pre_call` and `post_call` instead, which now work for both LLM calls and MCP tool calls.
+:::
 
 
 ### Configuration Parameters
@@ -290,5 +292,5 @@ Tool invocations are sent to AIRS as structured `tool_event` payloads containing
 ### Current Limitations
 
 - **No post-MCP response scanning.** Actual post-MCP tool-result scanning is not supported because there is no `post_mcp_call` hook in the framework. Response-side MCP events are only scanned when they appear as regular `tool_calls` in the LLM response.
-- **Guardrail selection not inherited by MCP sub-calls.** With `default_on: false`, MCP request-side child-call scans can be skipped because the parent request's guardrail selection is not propagated to the synthetic MCP payload. Workaround: use a dedicated guardrail with `mode: pre_mcp_call` and `default_on: true`.
+- **Guardrail selection not inherited by MCP sub-calls.** With `default_on: false`, MCP request-side child-call scans can be skipped because the parent request's guardrail selection is not propagated to the synthetic MCP payload. Workaround: use a dedicated guardrail with `mode: pre_call` and `default_on: true`.
 - **MCP transaction correlation.** MCP tool scans use the parent `litellm_call_id` when available; otherwise a fallback ID is synthesized and will not be grouped with the parent request in AIRS dashboards.

@@ -4,14 +4,24 @@ import Image from '@theme/IdealImage';
 
 # MCP Guardrails
 
-LiteLLM supports applying guardrails to MCP tool calls to ensure security and compliance. You can configure guardrails to run before or during MCP calls to validate inputs and block or mask sensitive information.
+LiteLLM supports applying guardrails to MCP tool calls to ensure security and compliance. You can configure guardrails to run before or after MCP calls to validate inputs and block or mask sensitive information.
 
-### Supported MCP Guardrail Modes
+:::warning Deprecated: `pre_mcp_call` and `during_mcp_call` modes
+The MCP-specific guardrail modes `pre_mcp_call` and `during_mcp_call` are **deprecated**. 
 
-MCP guardrails support the following modes:
+We are standardizing on the general-purpose modes:
+- Use `pre_call` instead of `pre_mcp_call`
+- Use `post_call` instead of `during_mcp_call`
 
-- `pre_mcp_call`: Run **before** MCP call, on **input**. Use this mode when you want to apply validation/masking/blocking for MCP requests
-- `during_mcp_call`: Run **during** MCP call execution. Use this mode for real-time monitoring and intervention
+The deprecated modes will continue to work for backwards compatibility, but we recommend migrating to `pre_call` and `post_call` for all new configurations.
+:::
+
+### Supported Guardrail Modes
+
+Use the standard guardrail modes for MCP tool calls:
+
+- `pre_call`: Run **before** the call, on **input**. Use this mode when you want to apply validation/masking/blocking for MCP requests
+- `post_call`: Run **after** the call, on **output**. Use this mode for scanning responses
 
 ### Configuration Examples
 
@@ -22,7 +32,7 @@ guardrails:
   - guardrail_name: "mcp-input-validation"
     litellm_params:
       guardrail: presidio  # or other supported guardrails
-      mode: "pre_mcp_call" # or during_mcp_call
+      mode: "pre_call"  # Recommended: use pre_call instead of pre_mcp_call
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses
