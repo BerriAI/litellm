@@ -325,20 +325,26 @@ class ProxyExtrasDBManager:
             logger.info(f"prisma db execute stdout: {result.stdout}")
             logger.info("✅ Migration diff applied successfully")
         except subprocess.CalledProcessError as e:
-            logger.error(
-                f"Failed to apply migration diff: {e.stderr}. "
-                f"Will NOT mark migrations as applied."
-            )
-            raise RuntimeError(
-                f"Migration diff application failed. Migrations will not be marked as applied. "
-                f"Please check the database state and apply the diff manually. Error: {e.stderr}"
-            ) from e
+            if mark_all_applied:
+                logger.error(
+                    f"Failed to apply migration diff: {e.stderr}. "
+                    f"Will NOT mark migrations as applied."
+                )
+                raise RuntimeError(
+                    f"Migration diff application failed. Migrations will not be marked as applied. "
+                    f"Please check the database state and apply the diff manually. Error: {e.stderr}"
+                ) from e
+            else:
+                logger.warning(f"Failed to apply migration diff: {e.stderr}")
         except subprocess.TimeoutExpired:
-            logger.error("Migration diff application timed out. Will NOT mark migrations as applied.")
-            raise RuntimeError(
-                "Migration diff application timed out. Migrations will not be marked as applied. "
-                "Please check the database state and apply the diff manually."
-            )
+            if mark_all_applied:
+                logger.error("Migration diff application timed out. Will NOT mark migrations as applied.")
+                raise RuntimeError(
+                    "Migration diff application timed out. Migrations will not be marked as applied. "
+                    "Please check the database state and apply the diff manually."
+                )
+            else:
+                logger.warning("Migration diff application timed out.")
 
         # 3. Mark all migrations as applied
         if not mark_all_applied:
