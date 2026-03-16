@@ -1267,6 +1267,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.model_call_details["response_headers"] = headers
             stringified_response = response.model_dump()
             ## LOGGING
+            # api_base included for consistency: post_call overwrites
+            # model_call_details["additional_args"] which some logging
+            # integrations read directly. The SpendLogs fix is in pre_call.
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
@@ -1368,6 +1371,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )  # type: ignore
 
             ## LOGGING
+            # api_base: consistency with pre_call; post_call only updates
+            # additional_args, not litellm_params (see aembedding comment).
             logging_obj.model_call_details["response_headers"] = headers
             logging_obj.post_call(
                 input=input,
