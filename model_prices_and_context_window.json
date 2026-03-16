@@ -16716,8 +16716,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.9e-07,
         "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_native_structured_output": true
+        "supports_vision": true
     },
     "google.gemma-3-27b-it": {
         "input_cost_per_token": 2.3e-07,
@@ -16728,8 +16727,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.8e-07,
         "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_native_structured_output": true
+        "supports_vision": true
     },
     "google.gemma-3-4b-it": {
         "input_cost_per_token": 4e-08,
@@ -16740,8 +16738,7 @@
         "mode": "chat",
         "output_cost_per_token": 8e-08,
         "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_native_structured_output": true
+        "supports_vision": true
     },
     "google_pse/search": {
         "input_cost_per_query": 0.005,
@@ -23089,8 +23086,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_native_structured_output": true
+        "supports_vision": true
     },
     "nvidia.nemotron-nano-9b-v2": {
         "input_cost_per_token": 6e-08,
@@ -23100,8 +23096,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.3e-07,
-        "supports_system_messages": true,
-        "supports_native_structured_output": true
+        "supports_system_messages": true
     },
     "nvidia.nemotron-nano-3-30b": {
         "input_cost_per_token": 6e-08,

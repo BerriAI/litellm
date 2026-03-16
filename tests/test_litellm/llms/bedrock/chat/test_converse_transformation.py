@@ -2664,19 +2664,21 @@ def test_supports_native_structured_outputs():
     # Non-Anthropic models
     assert config._supports_native_structured_outputs("qwen.qwen3-235b-a22b-2507-v1:0")
     assert config._supports_native_structured_outputs("mistral.mistral-large-3-675b-instruct")
-    assert config._supports_native_structured_outputs("google.gemma-3-27b-it")
     assert config._supports_native_structured_outputs("minimax.minimax-m2")
     assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
-    assert config._supports_native_structured_outputs("nvidia.nemotron-nano-12b-v2")
+    assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
 
     # Unsupported models -- should fall back to tool-call approach
     assert not config._supports_native_structured_outputs("anthropic.claude-3-5-sonnet-20241022-v2:0")
     assert not config._supports_native_structured_outputs("anthropic.claude-sonnet-4-20250514-v1:0")
     assert not config._supports_native_structured_outputs("meta.llama3-3-70b-instruct-v1:0")
     assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
-    # Excluded despite AWS listing them: broken constrained decoding on Bedrock
+    # Excluded: broken constrained decoding on Bedrock
     assert not config._supports_native_structured_outputs("openai.gpt-oss-120b-1:0")
     assert not config._supports_native_structured_outputs("mistral.magistral-small-2509")
+    # Excluded: ignores schema or broken on Bedrock
+    assert not config._supports_native_structured_outputs("google.gemma-3-27b-it")
+    assert not config._supports_native_structured_outputs("nvidia.nemotron-nano-12b-v2")
 
 
 def test_create_output_config_for_response_format():
