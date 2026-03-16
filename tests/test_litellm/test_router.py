@@ -643,7 +643,13 @@ def test_arouter_responses_api_bridge():
     ## CONFIRM MODEL NAME IS STRIPPED
     client = HTTPHandler()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"id": "resp_test", "object": "response", "status": "completed", "output": []}
+    mock_response.text = '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
             result = router.completion(
                 model="[IP-approved] o3-pro",
@@ -2733,6 +2739,81 @@ def test_credential_name_not_injected_when_absent():
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"] == ["A.101"]
+
+
+def test_update_kwargs_with_deployment_model_info_in_litellm_metadata():
+    """For generic_api_call, model_info with pricing must go to litellm_metadata.
+
+    Routes like /messages and /responses use generic_api_call which stores
+    model_info under litellm_metadata. Regression test for #23185.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+    )
+
+    assert "litellm_metadata" in kwargs
+    model_info = kwargs["litellm_metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_model_info_in_metadata():
+    """For acompletion (function_name=None), model_info goes to metadata.
+
+    /chat/completions uses acompletion which stores model_info under metadata.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name=None
+    )
+
+    assert "metadata" in kwargs
+    model_info = kwargs["metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
 
 
 def test_combine_fallback_usage():

@@ -148,6 +148,142 @@ def test_use_custom_pricing_for_model():
     assert use_custom_pricing_for_model(litellm_params) == True
 
 
+def test_use_custom_pricing_for_model_via_litellm_metadata():
+    """Pricing in litellm_metadata.model_info must be detected.
+
+    Generic API call routes (/messages, /responses) store model_info
+    under litellm_metadata, not metadata. Regression test for #23185.
+    """
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {
+                "id": "claude-sonnet-4-custom",
+                "input_cost_per_token": 0.0003,
+                "output_cost_per_token": 0.0015,
+            },
+        },
+    }
+    assert use_custom_pricing_for_model(litellm_params) is True
+
+
+def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
+    """Should return False when litellm_metadata.model_info has no pricing keys."""
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {"id": "some-id", "db_model": False},
+        },
+    }
+    assert use_custom_pricing_for_model(litellm_params) is False
+
+
+class TestUpdateFromKwargs:
+    """Tests for the update_from_kwargs convenience wrapper."""
+
+    def test_extracts_metadata_from_kwargs(self, logging_obj):
+        metadata = {"user_api_key": "sk-test", "model_info": {"id": "abc"}}
+        kwargs = {"metadata": metadata, "other_key": "ignored"}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"litellm_call_id": "call-1"},
+        )
+
+        assert logging_obj.litellm_params["metadata"] == metadata
+        assert logging_obj.litellm_params["litellm_call_id"] == "call-1"
+
+    def test_extracts_litellm_metadata_from_kwargs(self, logging_obj):
+        lm_meta = {
+            "model_info": {
+                "id": "deploy-1",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+        kwargs = {"litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"litellm_call_id": "call-2"},
+        )
+
+        assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
+        assert logging_obj.litellm_params["litellm_call_id"] == "call-2"
+
+    def test_backfills_metadata_from_litellm_metadata(self, logging_obj):
+        """When only litellm_metadata is present, metadata should be backfilled."""
+        lm_meta = {"model_info": {"id": "deploy-1"}}
+        kwargs = {"litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        assert logging_obj.litellm_params["metadata"] == lm_meta
+
+    def test_no_backfill_when_metadata_already_present(self, logging_obj):
+        metadata = {"user_api_key": "sk-real"}
+        lm_meta = {"model_info": {"id": "deploy-1"}}
+        kwargs = {"metadata": metadata, "litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        assert logging_obj.litellm_params["metadata"] == metadata
+        assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
+
+    def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
+        """Explicit litellm_params from the caller should override auto-extracted values."""
+        kwargs = {"metadata": {"from_kwargs": True}}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
+        )
+
+        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
+
+    def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
+        """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            use_custom_pricing_for_model,
+        )
+
+        lm_meta = {
+            "model_info": {
+                "id": "deploy-custom",
+                "input_cost_per_token": 0.005,
+                "output_cost_per_token": 0.015,
+            }
+        }
+        kwargs = {"litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        assert use_custom_pricing_for_model(logging_obj.litellm_params) is True
+
+    def test_additional_params_forwarded(self, logging_obj):
+        kwargs = {"metadata": {}}
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            model="gpt-5",
+            user="test-user",
+            optional_params={"temperature": 0.7},
+            custom_llm_provider="openai",
+        )
+
+        assert logging_obj.model == "gpt-5"
+        assert logging_obj.user == "test-user"
+        assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+    def test_empty_kwargs_no_error(self, logging_obj):
+        logging_obj.update_from_kwargs(
+            kwargs={},
+            litellm_params={"litellm_call_id": "call-empty"},
+        )
+        assert logging_obj.litellm_params["litellm_call_id"] == "call-empty"
+
+
 def test_logging_prevent_double_logging(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.

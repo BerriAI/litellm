@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
@@ -771,7 +772,15 @@ class LiteLLMAnthropicMessagesAdapter:
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+
         for tool in tools:
+            # Check if this is an Anthropic-native tool that should be kept as-is
+            tool_type = tool.get("type", "")
+            if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
+                # Keep Anthropic-native tools in their original format
+                new_tools.append(tool)  # type: ignore[arg-type]
+                continue
+            
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 

@@ -45,9 +45,15 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
 
   const hasCostBreakdown = costBreakdown?.input_cost !== undefined || costBreakdown?.output_cost !== undefined;
+  const hasAdditionalCosts =
+    costBreakdown?.additional_costs &&
+    Object.entries(costBreakdown.additional_costs).some(
+      ([, value]) => value != null && value !== 0
+    );
   const hasMeaningfulData =
     hasCostBreakdown ||
     hasTokenCounts ||
+    hasAdditionalCosts ||
     (costBreakdown &&
       ((costBreakdown.discount_percent !== undefined && costBreakdown.discount_percent !== 0) ||
         (costBreakdown.discount_amount !== undefined && costBreakdown.discount_amount !== 0) ||
@@ -127,17 +133,15 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   <span className="text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
               )}
-              {/* Additional Costs (free-form) */}
-              {costBreakdown?.additional_costs && Object.keys(costBreakdown.additional_costs).length > 0 && (
-                <>
-                  {Object.entries(costBreakdown.additional_costs).map(([key, value]) => (
+              {costBreakdown?.additional_costs &&
+                Object.entries(costBreakdown.additional_costs)
+                  .filter(([, value]) => value != null && value !== 0)
+                  .map(([key, value]) => (
                     <div key={key} className="flex text-sm">
                       <span className="text-gray-600 font-medium w-1/3">{key}:</span>
                       <span className="text-gray-900">{formatCost(value)}</span>
                     </div>
                   ))}
-                </>
-              )}
             </div>
 
             {/* Subtotal / Original Cost - hide when cached since it would be $0 */}

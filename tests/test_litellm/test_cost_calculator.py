@@ -332,6 +332,62 @@ def test_custom_pricing_with_router_model_id():
     assert model_info["cache_read_input_token_cost"] == 0.0000006
 
 
+def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
+    """When custom pricing is in litellm_metadata.model_info,
+    use_custom_pricing_for_model should return True and
+    _select_model_name_for_cost_calc should use router_model_id.
+
+    This tests the full chain that was broken for /messages and /responses
+    endpoints. Regression test for #23185.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    custom_model_id = "claude-sonnet-4-custom-pricing-test"
+    custom_pricing_info = {
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+        "max_tokens": 8192,
+        "litellm_provider": "anthropic",
+    }
+    litellm.register_model(model_cost={custom_model_id: custom_pricing_info})
+
+    litellm_params = {
+        "litellm_metadata": {
+            "model_info": {
+                "id": custom_model_id,
+                "input_cost_per_token": 0.0003,
+                "output_cost_per_token": 0.0015,
+            },
+        },
+    }
+
+    custom_pricing = use_custom_pricing_for_model(litellm_params)
+    assert custom_pricing is True
+
+    # _select_model_name_for_cost_calc appends provider prefix to the
+    # selected router_model_id, so the result is "anthropic/<model_id>"
+    selected_model = _select_model_name_for_cost_calc(
+        model="anthropic/claude-sonnet-4-20250514",
+        completion_response=None,
+        custom_pricing=custom_pricing,
+        custom_llm_provider="anthropic",
+        router_model_id=custom_model_id,
+    )
+    assert selected_model is not None
+    assert custom_model_id in selected_model
+
+    # Without custom_pricing, the router_model_id is NOT selected
+    selected_model_no_custom = _select_model_name_for_cost_calc(
+        model="anthropic/claude-sonnet-4-20250514",
+        completion_response=None,
+        custom_pricing=False,
+        custom_llm_provider="anthropic",
+        router_model_id=custom_model_id,
+    )
+    assert custom_model_id not in (selected_model_no_custom or "")
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -365,11 +421,7 @@ def test_azure_audio_output_cost_calculation():
     Audio tokens should be charged at output_cost_per_audio_token rate,
     not at the text token rate (output_cost_per_token).
     """
-    from litellm.types.utils import (
-        Choices,
-        CompletionTokensDetailsWrapper,
-        Message,
-    )
+    from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -471,11 +523,7 @@ def test_default_image_cost_calculator(monkeypatch):
 
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
-    from litellm.types.utils import (
-        Choices,
-        Message,
-        Usage,
-    )
+    from litellm.types.utils import Choices, Message, Usage
 
     litellm_model_response = ModelResponse(
         id="chatcmpl-cc5638bc-fdfe-48e4-8884-57c8f4fb7c63",
@@ -896,10 +944,7 @@ def test_azure_ai_cache_cost_calculation():
     applied correctly.
     """
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-    from litellm.types.utils import (
-        PromptTokensDetailsWrapper,
-        Usage,
-    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

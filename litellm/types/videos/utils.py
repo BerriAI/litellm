@@ -12,6 +12,26 @@ from litellm.types.utils import SpecialEnums
 from litellm.types.videos.main import DecodedVideoId
 
 VIDEO_ID_PREFIX = "video_"
+CHARACTER_ID_PREFIX = "character_"
+CHARACTER_ID_TEMPLATE = "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
+
+
+class DecodedCharacterId(dict):
+    """Structure representing a decoded character ID."""
+
+    custom_llm_provider: Optional[str]
+    model_id: Optional[str]
+    character_id: str
+
+
+def _add_base64_padding(value: str) -> str:
+    """
+    Add missing base64 padding when IDs are copied without trailing '=' chars.
+    """
+    missing_padding = len(value) % 4
+    if missing_padding:
+        value += "=" * (4 - missing_padding)
+    return value
 
 
 def encode_video_id_with_provider(
@@ -59,6 +79,7 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
 
     try:
         cleaned_id = encoded_video_id.replace(VIDEO_ID_PREFIX, "")
+        cleaned_id = _add_base64_padding(cleaned_id)
         decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
 
         if ";" not in decoded_id:
@@ -103,3 +124,86 @@ def extract_original_video_id(encoded_video_id: str) -> str:
     """Extract original video ID without encoding."""
     decoded = decode_video_id_with_provider(encoded_video_id)
     return decoded.get("video_id", encoded_video_id)
+
+
+def encode_character_id_with_provider(
+    character_id: str, provider: str, model_id: Optional[str] = None
+) -> str:
+    """Encode provider and model_id into character_id using base64."""
+    if not provider or not character_id:
+        return character_id
+
+    decoded = decode_character_id_with_provider(character_id)
+    if decoded.get("custom_llm_provider") is not None:
+        return character_id
+
+    assembled_id = CHARACTER_ID_TEMPLATE.format(provider, model_id or "", character_id)
+    base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode(
+        "utf-8"
+    )
+    return f"{CHARACTER_ID_PREFIX}{base64_encoded_id}"
+
+
+def decode_character_id_with_provider(encoded_character_id: str) -> DecodedCharacterId:
+    """Decode provider and model_id from encoded character_id."""
+    if not encoded_character_id:
+        return DecodedCharacterId(
+            custom_llm_provider=None,
+            model_id=None,
+            character_id=encoded_character_id,
+        )
+
+    if not encoded_character_id.startswith(CHARACTER_ID_PREFIX):
+        return DecodedCharacterId(
+            custom_llm_provider=None,
+            model_id=None,
+            character_id=encoded_character_id,
+        )
+
+    try:
+        cleaned_id = encoded_character_id.replace(CHARACTER_ID_PREFIX, "")
+        cleaned_id = _add_base64_padding(cleaned_id)
+        decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+
+        if ";" not in decoded_id:
+            return DecodedCharacterId(
+                custom_llm_provider=None,
+                model_id=None,
+                character_id=encoded_character_id,
+            )
+
+        parts = decoded_id.split(";")
+
+        custom_llm_provider = None
+        model_id = None
+        decoded_character_id = encoded_character_id
+
+        if len(parts) >= 3:
+            custom_llm_provider_part = parts[0]
+            model_id_part = parts[1]
+            character_id_part = parts[2]
+
+            custom_llm_provider = custom_llm_provider_part.replace(
+                "litellm:custom_llm_provider:", ""
+            )
+            model_id = model_id_part.replace("model_id:", "")
+            decoded_character_id = character_id_part.replace("character_id:", "")
+
+        return DecodedCharacterId(
+            custom_llm_provider=custom_llm_provider,
+            model_id=model_id,
+            character_id=decoded_character_id,
+        )
+    except Exception as e:
+        verbose_logger.debug(f"Error decoding character_id '{encoded_character_id}': {e}")
+        return DecodedCharacterId(
+            custom_llm_provider=None,
+            model_id=None,
+            character_id=encoded_character_id,
+        )
+
+
+def extract_original_character_id(encoded_character_id: str) -> str:
+    """Extract original character ID without encoding."""
+    decoded = decode_character_id_with_provider(encoded_character_id)
+    return decoded.get("character_id", encoded_character_id)

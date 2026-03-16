@@ -298,7 +298,8 @@ def ocr(
         verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=optional_params,
             litellm_params={

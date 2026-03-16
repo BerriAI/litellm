@@ -333,6 +333,10 @@ def test_parallel_function_call_anthropic_error_msg(
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
     """
+    # Ensure modify_params is False so UnsupportedParamsError is raised
+    # (other tests in this file set it to True and don't reset it)
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = False
     try:
         litellm.set_verbose = True
 
@@ -363,6 +367,8 @@ def test_parallel_function_call_anthropic_error_msg(
         print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 def test_parallel_function_call_stream():
