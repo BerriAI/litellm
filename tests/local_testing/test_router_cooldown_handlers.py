@@ -376,12 +376,7 @@ async def test_single_deployment_cooldown_with_allowed_fails():
             except litellm.Timeout:
                 pass
 
-        # Poll instead of fixed sleep — under xdist CPU contention 2s may
-        # not be enough for the async callback to fire.
-        for _ in range(100):  # up to 10s
-            if mock_client.call_count >= 1:
-                break
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(2)
 
         mock_client.assert_called_once()
 
@@ -431,12 +426,7 @@ async def test_single_deployment_cooldown_with_allowed_fail_policy():
             except litellm.Timeout:
                 pass
 
-        # Poll instead of fixed sleep — under xdist CPU contention 2s may
-        # not be enough for the async callback to fire.
-        for _ in range(100):  # up to 10s
-            if mock_client.call_count >= 1:
-                break
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(2)
 
         mock_client.assert_called_once()
 

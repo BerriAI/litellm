@@ -4,12 +4,6 @@
 # Pattern matches tests/test_litellm/conftest.py:
 #   - Function-scoped fixture saves/restores litellm globals (no reload)
 #   - Module-scoped fixture reloads only in single-process mode
-#
-# IMPORTANT: True defaults are captured at conftest import time (before any
-# test module can pollute them via module-level assignments like
-# `litellm.num_retries = 3`).  The function-scoped fixture resets globals to
-# these true defaults before every test, preventing cross-test contamination
-# under xdist where module reload is skipped.
 
 import importlib
 import os
@@ -22,40 +16,16 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-# ---------------------------------------------------------------------------
-# Capture TRUE defaults at conftest import time.  This runs before any test
-# module's top-level code (e.g. `litellm.num_retries = 3`) executes, so
-# the values here are guaranteed to be the real package defaults.
-# ---------------------------------------------------------------------------
-_SCALAR_DEFAULTS = {
-    "num_retries": getattr(litellm, "num_retries", None),
-    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
-    "request_timeout": getattr(litellm, "request_timeout", None),
-    "set_verbose": getattr(litellm, "set_verbose", False),
-    "cache": getattr(litellm, "cache", None),
-    "allowed_fails": getattr(litellm, "allowed_fails", 3),
-    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
-    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
-    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
-    "model_cost": getattr(litellm, "model_cost", None),
-    "token_counter": getattr(litellm, "token_counter", None),
-    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
-    "force_ipv4": getattr(litellm, "force_ipv4", False),
-    "drop_params": getattr(litellm, "drop_params", None),
-    "modify_params": getattr(litellm, "modify_params", False),
-}
-
 
 @pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
     Per-function isolation fixture.
 
-    Resets litellm globals to their true defaults before each test and
-    restores them afterward, so tests don't leak side effects.
-    Works safely under pytest-xdist parallel execution.
+    Saves and restores litellm callback/global state so tests don't leak
+    side effects. Works safely under pytest-xdist parallel execution.
     """
-    # ---- Save current callback state (for teardown restore) ----
+    # Save original callback state
     original_state = {}
     for attr in (
         "callbacks",
@@ -68,23 +38,38 @@ def isolate_litellm_state():
             val = getattr(litellm, attr)
             original_state[attr] = val.copy() if val else []
 
-    # Save list-type globals
+    # Save other globals that tests commonly mutate
+    for attr in (
+        "set_verbose",
+        "cache",
+        "num_retries",
+        "num_retries_per_request",
+        "request_timeout",
+        "default_fallbacks",
+        "enable_azure_ad_token_refresh",
+        "tag_budget_config",
+        "model_cost",
+        "token_counter",
+    ):
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+
+    # Save rules that tests may set (e.g. test_rules.py)
     for attr in ("pre_call_rules", "post_call_rules"):
         if hasattr(litellm, attr):
             val = getattr(litellm, attr)
             original_state[attr] = val.copy() if val else []
 
-    # Save scalar globals
-    for attr in _SCALAR_DEFAULTS:
+    # Save transport/network globals
+    for attr in ("disable_aiohttp_transport", "force_ipv4"):
         if hasattr(litellm, attr):
             original_state[attr] = getattr(litellm, attr)
 
-    # ---- Reset to true defaults before the test ----
-    # Flush HTTP client cache
+    # Flush cache before test
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
-    # Clear callbacks and rules
+    # Clear callbacks and rules before test
     for attr in (
         "callbacks",
         "success_callback",
@@ -97,15 +82,9 @@ def isolate_litellm_state():
         if hasattr(litellm, attr):
             setattr(litellm, attr, [])
 
-    # Reset scalar globals to true defaults (prevents contamination from
-    # module-level code like `litellm.num_retries = 3` in test files)
-    for attr, default_val in _SCALAR_DEFAULTS.items():
-        if hasattr(litellm, attr):
-            setattr(litellm, attr, default_val)
-
     yield
 
-    # ---- Teardown: restore saved state ----
+    # Restore all saved state
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
