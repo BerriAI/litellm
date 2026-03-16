@@ -84,8 +84,14 @@ class TestCheckBatchCost:
         assert find_call[1]["order"] == {"created_at": "asc"}
         not_in = find_call[1]["where"]["status"]["not_in"]
         assert "stale_expired" in not_in
-        assert "complete" in not_in
-        assert "completed" in not_in
+        # "complete"/"completed" are intentionally NOT excluded from the
+        # primary query — the batch_processed=False filter is sufficient.
+        # This allows CheckBatchCost to pick up batches that were
+        # transitioned to "complete" by the retrieve_batch endpoint
+        # before CheckBatchCost had a chance to process them.
+        assert "complete" not in not_in
+        assert "completed" not in not_in
+        assert find_call[1]["where"]["batch_processed"] is False
 
     @pytest.mark.asyncio
     async def test_fallback_query_used_when_batch_processed_missing(
