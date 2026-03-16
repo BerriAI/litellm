@@ -47,8 +47,8 @@ def cost_calculator(
         # ImageUsage has the same format as ResponseAPIUsage
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-            usage
+        chat_usage = (
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
         )
 
     # Use generic_cost_per_token for cost calculation

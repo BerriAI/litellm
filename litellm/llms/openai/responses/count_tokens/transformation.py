@@ -52,9 +52,7 @@ class OpenAICountTokensConfig:
             "Authorization": f"Bearer {api_key}",
         }
 
-    def validate_request(
-        self, model: str, input: Union[str, List[Any]]
-    ) -> None:
+    def validate_request(self, model: str, input: Union[str, List[Any]]) -> None:
         if not model:
             raise ValueError("model parameter is required")
 
@@ -139,20 +137,24 @@ class OpenAICountTokensConfig:
                 if tool_calls:
                     for tc in tool_calls:
                         func = tc.get("function", {})
-                        input_items.append({
-                            "type": "function_call",
-                            "call_id": tc.get("id", ""),
-                            "name": func.get("name", ""),
-                            "arguments": func.get("arguments", ""),
-                        })
+                        input_items.append(
+                            {
+                                "type": "function_call",
+                                "call_id": tc.get("id", ""),
+                                "name": func.get("name", ""),
+                                "arguments": func.get("arguments", ""),
+                            }
+                        )
                 elif not content:
                     input_items.append({"role": "assistant", "content": content})
             elif role == "tool":
-                input_items.append({
-                    "type": "function_call_output",
-                    "call_id": msg.get("tool_call_id", ""),
-                    "output": content if isinstance(content, str) else str(content),
-                })
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": msg.get("tool_call_id", ""),
+                        "output": content if isinstance(content, str) else str(content),
+                    }
+                )
 
         instructions = "\n".join(instructions_parts) if instructions_parts else None
         return input_items, instructions

@@ -307,4 +307,3 @@ class BedrockImageEdit(BaseAWSLLM):
         )
 
         return model_response
-

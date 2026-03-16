@@ -63,6 +63,7 @@ from litellm.utils import exception_type, get_litellm_params, get_optional_param
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
@@ -98,6 +99,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -933,6 +935,8 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    tools: Optional[List[Any]] = None,
+    reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -948,6 +952,17 @@ def responses_api_bridge_check(
             model_info["mode"] = mode
 
         if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
+
+        # OpenAI gpt-5.4+ chat-completions calls with both tools + reasoning_effort
+        # must be bridged to Responses API.
+        if (
+            custom_llm_provider == "openai"
+            and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+            and tools
+            and reasoning_effort is not None
+        ):
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
     except Exception as e:
@@ -1355,6 +1370,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
+        ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        responses_api_model_info, model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
+        )
+
         if not _should_allow_input_examples(
             custom_llm_provider=custom_llm_provider, model=model
         ):
@@ -1591,14 +1613,25 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
+        # Only run the second bridge check if the first one didn't already
+        # detect responses mode (e.g. via the "responses/" prefix).  The second
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
+        # the first (early) check doesn't cover.
+        if responses_api_model_info.get("mode") != "responses":
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+            )
 
-        if model_info.get("mode") == "responses":
+        if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
+
+            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
+                optional_params = dict(optional_params)
+                optional_params["reasoning_effort"] = reasoning_effort
 
             return responses_api_bridge.completion(
                 model=model,
@@ -2243,7 +2276,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,
             )
         elif custom_llm_provider == "bedrock_mantle":
-            api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+            api_base = (
+                api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+            )
             api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
             headers = headers or litellm.headers
             config = litellm.BedrockMantleChatConfig.get_config()
@@ -2271,14 +2306,16 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            api_base, api_key, headers = (
-                litellm.A2AConfig.resolve_agent_config_from_registry(
-                    model=model,
-                    api_base=api_base,
-                    api_key=api_key,
-                    headers=headers,
-                    optional_params=optional_params,
-                )
+            (
+                api_base,
+                api_key,
+                headers,
+            ) = litellm.A2AConfig.resolve_agent_config_from_registry(
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                headers=headers,
+                optional_params=optional_params,
             )
 
             # Fall back to environment variables and defaults
@@ -3687,8 +3724,10 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "sagemaker_chat":
+        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
+            # sagemaker_chat: HF Messages API endpoints
+            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
             model_response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3698,7 +3737,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="sagemaker_chat",
+                custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
                 encoding=_get_encoding(),
@@ -3750,9 +3789,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -5097,6 +5136,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
@@ -5192,7 +5232,9 @@ def embedding(  # noqa: PLR0915
             )
 
             try:
-                model_info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+                model_info = get_model_info(
+                    model=model, custom_llm_provider="vertex_ai"
+                )
                 uses_embed_content = model_info.get("uses_embed_content", False)
             except Exception:
                 uses_embed_content = False
@@ -6153,9 +6195,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6335,7 +6377,9 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             if existing_duration is None:
                 calculated_duration = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    response._hidden_params["audio_transcription_duration"] = calculated_duration
+                    response._hidden_params[
+                        "audio_transcription_duration"
+                    ] = calculated_duration
 
         return response
     except Exception as e:
@@ -6558,7 +6602,9 @@ def transcription(
         if existing_duration is None:
             calculated_duration = calculate_request_duration(file)
             if calculated_duration is not None:
-                response._hidden_params["audio_transcription_duration"] = calculated_duration
+                response._hidden_params[
+                    "audio_transcription_duration"
+                ] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
@@ -6862,9 +6908,9 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
-        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
-            voice_id
-        )
+        litellm_params_dict[
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY
+        ] = voice_id
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -7443,9 +7489,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -7456,9 +7502,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -7469,9 +7515,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         annotation_chunks = [
             chunk
@@ -7482,8 +7528,15 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(annotation_chunks) > 0:
-            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
-            response["choices"][0]["message"]["annotations"] = annotations
+            # Merge annotations from ALL chunks — providers may spread
+            # them across multiple streaming chunks or send them only in
+            # the final chunk.
+            all_annotations: list = []
+            for ac in annotation_chunks:
+                all_annotations.extend(
+                    ac["choices"][0]["delta"]["annotations"]
+                )
+            response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [
             chunk
@@ -7625,12 +7678,15 @@ async def acount_tokens(
     from litellm.utils import ProviderConfigManager
 
     # Determine provider from model string
-    resolved_model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-        get_llm_provider(
-            model=model,
-            api_base=api_base,
-            api_key=api_key,
-        )
+    (
+        resolved_model,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = get_llm_provider(
+        model=model,
+        api_base=api_base,
+        api_key=api_key,
     )
 
     # Use dynamic key/base if not explicitly provided
@@ -7686,7 +7742,7 @@ async def acount_tokens(
     local_count = litellm.token_counter(
         model=model,
         messages=fallback_messages,
-        tools=tools,
+        tools=tools,  # type: ignore[arg-type]
     )
 
     return TokenCountResponse(

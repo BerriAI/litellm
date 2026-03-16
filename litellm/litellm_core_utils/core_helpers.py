@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union, get_args
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
 
@@ -96,6 +96,8 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "tool_calls": "tool_calls",
     "function_call": "function_call",
     "content_filter": "content_filter",
+    # Anthropic Sonnet 4
+    "content_filtered": "content_filter",
 }
 
 

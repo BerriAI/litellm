@@ -90,7 +90,7 @@ def test_supports_function_calling_github_openai_alias():
 def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
-            model="github/claude-3-5-sonnet-latest"
+            model="github/claude-3-7-sonnet-20250219"
         )
         is True
     )
@@ -384,14 +384,14 @@ def test_all_model_configs():
     assert (
         "max_completion_tokens"
         in VertexAIAnthropicConfig().get_supported_openai_params(
-            model="claude-3-5-sonnet-20240620"
+            model="claude-sonnet-4-6"
         )
     )
 
     assert VertexAIAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-6",
         drop_params=False,
     ) == {"max_tokens": 10}
 
@@ -444,9 +444,6 @@ def test_anthropic_web_search_in_model_info():
     supported_models = [
         "anthropic/claude-4-sonnet-20250514",
         "anthropic/claude-sonnet-4-5-20250929",
-        "anthropic/claude-3-5-sonnet-20241022",
-        "anthropic/claude-3-5-haiku-20241022",
-        "anthropic/claude-3-5-haiku-latest",
     ]
     for model in supported_models:
         from litellm.utils import get_model_info
@@ -622,6 +619,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
@@ -703,6 +701,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
@@ -741,6 +740,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
+                "supports_multimodal": {"type": "boolean"},
+                "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
@@ -1139,7 +1140,7 @@ def test_get_model_info_shows_supports_computer_use():
     [
         ("gpt-3.5-turbo", "openai"),
         ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
-        ("gemini-1.5-pro", "vertex_ai"),
+        ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
 def test_pre_process_non_default_params(model, custom_llm_provider):
@@ -1228,14 +1229,14 @@ class TestProxyFunctionCalling:
             ),
             # Anthropic models (Claude supports function calling)
             (
-                "claude-3-5-sonnet-20240620",
-                "litellm_proxy/claude-3-5-sonnet-20240620",
+                "claude-sonnet-4-6",
+                "litellm_proxy/claude-sonnet-4-6",
                 True,
             ),
             # Google models
-            ("gemini-pro", "litellm_proxy/gemini-pro", True),
-            ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
-            ("gemini/gemini-1.5-flash", "litellm_proxy/gemini/gemini-1.5-flash", True),
+            ("gemini-2.5-pro", "litellm_proxy/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
+            ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
@@ -1440,8 +1441,8 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/gpt-3.5-turbo", True),
             ("litellm_proxy/gpt-4", True),
             ("litellm_proxy/gpt-4o", True),
-            ("litellm_proxy/claude-3-5-sonnet-20240620", True),
-            ("litellm_proxy/gemini/gemini-1.5-pro", True),
+            ("litellm_proxy/claude-sonnet-4-6", True),
+            ("litellm_proxy/gemini/gemini-2.5-pro", True),
             # Test proxy models that should not support function calling
             ("litellm_proxy/command-nightly", False),
             ("litellm_proxy/anthropic.claude-instant-v1", False),
@@ -1486,8 +1487,8 @@ class TestProxyFunctionCalling:
         [
             "litellm_proxy/gpt-3.5-turbo",
             "litellm_proxy/gpt-4",
-            "litellm_proxy/claude-3-5-sonnet-20240620",
-            "litellm_proxy/gemini/gemini-1.5-pro",
+            "litellm_proxy/claude-sonnet-4-6",
+            "litellm_proxy/gemini/gemini-2.5-pro",
         ],
     )
     def test_proxy_model_with_custom_llm_provider_none(self, model_name):

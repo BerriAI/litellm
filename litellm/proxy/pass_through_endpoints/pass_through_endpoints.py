@@ -54,7 +54,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
-from litellm.proxy.utils import get_server_root_path
+from litellm.proxy.utils import get_server_root_path, normalize_route_for_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -404,7 +404,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 headers=headers,
                 params=requested_query_params,
             )
-        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True and not _parsed_body:
+        elif (
+            HttpPassThroughEndpointHelpers.is_multipart(request) is True
+            and not _parsed_body
+        ):
             # Only use multipart handler if we don't have a parsed body
             # (parsed body means it was JSON despite multipart content-type header)
             return await HttpPassThroughEndpointHelpers.make_multipart_http_request(
@@ -681,8 +684,10 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
-        is_multipart = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
-        
+        is_multipart = (
+            HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
+        )
+
         if custom_body:
             _parsed_body = custom_body
         elif is_multipart:
@@ -1133,6 +1138,9 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
+            custom_body: Optional[
+                dict
+            ] = None,  # caller-supplied body takes precedence over request-parsed body
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
@@ -1208,9 +1216,11 @@ def create_pass_through_route(
             )
             if query_params:
                 final_query_params.update(query_params)
-            # Use the body parsed from the raw request
+            # Caller-supplied custom_body takes precedence over the request-parsed body
             final_custom_body: Optional[dict] = None
-            if isinstance(custom_body_data, dict):
+            if custom_body is not None:
+                final_custom_body = custom_body
+            elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
             return await pass_through_request(  # type: ignore
@@ -2058,9 +2068,11 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if route.startswith(mapped_route):
-                return True
+        normalized_route = normalize_route_for_root_path(route)
+        if normalized_route is not None:
+            for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+                if normalized_route.startswith(mapped_route):
+                    return True
 
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
@@ -2111,11 +2123,7 @@ class InitPassThroughEndpointHelpers:
 
                 # If path matches and method filter is provided, check if method is allowed
                 if path_matches:
-                    if (
-                        method is None
-                        or not route_methods
-                        or method in route_methods
-                    ):
+                    if method is None or not route_methods or method in route_methods:
                         return _registered_pass_through_routes[key]
 
         return None
