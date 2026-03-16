@@ -16,6 +16,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports **multimodal embeddings** with `gemini-embedding-2-preview`—generating a single embedding from a mix of text, images, audio, video, and PDF content. Available via both the **Gemini API** (API key) and **Vertex AI** (GCP credentials).
 
+{/* truncate */}
+
 ## Supported Input Types
 
 | Modality | Supported Formats | 

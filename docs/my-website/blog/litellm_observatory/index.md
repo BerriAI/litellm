@@ -19,6 +19,8 @@ As LiteLLM adoption has grown, so have expectations around reliability, performa
 
 This post introduces **LiteLLM Observatory**, a long-running release-validation system we built to catch regressions before they reach users.
 
+{/* truncate */}
+
 ---
 
 ## Why We Built the Observatory
@@ -124,4 +126,3 @@ Reliability is an ongoing investment.
 LiteLLM Observatory is one of several systems we’re building to continuously raise the bar on release quality and operational safety. As LiteLLM evolves, so will our validation tooling, informed by real-world usage and lessons learned.
 
 We’ll continue to share those improvements openly as we go.
-

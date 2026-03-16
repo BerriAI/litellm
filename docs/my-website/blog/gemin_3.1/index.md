@@ -19,6 +19,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports `gemini-3.1-pro-preview` and all the new API changes along with it.
 
+{/* truncate */}
+
 ## Deploy this version
 
 <Tabs>

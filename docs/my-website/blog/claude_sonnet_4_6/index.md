@@ -15,6 +15,8 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports Claude Sonnet 4.6 on Day 0. Use it across Anthropic, Azure, Vertex AI, and Bedrock through the LiteLLM AI Gateway.
 
+{/* truncate */}
+
 ## Docker Image
 
 ```bash

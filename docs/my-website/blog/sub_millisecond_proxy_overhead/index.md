@@ -23,6 +23,8 @@ Proxy overhead refers to the latency introduced by LiteLLM itself, independent o
 
 To measure it, we run the same workload directly against the provider and through LiteLLM at identical QPS (for example, 1,000 QPS) and compare the latency delta. To reduce noise, the load generator, LiteLLM, and a mock LLM endpoint all run on the same machine, ensuring the difference reflects proxy overhead rather than network latency.
 
+{/* truncate */}
+
 ---
 
 ## Where We're Coming From

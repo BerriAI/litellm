@@ -13,6 +13,8 @@ hide_table_of_contents: false
 
 LiteLLM now supoports videos character, edit and extension apis.
 
+{/* truncate */}
+
 ## What's New
 
 Four new endpoints for video character operations:
