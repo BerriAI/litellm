@@ -1,6 +1,12 @@
 {
   "posts": [
     {
+      "title": "How We Fixed a Streaming Connection Pool Leak",
+      "description": "How we tracked down and fixed a connection pool leak that caused OpenAI streaming requests to hang after 30 minutes.",
+      "date": "2026-03-04",
+      "url": "https://docs.litellm.ai/blog/streaming-connection-pool-leak"
+    },
+    {
       "title": "Incident Report: SERVER_ROOT_PATH regression broke UI routing",
       "description": "How a single line removal caused UI 404s for all deployments using SERVER_ROOT_PATH, and the tests we added to prevent it from happening again.",
       "date": "2026-02-21",
