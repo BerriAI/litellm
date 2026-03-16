@@ -16,7 +16,7 @@ tags: [videos, characters, proxy, routing]
 hide_table_of_contents: false
 ---
 
-Upload a video character once, reference it across unlimited generations. LiteLLM now handles character management with full router support.
+LiteLLM now supoports videos character, edit and extension apis.
 
 ## What's New
 
@@ -80,71 +80,51 @@ curl -X POST "http://localhost:4000/v1/videos/characters" \
   -F "name=Luna"
 
 # Get character
-curl -X GET "http://localhost:4000/v1/videos/characters/char_xyz123" \
+curl -X GET "http://localhost:4000/v1/videos/characters/char_abc123def456" \
   -H "Authorization: Bearer sk-litellm-key"
+
+# Edit video
+curl -X POST "http://localhost:4000/v1/videos/edits" \
+  -H "Authorization: Bearer sk-litellm-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video": {"id": "video_xyz789"},
+    "prompt": "Add warm golden lighting and enhance colors"
+  }'
+
+# Extend video
+curl -X POST "http://localhost:4000/v1/videos/extensions" \
+  -H "Authorization: Bearer sk-litellm-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video": {"id": "video_xyz789"},
+    "prompt": "Luna waves goodbye and walks into the sunset",
+    "seconds": "5"
+  }'
 ```
 
-## Key Features
+## Managed Character IDs
 
-✅ **Full Router Support** - Load balance across multiple model deployments  
-✅ **Character Encoding** - Automatic provider/model tracking in character IDs  
-✅ **Error Handling** - Proper HTTP status checks before response parsing  
-✅ **Backward Compatible** - External providers receive NotImplementedError, not instantiation errors  
-✅ **Multi-Deployment** - Router picks optimal deployment when target_model_names is set
+LiteLLM automatically encodes provider and model metadata into character IDs:
 
-## Best Practices
-
-**Character uploads:**
-- 2-4 seconds optimal
-- Match target resolution (16:9, 9:16, or 1:1)
-- 720p-1080p
-- Clear character isolation
-
-**Prompting:**
+**What happens:**
 ```
-✅ "Luna the fox dances through a cosmic forest, stars trailing her movement"
-❌ "A character that looks like Luna"
+Upload character "Luna" with model "sora-2" on OpenAI
+  ↓
+LiteLLM creates: char_abc123def456 (contains provider + model_id)
+  ↓
+When you reference it later, LiteLLM decodes automatically
+  ↓
+Router knows exactly which deployment to use
 ```
 
-Always mention character name verbatim in prompt.
+**Behind the scenes:**
+- Character ID format: `character_<base64_encoded_metadata>`
+- Metadata includes: provider, model_id, original_character_id
+- Transparent to you - just use the ID, LiteLLM handles routing
 
-## Implementation Notes
-
-All four handler methods now include:
-- `response.raise_for_status()` - Proper error detection before model parsing
-- Router-first dispatch - Consistent with avideo_edit/extension
-- Async support - Full async/await pattern
-
-## What's Inside
-
-- 8 handler methods (sync + async pairs)
-- Character transformation classes
-- SDK functions + Router wiring
-- Full test coverage
-- Comprehensive error handling
-
-## Common Issues
-
-**Character doesn't appear?**
-- Include character ID in `characters` array
-- Use character name in prompt (exact match)
-- Ensure character occupies meaningful screen space
-
-**Distorted character?**
-- Character video aspect ratio must match target resolution
-- Upload again with matching dimensions
-
-**Want to edit with character?**
-- Use avideo_edit (currently no character support in extensions)
-- Edit preserves original composition
-
-## Next Steps
-
-- Try the [examples](https://docs.litellm.ai/video_characters)
-- Check out [character best practices](https://docs.litellm.ai/docs/video_characters#best-practices)
-- Deploy the proxy and start routing
-
-**Resources:**
-- [Docs](https://docs.litellm.ai/docs/video_characters)
-- [SDK Reference](https://github.com/BerriAI/litellm)
-- [Support](https://github.com/BerriAI/litellm/issues)
+**Benefits:**
+- Multi-deployment load balancing
+- Automatic model resolution
+- Encoded IDs work across proxy restarts
+- Router picks optimal deployment
