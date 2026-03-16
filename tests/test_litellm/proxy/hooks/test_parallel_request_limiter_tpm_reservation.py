@@ -76,6 +76,9 @@ def test_estimate_request_tokens():
     assert handler_cls._estimate_request_tokens({}) == 0
     assert handler_cls._estimate_request_tokens({"max_tokens": 0}) == 0
     assert handler_cls._estimate_request_tokens({"max_tokens": -1}) == 0
+    # Bug 4: float values from JSON parsing should be handled
+    assert handler_cls._estimate_request_tokens({"max_tokens": 100.0}) == 100
+    assert handler_cls._estimate_request_tokens({"max_tokens": 99.9}) == 99
 
 
 @pytest.mark.asyncio
@@ -86,10 +89,8 @@ async def test_concurrent_requests_respect_tpm_limit(handler, user_api_key_dict)
     With the fix, only 2 should pass (100 tokens reserved).
     """
     cache = MagicMock()
-    allowed_count = 0
-    rejected_count = 0
 
-    for i in range(5):
+    async def try_request():
         data = {"model": "gpt-4", "max_tokens": 50, "metadata": {}}
         try:
             await handler.async_pre_call_hook(
@@ -98,9 +99,13 @@ async def test_concurrent_requests_respect_tpm_limit(handler, user_api_key_dict)
                 data=data,
                 call_type="completion",
             )
-            allowed_count += 1
+            return "allowed"
         except Exception:
-            rejected_count += 1
+            return "rejected"
+
+    results = await asyncio.gather(*[try_request() for _ in range(5)])
+    allowed_count = results.count("allowed")
+    rejected_count = results.count("rejected")
 
     # With TPM limit of 100 and max_tokens=50 per request,
     # only 2 requests should be allowed (2 * 50 = 100 <= TPM limit)
@@ -208,3 +213,21 @@ async def test_reservation_released_on_failure(handler, user_api_key_dict):
         allowed = False
 
     assert allowed, "Request should be allowed after failed request released its reservation"
+
+
+@pytest.mark.asyncio
+async def test_first_request_exceeding_tpm_limit_rejected(handler, user_api_key_dict):
+    """Bug 1: A single first request with max_tokens > tpm_limit should be
+    rejected even when the cache has no prior entry."""
+    cache = MagicMock()
+
+    # tpm_limit is 100, but request wants 200 tokens
+    data = {"model": "gpt-4", "max_tokens": 200, "metadata": {}}
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="completion",
+        )
+    assert exc_info.value.status_code == 429
