@@ -8,8 +8,6 @@ everything else through unchanged.
 
 import asyncio
 
-import pytest
-
 
 # The middleware is defined at module scope in proxy_server.py alongside heavy
 # imports we don't want here.  Re-implement the same class locally to test the
@@ -55,7 +53,7 @@ def _make_http_scope(path: str, raw_path: bytes | None = None) -> dict:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── tests ────────────────────────────────────────────────────────────────
