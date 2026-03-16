@@ -132,11 +132,11 @@ class TestLangsmithLoggerInit:
         self, mock_get_running_loop
     ):
         """Test that helper returns None when no running event loop exists."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key",
-            langsmith_project="test-project",
-            start_periodic_flush=False,
-        )
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+            logger = LangsmithLogger(
+                langsmith_api_key="test-key",
+                langsmith_project="test-project",
+            )
 
         mock_get_running_loop.reset_mock()
 
@@ -165,11 +165,11 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
         """Test that async logging lazily starts periodic flush after sync init."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key",
-            langsmith_project="test-project",
-            start_periodic_flush=False,
-        )
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+            logger = LangsmithLogger(
+                langsmith_api_key="test-key",
+                langsmith_project="test-project",
+            )
         logger._get_sampling_rate_to_use_for_request = MagicMock(return_value=1.0)
         logger._get_credentials_to_use_for_request = MagicMock(
             return_value=logger.default_credentials
@@ -185,11 +185,11 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_failure_event_lazily_starts_periodic_flush(self):
         """Test that async failure logging lazily starts periodic flush after sync init."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key",
-            langsmith_project="test-project",
-            start_periodic_flush=False,
-        )
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+            logger = LangsmithLogger(
+                langsmith_api_key="test-key",
+                langsmith_project="test-project",
+            )
         logger._get_sampling_rate_to_use_for_request = MagicMock(return_value=1.0)
         logger._get_credentials_to_use_for_request = MagicMock(
             return_value=logger.default_credentials

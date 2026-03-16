@@ -45,7 +45,6 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_base_url: Optional[str] = None,
         langsmith_sampling_rate: Optional[float] = None,
         langsmith_tenant_id: Optional[str] = None,
-        start_periodic_flush: bool = True,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -84,9 +83,7 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        self._flush_task: Optional[asyncio.Task[Any]] = None
-        if start_periodic_flush:
-            self._flush_task = self._start_periodic_flush_task()
+        self._flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
@@ -101,6 +98,9 @@ class LangsmithLogger(CustomBatchLogger):
         return loop.create_task(self.periodic_flush())
 
     def _ensure_periodic_flush_task(self) -> None:
+        # This helper is intentionally synchronous. In asyncio's cooperative
+        # execution model, there is no await between the check and assignment,
+        # so one caller cannot interleave here and create a duplicate task.
         if self._flush_task is None or self._flush_task.done():
             self._flush_task = self._start_periodic_flush_task()
 
