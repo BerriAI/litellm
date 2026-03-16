@@ -16,15 +16,15 @@ columns={2}
 items={[
   {
     icon: "⚡",
-    title: "First LLM Call",
-    description: "Install LiteLLM and make your first call to OpenAI, Anthropic, Bedrock, or any provider in under 5 minutes.",
+    title: "Set Up Your Environment",
+    description: "Get your API keys for OpenAI, Cohere, and AI21 — no waitlist required — and configure your environment before making your first LLM call.",
     to: "/docs/tutorials/installation",
   },
   {
-    icon: "🖥️",
-    title: "Run the Proxy (LLM Gateway)",
-    description: "Start a local OpenAI-compatible gateway, add a model, and call it — the fastest way to understand what the proxy does.",
-    to: "/docs/tutorials/model_config_proxy",
+    icon: "🧪",
+    title: "Build an LLM Playground",
+    description: "Create a Streamlit playground to evaluate and compare multiple LLM providers side by side in under 10 minutes.",
+    to: "/docs/tutorials/first_playground",
   },
   {
     icon: "🤖",
@@ -35,7 +35,7 @@ items={[
   {
     icon: "🛠️",
     title: "Use with a Coding Tool",
-    description: "Point Claude Code, Cursor, GitHub Copilot, or Gemini CLI at LiteLLM to use any model behind your favorite coding tool.",
+    description: "Point Cursor, GitHub Copilot, Gemini CLI, or Claude Code at LiteLLM to use any model behind your favorite coding tool.",
     to: "/docs/tutorials/cursor_integration",
   },
 ]}
@@ -58,19 +58,19 @@ items={[
     icon: "🛠️",
     title: "AI Coding Tools",
     description: "Claude Code, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Qwen Code, OpenAI Codex.",
-    to: "/ai_tools",
+    to: "/docs/tutorials/cursor_integration",
   },
   {
-    icon: "🔑",
-    title: "Proxy & Gateway",
-    description: "Config setup, SSO, SCIM provisioning, default teams, tag-based access, prompt caching.",
-    to: "/docs/tutorials/model_config_proxy",
+    icon: "👥",
+    title: "User & Team Onboarding",
+    description: "Onboard users to default teams, enable self-serve AI exploration, and manage access at scale.",
+    to: "/docs/tutorials/default_team_self_serve",
   },
   {
     icon: "💸",
     title: "Cost & Spend Tracking",
-    description: "Track costs per key, team, and coding tool. Enable prompt caching to cut spend.",
-    to: "/docs/tutorials/prompt_caching",
+    description: "Track usage and costs for coding tools like Claude Code, Roo Code, Gemini CLI, and OpenAI Codex.",
+    to: "/docs/tutorials/cost_tracking_coding",
   },
   {
     icon: "🛡️",

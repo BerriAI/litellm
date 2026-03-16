@@ -15,28 +15,22 @@ import NavigationCards from '@site/src/components/NavigationCards';
 columns={2}
 items={[
   {
-    icon: "💬",
-    title: "Completion & Messaging",
-    description: "Streaming, function calling, JSON mode, vision, audio, batching, and provider-specific params.",
-    to: "/docs/completion/stream",
-  },
-  {
-    icon: "✍️",
-    title: "Prompt Engineering",
-    description: "Prompt caching, formatting, message trimming, model aliases, mock requests, and reliable completions.",
-    to: "/docs/completion/prompt_caching",
-  },
-  {
-    icon: "🤖",
-    title: "AI Capabilities",
-    description: "Web search, web fetch, computer use, knowledge bases, code interpreter, and video generation.",
-    to: "/docs/completion/web_search",
-  },
-  {
-    icon: "⚙️",
-    title: "Models & Customization",
-    description: "Fine-tuned models, security settings, budget management, and custom adapters.",
+    icon: "🎛️",
+    title: "Fine-tuned Models",
+    description: "Call fine-tuned OpenAI, Azure, and Vertex AI models using LiteLLM with custom model names.",
     to: "/docs/guides/finetuned_models",
+  },
+  {
+    icon: "🔒",
+    title: "Security Settings",
+    description: "Configure SSL certificates and HTTP proxy settings for secure LiteLLM deployments.",
+    to: "/docs/guides/security_settings",
+  },
+  {
+    icon: "🖥️",
+    title: "Code Interpreter",
+    description: "Use OpenAI's Code Interpreter tool to execute Python code in a secure, sandboxed environment.",
+    to: "/docs/guides/code_interpreter",
   },
 ]}
 />

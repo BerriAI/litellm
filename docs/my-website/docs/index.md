@@ -16,7 +16,7 @@ import Image from '@theme/IdealImage';
 - Call any provider using the same `completion()` interface — no re-learning the API for each one
 - Consistent output format regardless of which provider or model you use
 - Built-in retry / fallback logic across multiple deployments via the [Router](./routing.md)
-- Self-hosted [LLM Gateway (Proxy)](./proxy/quick_start.md) with virtual keys, cost tracking, and an admin UI
+- Self-hosted [LLM Gateway (Proxy)](./simple_proxy) with virtual keys, cost tracking, and an admin UI
 
 [![PyPI](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
 [![GitHub Stars](https://img.shields.io/github/stars/BerriAI/litellm?style=social)](https://github.com/BerriAI/litellm)
@@ -302,7 +302,7 @@ response = litellm.completion(
 )
 ```
 
-📖 [See all observability integrations →](https://docs.litellm.ai/docs/observability/callbacks)
+📖 [See all observability integrations →](/docs/observability/agentops_integration)
 
 ### Track Costs & Usage
 
@@ -432,7 +432,7 @@ items={[
 icon: "🔀",
 title: "Router & Fallbacks",
 description: "Load balance across deployments and set automatic fallbacks.",
-to: "/docs/routing",
+to: "/docs/routing-load-balancing",
 },
 {
 icon: "🔑",
@@ -456,7 +456,7 @@ to: "/docs/proxy/guardrails/quick_start",
 icon: "📡",
 title: "Observability",
 description: "Integrate with Langfuse, MLflow, Helicone, and more.",
-to: "/docs/observability/callbacks",
+to: "/docs/observability/agentops_integration",
 },
 {
 icon: "🏭",

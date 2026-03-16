@@ -1,6 +1,3 @@
----
-slug: /routing-load-balancing
----
 
 import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
@@ -1765,7 +1762,7 @@ response = router.completion(
 
 ## Deploy Router 
 
-If you want a server to load balance across different LLM APIs, use our [LiteLLM Proxy Server](./simple_proxy)
+If you want a server to load balance across different LLM APIs, use our [LiteLLM Proxy Server](./proxy/load_balancing.md)
 
 
 

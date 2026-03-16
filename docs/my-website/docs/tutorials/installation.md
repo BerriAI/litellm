@@ -1,6 +1,4 @@
----
-displayed_sidebar: tutorialSidebar
----
+
 
 # Set up environment
 

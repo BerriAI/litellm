@@ -42,9 +42,9 @@ const sidebars = {
       type: "category",
       label: "Guardrails",
       items: [
+        "proxy/guardrails/quick_start",
         "apply_guardrail",
         "moderation",
-        "proxy/guardrails/quick_start",
         "proxy/guardrails/team_based_guardrails",
         "proxy/guardrails/guardrail_load_balancing",
         "proxy/guardrails/test_playground",
@@ -143,7 +143,7 @@ const sidebars = {
         type: "generated-index",
         title: "AI Tools",
         description: "Integrate LiteLLM with AI tools like OpenWebUI, Claude Code, and more",
-        slug: "/ai_tools"
+        slug: "/docs/integrations/ai-tools"
       },
       items: [
         "tutorials/openweb_ui",
@@ -181,7 +181,7 @@ const sidebars = {
         type: "generated-index",
         title: "Agent SDKs",
         description: "Use LiteLLM with agent frameworks and SDKs",
-        slug: "/agent_sdks"
+        slug: "/docs/integrations/agent-sdks"
       },
       items: [
         "tutorials/openai_agents_sdk",
