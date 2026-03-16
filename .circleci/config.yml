@@ -2151,6 +2151,7 @@ jobs:
             pip install "anthropic==0.52.0"
             pip install "blockbuster==1.5.24"
             pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -2158,13 +2159,13 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 2 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            LITELLM_LOG=WARNING python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml logging_coverage.xml
-            mv .coverage logging_coverage
+            mv coverage.xml logging_coverage.xml || true
+            mv .coverage logging_coverage || true
 
       # Store test results
       - store_test_results:
