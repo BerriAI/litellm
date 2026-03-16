@@ -230,6 +230,21 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def supports_native_file_search(self) -> bool:
+        """
+        Returns True if the provider natively handles the file_search tool with
+        vector_store_ids in the Responses API.
+
+        When True:  the file_search tool is passed through as-is to the provider,
+                    and LiteLLM maps any managed vector store IDs to provider-specific IDs.
+        When False: LiteLLM intercepts the file_search tool, performs RAG search against
+                    the referenced vector stores, injects context into the input, and
+                    strips the file_search tool before forwarding to the provider.
+
+        Default: False (RAG injection mode)
+        """
+        return False
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################

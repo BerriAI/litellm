@@ -51,6 +51,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         )
 
+    def supports_native_file_search(self) -> bool:
+        """OpenAI natively handles file_search with vector_store_ids."""
+        return True
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
