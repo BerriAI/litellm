@@ -161,9 +161,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
               <Text className="font-medium">Team {index + 1}</Text>
               <Button
                 size="small"
+                danger
                 icon={<DeleteOutlined />}
                 onClick={() => removeTeam(index)}
-                className="text-red-500 hover:text-red-700"
               >
                 Remove
               </Button>
