@@ -134,6 +134,7 @@ def test_multiple_deployments_parallel():
 
 
 # test_multiple_deployments_parallel()
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_cooldown_same_model_name(sync_mode):

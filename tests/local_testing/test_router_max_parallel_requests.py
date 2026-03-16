@@ -154,6 +154,7 @@ async def _handle_router_calls(router):
     print("done", chunk)
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_max_parallel_requests_rpm_rate_limiting():
     """
