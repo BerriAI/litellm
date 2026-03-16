@@ -2316,7 +2316,7 @@ jobs:
       - run:
           name: Load Docker Database Image for helm tests
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
             docker tag litellm-docker-database:ci litellm-ci:${IMAGE_TAG}
 
@@ -2442,7 +2442,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -2574,7 +2574,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
       - run:
           name: Run Docker container
@@ -2720,7 +2720,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -2864,7 +2864,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -3028,7 +3028,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -3144,7 +3144,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container 1
@@ -3283,7 +3283,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -3518,7 +3518,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
@@ -3682,7 +3682,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Run Docker container with test config
@@ -4136,17 +4136,11 @@ jobs:
 
   build_docker_database_image:
     machine:
-      image: ubuntu-2204:2023.10.1
+      image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
     steps:
       - checkout
-
-      - run:
-          name: Upgrade Docker
-          command: |
-            curl -fsSL https://get.docker.com | sh
-            docker version
 
       - run:
           name: Build Docker image
@@ -4158,12 +4152,12 @@ jobs:
       - run:
           name: Save Docker image to workspace root
           command: |
-            docker save litellm-docker-database:ci | gzip > litellm-docker-database.tar.gz
+            docker save litellm-docker-database:ci | zstd -1 -T0 > litellm-docker-database.tar.zst
 
       - persist_to_workspace:
           root: .
           paths:
-            - litellm-docker-database.tar.gz
+            - litellm-docker-database.tar.zst
 
   e2e_ui_testing:
     machine:
@@ -4181,7 +4175,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Install Dependencies
@@ -4275,7 +4269,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Install Neon CLI
@@ -4352,7 +4346,7 @@ jobs:
       - run:
           name: Load Docker Database Image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci myapp:latest
       - run:
           name: Run Docker container with bad DATABASE_URL
