@@ -88,6 +88,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._cached_item_id: Optional[str] = None
         self._cached_response_id: Optional[str] = None
         self._pending_tool_events: List[BaseLiteLLMOpenAIResponseObject] = []
+        self._pending_annotation_events: List[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
         self._tool_call_id_by_index: dict[int, str] = {}
@@ -748,6 +749,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)
 
+            if self._pending_annotation_events:
+                return self._pending_annotation_events.pop(0)
+
             done_event = self.return_default_done_events(self.litellm_model_response)
             if done_event:
                 return done_event
@@ -1001,14 +1005,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = chunk.id
         item_id = self._cached_item_id or chunk.id
 
-        # Check if this chunk has annotations first (before processing text/reasoning)
-        # This ensures we detect and queue annotation events from the annotation chunk
         if chunk.choices and hasattr(chunk.choices[0].delta, "annotations"):
             annotations = chunk.choices[0].delta.annotations
             if annotations and self.sent_annotation_events is False:
                 self.sent_annotation_events = True
-                # Store annotation events to emit them one by one
-                if not hasattr(self, "_pending_annotation_events"):
+                if not self._pending_annotation_events:
                     response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
                         annotations=annotations
                     )
@@ -1070,13 +1071,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._pending_tool_events.pop(0)
 
         # Priority 4: If we have pending annotation events, emit the next one
-        # This happens when the current chunk has no text/reasoning content
-        if (
-            hasattr(self, "_pending_annotation_events")
-            and self._pending_annotation_events
-        ):
-            event = self._pending_annotation_events.pop(0)
-            return event
+        if self._pending_annotation_events:
+            return self._pending_annotation_events.pop(0)
 
         # Priority 5: If we have pending tool events (from earlier chunk), emit the next one
         if self._pending_tool_events:

@@ -3321,3 +3321,269 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION = {
+    "type": "web_search_result_location",
+    "cited_text": "The Sony WH-1000XM5 remains one of the best...",
+    "url": "https://example.com/headphones",
+    "title": "Best Headphones 2025",
+}
+
+MOCK_CHAR_LOCATION_CITATION = {
+    "type": "char_location",
+    "cited_text": "The grass is green.",
+    "document_index": 0,
+    "document_title": "My Document",
+    "start_char_index": 0,
+    "end_char_index": 20,
+}
+
+MOCK_PAGE_LOCATION_CITATION = {
+    "type": "page_location",
+    "cited_text": "Chapter introduction.",
+    "document_index": 1,
+    "document_title": "User Manual",
+    "start_page_number": 3,
+    "end_page_number": 5,
+}
+
+MOCK_CHAR_LOCATION_CITATION_NO_TITLE = {
+    "type": "char_location",
+    "cited_text": "Some text.",
+    "document_index": 0,
+    "start_char_index": 0,
+    "end_char_index": 10,
+}
+
+MOCK_CITATION_WITH_SUPPORTED_TEXT = {
+    **MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION,
+    "supported_text": "Based on current reviews...",
+}
+
+
+def test_web_search_result_location_citation_to_annotation():
+    config = AnthropicConfig()
+    result = config._translate_anthropic_citation_to_openai_annotation(
+        MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION
+    )
+    assert result is not None
+    assert result["type"] == "url_citation"
+    assert result["url_citation"]["url"] == "https://example.com/headphones"
+    assert result["url_citation"]["title"] == "Best Headphones 2025"
+    assert "start_index" not in result["url_citation"]
+    assert "end_index" not in result["url_citation"]
+
+
+def test_char_location_citation_to_annotation():
+    config = AnthropicConfig()
+    result = config._translate_anthropic_citation_to_openai_annotation(
+        MOCK_CHAR_LOCATION_CITATION
+    )
+    assert result is None
+
+
+def test_page_location_citation_to_annotation():
+    config = AnthropicConfig()
+    result = config._translate_anthropic_citation_to_openai_annotation(
+        MOCK_PAGE_LOCATION_CITATION
+    )
+    assert result is None
+
+
+def test_mixed_citation_types_batch_conversion():
+    config = AnthropicConfig()
+    citations = [
+        [MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION],
+        [MOCK_CHAR_LOCATION_CITATION, MOCK_PAGE_LOCATION_CITATION],
+    ]
+    result = config._translate_anthropic_citations_to_openai_annotations(citations)
+    assert result is not None
+    assert len(result) == 1  # Only web_search_result_location survives
+    assert result[0]["url_citation"]["url"] == "https://example.com/headphones"
+
+
+def test_unknown_citation_type_skipped():
+    config = AnthropicConfig()
+    unknown = {"type": "future_type", "data": "something"}
+    citations = [[unknown, MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION]]
+    result = config._translate_anthropic_citations_to_openai_annotations(citations)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["url_citation"]["url"] == "https://example.com/headphones"
+
+
+def test_citations_none_empty_cases():
+    config = AnthropicConfig()
+    assert config._translate_anthropic_citations_to_openai_annotations(None) is None
+    assert config._translate_anthropic_citations_to_openai_annotations([]) is None
+    assert config._translate_anthropic_citations_to_openai_annotations([[]]) is None
+    # Mixed empty and valid
+    result = config._translate_anthropic_citations_to_openai_annotations(
+        [[], [MOCK_WEB_SEARCH_RESULT_LOCATION_CITATION]]
+    )
+    assert result is not None
+    assert len(result) == 1
+
+
+def test_document_title_none_produces_none_for_char_location():
+    """char_location citations are skipped regardless of document_title presence."""
+    config = AnthropicConfig()
+    result = config._translate_anthropic_citation_to_openai_annotation(
+        MOCK_CHAR_LOCATION_CITATION_NO_TITLE
+    )
+    assert result is None
+
+
+def test_supported_text_not_in_annotation():
+    config = AnthropicConfig()
+    result = config._translate_anthropic_citation_to_openai_annotation(
+        MOCK_CITATION_WITH_SUPPORTED_TEXT
+    )
+    assert result is not None
+    url_citation = result["url_citation"]
+    assert "supported_text" not in url_citation
+    assert url_citation["url"] == "https://example.com/headphones"
+
+
+def test_backward_compat_provider_specific_fields_and_annotations():
+    import httpx
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    completion_response = {
+        "id": "msg_01ABC123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5-20251001",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+        "content": [
+            {
+                "type": "text",
+                "text": "Based on reviews, Sony WH-1000XM5 is recommended.",
+                "citations": [
+                    {
+                        "type": "web_search_result_location",
+                        "cited_text": "Sony...",
+                        "url": "https://example.com/headphones",
+                        "title": "Best Headphones 2025",
+                    }
+                ],
+            }
+        ],
+    }
+    mock_response = httpx.Response(
+        status_code=200,
+        json=completion_response,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    model_response = ModelResponse()
+    config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=mock_response,
+        model_response=model_response,
+    )
+    message = model_response.choices[0].message
+    assert message.provider_specific_fields is not None
+    assert message.provider_specific_fields["citations"] is not None
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["type"] == "url_citation"
+    assert (
+        message.annotations[0]["url_citation"]["url"]
+        == "https://example.com/headphones"
+    )
+
+
+def test_streaming_message_delta_batch_emit():
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(streaming_response=iter([]), sync_stream=True)
+
+    content_block_1 = {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+            "type": "citations",
+            "citation": {
+                "type": "web_search_result_location",
+                "cited_text": "Sony...",
+                "url": "https://example.com/1",
+                "title": "Title 1",
+            },
+        },
+    }
+    content_block_2 = {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {
+            "type": "citations",
+            "citation": {
+                "type": "web_search_result_location",
+                "cited_text": "Bose...",
+                "url": "https://example.com/2",
+                "title": "Title 2",
+            },
+        },
+    }
+
+    iterator._content_block_delta_helper(content_block_1)
+    iterator._content_block_delta_helper(content_block_2)
+    assert len(iterator._accumulated_annotations) == 2
+
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 50},
+    }
+    result = iterator.chunk_parser(message_delta_chunk)
+    delta = result.choices[0].delta
+    assert hasattr(delta, "annotations") and delta.annotations is not None
+    assert len(delta.annotations) == 2
+    assert delta.annotations[0]["url_citation"]["url"] == "https://example.com/1"
+    assert delta.annotations[1]["url_citation"]["url"] == "https://example.com/2"
+    assert len(iterator._accumulated_annotations) == 0
+
+
+def test_streaming_annotation_drain_in_common_done_event_logic():
+    """Verify that annotations queued during streaming are fully drained at end-of-stream."""
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(streaming_response=iter([]), sync_stream=True)
+
+    for i in range(4):
+        content_block = {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {
+                "type": "citations",
+                "citation": {
+                    "type": "web_search_result_location",
+                    "cited_text": f"Text {i}",
+                    "url": f"https://example.com/{i}",
+                    "title": f"Title {i}",
+                },
+            },
+        }
+        iterator._content_block_delta_helper(content_block)
+
+    assert len(iterator._accumulated_annotations) == 4
+
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 50},
+    }
+    result = iterator.chunk_parser(message_delta_chunk)
+    delta = result.choices[0].delta
+    assert hasattr(delta, "annotations") and delta.annotations is not None
+    assert len(delta.annotations) == 4
+    for i in range(4):
+        assert delta.annotations[i]["url_citation"]["url"] == f"https://example.com/{i}"
+    assert len(iterator._accumulated_annotations) == 0
