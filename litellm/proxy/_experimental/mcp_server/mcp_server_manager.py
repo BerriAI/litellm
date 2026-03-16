@@ -1075,11 +1075,20 @@ class MCPServerManager:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 
             # Filter tools based on allowed_tools / disallowed_tools config
+            # For OpenAPI servers (spec_path), tools already have the server
+            # prefix in their name (e.g. "myserver-get_pet"). Strip it before
+            # checking so that unprefixed disallowed_tools entries match.
             if server.allowed_tools or server.disallowed_tools:
+                prefix = f"{server.name}-"
                 tools = [
                     tool
                     for tool in tools
-                    if self.check_allowed_or_banned_tools(tool.name, server)
+                    if self.check_allowed_or_banned_tools(
+                        tool.name.removeprefix(prefix)
+                        if server.spec_path
+                        else tool.name,
+                        server,
+                    )
                 ]
 
             prefixed_or_original_tools = self._create_prefixed_tools(
