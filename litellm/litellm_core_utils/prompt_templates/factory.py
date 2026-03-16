@@ -1499,7 +1499,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     from litellm.types.llms.vertex_ai import BlobType
 
     content_str: str = ""
-    inline_data: Optional[BlobType] = None
+    inline_data_list: List[BlobType] = []
 
     if "content" in message:
         if isinstance(message["content"], str):
@@ -1511,8 +1511,10 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                 try:
                     mime_rest = content_str[5:].split(";base64,", 1)
                     if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
-                        inline_data = BlobType(
-                            data=mime_rest[1], mime_type=mime_rest[0]
+                        # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
+                        clean_mime = mime_rest[0].split(";")[0].strip()
+                        inline_data_list.append(
+                            BlobType(data=mime_rest[1], mime_type=clean_mime)
                         )
                         content_str = ""
                 except Exception as e:
@@ -1530,9 +1532,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                     source = content.get("source", {})
                     if isinstance(source, dict) and source.get("type") == "base64":
                         try:
-                            inline_data = BlobType(
-                                data=source.get("data", ""),
-                                mime_type=source.get("media_type", "image/jpeg"),
+                            inline_data_list.append(
+                                BlobType(
+                                    data=source.get("data", ""),
+                                    mime_type=source.get("media_type", "image/jpeg"),
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1553,9 +1557,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             image_obj = convert_to_anthropic_image_obj(
                                 image_url, format=None
                             )
-                            inline_data = BlobType(
-                                data=image_obj["data"],
-                                mime_type=image_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=image_obj["data"],
+                                    mime_type=image_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1580,9 +1586,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             file_obj = convert_to_anthropic_image_obj(
                                 file_data, format=None
                             )
-                            inline_data = BlobType(
-                                data=file_obj["data"],
-                                mime_type=file_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=file_obj["data"],
+                                    mime_type=file_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1636,13 +1644,12 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
 
-    # For Computer Use, if we have an image, we need separate parts:
+    # For Computer Use, if we have images/files, we need separate parts:
     # - One part with function_response
-    # - One part with inline_data
+    # - One part per inline_data item
     # Gemini's PartType is a oneof, so we can't have both in the same part
-    if inline_data:
-        image_part: VertexPartType = {"inline_data": inline_data}
-        return [_part, image_part]
+    if inline_data_list:
+        return [_part] + [{"inline_data": d} for d in inline_data_list]
 
     return _part
 
