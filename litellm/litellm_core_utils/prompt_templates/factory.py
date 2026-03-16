@@ -1503,6 +1503,23 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
+            # Handle data URL images that were converted from Anthropic format
+            # When routing /v1/messages to Gemini, images in tool_results come as data URLs
+            if content_str.startswith("data:") and ";base64," in content_str:
+                try:
+                    image_obj = convert_to_anthropic_image_obj(
+                        content_str, format=None
+                    )
+                    inline_data = BlobType(
+                        data=image_obj["data"],
+                        mime_type=image_obj["media_type"],
+                    )
+                    # Clear content_str since the image is now in inline_data
+                    content_str = ""
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Failed to process data URL image in tool response: {e}"
+                    )
         elif isinstance(message["content"], List):
             content_list = message["content"]
             for content in content_list:

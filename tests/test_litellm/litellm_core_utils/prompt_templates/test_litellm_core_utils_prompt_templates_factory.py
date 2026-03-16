@@ -550,6 +550,64 @@ def test_convert_gemini_tool_call_result_with_image_url():
     assert isinstance(result2, list) and any("inline_data" in p for p in result2)
 
 
+def test_convert_gemini_tool_call_result_with_data_url_string():
+    """
+    Test that data URL strings in tool results are properly converted to inline_data for Gemini.
+    This tests the fix for: https://github.com/BerriAI/litellm/issues/23712
+
+    When routing /v1/messages (Anthropic format) to Gemini models, images in tool_results
+    are converted to data URL strings by translate_anthropic_messages_to_openai().
+    This test ensures those data URLs are properly extracted as inline_data for Gemini.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    # Test with a data URL string (as produced by translate_anthropic_messages_to_openai)
+    test_image_base64 = "/9j/4AAQSkZJRgABAQAAAQABAAD"
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=f"data:image/jpeg;base64,{test_image_base64}",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    # Should return a list with 2 parts: function_response + inline_data
+    assert isinstance(result, list), f"Expected list, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find the inline_data part
+    inline_data_part = next((p for p in result if "inline_data" in p), None)
+    assert inline_data_part is not None, "Missing inline_data part"
+
+    # Verify the inline_data has correct mime_type and data
+    inline_data = inline_data_part["inline_data"]
+    assert inline_data["mime_type"] == "image/jpeg"
+    assert inline_data["data"] == test_image_base64
+
+    # Verify function_response part exists with empty content
+    function_response_part = next((p for p in result if "function_response" in p), None)
+    assert function_response_part is not None, "Missing function_response part"
+    assert function_response_part["function_response"]["name"] == "read_file"
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
