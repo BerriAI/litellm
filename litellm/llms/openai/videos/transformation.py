@@ -18,6 +18,7 @@ from litellm.types.videos.main import (
 )
 from litellm.types.videos.utils import (
     encode_video_id_with_provider,
+    extract_original_character_id,
     extract_original_video_id,
 )
 
@@ -51,6 +52,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             "input_reference",
             "seconds",
             "size",
+            "characters",
             "user",
             "extra_headers",
         ]
@@ -126,6 +128,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
             model=model, prompt=prompt, **video_create_optional_request_params
         )
         request_dict = cast(Dict, video_create_request)
+        request_dict = self._decode_character_ids_in_create_video_request(request_dict)
 
         # Handle input_reference parameter if provided
         _input_reference = video_create_optional_request_params.get("input_reference")
@@ -142,6 +145,35 @@ class OpenAIVideoConfig(BaseVideoConfig):
                 field_name="input_reference",
             )
         return data_without_files, files_list, api_base
+
+    def _decode_character_ids_in_create_video_request(self, request_dict: Dict) -> Dict:
+        """
+        Decode LiteLLM-managed encoded character ids for provider requests.
+
+        OpenAI expects character ids like `char_...`. If a caller sends
+        `character_<base64-encoded-provider-payload>`, convert it back to the
+        original provider id before forwarding upstream.
+        """
+        raw_characters = request_dict.get("characters")
+        if not isinstance(raw_characters, list):
+            return request_dict
+
+        decoded_characters: List[Any] = []
+        for character in raw_characters:
+            if not isinstance(character, dict):
+                decoded_characters.append(character)
+                continue
+
+            character_id = character.get("id")
+            if isinstance(character_id, str):
+                decoded_character = dict(character)
+                decoded_character["id"] = extract_original_character_id(character_id)
+                decoded_characters.append(decoded_character)
+            else:
+                decoded_characters.append(character)
+
+        request_dict["characters"] = decoded_characters
+        return request_dict
 
     def transform_video_create_response(
         self,
