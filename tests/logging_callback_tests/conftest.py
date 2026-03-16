@@ -17,6 +17,27 @@ sys.path.insert(
 import litellm
 
 
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "datadog_params",
+)
+
+
 @pytest.fixture(scope="function", autouse=True)
 def isolate_litellm_state():
     """
@@ -25,21 +46,16 @@ def isolate_litellm_state():
     Saves and restores litellm callback/global state so tests don't leak
     side effects. Works safely under pytest-xdist parallel execution.
     """
-    # Save original callback state
     original_state = {}
-    for attr in (
-        "callbacks",
-        "success_callback",
-        "failure_callback",
-        "_async_success_callback",
-        "_async_failure_callback",
-    ):
+
+    # Save list-type attrs (callbacks)
+    for attr in _LIST_ATTRS:
         if hasattr(litellm, attr):
             val = getattr(litellm, attr)
-            original_state[attr] = val.copy() if val else []
+            original_state[attr] = val.copy() if isinstance(val, list) else val
 
-    # Save other globals that tests commonly mutate
-    for attr in ("set_verbose", "cache", "num_retries"):
+    # Save scalar attrs
+    for attr in _SCALAR_ATTRS:
         if hasattr(litellm, attr):
             original_state[attr] = getattr(litellm, attr)
 
@@ -48,12 +64,7 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
 
     # Clear callbacks before test
-    for attr in (
-        "success_callback",
-        "failure_callback",
-        "_async_success_callback",
-        "_async_failure_callback",
-    ):
+    for attr in _LIST_ATTRS:
         if hasattr(litellm, attr):
             setattr(litellm, attr, [])
 
