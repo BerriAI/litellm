@@ -85,7 +85,10 @@ async def test_batch_upsert_tools_calls_upsert():
     assert call_kw["data"]["create"]["output_policy"] == "untrusted"
     assert call_kw["data"]["create"]["call_count"] == 1
     assert call_kw["data"]["update"]["call_count"] == {"increment": 1}
-    assert "updated_at" in call_kw["data"]["update"]
+    # Timestamps should be ISO strings, not datetime objects.
+    assert isinstance(call_kw["data"]["create"]["last_used_at"], str)
+    assert isinstance(call_kw["data"]["update"]["updated_at"], str)
+    assert isinstance(call_kw["data"]["update"]["last_used_at"], str)
 
 
 @pytest.mark.asyncio
@@ -194,6 +197,10 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
     assert call_kw["where"] == {"tool_name": "my_tool"}
     assert call_kw["data"]["update"]["input_policy"] == "blocked"
     assert call_kw["data"]["update"]["updated_by"] == "admin"
+    # created_at / updated_at must be ISO strings for Postgres compatibility.
+    assert isinstance(call_kw["data"]["create"]["created_at"], str)
+    assert isinstance(call_kw["data"]["create"]["updated_at"], str)
+    assert isinstance(call_kw["data"]["update"]["updated_at"], str)
     prisma.db.litellm_tooltable.find_unique.assert_awaited_with(
         where={"tool_name": "my_tool"}
     )
