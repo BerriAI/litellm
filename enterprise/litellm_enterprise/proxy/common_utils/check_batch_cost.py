@@ -204,6 +204,54 @@ class CheckBatchCost:
                 )
                 continue
 
+            # Sync batch status to DB for all status changes (not just completion).
+            # This ensures list_user_batches returns fresh status from the provider.
+            _current_db_status = job.status
+            _provider_status = response.status
+            _normalized_status = (
+                _provider_status if _provider_status != "completed" else "complete"
+            )
+
+            if _normalized_status != _current_db_status:
+                _is_terminal_failure = _provider_status in (
+                    "failed",
+                    "expired",
+                    "cancelled",
+                )
+
+                if _provider_status != "completed":
+                    # For non-completed status changes, update DB now.
+                    # Completed batches are handled below with cost tracking.
+                    try:
+                        update_data: dict = {
+                            "status": _normalized_status,
+                            "file_object": response.model_dump_json(),
+                        }
+                        if _is_terminal_failure:
+                            if self._has_batch_processed_column:
+                                update_data["batch_processed"] = True
+                            verbose_proxy_logger.info(
+                                f"Batch {batch_id} reached terminal state "
+                                f"'{_provider_status}', marking as processed"
+                            )
+                        else:
+                            verbose_proxy_logger.info(
+                                f"Batch {batch_id} status changed: "
+                                f"{_current_db_status} -> {_provider_status}"
+                            )
+                        await self.prisma_client.db.litellm_managedobjecttable.update(
+                            where={"id": job.id},
+                            data=update_data,
+                        )
+                    except Exception as db_err:
+                        verbose_proxy_logger.error(
+                            f"CheckBatchCost: failed to sync status for "
+                            f"batch {batch_id}: {db_err}"
+                        )
+
+                    if _is_terminal_failure:
+                        continue  # No cost tracking needed for failed/expired/cancelled
+
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
                 response.status == "completed"
