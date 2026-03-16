@@ -108,7 +108,6 @@ def rerank(  # noqa: PLR0915
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     user = kwargs.get("user", None)
     client = kwargs.get("client", None)
     try:
@@ -164,7 +163,8 @@ def rerank(  # noqa: PLR0915
 
         model_response = RerankResponse()
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(optional_rerank_params),
@@ -172,7 +172,6 @@ def rerank(  # noqa: PLR0915
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),

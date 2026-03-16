@@ -480,6 +480,7 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -6174,6 +6175,39 @@ class ProxyStartupEvent:
         # Focus Background Job
         ########################################################
         await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Vantage Background Job
+        ########################################################
+        from litellm.integrations.vantage.vantage_logger import VantageLogger
+        from litellm.proxy.spend_tracking.vantage_endpoints import (
+            _get_vantage_settings,
+            is_vantage_setup,
+            is_vantage_setup_in_config,
+            is_vantage_setup_in_db,
+        )
+
+        if await is_vantage_setup():
+            # If configured via DB but not in config.yaml callbacks,
+            # instantiate and register a VantageLogger so the scheduler
+            # can find it.
+            if not is_vantage_setup_in_config() and await is_vantage_setup_in_db():
+                try:
+                    db_settings = await _get_vantage_settings()
+                    if db_settings:
+                        vantage_logger = VantageLogger(
+                            api_key=db_settings.get("api_key"),
+                            integration_token=db_settings.get("integration_token"),
+                            base_url=db_settings.get("base_url"),
+                        )
+                        litellm.logging_callback_manager.add_litellm_callback(
+                            vantage_logger
+                        )
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "Failed to register VantageLogger from DB settings: %s", e
+                    )
+            await VantageLogger.init_vantage_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
@@ -13250,6 +13284,7 @@ app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
+app.include_router(vantage_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)

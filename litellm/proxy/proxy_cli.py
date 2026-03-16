@@ -556,6 +556,13 @@ class ProxyInitializationHelpers:
     help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
+@click.option(
+    "--enforce_prisma_migration_check",
+    is_flag=True,
+    default=False,
+    help="Exit with error if database migration fails on startup.",
+    envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -595,6 +602,7 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
     max_requests_before_restart,
+    enforce_prisma_migration_check: bool,
 ):
     args = locals()
     if local:
@@ -708,6 +716,7 @@ def run_server(  # noqa: PLR0915
             for k, v in new_env_var.items():
                 os.environ[k] = v
 
+        litellm_settings = None
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -822,7 +831,9 @@ def run_server(  # noqa: PLR0915
                         "pool_timeout": db_connection_timeout,
                     }
                     database_url = get_secret("DATABASE_URL", default_value=None)
-                    modified_url = append_query_params(database_url, params)
+                    modified_url = append_query_params(
+                        str(database_url) if database_url else None, params
+                    )
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
                     ### add connection pool + pool timeout args
@@ -857,11 +868,17 @@ def run_server(  # noqa: PLR0915
                     if not PrismaManager.setup_database(
                         use_migrate=not use_prisma_db_push
                     ):
-                        print(  # noqa
-                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
-                        )
-                        sys.exit(1)
+                        if enforce_prisma_migration_check:
+                            print(  # noqa
+                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            )
+                            sys.exit(1)
+                        else:
+                            print(  # noqa
+                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
+                                "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
+                            )
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

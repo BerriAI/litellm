@@ -144,6 +144,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "vantage",
     "posthog",
     "levo",
 ]
