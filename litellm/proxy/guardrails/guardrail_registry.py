@@ -544,23 +544,21 @@ class InMemoryGuardrailHandler:
         self, guardrail_id: str, guardrail: Guardrail
     ) -> None:
         """
-        Update a guardrail in memory
+        Update a guardrail in memory by deleting and re-initializing.
 
-        - updates the guardrail in memory
-        - updates the guardrail params in litellm.callback_manager
+        Re-initialization is necessary because guardrails like
+        ``ContentFilterGuardrail`` compile patterns at init time.
+        Simply patching attributes via ``setattr`` would leave stale
+        compiled state and skip validation of new patterns.
         """
-        self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
+        # Delete old callback and in-memory references
+        self.delete_in_memory_guardrail(guardrail_id)
 
-        custom_guardrail_callback = self.guardrail_id_to_custom_guardrail.get(
-            guardrail_id
-        )
-        if custom_guardrail_callback:
-            updated_litellm_params = cast(
-                LitellmParams, guardrail.get("litellm_params", {})
-            )
-            custom_guardrail_callback.update_in_memory_litellm_params(
-                litellm_params=updated_litellm_params
-            )
+        # Ensure the guardrail_id is set so initialize_guardrail uses it
+        guardrail["guardrail_id"] = guardrail_id
+
+        # Re-initialize (validates patterns, compiles regexes, registers callback)
+        self.initialize_guardrail(guardrail=guardrail)
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
