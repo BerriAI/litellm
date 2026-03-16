@@ -831,14 +831,43 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
 
-        await prisma_client.db.litellm_managedobjecttable.update(
-            where={"unified_object_id": batch_id},
-            data={
-                "status": db_status,
-                "file_object": response.model_dump_json(),
-                "updated_at": litellm.utils.get_utc_datetime(),
-            },
-        )
+        update_data: dict = {
+            "status": db_status,
+            "file_object": response.model_dump_json(),
+            "updated_at": litellm.utils.get_utc_datetime(),
+        }
+
+        # When a batch reaches completion, also mark batch_processed=True.
+        # The cost callback is enqueued asynchronously during the
+        # aretrieve_batch call that detected completion (via the @client
+        # decorator).  It is not awaited, so there is a theoretical window
+        # where the callback hasn't executed yet.  In practice the callback
+        # completes reliably.  Setting the flag here unblocks file deletion
+        # which queries batch_processed=False.  CheckBatchCost acts as a
+        # safety net for the rare case where the callback fails.
+        if db_status == "complete":
+            update_data["batch_processed"] = True
+
+        try:
+            await prisma_client.db.litellm_managedobjecttable.update(
+                where={"unified_object_id": batch_id},
+                data=update_data,
+            )
+        except Exception as col_err:
+            # If the batch_processed column doesn't exist (old schema),
+            # retry without it so the status update still succeeds.
+            err_str = str(col_err).lower()
+            if "batch_processed" in err_str and update_data.get("batch_processed") is not None:
+                verbose_proxy_logger.warning(
+                    f"batch_processed column not found, retrying update without it: {col_err}"
+                )
+                update_data.pop("batch_processed", None)
+                await prisma_client.db.litellm_managedobjecttable.update(
+                    where={"unified_object_id": batch_id},
+                    data=update_data,
+                )
+            else:
+                raise
     except Exception as e:
         verbose_proxy_logger.error(
             f"Failed to update batch status in ManagedObjectTable: {e}"

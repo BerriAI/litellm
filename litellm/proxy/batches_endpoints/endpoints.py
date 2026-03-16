@@ -406,9 +406,11 @@ async def retrieve_batch(  # noqa: PLR0915
             verbose_proxy_logger=verbose_proxy_logger,
         )
 
-        # If batch is in a terminal state, return immediately
+        # If batch is in a terminal state, return immediately.
+        # Include "complete" (DB-normalized form of "completed").
         if response is not None and response.status in [
             "completed",
+            "complete",
             "failed",
             "cancelled",
             "expired",
