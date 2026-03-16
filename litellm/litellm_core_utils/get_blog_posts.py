@@ -14,7 +14,7 @@ import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from importlib.resources import files
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 from pydantic import BaseModel
