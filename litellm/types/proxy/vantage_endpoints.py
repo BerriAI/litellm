@@ -20,7 +20,7 @@ class VantageInitRequest(BaseModel):
         description="Vantage API base URL (default: https://api.vantage.sh)",
     )
 
-    @field_validator("api_key", "integration_token")
+    @field_validator("api_key", "integration_token", "base_url")
     @classmethod
     def must_be_non_empty(cls, v: str) -> str:
         if not v.strip():
@@ -39,7 +39,8 @@ class VantageExportRequest(BaseModel):
     """Request model for Vantage export operations (actual export, no default limit)"""
 
     limit: Optional[int] = Field(
-        None, description="Optional limit on number of records to export (default: no limit)"
+        None,
+        description="Optional limit on number of records to export (default: no limit)",
     )
     start_time_utc: Optional[datetime] = Field(
         None, description="Start time for data export in UTC"
@@ -96,7 +97,7 @@ class VantageSettingsUpdate(BaseModel):
     )
     base_url: Optional[str] = Field(None, description="New Vantage API base URL")
 
-    @field_validator("api_key", "integration_token")
+    @field_validator("api_key", "integration_token", "base_url")
     @classmethod
     def must_be_non_empty(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and not v.strip():
