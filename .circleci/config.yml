@@ -28,34 +28,36 @@ commands:
       - setup_google_dns
       - restore_cache:
           keys:
-            - v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
-            - v2-litellm-deps-
+            - v3-litellm-uv-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest-mock==3.12.0"
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.22.0"
-            pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
-            pip install "requests-mock>=1.12.1"
-            pip install "responses==0.25.7"
-            pip install "pytest-xdist==3.6.1"
-            pip install "pytest-timeout==2.2.0"
-            pip install "semantic_router==0.1.10"
-            pip install "fastapi-offline==1.7.3"
-            pip install "a2a"
+            python -m pip install --upgrade pip uv
+            uv pip install --system \
+              -r requirements.txt \
+              "pytest-mock==3.12.0" \
+              "pytest==7.3.1" \
+              "pytest-retry==1.6.3" \
+              "pytest-asyncio==0.21.1" \
+              "respx==0.22.0" \
+              "hypercorn==0.17.3" \
+              "pydantic==2.11.0" \
+              "mcp==1.25.0" \
+              "requests-mock>=1.12.1" \
+              "responses==0.25.7" \
+              "pytest-xdist==3.6.1" \
+              "pytest-timeout==2.2.0" \
+              "pytest-cov==5.0.0" \
+              "semantic_router==0.1.10" \
+              "fastapi-offline==1.7.3" \
+              "a2a"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ~/.cache/pip
-          key: v2-litellm-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
+            - ~/.local/lib
+            - ~/.local/bin
+            - ~/.cache/uv
+          key: v3-litellm-uv-deps-{{ checksum "requirements.txt" }}-{{ checksum ".circleci/config.yml" }}
 
 jobs:
   # Add Windows testing job
@@ -1556,7 +1558,7 @@ jobs:
           paths:
             - search_coverage.xml
             - search_coverage
-  # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
+  # Split litellm_mapped_tests into parallel jobs
   litellm_mapped_tests_proxy_part1:
     docker:
       - image: cimg/python:3.11
@@ -1572,20 +1574,10 @@ jobs:
           command: |
             prisma generate
             export PYTHONUNBUFFERED=1
-            python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 4 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+            python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 4 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_proxy_tests_part1_coverage.xml
-            mv .coverage litellm_proxy_tests_part1_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_proxy_tests_part1_coverage.xml
-            - litellm_proxy_tests_part1_coverage
   litellm_mapped_tests_proxy_part2:
     docker:
       - image: cimg/python:3.11
@@ -1601,20 +1593,10 @@ jobs:
           command: |
             prisma generate
             export PYTHONUNBUFFERED=1
-            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
+            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_proxy_tests_part2_coverage.xml
-            mv .coverage litellm_proxy_tests_part2_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_proxy_tests_part2_coverage.xml
-            - litellm_proxy_tests_part2_coverage
   litellm_mapped_tests_llms:
     docker:
       - image: cimg/python:3.11
@@ -1628,20 +1610,10 @@ jobs:
       - run:
           name: Run LLM provider tests
           command: |
-            python -m pytest tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-llms.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm/llms --junitxml=test-results/junit-llms.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_llms_tests_coverage.xml
-            mv .coverage litellm_llms_tests_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_llms_tests_coverage.xml
-            - litellm_llms_tests_coverage
   litellm_mapped_tests_core:
     docker:
       - image: cimg/python:3.11
@@ -1655,20 +1627,10 @@ jobs:
       - run:
           name: Run core tests
           command: |
-            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --junitxml=test-results/junit-core.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_core_tests_coverage.xml
-            mv .coverage litellm_core_tests_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_core_tests_coverage.xml
-            - litellm_core_tests_coverage
   litellm_mapped_tests_litellm_core_utils:
     docker:
       - image: cimg/python:3.11
@@ -1682,20 +1644,10 @@ jobs:
       - run:
           name: Run litellm_core_utils tests
           command: |
-            python -m pytest tests/test_litellm/litellm_core_utils --cov=litellm --cov-report=xml --junitxml=test-results/junit-litellm-core-utils.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm/litellm_core_utils --junitxml=test-results/junit-litellm-core-utils.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_core_utils_tests_coverage.xml
-            mv .coverage litellm_core_utils_tests_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_core_utils_tests_coverage.xml
-            - litellm_core_utils_tests_coverage
   litellm_mapped_tests_mcps:
     docker:
       - image: cimg/python:3.11
@@ -1736,20 +1688,10 @@ jobs:
       - run:
           name: Run integrations tests
           command: |
-            python -m pytest tests/test_litellm/integrations --cov=litellm --cov-report=xml --junitxml=test-results/junit-integrations.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm/integrations --junitxml=test-results/junit-integrations.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml litellm_integrations_tests_coverage.xml
-            mv .coverage litellm_integrations_tests_coverage
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - litellm_integrations_tests_coverage.xml
-            - litellm_integrations_tests_coverage
   litellm_mapped_enterprise_tests:
     docker:
       - image: cimg/python:3.11
