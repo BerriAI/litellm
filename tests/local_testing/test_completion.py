@@ -2937,7 +2937,7 @@ def test_completion_together_ai_mixtral():
 
 def test_completion_together_ai_llama():
     litellm.set_verbose = True
-    model_name = "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    model_name = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
