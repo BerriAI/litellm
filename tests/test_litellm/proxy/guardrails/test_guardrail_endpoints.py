@@ -884,7 +884,6 @@ async def test_patch_guardrail_endpoint(
     """Test patch_guardrail endpoint with different scenarios"""
 
     # Configure mocks based on scenario
-    mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
         mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
@@ -903,7 +902,7 @@ async def test_patch_guardrail_endpoint(
         mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
             side_effect=Exception("Sync failed")
         )
-        mock_logger = mocker.patch(
+        mocker.patch(
             "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
         )
 
@@ -943,7 +942,7 @@ async def test_patch_guardrail_endpoint(
 
         if scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
-            assert "failed to update in memory" in str(exc_info.value.detail)
+            assert "rolled back" in str(exc_info.value.detail)
     else:
         result = await patch_guardrail(
             "test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
@@ -957,11 +956,6 @@ async def test_patch_guardrail_endpoint(
         mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
             guardrail=mocker.ANY
         )
-
-        if scenario == "success_sync_fails":
-            assert mock_logger is not None
-            mock_logger.warning.assert_called_once()
-            assert "Failed to update" in str(mock_logger.warning.call_args)
 
 
 @pytest.mark.parametrize(
@@ -1022,7 +1016,7 @@ async def test_delete_guardrail_endpoint(
 
         if scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
-            assert "failed to remove from memory" in str(exc_info.value.detail)
+            assert "rolled back" in str(exc_info.value.detail)
     else:
         result = await delete_guardrail(
             guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER

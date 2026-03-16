@@ -541,7 +541,10 @@ class InMemoryGuardrailHandler:
         return _guardrail_callback
 
     def update_in_memory_guardrail(
-        self, guardrail_id: str, guardrail: Guardrail
+        self,
+        guardrail_id: str,
+        guardrail: Guardrail,
+        config_file_path: Optional[str] = None,
     ) -> None:
         """
         Update a guardrail in memory by deleting and re-initializing.
@@ -554,11 +557,14 @@ class InMemoryGuardrailHandler:
         # Delete old callback and in-memory references
         self.delete_in_memory_guardrail(guardrail_id)
 
-        # Ensure the guardrail_id is set so initialize_guardrail uses it
-        guardrail["guardrail_id"] = guardrail_id
+        # Work on a copy to avoid mutating the caller's dict (important for rollback paths)
+        guardrail_copy = {**guardrail, "guardrail_id": guardrail_id}
 
         # Re-initialize (validates patterns, compiles regexes, registers callback)
-        self.initialize_guardrail(guardrail=guardrail)
+        self.initialize_guardrail(
+            guardrail=cast(Guardrail, guardrail_copy),
+            config_file_path=config_file_path,
+        )
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """

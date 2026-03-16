@@ -556,9 +556,19 @@ async def delete_guardrail(
             verbose_proxy_logger.error(
                 f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
             )
+            # Rollback: re-create the DB entry so state stays consistent
+            try:
+                await GUARDRAIL_REGISTRY.add_guardrail_to_db(
+                    guardrail=cast(Guardrail, existing_guardrail),
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.error(
+                    "Failed to rollback guardrail DB deletion after memory removal failure"
+                )
             raise HTTPException(
                 status_code=422,
-                detail=f"Guardrail deleted from DB but failed to remove from memory: {delete_error}",
+                detail=f"Guardrail delete failed, rolled back: {delete_error}",
             )
 
         return result
@@ -1143,9 +1153,25 @@ async def patch_guardrail(
             verbose_proxy_logger.error(
                 f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
             )
+            # Rollback: restore previous guardrail data in DB
+            try:
+                await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                    guardrail_id=guardrail_id,
+                    guardrail=cast(Guardrail, existing_guardrail),
+                    prisma_client=prisma_client,
+                )
+                # Re-sync the old guardrail in memory
+                IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                    guardrail=cast(Guardrail, existing_guardrail),
+                )
+            except Exception:
+                verbose_proxy_logger.error(
+                    "Failed to rollback guardrail DB entry after patch failure"
+                )
+
             raise HTTPException(
                 status_code=422,
-                detail=f"Guardrail patched in DB but failed to update in memory: {update_error}",
+                detail=f"Guardrail patch failed, rolled back: {update_error}",
             )
 
         return result
