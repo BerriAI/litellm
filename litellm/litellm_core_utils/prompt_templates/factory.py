@@ -86,6 +86,15 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
+def _get_content_as_str(content: Union[str, list]) -> str:
+    """Extract text from content that may be a string or a list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return convert_content_list_to_str({"content": content})
+    return str(content)
+
+
 def map_system_message_pt(messages: list) -> list:
     """
     Convert 'system' message to 'user' message if provider doesn't support 'system' role.
@@ -100,6 +109,7 @@ def map_system_message_pt(messages: list) -> list:
     new_messages = []
     for i, m in enumerate(messages):
         if m["role"] == "system":
+            system_text = _get_content_as_str(m["content"])
             if i < len(messages) - 1:  # Not the last message
                 next_m = messages[i + 1]
                 next_role = next_m["role"]
@@ -107,13 +117,14 @@ def map_system_message_pt(messages: list) -> list:
                     next_role == "user" or next_role == "assistant"
                 ):  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    next_text = _get_content_as_str(next_m["content"])
+                    next_m["content"] = system_text + " " + next_text
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
-                    new_message = {"role": "user", "content": m["content"]}
+                    new_message = {"role": "user", "content": system_text}
                     new_messages.append(new_message)
             else:  # Last message
-                new_message = {"role": "user", "content": m["content"]}
+                new_message = {"role": "user", "content": system_text}
                 new_messages.append(new_message)
         else:  # Not a system message
             new_messages.append(m)

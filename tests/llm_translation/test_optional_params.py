@@ -55,6 +55,61 @@ def test_supports_system_message():
     assert isinstance(response, litellm.ModelResponse)
 
 
+def test_supports_system_message_list_content():
+    """
+    Test map_system_message_pt when content is a list of content blocks
+    (e.g. from Anthropic pass-through endpoint).
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23757
+    """
+    # System message with list content (Anthropic format)
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert isinstance(new_messages[0]["content"], str)
+    assert "You are helpful." in new_messages[0]["content"]
+    assert "Hello!" in new_messages[0]["content"]
+
+
+def test_supports_system_message_mixed_content():
+    """
+    Test map_system_message_pt with mixed str and list content types.
+    """
+    messages = [
+        {"role": "system", "content": "System prompt"},
+        {"role": "user", "content": [{"type": "text", "text": "User message"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert isinstance(new_messages[0]["content"], str)
+    assert "System prompt" in new_messages[0]["content"]
+    assert "User message" in new_messages[0]["content"]
+
+
+def test_supports_system_message_list_content_last_message():
+    """
+    Test map_system_message_pt when system message with list content is the last message.
+    """
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "Only system"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert new_messages[0]["content"] == "Only system"
+
+
 @pytest.mark.parametrize(
     "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
 )
