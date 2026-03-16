@@ -51,6 +51,7 @@ router = Router(
 )
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize(
     "model",
     [

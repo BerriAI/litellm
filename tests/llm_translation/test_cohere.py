@@ -65,6 +65,7 @@ async def test_chat_completion_cohere_citations(stream):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_cohere_command_r_plus_function_call():
     litellm.set_verbose = True
     tools = [
