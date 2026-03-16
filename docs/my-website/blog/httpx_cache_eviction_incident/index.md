@@ -3,17 +3,9 @@ slug: httpx-cache-eviction-incident
 title: "Incident Report: Cache Eviction Closes In-Use httpx Clients"
 date: 2026-02-27T10:00:00
 authors:
-  - name: Ryan Crabbe
-    title: Performance Engineer, LiteLLM
-    url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - ryan
+  - ishaan-alt
+  - krrish
 tags: [incident-report, caching, stability]
 hide_table_of_contents: false
 ---

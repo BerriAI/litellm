@@ -3,18 +3,9 @@ slug: gemini_3_1_flash_lite_preview
 title: "DAY 0 Support: Gemini 3.1 Flash Lite Preview on LiteLLM"
 date: 2026-03-03T08:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Guide to using Gemini 3.1 Flash Lite Preview on LiteLLM Proxy and SDK with day 0 support."
 tags: [gemini, day 0 support, llms, supernova]
 hide_table_of_contents: false
@@ -150,7 +141,7 @@ LiteLLM provides **full end-to-end support** for Gemini 3.1 Flash Lite Preview o
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
 - ✅ [`/v1/messages`](../../docs/anthropic_unified) - Anthropic-compatible messages endpoint
-- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent.md) compatible endpoint 
+- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent) compatible endpoint 
 
 All endpoints support:
 - Streaming and non-streaming responses

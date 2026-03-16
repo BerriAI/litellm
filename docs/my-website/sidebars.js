@@ -18,6 +18,11 @@ const sidebars = {
     { type: "doc", id: "integrations/index" },
     { type: "doc", id: "integrations/community" },
     {
+      type: "doc",
+      id: "integrations/websearch_interception",
+      label: "Web Search Integration"
+    },
+    {
       type: "category",
       label: "Observability",
       items: [
@@ -114,11 +119,6 @@ const sidebars = {
         "proxy/prometheus",
         "proxy/pyroscope_profiling"
       ]
-    },
-    {
-      type: "doc",
-      id: "integrations/websearch_interception",
-      label: "Web Search Integration"
     },
     {
       type: "category",
