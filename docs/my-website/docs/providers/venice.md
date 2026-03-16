@@ -23,6 +23,9 @@ import TabItem from '@theme/TabItem';
 - [API Key](#api-key)
 - [Sample Usage](#sample-usage)
 - [Streaming](#streaming)
+- [Async Usage](#async-usage)
+- [Vision Models](#vision-models)
+- [JSON Mode / Structured Output](#json-mode--structured-output)
 - [Function Calling](#function-calling)
 - [Supported Models](#supported-models)
 - [Embeddings](#embeddings)
@@ -173,7 +176,6 @@ Venice AI supports function calling on compatible models.
 ```python
 from litellm import completion
 import os
-import json
 
 os.environ["VENICE_AI_API_KEY"] = "your-api-key"
 
