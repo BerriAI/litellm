@@ -631,6 +631,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
+            pip install "pytest-xdist==3.6.1"
       - save_cache:
           paths:
             - ./venv
@@ -648,7 +649,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/proxy_admin_ui_tests -x --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/proxy_admin_ui_tests -x --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
 
       - run:
@@ -759,7 +760,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1399,13 +1400,14 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pydantic==2.11.0"
             pip install "mcp==1.25.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/mcp_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1581,13 +1583,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/llm_responses_api_testing --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1667,13 +1670,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1959,13 +1963,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -2006,13 +2011,14 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pytest-mock
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -2050,13 +2056,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
