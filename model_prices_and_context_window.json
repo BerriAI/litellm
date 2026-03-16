@@ -13520,7 +13520,17 @@
         "supports_web_search": false,
         "tpm": 8000000,
         "cache_read_input_token_cost_priority": 5.4e-08,
-        "cache_read_input_token_cost_flex": 1.5e-08
+        "cache_read_input_token_cost_flex": 1.5e-08,
+        "input_cost_per_token_priority": 5.4e-07,
+        "input_cost_per_token_flex": 1.5e-07,
+        "output_cost_per_token_priority": 4.5e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07,
+        "output_cost_per_image_priority": 0.0702,
+        "output_cost_per_image_flex": 0.0195,
+        "output_cost_per_image_token_priority": 5.4e-05,
+        "output_cost_per_image_token_flex": 1.5e-05
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -14866,7 +14876,17 @@
         "supports_web_search": true,
         "tpm": 8000000,
         "cache_read_input_token_cost_priority": 5.4e-08,
-        "cache_read_input_token_cost_flex": 1.5e-08
+        "cache_read_input_token_cost_flex": 1.5e-08,
+        "input_cost_per_token_priority": 5.4e-07,
+        "input_cost_per_token_flex": 1.5e-07,
+        "output_cost_per_token_priority": 4.5e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07,
+        "output_cost_per_image_priority": 0.0702,
+        "output_cost_per_image_flex": 0.0195,
+        "output_cost_per_image_token_priority": 5.4e-05,
+        "output_cost_per_image_token_flex": 1.5e-05
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -30608,7 +30628,17 @@
         "supports_web_search": false,
         "tpm": 8000000,
         "cache_read_input_token_cost_priority": 5.4e-08,
-        "cache_read_input_token_cost_flex": 1.5e-08
+        "cache_read_input_token_cost_flex": 1.5e-08,
+        "input_cost_per_token_priority": 5.4e-07,
+        "input_cost_per_token_flex": 1.5e-07,
+        "output_cost_per_token_priority": 4.5e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "input_cost_per_audio_token_priority": 1.8e-06,
+        "input_cost_per_audio_token_flex": 5e-07,
+        "output_cost_per_image_priority": 0.0702,
+        "output_cost_per_image_flex": 0.0195,
+        "output_cost_per_image_token_priority": 5.4e-05,
+        "output_cost_per_image_token_flex": 1.5e-05
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
