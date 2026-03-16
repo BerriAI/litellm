@@ -4262,7 +4262,7 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         ]
     ] = Field(
-        default=LitellmUserRoles.INTERNAL_USER,
+        default=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         description="Default role assigned to new users created",
     )
     max_budget: Optional[float] = Field(
