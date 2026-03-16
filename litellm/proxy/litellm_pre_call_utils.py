@@ -1183,14 +1183,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
-    # Add User-Agent
+    # Add User-Agent (skip if disabled via litellm.disable_add_user_agent_to_request_tags)
+    import litellm as _litellm_module
+
     user_agent = ""
-    if (
-        request is not None
-        and hasattr(request, "headers")
-        and "user-agent" in request.headers
-    ):
-        user_agent = request.headers["user-agent"]
+    if not getattr(_litellm_module, "disable_add_user_agent_to_request_tags", False):
+        if (
+            request is not None
+            and hasattr(request, "headers")
+            and "user-agent" in request.headers
+        ):
+            user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
     # Check if using tag based routing
