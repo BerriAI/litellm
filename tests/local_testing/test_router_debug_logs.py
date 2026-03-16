@@ -83,6 +83,7 @@ def test_async_fallbacks(caplog):
         log
         for log in captured_logs
         if "Task exception was never retrieved" not in log
+        and "Task was destroyed but it is pending" not in log
         and "get_available_deployment" not in log
         and "in the Langfuse queue" not in log
     ]

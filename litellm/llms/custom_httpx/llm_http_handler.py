@@ -1882,12 +1882,11 @@ class BaseLLMHTTPHandler:
             headers=headers, provider=custom_llm_provider
         )
 
-        logging_obj.update_environment_variables(
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=dict(anthropic_messages_optional_request_params),
             litellm_params={
-                "metadata": kwargs.get("metadata", {}),
-                "litellm_metadata": kwargs.get("litellm_metadata", {}),
                 "preset_cache_key": None,
                 "stream_response": {},
                 **anthropic_messages_optional_request_params,
