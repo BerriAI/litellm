@@ -1330,6 +1330,7 @@ jobs:
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
             pip install "semantic_router==0.1.10" --no-deps
+            pip install aurelio_sdk --no-deps
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
       # Run pytest and generate JUnit XML report
@@ -1684,6 +1685,7 @@ jobs:
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
             pip install "semantic_router==0.1.10" --no-deps
+            pip install aurelio_sdk --no-deps
             pip install "fastapi-offline==1.7.3"
       - setup_litellm_enterprise_pip
       - run:
