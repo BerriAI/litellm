@@ -3493,9 +3493,6 @@ class SpecialEnums(Enum):
     LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
-    LITELLM_MANAGED_VIDEO_CHARACTER_COMPLETE_STR = (
-        "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
-    )
 
 
 class ServiceTier(Enum):

@@ -106,14 +106,6 @@ class DecodedVideoId(TypedDict, total=False):
     video_id: str
 
 
-class DecodedCharacterId(TypedDict, total=False):
-    """Structure representing a decoded character ID"""
-
-    custom_llm_provider: Optional[str]
-    model_id: Optional[str]
-    character_id: str
-
-
 class CharacterObject(BaseModel):
     """Represents a character created from a video."""
 
