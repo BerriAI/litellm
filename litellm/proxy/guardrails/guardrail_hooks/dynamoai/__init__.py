@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
-    _dynamoai_callback = DynamoAIGuardrails(
 
     _dynamoai_callback = DynamoAIGuardrails(
         api_base=litellm_params.api_base,
