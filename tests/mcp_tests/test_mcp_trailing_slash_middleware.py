@@ -9,7 +9,6 @@ everything else through unchanged.
 import asyncio
 from typing import Optional
 
-
 # The middleware is defined at module scope in proxy_server.py alongside heavy
 # imports we don't want here.  Re-implement the same class locally to test the
 # logic in isolation (it's only ~10 lines) while keeping the test dependency-free.
