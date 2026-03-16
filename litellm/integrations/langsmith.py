@@ -84,8 +84,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
+        self._flush_task: Optional[asyncio.Task[Any]] = None
         if start_periodic_flush:
-            self._start_periodic_flush_task()
+            self._flush_task = self._start_periodic_flush_task()
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
@@ -98,6 +99,10 @@ class LangsmithLogger(CustomBatchLogger):
             return None
 
         return loop.create_task(self.periodic_flush())
+
+    def _ensure_periodic_flush_task(self) -> None:
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = self._start_periodic_flush_task()
 
     def get_credentials_from_env(
         self,
@@ -269,6 +274,7 @@ class LangsmithLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self._ensure_periodic_flush_task()
             sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample = random.random()
             if random_sample > sampling_rate:
@@ -310,6 +316,7 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._ensure_periodic_flush_task()
         sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
         random_sample = random.random()
         if random_sample > sampling_rate:
