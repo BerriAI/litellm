@@ -1,9 +1,9 @@
 # conftest.py
 #
 # xdist-compatible test isolation for logging callback tests.
-# Pattern matches tests/guardrails_tests/conftest.py:
 #   - Function-scoped fixture saves/restores litellm globals (no reload)
 #   - Module-scoped fixture reloads only in single-process mode
+#   - Clears _in_memory_loggers to prevent cached logger instance leaks
 
 import importlib
 import os
@@ -24,6 +24,8 @@ _LIST_ATTRS = (
     "_async_success_callback",
     "_async_failure_callback",
     "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
 )
 
 _SCALAR_ATTRS = (
@@ -35,6 +37,7 @@ _SCALAR_ATTRS = (
     "redact_user_api_key_info",
     "s3_callback_params",
     "datadog_params",
+    "vector_store_registry",
 )
 
 
@@ -46,6 +49,8 @@ def isolate_litellm_state():
     Saves and restores litellm callback/global state so tests don't leak
     side effects. Works safely under pytest-xdist parallel execution.
     """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+
     original_state = {}
 
     # Save list-type attrs (callbacks)
@@ -59,9 +64,12 @@ def isolate_litellm_state():
         if hasattr(litellm, attr):
             original_state[attr] = getattr(litellm, attr)
 
-    # Flush cache before test
+    # Flush cache and clear internal logger instances before test
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+    # Clear cached logger instances (LangsmithLogger, SlackAlerting, etc.)
+    ll_logging._in_memory_loggers.clear()
 
     # Clear callbacks before test
     for attr in _LIST_ATTRS:
@@ -73,6 +81,8 @@ def isolate_litellm_state():
     # Restore all saved state
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+    ll_logging._in_memory_loggers.clear()
 
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
