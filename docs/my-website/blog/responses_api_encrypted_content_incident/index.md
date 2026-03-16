@@ -22,7 +22,7 @@ hide_table_of_contents: false
 **Date:** Feb 24, 2026  
 **Duration:** Ongoing (until fix deployed)  
 **Severity:** High (for users load balancing Responses API across different API keys)  
-**Status:** Resolved
+**Status:** Resolved (fix available in **LiteLLM 1.82.1+**)
 
 ## Summary
 

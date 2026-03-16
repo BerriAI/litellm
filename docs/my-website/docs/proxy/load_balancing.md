@@ -352,7 +352,7 @@ If `order=1` deployment is unavailable (e.g., rate-limited), the router falls ba
 
 When load balancing OpenAI's Responses API across deployments with **different API keys** (e.g., different Azure regions or organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the originating API key.
 
-**Solution:** Use the `encrypted_content_affinity` pre-call check to automatically route follow-up requests containing encrypted items to the correct deployment:
+**Solution:** Use the `encrypted_content_affinity` pre-call check to automatically route follow-up requests containing encrypted items to the correct deployment. **Requires LiteLLM 1.82.1+**.
 
 ```yaml
 model_list:
