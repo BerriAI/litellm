@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional
 
 import orjson
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm.proxy._types import *
@@ -530,6 +530,7 @@ async def video_create_character(
     request: Request,
     fastapi_response: Response,
     video: UploadFile = File(...),
+    name: str = Form(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
