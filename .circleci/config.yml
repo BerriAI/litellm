@@ -511,7 +511,6 @@ jobs:
               --verbose \
               --command="xargs python -m pytest \
                 -v \
-                -n 4 \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -k 'caching or cache'"
