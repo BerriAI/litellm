@@ -23,6 +23,9 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_headers_manager import (
+    update_request_with_filtered_beta,
+)
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
@@ -58,9 +61,6 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from .transformation import AnthropicConfig
 
 if TYPE_CHECKING:
@@ -339,10 +339,6 @@ class AnthropicChatCompletion(BaseLLM):
             litellm_params=litellm_params,
         )
 
-        headers = update_headers_with_filtered_beta(
-            headers=headers, provider=custom_llm_provider
-        )
-
         config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
@@ -358,6 +354,12 @@ class AnthropicChatCompletion(BaseLLM):
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
             headers=headers,
+        )
+
+        headers, data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=data,
+            provider=custom_llm_provider,
         )
 
         ## LOGGING
