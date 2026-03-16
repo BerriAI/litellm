@@ -611,7 +611,7 @@ class ModelResponseIterator:
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
             annotation = (
-                AnthropicConfig()._translate_anthropic_citation_to_openai_annotation(
+                AnthropicConfig._translate_anthropic_citation_to_openai_annotation(
                     content_block["delta"]["citation"]
                 )
             )
