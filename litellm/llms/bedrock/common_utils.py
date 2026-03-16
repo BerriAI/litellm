@@ -49,6 +49,46 @@ def get_cached_model_info():
     return _get_model_info
 
 
+def add_additional_properties_to_schema(schema: dict) -> dict:
+    """
+    Recursively ensure all object types in a JSON schema have
+    ``"additionalProperties": false``.
+
+    Bedrock's native structured-outputs API requires this field to be
+    explicitly set on every object node, otherwise it returns a
+    validation error.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    result = dict(schema)
+
+    if result.get("type") == "object" and "additionalProperties" not in result:
+        result["additionalProperties"] = False
+
+    # Recurse into nested schemas
+    if "properties" in result and isinstance(result["properties"], dict):
+        result["properties"] = {
+            k: add_additional_properties_to_schema(v)
+            for k, v in result["properties"].items()
+        }
+    if "items" in result and isinstance(result["items"], dict):
+        result["items"] = add_additional_properties_to_schema(result["items"])
+    for defs_key in ("$defs", "definitions"):
+        if defs_key in result and isinstance(result[defs_key], dict):
+            result[defs_key] = {
+                k: add_additional_properties_to_schema(v)
+                for k, v in result[defs_key].items()
+            }
+    for key in ("anyOf", "allOf", "oneOf"):
+        if key in result and isinstance(result[key], list):
+            result[key] = [
+                add_additional_properties_to_schema(item) for item in result[key]
+            ]
+
+    return result
+
+
 def remove_custom_field_from_tools(request_body: dict) -> None:
     """
     Remove ``custom`` field from each tool in the request body.
@@ -1062,9 +1102,11 @@ class CommonBatchFilesUtils:
 
         return (
             dict(prepped.headers),
-            request_data.encode("utf-8")
-            if isinstance(request_data, str)
-            else request_data,
+            (
+                request_data.encode("utf-8")
+                if isinstance(request_data, str)
+                else request_data
+            ),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:
