@@ -837,7 +837,11 @@ async def test_update_guardrail_endpoint(
             assert "Prisma client not initialized" in str(exc_info.value.detail)
         elif scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
-            assert "rolled back" in str(exc_info.value.detail)
+            assert "Guardrail update failed" in str(exc_info.value.detail)
+            # Verify rollback was attempted: update_in_db called twice (initial + rollback)
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+            # Verify rollback attempted in-memory re-init with old config
+            assert mock_in_memory_handler.update_in_memory_guardrail.call_count == 2
     else:
         result = await update_guardrail(
             "test-guardrail-id", MOCK_UPDATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
@@ -942,7 +946,11 @@ async def test_patch_guardrail_endpoint(
 
         if scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
-            assert "rolled back" in str(exc_info.value.detail)
+            assert "Guardrail patch failed" in str(exc_info.value.detail)
+            # Verify rollback was attempted: update_in_db called twice (initial + rollback)
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+            # Verify rollback attempted in-memory re-sync with old config
+            assert mock_in_memory_handler.sync_guardrail_from_db.call_count == 2
     else:
         result = await patch_guardrail(
             "test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
@@ -1017,6 +1025,10 @@ async def test_delete_guardrail_endpoint(
         if scenario == "success_sync_fails":
             assert exc_info.value.status_code == 422
             assert "rolled back" in str(exc_info.value.detail)
+            # Verify rollback was attempted: add_guardrail_to_db called with original ID
+            mock_guardrail_registry.add_guardrail_to_db.assert_called_once()
+            call_kwargs = mock_guardrail_registry.add_guardrail_to_db.call_args
+            assert call_kwargs.kwargs.get("guardrail_id") == expected_result
     else:
         result = await delete_guardrail(
             guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER
