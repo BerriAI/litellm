@@ -2541,6 +2541,10 @@ if MCP_AVAILABLE:
 
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
+    # Add explicit route for /mcp (without trailing slash) to avoid 307 redirect
+    # which disrupts MCP client connections (e.g., Claude Code)
+    # See: https://github.com/BerriAI/litellm/issues/23688
+    app.add_route("/mcp", handle_streamable_http_mcp, methods=["POST", "GET", "PUT", "DELETE", "OPTIONS"])
     app.mount("/mcp", handle_streamable_http_mcp)
     app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
