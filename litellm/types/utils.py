@@ -3029,6 +3029,7 @@ all_litellm_params = (
         "mock_timeout",
         "disable_add_transform_inline_image_block",
         "litellm_proxy_rate_limit_response",
+        "is_centralized_redis_cache_incremented",
         "api_key",
         "api_version",
         "prompt_id",

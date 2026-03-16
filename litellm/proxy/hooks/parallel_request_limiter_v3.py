@@ -49,10 +49,20 @@ local now = tonumber(ARGV[1])
 local window_size = tonumber(ARGV[2])
 
 -- Process each window/counter pair
+-- ARGV[3+] contains limits for each pair (ARGV[3] = limit for pair 1, ARGV[4] = limit for pair 2, etc.)
+-- Returns 3 values per pair: window_start, counter, was_incremented (1 or 0)
 for i = 1, #KEYS, 2 do
     local window_key = KEYS[i]
     local counter_key = KEYS[i + 1]
+    local pair_index = (i - 1) / 2 + 1
+    local limit = tonumber(ARGV[2 + pair_index])
     local increment_value = 1
+    if limit < 1 then
+        increment_value = 0
+    end
+
+    -- Check if this is a max_parallel_requests key (always refresh TTL for these)
+    local is_max_parallel = string.find(counter_key, ":max_parallel_requests") ~= nil
 
     -- Check if window exists and is valid
     local window_start = redis.call('GET', window_key)
@@ -64,16 +74,28 @@ for i = 1, #KEYS, 2 do
         redis.call('EXPIRE', counter_key, window_size)
         table.insert(results, tostring(now)) -- window_start
         table.insert(results, increment_value) -- counter
+        table.insert(results, increment_value) -- was_incremented (1 if limit >= 1, else 0)
     else
-        local counter = redis.call('INCR', counter_key)
-        -- This happens when window_key exists but counter_key doesn't (e.g., tokens key
-        -- created after requests key when both share the same window_key)
+        local current_counter = tonumber(redis.call('GET', counter_key) or 0)
         local current_ttl = redis.call('TTL', counter_key)
-        if current_ttl == -1 then
-            redis.call('EXPIRE', counter_key, window_size)
+        if current_counter >= limit then
+            -- Always refresh TTL for max_parallel_requests keys
+            if is_max_parallel or current_ttl == -1 then
+                redis.call('EXPIRE', counter_key, window_size)
+            end
+            table.insert(results, window_start)
+            table.insert(results, current_counter)
+            table.insert(results, 0) -- was_incremented: no
+        else
+            local counter = redis.call('INCR', counter_key)
+            -- Always refresh TTL for max_parallel_requests keys
+            if is_max_parallel or current_ttl == -1 then
+                redis.call('EXPIRE', counter_key, window_size)
+            end
+            table.insert(results, window_start)
+            table.insert(results, counter)
+            table.insert(results, 1) -- was_incremented: yes
         end
-        table.insert(results, window_start) -- window_start
-        table.insert(results, counter) -- counter
     end
 end
 
@@ -131,6 +153,7 @@ class RateLimitStatus(TypedDict):
     limit_remaining: int
     rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
     descriptor_key: str
+    was_incremented: bool  # True if the counter was actually incremented
 
 
 class RateLimitResponse(TypedDict):
@@ -218,6 +241,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
+
+        Returns triplets per window/counter pair: (window_start, counter, was_incremented)
+        to match the Lua script output format.
         """
         results: List[Any] = []
 
@@ -253,6 +279,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 results.append(str(now_int))  # window_start
                 results.append(increment_value)  # counter
+                results.append(1)  # was_incremented: yes (new window)
             else:
                 # Increment the counter
                 current_counter = await self.internal_usage_cache.async_get_cache(
@@ -272,6 +299,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 results.append(window_start)  # window_start
                 results.append(new_counter_value)  # counter
+                results.append(1)  # was_incremented: yes (incremented)
 
         return results
 
@@ -293,9 +321,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: List[str],
         cache_values: List[Any],
         key_metadata: Dict[str, Any],
+        was_incremented_values: Optional[List[int]] = None,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
+
+        Args:
+            keys_to_fetch: List of keys (pairs: window_key, counter_key)
+            cache_values: List of values (pairs: window_start, counter) or triplets with was_incremented
+            key_metadata: Metadata for each window key
+            was_incremented_values: Optional list of 0/1 values indicating if each counter was incremented
         """
         statuses: List[RateLimitStatus] = []
         overall_code = "OK"
@@ -329,7 +364,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if current_limit is None or rate_limit_type is None:
                 continue
 
-            if counter_value is not None and int(counter_value) > current_limit:
+            # Get was_incremented for this counter (pair_index = i // 2)
+            was_incremented = True  # Default to True for backwards compatibility
+            if was_incremented_values is not None:
+                pair_index = i // 2
+                was_incremented = bool(was_incremented_values[pair_index])
+
+            # Rate limit only if counter >= limit AND counter was NOT incremented
+            # If was_incremented is True, it means this request just took the counter from < limit to current value,
+            # so it should be allowed (it's within the limit)
+            if counter_value is not None and int(counter_value) >= current_limit and not was_incremented:
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
@@ -347,6 +391,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "limit_remaining": limit_remaining,
                     "rate_limit_type": rate_limit_type,
                     "descriptor_key": key_metadata[window_key]["descriptor_key"],
+                    "was_incremented": was_incremented,
                 }
             )
 
@@ -407,6 +452,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         keys_to_fetch: List[str],
         now_int: int,
+        counter_key_to_limit: Dict[str, int],
     ) -> List[Any]:
         """
         Execute Redis operations grouped by hash tag for cluster compatibility.
@@ -414,6 +460,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Args:
             keys_to_fetch: List[str] - List of keys to fetch
             now_int: int - Current timestamp
+            counter_key_to_limit: Dict[str, int] - Mapping of counter keys to their limits
 
         Returns:
             List[Any] - List of cache values
@@ -426,9 +473,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         for hash_tag, group_keys in key_groups.items():
             try:
+                # Build limits list for this group (one limit per window/counter pair)
+                group_limits = []
+                for i in range(0, len(group_keys), 2):
+                    counter_key = group_keys[i + 1]
+                    limit = counter_key_to_limit.get(counter_key, 0)
+                    group_limits.append(limit)
+
                 group_cache_values = await self.batch_rate_limiter_script(
                     keys=group_keys,
-                    args=[now_int, self.window_size],  # Use integer timestamp
+                    args=[now_int, self.window_size] + group_limits,
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
@@ -469,6 +523,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Collect all keys and their metadata upfront
         keys_to_fetch: List[str] = []
         key_metadata = {}  # Store metadata for each key
+        counter_key_to_limit: Dict[str, int] = {}  # Store limit for each counter key
+        was_incremented_values: List[int] = []  # Track if each counter was incremented
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
@@ -488,18 +544,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     descriptor_key, descriptor_value, "requests"
                 )
                 keys_to_fetch.extend([window_key, rpm_key])
+                counter_key_to_limit[rpm_key] = int(requests_limit)
                 rate_limit_set = True
             if tokens_limit is not None:
                 tpm_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "tokens"
                 )
                 keys_to_fetch.extend([window_key, tpm_key])
+                counter_key_to_limit[tpm_key] = int(tokens_limit)
                 rate_limit_set = True
             if max_parallel_requests_limit is not None:
                 max_parallel_requests_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "max_parallel_requests"
                 )
                 keys_to_fetch.extend([window_key, max_parallel_requests_key])
+                counter_key_to_limit[max_parallel_requests_key] = int(max_parallel_requests_limit)
                 rate_limit_set = True
 
             if not rate_limit_set:
@@ -528,8 +587,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if cache_values is not None:
+                # Pre-check path: no increment happened, set all was_incremented to False
+                num_pairs = len(keys_to_fetch) // 2
+                was_incremented_false = [0] * num_pairs
                 rate_limit_response = self.is_cache_list_over_limit(
-                    keys_to_fetch, cache_values, key_metadata
+                    keys_to_fetch, cache_values, key_metadata, was_incremented_values=was_incremented_false
                 )
                 if rate_limit_response["overall_code"] == "OVER_LIMIT":
                     return rate_limit_response
@@ -547,20 +609,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 cache_values = []
                 for _ in keys_to_fetch:
                     cache_values.append(str(now_int) if _.endswith(":window") else 0)
+
+            # read_only path: no increment happened, set all was_incremented to False
+            num_pairs = len(keys_to_fetch) // 2
+            was_incremented_values = [0] * num_pairs
         elif self.batch_rate_limiter_script is not None:
             # NORMAL MODE: Increment counters in Redis
             # Group keys by hash tag for Redis cluster compatibility
             cache_values = await self._execute_redis_batch_rate_limiter_script(
                 keys_to_fetch=keys_to_fetch,
                 now_int=now_int,
+                counter_key_to_limit=counter_key_to_limit,
             )
 
             # update in-memory cache with new values
-            for i in range(0, len(cache_values), 2):
-                window_key = keys_to_fetch[i]
-                counter_key = keys_to_fetch[i + 1]
+            # Lua script returns 3 values per pair: window_start, counter, was_incremented
+            was_incremented_values = []
+            for i in range(0, len(cache_values), 3):
+                key_index = (i // 3) * 2
+                window_key = keys_to_fetch[key_index]
+                counter_key = keys_to_fetch[key_index + 1]
                 window_value = cache_values[i]
                 counter_value = cache_values[i + 1]
+                was_incremented = cache_values[i + 2]  # 1 if incremented, 0 if not
+                was_incremented_values.append(was_incremented)
                 await self.internal_usage_cache.async_set_cache(
                     key=counter_key,
                     value=counter_value,
@@ -575,6 +647,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
                 )
+
+            # Strip was_incremented values for is_cache_list_over_limit (expects pairs)
+            cache_values_for_limit_check = []
+            for i in range(0, len(cache_values), 3):
+                cache_values_for_limit_check.append(cache_values[i])      # window_start
+                cache_values_for_limit_check.append(cache_values[i + 1])  # counter
+            cache_values = cache_values_for_limit_check
         else:
             # NORMAL MODE: In-memory sliding window (no Redis)
             cache_values = await self.in_memory_cache_sliding_window(
@@ -582,9 +661,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 now_int=now_int,
                 window_size=self.window_size,
             )
+            # In-memory sliding window returns triplets (window_start, counter, was_incremented)
+            # Extract was_incremented and strip to pairs for is_cache_list_over_limit
+            was_incremented_values = []
+            cache_values_for_limit_check = []
+            for i in range(0, len(cache_values), 3):
+                cache_values_for_limit_check.append(cache_values[i])      # window_start
+                cache_values_for_limit_check.append(cache_values[i + 1])  # counter
+                was_incremented_values.append(cache_values[i + 2])        # was_incremented
+            cache_values = cache_values_for_limit_check
 
         rate_limit_response = self.is_cache_list_over_limit(
-            keys_to_fetch, cache_values, key_metadata
+            keys_to_fetch, cache_values, key_metadata, was_incremented_values
         )
         return rate_limit_response
 
@@ -1175,6 +1263,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
+    def _get_max_parallel_was_incremented(
+        self,
+        response: RateLimitResponse,
+    ) -> bool:
+        """
+        Check if max_parallel_requests was incremented from the rate limit response.
+
+        Returns True if the max_parallel_requests counter was incremented,
+        False if max_parallel_requests is not configured.
+        """
+        for status in response["statuses"]:
+            if status["rate_limit_type"] == "max_parallel_requests":
+                return status.get("was_incremented", True)
+        return False
+
     def _handle_rate_limit_error(
         self,
         response: RateLimitResponse,
@@ -1220,6 +1323,40 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "reset_at": reset_time_formatted,
                     },
                 )
+
+    async def _decrement_max_parallel_requests(
+        self,
+        api_key: str,
+        parent_otel_span: Optional[Span] = None,
+    ) -> None:
+        """
+        Decrement the max_parallel_requests counter in Redis.
+        Called when a request fails before reaching the LLM (e.g., rate limited by RPM/TPM).
+        """
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
+        counter_key = self.create_rate_limit_keys(
+            key="api_key",
+            value=api_key,
+            rate_limit_type="max_parallel_requests",
+        )
+        pipeline_operations: List[RedisPipelineIncrementOperation] = [
+            RedisPipelineIncrementOperation(
+                key=counter_key,
+                increment_value=-1,
+                ttl=self.window_size,
+            )
+        ]
+
+        try:
+            await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                increment_list=pipeline_operations,
+                litellm_parent_otel_span=parent_otel_span,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to decrement max_parallel_requests counter: {str(e)}"
+            )
 
     async def async_pre_call_hook(
         self,
@@ -1298,6 +1435,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
             )
+
+            max_parallel_was_incremented = self._get_max_parallel_was_incremented(
+                response
+            )
+            data["is_centralized_redis_cache_incremented"] = max_parallel_was_incremented
 
             if response["overall_code"] == "OVER_LIMIT":
                 self._handle_rate_limit_error(
@@ -1537,20 +1679,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             # API Key TPM
+            is_centralized_redis_cache_incremented = kwargs.get(
+                "litellm_params", {}
+            ).get("is_centralized_redis_cache_incremented", False)
             if user_api_key:
                 # MAX PARALLEL REQUESTS - only support for API Key, just decrement the counter
-                counter_key = self.create_rate_limit_keys(
-                    key="api_key",
-                    value=user_api_key,
-                    rate_limit_type="max_parallel_requests",
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=counter_key,
-                        increment_value=-1,
-                        ttl=self.window_size,
+                # Only decrement if the centralized Redis cache was incremented in pre-call hook
+                if is_centralized_redis_cache_incremented:
+                    counter_key = self.create_rate_limit_keys(
+                        key="api_key",
+                        value=user_api_key,
+                        rate_limit_type="max_parallel_requests",
                     )
-                )
+                    pipeline_operations.append(
+                        RedisPipelineIncrementOperation(
+                            key=counter_key,
+                            increment_value=-1,
+                            ttl=self.window_size,
+                        )
+                    )
                 pipeline_operations.extend(
                     self._create_pipeline_operations(
                         key="api_key",
@@ -1693,20 +1840,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
+            is_centralized_redis_cache_incremented = kwargs.get(
+                "litellm_params", {}
+            ).get("is_centralized_redis_cache_incremented", False)
             if user_api_key:
                 # MAX PARALLEL REQUESTS - only support for API Key, just decrement the counter
-                counter_key = self.create_rate_limit_keys(
-                    key="api_key",
-                    value=user_api_key,
-                    rate_limit_type="max_parallel_requests",
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=counter_key,
-                        increment_value=-1,
-                        ttl=self.window_size,
+                # Only decrement if the centralized Redis cache was incremented in pre-call hook
+                if is_centralized_redis_cache_incremented:
+                    counter_key = self.create_rate_limit_keys(
+                        key="api_key",
+                        value=user_api_key,
+                        rate_limit_type="max_parallel_requests",
                     )
-                )
+                    pipeline_operations.append(
+                        RedisPipelineIncrementOperation(
+                            key=counter_key,
+                            increment_value=-1,
+                            ttl=self.window_size,
+                        )
+                    )
 
             # Execute all increments in a single pipeline
             if pipeline_operations:

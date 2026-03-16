@@ -1429,6 +1429,34 @@ class ProxyLogging:
 
             return data
         except Exception as e:
+            # Handle cleanup for max_parallel_requests counter when pre-call fails
+            # If the counter was incremented but request failed before LLM call,
+            # we need to decrement it now
+            flag_value = data.get("is_centralized_redis_cache_incremented") if data else None
+            if data is not None and flag_value:
+                from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+                    _PROXY_MaxParallelRequestsHandler_v3,
+                )
+                found_callback = False
+                for callback in litellm.callbacks:
+                    if isinstance(callback, _PROXY_MaxParallelRequestsHandler_v3):
+                        found_callback = True
+                        try:
+                            verbose_proxy_logger.info(
+                                f"DEBUG Decrementing max_parallel_requests for api_key: {user_api_key_dict.api_key}"
+                            )
+                            await callback._decrement_max_parallel_requests(
+                                api_key=user_api_key_dict.api_key,
+                                parent_otel_span=user_api_key_dict.parent_otel_span,
+                            )
+                            data["is_centralized_redis_cache_incremented"] = False
+                        except Exception as cleanup_error:
+                            verbose_proxy_logger.warning(
+                                f"Failed to decrement max_parallel_requests during pre-call cleanup: {cleanup_error}"
+                            )
+                        break
+                if not found_callback:
+                    verbose_proxy_logger.warning("DEBUG Rate limiter callback not found in litellm.callbacks!")
             raise e
 
     async def during_call_hook(
@@ -1870,6 +1898,12 @@ class ProxyLogging:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
+
+            # Pass is_centralized_redis_cache_incremented to litellm_params for rate limiter
+            if "is_centralized_redis_cache_incremented" in request_data:
+                _litellm_params["is_centralized_redis_cache_incremented"] = request_data[
+                    "is_centralized_redis_cache_incremented"
+                ]
 
             litellm_logging_obj.update_environment_variables(
                 model=request_data.get("model", ""),

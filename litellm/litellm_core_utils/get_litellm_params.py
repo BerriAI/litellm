@@ -94,6 +94,7 @@ def get_litellm_params(
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     litellm_request_debug: Optional[bool] = None,
+    is_centralized_redis_cache_incremented: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
@@ -153,6 +154,7 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "is_centralized_redis_cache_incremented": is_centralized_redis_cache_incremented,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present

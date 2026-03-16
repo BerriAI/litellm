@@ -776,6 +776,17 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
+        # Update logging object's litellm_params with is_centralized_redis_cache_incremented flag
+        # This is needed because function_setup is called BEFORE pre_call_hook, so the flag
+        # wasn't included in the original litellm_params
+        if "is_centralized_redis_cache_incremented" in self.data:
+            logging_obj.litellm_params["is_centralized_redis_cache_incremented"] = self.data[
+                "is_centralized_redis_cache_incremented"
+            ]
+            logging_obj.model_call_details.setdefault("litellm_params", {})[
+                "is_centralized_redis_cache_incremented"
+            ] = self.data["is_centralized_redis_cache_incremented"]
+
         # Apply hierarchical router_settings (Key > Team)
         # Global router_settings are already on the Router object itself.
         if llm_router is not None and proxy_config is not None:
