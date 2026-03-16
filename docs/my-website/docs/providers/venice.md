@@ -30,6 +30,8 @@ import TabItem from '@theme/TabItem';
 - [Supported Models](#supported-models)
 - [Embeddings](#embeddings)
 - [Image Generation](#image-generation)
+- [OpenAI SDK Compatibility](#openai-sdk-compatibility)
+- [Why Venice?](#why-venice)
 
 ## API Key
 
