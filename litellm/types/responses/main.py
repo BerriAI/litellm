@@ -46,6 +46,24 @@ class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):
     result: Optional[str]  # Base64 encoded image data (without data:image prefix)
 
 
+class OutputCodeInterpreterCallLog(BaseLiteLLMOpenAIResponseObject):
+    """Log output from a code interpreter call"""
+
+    type: Literal["logs"]
+    logs: str
+
+
+class OutputCodeInterpreterCall(BaseLiteLLMOpenAIResponseObject):
+    """A code interpreter / code execution call output"""
+
+    type: Literal["code_interpreter_call"]
+    id: str
+    code: Optional[str]
+    container_id: Optional[str]
+    status: Literal["in_progress", "completed", "incomplete", "failed"]
+    outputs: Optional[List[OutputCodeInterpreterCallLog]]
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item

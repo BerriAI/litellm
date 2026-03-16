@@ -1749,6 +1749,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
 
+        _hidden_params["provider_specific_fields"] = provider_specific_fields
         model_response._hidden_params = _hidden_params
         return model_response
 

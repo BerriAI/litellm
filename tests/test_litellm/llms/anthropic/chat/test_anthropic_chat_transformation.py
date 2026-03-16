@@ -2246,6 +2246,73 @@ def test_code_execution_tool_results_extraction():
     assert "Done!" in transformed_response.choices[0].message.content
 
 
+def test_code_execution_tool_results_in_hidden_params():
+    """
+    Test that tool_results reaches _hidden_params so the Responses API adapter
+    can surface them via provider_specific_fields.
+
+    The Responses API adapter reads _hidden_params.get("provider_specific_fields")
+    to set provider_specific_fields on the response. Without this, server-side
+    code execution results (stdout/stderr) are lost when using responses.create().
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    mock_anthropic_response = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "text", "text": "Here's the result."},
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC",
+                "name": "bash_code_execution",
+                "input": {"command": "echo hello"},
+            },
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01ABC",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        ],
+        "stop_reason": "stop",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+    }
+
+    mock_raw_response = MagicMock(spec=httpx.Response)
+    mock_raw_response.json.return_value = mock_anthropic_response
+    mock_raw_response.status_code = 200
+    mock_raw_response.headers = {}
+
+    model_response = ModelResponse()
+
+    transformed_response = config.transform_parsed_response(
+        completion_response=mock_anthropic_response,
+        raw_response=mock_raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    # Verify tool_results is in _hidden_params for the Responses API adapter
+    hidden = transformed_response._hidden_params
+    assert "provider_specific_fields" in hidden
+    assert "tool_results" in hidden["provider_specific_fields"]
+    assert len(hidden["provider_specific_fields"]["tool_results"]) == 1
+    assert hidden["provider_specific_fields"]["tool_results"][0]["content"]["stdout"] == "hello\n"
+
+
 def test_tool_search_tool_result_not_in_tool_results():
     """
     Test that tool_search_tool_result is NOT included in tool_results

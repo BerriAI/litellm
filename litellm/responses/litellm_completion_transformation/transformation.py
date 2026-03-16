@@ -1624,7 +1624,90 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             )
         )
+        # Convert server-side tool results (e.g. Anthropic code execution)
+        # into code_interpreter_call output items, replacing the corresponding
+        # function_call items so the output matches OpenAI's native shape.
+        tool_result_items = LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(
+            chat_completion_response
+        )
+        if tool_result_items:
+            # Remove function_call items that are replaced by code_interpreter_call
+            replaced_ids = {item["id"] for item in tool_result_items}
+            responses_output = [
+                item for item in responses_output
+                if not (
+                    getattr(item, "type", None) == "function_call"
+                    and getattr(item, "call_id", None) in replaced_ids
+                )
+            ]
+            # Convert all items to dicts so Pydantic validates via the
+            # List[Union[ResponseOutputItem, Dict]] branch of the union.
+            responses_output = [
+                item.model_dump() if hasattr(item, "model_dump") else item
+                for item in responses_output
+            ]
+            responses_output.extend(tool_result_items)
         return responses_output
+
+    @staticmethod
+    def _extract_tool_result_output_items(
+        chat_completion_response: ModelResponse,
+    ) -> list:
+        """Convert provider tool_results into code_interpreter_call output items.
+
+        Server-side tool results (e.g. Anthropic bash_code_execution_tool_result)
+        are stored in provider_specific_fields["tool_results"] by the provider
+        transformer. This maps them to standard Responses API code_interpreter_call
+        items so consumers don't need provider-specific handling.
+        """
+        output_items: list = []
+        for choice in (chat_completion_response.choices or []):
+            message = getattr(choice, "message", None)
+            if not message:
+                continue
+            psf = getattr(message, "provider_specific_fields", None)
+            if not psf or not isinstance(psf, dict):
+                continue
+            tool_results = psf.get("tool_results")
+            if not tool_results or not isinstance(tool_results, list):
+                continue
+            # Also extract container id if available
+            container = psf.get("container", {})
+            container_id = container.get("id", "") if isinstance(container, dict) else ""
+            # Build a map of call_id -> code from tool_calls
+            code_by_id: dict = {}
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        import json as _json
+                        args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
+                        code_by_id[tc.id] = args.get("command", "")
+                    except Exception:
+                        code_by_id[tc.id] = ""
+            for tr in tool_results:
+                call_id = tr.get("tool_use_id", "")
+                content = tr.get("content", {})
+                # Build log output from stdout/stderr
+                if isinstance(content, dict):
+                    parts = []
+                    stdout = content.get("stdout", "")
+                    stderr = content.get("stderr", "")
+                    if stdout:
+                        parts.append(stdout)
+                    if stderr:
+                        parts.append(f"STDERR: {stderr}")
+                    logs = "".join(parts) if parts else str(content)
+                else:
+                    logs = str(content)
+                output_items.append({
+                    "type": "code_interpreter_call",
+                    "id": call_id,
+                    "code": code_by_id.get(call_id, ""),
+                    "container_id": container_id,
+                    "status": "completed",
+                    "outputs": [{"type": "logs", "logs": logs}],
+                })
+        return output_items
 
     @staticmethod
     def _extract_reasoning_output_items(

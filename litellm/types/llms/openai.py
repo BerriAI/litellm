@@ -77,6 +77,7 @@ from typing_extensions import Annotated, Dict, Required, TypedDict, override
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
+    OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
 )
@@ -1202,6 +1203,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         List[
             Union[
                 GenericResponseOutputItem,
+                OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,

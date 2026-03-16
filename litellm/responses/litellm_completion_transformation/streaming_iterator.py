@@ -71,6 +71,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: List[Dict[str, Any]] = []
+        # Accumulate provider_specific_fields across streaming chunks
+        # (e.g. Anthropic tool_results from server-side code execution).
+        self._accumulated_provider_specific_fields: Dict[str, Any] = {}
         self.finished: bool = False
         self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
@@ -459,13 +462,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_litellm_model_response(
         self,
     ) -> Optional[ModelResponse]:
-        return cast(
+        response = cast(
             Optional[ModelResponse],
             stream_chunk_builder(
                 chunks=self.collected_chat_completion_chunks,
                 logging_obj=self.litellm_logging_obj,
             ),
         )
+        # Inject accumulated provider_specific_fields (e.g. Anthropic
+        # tool_results) into _hidden_params so the Responses API adapter
+        # can surface them on the completed response.
+        if response is not None and self._accumulated_provider_specific_fields:
+            if not hasattr(response, "_hidden_params") or response._hidden_params is None:
+                response._hidden_params = {}
+            response._hidden_params["provider_specific_fields"] = (
+                self._accumulated_provider_specific_fields
+            )
+        return response
 
     @staticmethod
     def _snapshot_chunk_for_stream_chunk_builder(
@@ -828,6 +841,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
+                        # Accumulate provider_specific_fields from chunk
+                        # and delta (e.g. Anthropic tool_results, container).
+                        for src in (
+                            getattr(chunk, "provider_specific_fields", None),
+                            getattr(chunk.choices[0].delta if chunk.choices else None, "provider_specific_fields", None),
+                        ):
+                            if src and isinstance(src, dict):
+                                self._accumulated_provider_specific_fields.update(src)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
                             self._snapshot_chunk_for_stream_chunk_builder(chunk)
@@ -922,6 +943,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
+                    # Accumulate provider_specific_fields from chunk
+                    # and delta (e.g. Anthropic tool_results, container).
+                    for src in (
+                        getattr(chunk, "provider_specific_fields", None),
+                        getattr(chunk.choices[0].delta if chunk.choices else None, "provider_specific_fields", None),
+                    ):
+                        if src and isinstance(src, dict):
+                            self._accumulated_provider_specific_fields.update(src)
                     self.collected_chat_completion_chunks.append(
                         self._snapshot_chunk_for_stream_chunk_builder(
                             cast(ModelResponseStream, chunk)
