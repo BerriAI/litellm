@@ -33,23 +33,15 @@ commands:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip uv
-            uv pip install --system \
-              -r requirements.txt \
-              "pytest-mock==3.12.0" \
-              "pytest==7.3.1" \
-              "pytest-retry==1.6.3" \
-              "pytest-asyncio==0.21.1" \
-              "respx==0.22.0" \
-              "hypercorn==0.17.3" \
-              "pydantic==2.11.0" \
-              "mcp==1.25.0" \
-              "requests-mock>=1.12.1" \
-              "responses==0.25.7" \
-              "pytest-xdist==3.6.1" \
-              "pytest-timeout==2.2.0" \
-              "pytest-cov==5.0.0" \
-              "semantic_router==0.1.10" \
-              "fastapi-offline==1.7.3" \
+            # Use uv for the heavy requirements.txt (10-100x faster than pip)
+            uv pip install --system -r requirements.txt
+            # Use pip for test deps (small set, avoids uv strict-resolution
+            # conflicts with transitive dep pins like openai<2 and pydantic>=2.11.5)
+            pip install "pytest-mock==3.12.0" "pytest==7.3.1" "pytest-retry==1.6.3" \
+              "pytest-asyncio==0.21.1" "respx==0.22.0" "hypercorn==0.17.3" \
+              "pydantic==2.11.0" "mcp==1.25.0" "requests-mock>=1.12.1" \
+              "responses==0.25.7" "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" \
+              "pytest-cov==5.0.0" "semantic_router==0.1.10" "fastapi-offline==1.7.3" \
               "a2a"
       - setup_litellm_enterprise_pip
       - save_cache:
