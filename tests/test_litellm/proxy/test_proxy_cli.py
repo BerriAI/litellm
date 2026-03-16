@@ -677,7 +677,7 @@ class TestHealthAppFactory:
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False"""
+        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False and --enforce_prisma_migration_check is set"""
         from litellm.proxy.proxy_cli import run_server
 
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -717,7 +717,7 @@ class TestHealthAppFactory:
 
             with pytest.raises(SystemExit) as exc_info:
                 run_server.main(
-                    ["--local", "--skip_server_startup"], standalone_mode=False
+                    ["--local", "--skip_server_startup", "--enforce_prisma_migration_check"], standalone_mode=False
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(use_migrate=True)
