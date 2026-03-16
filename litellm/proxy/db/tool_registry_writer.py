@@ -83,7 +83,7 @@ async def batch_upsert_tools(
         data = [item for item in items if item.get("tool_name")]
         if not data:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
         table = prisma_client.db.litellm_tooltable
         for item in data:
             tool_name = item.get("tool_name", "")
@@ -171,7 +171,7 @@ async def update_tool_policy(
     """Update input_policy and/or output_policy for a tool. Upserts the row if it does not exist yet."""
     try:
         _updated_by = updated_by or "system"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
 
         create_data: dict = {
             "tool_id": str(uuid.uuid4()),
