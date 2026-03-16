@@ -7,6 +7,7 @@ everything else through unchanged.
 """
 
 import asyncio
+from typing import Optional
 
 
 # The middleware is defined at module scope in proxy_server.py alongside heavy
@@ -45,15 +46,11 @@ class _Recorder:
         self.scopes.append(scope)
 
 
-def _make_http_scope(path: str, raw_path: bytes | None = None) -> dict:
+def _make_http_scope(path: str, raw_path: Optional[bytes] = None) -> dict:
     scope: dict = {"type": "http", "path": path}
     if raw_path is not None:
         scope["raw_path"] = raw_path
     return scope
-
-
-def _run(coro):
-    return asyncio.run(coro)
 
 
 # ── tests ────────────────────────────────────────────────────────────────
@@ -65,7 +62,7 @@ def test_rewrites_exact_mcp_path():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = _make_http_scope("/mcp", b"/mcp")
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert len(recorder.scopes) == 1
     assert recorder.scopes[0]["path"] == "/mcp/"
@@ -78,7 +75,7 @@ def test_no_rewrite_for_mcp_subpath():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = _make_http_scope("/mcp/foo", b"/mcp/foo")
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert recorder.scopes[0]["path"] == "/mcp/foo"
     assert recorder.scopes[0]["raw_path"] == b"/mcp/foo"
@@ -90,7 +87,7 @@ def test_no_rewrite_for_other_paths():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = _make_http_scope("/health", b"/health")
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert recorder.scopes[0]["path"] == "/health"
 
@@ -101,7 +98,7 @@ def test_no_rewrite_for_non_http_scope():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = {"type": "websocket", "path": "/mcp"}
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert recorder.scopes[0]["path"] == "/mcp"
 
@@ -112,7 +109,7 @@ def test_raw_path_fallback_when_absent():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = _make_http_scope("/mcp")  # no raw_path
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert recorder.scopes[0]["path"] == "/mcp/"
     assert recorder.scopes[0]["raw_path"] == b"/mcp/"
@@ -124,7 +121,7 @@ def test_already_trailing_slash_no_double():
     mw = _MCPTrailingSlashMiddleware(recorder)
 
     scope = _make_http_scope("/mcp/", b"/mcp/")
-    _run(mw(scope, None, None))
+    asyncio.run(mw(scope, None, None))
 
     assert recorder.scopes[0]["path"] == "/mcp/"
     assert recorder.scopes[0]["raw_path"] == b"/mcp/"

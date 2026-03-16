@@ -13409,7 +13409,7 @@ class _MCPTrailingSlashMiddleware:
     """Transparently append '/' to the MCP mount path so Starlette serves it
     directly instead of responding with 307 Temporary Redirect."""
 
-    def __init__(self, app: Any) -> None:  # noqa: F811
+    def __init__(self, app: Any) -> None:
         self.app = app
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
