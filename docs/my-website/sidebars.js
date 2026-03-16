@@ -581,7 +581,7 @@ const sidebars = {
         {
           type: "link",
           label: "/a2a - A2A Agent Gateway",
-          href: "/docs/simple_proxy#agent--mcp-gateway",
+          href: "/docs/a2a",
         },
         "assistants",
         "audio_transcription",
@@ -646,7 +646,7 @@ const sidebars = {
         {
           type: "link",
           label: "/mcp - Model Context Protocol",
-          href: "/docs/simple_proxy#agent--mcp-gateway",
+          href: "/docs/mcp",
         },
         {
           type: "category",
