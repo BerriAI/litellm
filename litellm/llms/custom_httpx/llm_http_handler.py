@@ -6187,6 +6187,7 @@ class BaseLLMHTTPHandler:
                 files=files_list,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_create_character_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6254,6 +6255,7 @@ class BaseLLMHTTPHandler:
                 files=files_list,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_create_character_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6327,6 +6329,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_get_character_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6387,6 +6390,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_get_character_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6472,6 +6476,7 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_edit_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6543,6 +6548,7 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_edit_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6632,6 +6638,7 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_extension_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -6705,6 +6712,7 @@ class BaseLLMHTTPHandler:
                 json=data,
                 timeout=timeout,
             )
+            response.raise_for_status()
             return video_provider_config.transform_video_extension_response(
                 raw_response=response,
                 logging_obj=logging_obj,
