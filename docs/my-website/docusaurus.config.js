@@ -2,9 +2,9 @@
 // Note: type annotations allow type checking and IDEs autocompletion
 
 // @ts-ignore
-const lightCodeTheme = require('prism-react-renderer/themes/github');
+const lightCodeTheme = require('prism-react-renderer/themes/vsLight');
 // @ts-ignore
-const darkCodeTheme = require('prism-react-renderer/themes/dracula');
+const darkCodeTheme = require('prism-react-renderer/themes/nightOwl');
 
 const inkeepConfig = {
   baseSettings: {
@@ -87,18 +87,83 @@ const config = {
       },
     ],
     [
-      '@docusaurus/plugin-content-blog',
+      '@docusaurus/plugin-content-docs',
       {
-        id: 'release_notes',
+        id: 'release-notes',
         path: './release_notes',
         routeBasePath: 'release_notes',
-        blogTitle: 'Release Notes',
-        blogSidebarTitle: 'Releases',
-        blogSidebarCount: 'ALL',
-        postsPerPage: 'ALL',
-        showReadingTime: false,
-        sortPosts: 'descending',
-        include: ['**/*.{md,mdx}'],
+        sidebarPath: require.resolve('./sidebars-release-notes.js'),
+        async sidebarItemsGenerator({defaultSidebarItemsGenerator, docs, ...args}) {
+          const items = await defaultSidebarItemsGenerator({docs, ...args});
+
+          // Build map of doc id -> year from frontmatter date
+          const docYearMap = {};
+          for (const doc of docs) {
+            const date = doc.frontMatter && doc.frontMatter.date;
+            if (date) {
+              const year = new Date(date).getFullYear();
+              docYearMap[doc.id] = year;
+            }
+          }
+
+          function parseVersion(str) {
+            const match = (str || '').match(/v?(\d+)\.(\d+)\.(\d+)/);
+            if (!match) return [0, 0, 0];
+            return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+          }
+          function compareVersionsDesc(a, b) {
+            const [aMaj, aMin, aPatch] = parseVersion(a.label || a.id || '');
+            const [bMaj, bMin, bPatch] = parseVersion(b.label || b.id || '');
+            if (bMaj !== aMaj) return bMaj - aMaj;
+            if (bMin !== aMin) return bMin - aMin;
+            return bPatch - aPatch;
+          }
+
+          // Flatten and transform doc items (filter index, shorten labels)
+          function flattenDocs(list) {
+            const result = [];
+            for (const item of list) {
+              if (item.type === 'doc' && item.id === 'index') continue;
+              if (item.type === 'doc') {
+                const label = item.id.replace(/\/index$/, '');
+                result.push({...item, label});
+              } else if (item.type === 'category') {
+                if (item.link && item.link.type === 'doc' && item.link.id !== 'index') {
+                  const id = item.link.id;
+                  const label = id.replace(/\/index$/, '');
+                  result.push({type: 'doc', id, label});
+                } else {
+                  result.push(...flattenDocs(item.items));
+                }
+              }
+            }
+            return result;
+          }
+
+          const docItems = flattenDocs(items);
+
+          // Group by year
+          const byYear = {};
+          for (const item of docItems) {
+            const year = docYearMap[item.id] || 'Other';
+            if (!byYear[year]) byYear[year] = [];
+            byYear[year].push(item);
+          }
+
+          // Sort each year's items by version descending
+          for (const year of Object.keys(byYear)) {
+            byYear[year].sort(compareVersionsDesc);
+          }
+
+          // Build categories sorted by year descending
+          const years = Object.keys(byYear).sort((a, b) => b - a);
+          return years.map(year => ({
+            type: 'category',
+            label: String(year),
+            collapsed: year !== String(years[0]),
+            items: byYear[year],
+          }));
+        },
       },
     ],
     [
@@ -181,13 +246,12 @@ const config = {
             label: 'Docs',
           },
           {
+            type: 'docSidebar',
             sidebarId: 'integrationsSidebar',
             position: 'left',
             label: 'Integrations',
-            to: "docs/integrations"
           },
           {
-            sidebarId: 'tutorialSidebar',
             position: 'left',
             label: 'Enterprise',
             to: "docs/enterprise"
@@ -195,19 +259,16 @@ const config = {
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
           {
-            href: 'https://models.litellm.ai/',
-            label: '💸 LLM Model Cost Map',
-            position: 'right',
-          },
-          {
             href: 'https://github.com/BerriAI/litellm',
-            label: 'GitHub',
             position: 'right',
+            className: 'header-github-link',
+            'aria-label': 'GitHub repository',
           },
           {
             href: 'https://www.litellm.ai/support',
-            label: 'Slack/Discord',
             position: 'right',
+            className: 'header-discord-link',
+            'aria-label': 'Discord / Slack community',
           }
         ],
       },

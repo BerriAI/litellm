@@ -212,7 +212,20 @@ const sidebars = {
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
-    { type: "doc", id: "index", label: "Getting Started" },
+    // ════════════════════════════════════════════════════════════
+    // GET STARTED
+    // ════════════════════════════════════════════════════════════
+    {
+      type: "category",
+      label: "Get Started",
+      collapsible: false,
+      collapsed: false,
+      items: [
+        { type: "doc", id: "index", label: "Quickstart" },
+        { type: "link", label: "Models & Pricing", href: "https://models.litellm.ai" },
+        { type: "link", label: "Changelog", href: "/release_notes" },
+      ],
+    },
 
     {
       type: "category",
@@ -1179,22 +1192,6 @@ const sidebars = {
         "troubleshoot/pip_venv_upgrade",
         "troubleshoot/rollback",
         "troubleshoot",
-      ],
-    },
-    {
-      type: "category",
-      label: "Blog",
-      items: [
-        {
-          type: "link",
-          label: "Day 0 Support: Claude Sonnet 4.6",
-          href: "/blog/claude_sonnet_4_6",
-        },
-        {
-          type: "link",
-          label: "Incident: Broken Model Cost Map",
-          href: "/blog/model-cost-map-incident",
-        },
       ],
     },
   ],
