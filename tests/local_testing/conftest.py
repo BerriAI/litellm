@@ -43,6 +43,8 @@ _SCALAR_DEFAULTS = {
     "force_ipv4": getattr(litellm, "force_ipv4", False),
     "drop_params": getattr(litellm, "drop_params", None),
     "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
 }
 
 
