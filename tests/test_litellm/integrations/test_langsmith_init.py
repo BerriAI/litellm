@@ -132,3 +132,17 @@ class TestLangsmithLoggerInit:
         assert (
             logger.sampling_rate >= 0.0
         ), f"sampling_rate should be non-negative, got {logger.sampling_rate}"
+
+    @patch("asyncio.create_task")
+    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    def test_langsmith_init_skips_periodic_flush_without_running_loop(
+        self, mock_get_running_loop, mock_create_task
+    ):
+        """Test that sync initialization does not try to create async tasks without a running loop."""
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key", langsmith_project="test-project"
+        )
+
+        assert logger is not None
+        assert mock_get_running_loop.call_count >= 1
+        mock_create_task.assert_not_called()

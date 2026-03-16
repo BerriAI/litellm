@@ -45,6 +45,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_base_url: Optional[str] = None,
         langsmith_sampling_rate: Optional[float] = None,
         langsmith_tenant_id: Optional[str] = None,
+        start_periodic_flush: bool = True,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -83,7 +84,20 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        asyncio.create_task(self.periodic_flush())
+        if start_periodic_flush:
+            self._start_periodic_flush_task()
+
+    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+        """Start the periodic flush task only when an event loop is already running."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            verbose_logger.debug(
+                "Langsmith logger init: no running event loop, skipping periodic flush task startup"
+            )
+            return None
+
+        return loop.create_task(self.periodic_flush())
 
     def get_credentials_from_env(
         self,
