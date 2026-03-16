@@ -114,18 +114,34 @@ class TestLangsmithLoggerInit:
             logger.sampling_rate >= 0.0
         ), f"sampling_rate should be non-negative, got {logger.sampling_rate}"
 
-    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    @patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None)
     def test_langsmith_init_skips_periodic_flush_without_running_loop(
-        self, mock_get_running_loop
+        self, mock_start_periodic_flush_task
     ):
-        """Test that sync initialization does not try to create async tasks without a running loop."""
+        """Test that sync initialization leaves the periodic flush task unset."""
         logger = LangsmithLogger(
             langsmith_api_key="test-key", langsmith_project="test-project"
         )
 
         assert logger is not None
-        assert mock_get_running_loop.call_count >= 1
+        mock_start_periodic_flush_task.assert_called_once()
         assert logger._flush_task is None
+
+    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    def test_start_periodic_flush_task_returns_none_without_running_loop(
+        self, mock_get_running_loop
+    ):
+        """Test that helper returns None when no running event loop exists."""
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            start_periodic_flush=False,
+        )
+
+        mock_get_running_loop.reset_mock()
+
+        assert logger._start_periodic_flush_task() is None
+        mock_get_running_loop.assert_called_once()
 
     @patch("asyncio.get_running_loop")
     def test_langsmith_init_starts_periodic_flush_with_running_loop(

@@ -316,18 +316,18 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self._ensure_periodic_flush_task()
-        sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
-        random_sample = random.random()
-        if random_sample > sampling_rate:
-            verbose_logger.info(
-                "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                    sampling_rate, random_sample
-                )
-            )
-            return  # Skip logging
-        verbose_logger.info("Langsmith Failure Event Logging!")
         try:
+            self._ensure_periodic_flush_task()
+            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
+            random_sample = random.random()
+            if random_sample > sampling_rate:
+                verbose_logger.info(
+                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                        sampling_rate, random_sample
+                    )
+                )
+                return  # Skip logging
+            verbose_logger.info("Langsmith Failure Event Logging!")
             credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
             data = self._prepare_log_data(
                 kwargs=kwargs,
