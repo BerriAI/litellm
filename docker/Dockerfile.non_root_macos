@@ -156,7 +156,7 @@ RUN python3 - <<'PY'
 import site, pathlib, subprocess, tarfile, tempfile, shutil, sys, inspect
 
 SAFE = {
-    "tar": ("tar", "7.5.10"),
+    "tar": ("tar", "7.5.11"),
     "glob": ("glob", "11.1.0"),
     "brace-expansion": ("@isaacs/brace-expansion", "5.0.1"),
     "minimatch": ("minimatch", "10.2.4"),
