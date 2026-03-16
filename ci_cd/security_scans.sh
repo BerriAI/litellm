@@ -11,7 +11,7 @@ echo "Starting security scans for LiteLLM..."
 install_trivy() {
     echo "Installing Trivy and required tools..."
     sudo apt-get update
-    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl
+    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl bsdmainutils
     wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
     echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
     sudo apt-get update
