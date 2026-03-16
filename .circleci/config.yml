@@ -159,9 +159,8 @@ jobs:
               "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.43.0" pyarrow \
               "boto3==1.36.0" "aioboto3==13.4.0" langchain lunary==0.2.5 \
               "azure-identity==1.16.1" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
-              traceloop-sdk==0.21.1 opentelemetry-api==1.25.0 opentelemetry-sdk==1.25.0 \
-              opentelemetry-exporter-otlp==1.25.0 openai==1.100.1 prisma==0.11.0 \
-              "detect_secrets==1.5.0" "httpx==0.24.1" "respx==0.22.0" fastapi \
+              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
+              "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
               "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
               python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
@@ -255,9 +254,8 @@ jobs:
               "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.43.0" pyarrow \
               "boto3==1.36.0" "aioboto3==13.4.0" langchain lunary==0.2.5 \
               "azure-identity==1.16.1" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
-              traceloop-sdk==0.21.1 opentelemetry-api==1.25.0 opentelemetry-sdk==1.25.0 \
-              opentelemetry-exporter-otlp==1.25.0 openai==1.100.1 prisma==0.11.0 \
-              "detect_secrets==1.5.0" "httpx==0.24.1" "respx==0.22.0" fastapi \
+              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
+              "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
               "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
               python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
