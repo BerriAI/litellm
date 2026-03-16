@@ -14,16 +14,14 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.main import base_llm_http_handler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, FileTypes
-from litellm.types.videos.main import (
-    VideoCreateOptionalRequestParams,
-    VideoObject,
-)
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import decode_video_id_with_provider
 from litellm.utils import ProviderConfigManager, client
 from litellm.videos.utils import VideoGenerationRequestUtils
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
+
 
 ##### Video Generation #######################
 @client
@@ -71,7 +69,8 @@ async def avideo_generation(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=local_vars.get("api_base", None)
+                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL,
+                api_base=local_vars.get("api_base", None),
             )
 
         func = partial(
@@ -117,17 +116,18 @@ async def avideo_generation(
 def video_generation(
     prompt: str,
     model: Optional[str] = None,
-    input_reference: Optional[str] = None,
+    input_reference: Optional[FileTypes] = None,
+    seconds: Optional[str] = None,
     size: Optional[str] = None,
     user: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_generation: Literal[True],
-    **kwargs,
+    **kwargs: Any,
 ) -> Coroutine[Any, Any, VideoObject]:
     ...
 
@@ -136,18 +136,18 @@ def video_generation(
 def video_generation(
     prompt: str,
     model: Optional[str] = None,
-    input_reference: Optional[str] = None,
+    input_reference: Optional[FileTypes] = None,
     seconds: Optional[str] = None,
     size: Optional[str] = None,
     user: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_generation: Literal[False] = False,
-    **kwargs,
+    **kwargs: Any,
 ) -> VideoObject:
     ...
 
@@ -170,10 +170,7 @@ def video_generation(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    VideoObject,
-    Coroutine[Any, Any, VideoObject],
-]:
+) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
 
@@ -202,20 +199,24 @@ def video_generation(  # noqa: PLR0915
         )
 
         # get provider config
-        video_generation_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_generation_provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_generation_provider_config is None:
-            raise ValueError(f"video generation is not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"video generation is not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
         # Get VideoGenerationOptionalRequestParams with only valid parameters
         video_generation_optional_params: VideoCreateOptionalRequestParams = (
-            VideoGenerationRequestUtils.get_requested_video_generation_optional_param(local_vars)
+            VideoGenerationRequestUtils.get_requested_video_generation_optional_param(
+                local_vars
+            )
         )
 
         # Get optional parameters for the video generation API
@@ -228,7 +229,8 @@ def video_generation(  # noqa: PLR0915
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(video_generation_request_params),
@@ -280,10 +282,7 @@ def video_content(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    bytes,
-    Coroutine[Any, Any, bytes],
-]:
+) -> Union[bytes, Coroutine[Any, Any, bytes],]:
     """
     Download video content from OpenAI's video API.
 
@@ -328,15 +327,17 @@ def video_content(
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_provider_config is None:
-            raise ValueError(f"video support download is not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"video support download is not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
         # For video content download, we don't need complex optional parameter handling
@@ -346,7 +347,8 @@ def video_content(
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             user=kwargs.get("user"),
             optional_params=dict(video_content_request_params),
@@ -451,6 +453,7 @@ async def avideo_content(
             extra_kwargs=kwargs,
         )
 
+
 ##### Video Remix #######################
 @client
 async def avideo_remix(
@@ -525,14 +528,14 @@ async def avideo_remix(
 def video_remix(
     video_id: str,
     prompt: str,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_remix: Literal[True],
-    **kwargs,
+    **kwargs: Any,
 ) -> Coroutine[Any, Any, VideoObject]:
     ...
 
@@ -541,14 +544,14 @@ def video_remix(
 def video_remix(
     video_id: str,
     prompt: str,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_remix: Literal[False] = False,
-    **kwargs,
+    **kwargs: Any,
 ) -> VideoObject:
     ...
 
@@ -567,10 +570,7 @@ def video_remix(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    VideoObject,
-    Coroutine[Any, Any, VideoObject],
-]:
+) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
     """
     Maps the https://api.openai.com/v1/videos/{video_id}/remix endpoint.
 
@@ -600,11 +600,11 @@ def video_remix(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_remix_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_remix_provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_remix_provider_config is None:
@@ -618,7 +618,8 @@ def video_remix(  # noqa: PLR0915
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             user=kwargs.get("user"),
             optional_params=dict(video_remix_request_params),
@@ -744,14 +745,14 @@ def video_list(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     order: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_list: Literal[True],
-    **kwargs,
+    **kwargs: Any,
 ) -> Coroutine[Any, Any, List[VideoObject]]:
     ...
 
@@ -761,14 +762,14 @@ def video_list(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     order: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_list: Literal[False] = False,
-    **kwargs,
+    **kwargs: Any,
 ) -> List[VideoObject]:
     ...
 
@@ -788,10 +789,7 @@ def video_list(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    List[VideoObject],
-    Coroutine[Any, Any, List[VideoObject]],
-]:
+) -> Union[List[VideoObject], Coroutine[Any, Any, List[VideoObject]],]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
 
@@ -818,11 +816,11 @@ def video_list(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_list_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_list_provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_list_provider_config is None:
@@ -837,7 +835,8 @@ def video_list(  # noqa: PLR0915
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             user=kwargs.get("user"),
             optional_params=dict(video_list_request_params),
@@ -852,7 +851,7 @@ def video_list(  # noqa: PLR0915
         litellm_logging_obj.call_type = CallTypes.video_list.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
-        return base_llm_http_handler.video_list_handler(
+        return base_llm_http_handler.video_list_handler(  # type: ignore[return-value]
             after=after,
             limit=limit,
             order=order,
@@ -911,7 +910,6 @@ async def avideo_status(
         loop = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-
         func = partial(
             video_status,
             video_id=video_id,
@@ -949,14 +947,14 @@ async def avideo_status(
 @overload
 def video_status(
     video_id: str,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_status: Literal[True],
-    **kwargs,
+    **kwargs: Any,
 ) -> Coroutine[Any, Any, VideoObject]:
     ...
 
@@ -964,14 +962,14 @@ def video_status(
 @overload
 def video_status(
     video_id: str,
-    timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    custom_llm_provider=None,
+    timeout: int = 600,
+    custom_llm_provider: Optional[str] = None,
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     *,
     avideo_status: Literal[False] = False,
-    **kwargs,
+    **kwargs: Any,
 ) -> VideoObject:
     ...
 
@@ -989,10 +987,7 @@ def video_status(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    VideoObject,
-    Coroutine[Any, Any, VideoObject],
-]:
+) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
     """
     Retrieve video status from OpenAI's video API.
 
@@ -1044,11 +1039,11 @@ def video_status(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_status_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        video_status_provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if video_status_provider_config is None:
@@ -1061,7 +1056,8 @@ def video_status(  # noqa: PLR0915
         }
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             user=kwargs.get("user"),
             optional_params=dict(video_status_request_params),

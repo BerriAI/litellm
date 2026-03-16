@@ -643,7 +643,13 @@ def test_arouter_responses_api_bridge():
     ## CONFIRM MODEL NAME IS STRIPPED
     client = HTTPHandler()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"id": "resp_test", "object": "response", "status": "completed", "output": []}
+    mock_response.text = '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
             result = router.completion(
                 model="[IP-approved] o3-pro",
@@ -1357,8 +1363,9 @@ async def test_acompletion_streaming_iterator_edge_cases():
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         modified_messages = fallback_kwargs["messages"]
 
-        # Should have assistant message with empty content
-        assert modified_messages[2]["content"] == ""
+        # Empty content → pre-first-chunk path uses original messages
+        # (no continuation prompt added)
+        assert modified_messages == messages
         print("✓ Handles empty generated content correctly")
 
     print("✓ Edge case tests passed!")
@@ -1417,6 +1424,179 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     )
     assert result._hidden_params.get("litellm_call_id") == "test-call-id"
     assert result._hidden_params.get("_response_ms") == 500.0
+
+
+def test_completion_streaming_iterator_fallback_on_429():
+    """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
+
+    This is the sync counterpart of test_acompletion_streaming_iterator.
+    Before this fix, __next__ raised RateLimitError directly and the Router
+    never got a chance to fall back.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    rate_limit_error = MidStreamFallbackError(
+        message="Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class SyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise rate_limit_error
+
+    mock_response = SyncIteratorImmediateError()
+
+    # Fallback returns a simple non-streaming response (fallback may not stream)
+    mock_fallback_response = MagicMock()
+    mock_fallback_response.__iter__ = MagicMock(return_value=iter([]))
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        return_value=mock_fallback_response,
+    ) as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        collected_chunks = list(result)
+
+        assert mock_fallback.called
+        call_kwargs = mock_fallback.call_args
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert call_kwargs.kwargs.get("messages") == messages
+        # Verify original_function is _completion (sync)
+        assert call_kwargs.kwargs.get("original_function") == router._completion
+
+
+def test_completion_streaming_iterator_preserves_hidden_params():
+    """SyncFallbackStreamWrapper must copy _hidden_params from original response."""
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {
+        "litellm_overhead_time_ms": 42.0,
+        "litellm_call_id": "test-sync-call",
+    }
+    mock_response.__iter__ = MagicMock(return_value=iter([]))
+
+    result = router._completion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert hasattr(result, "_hidden_params")
+    assert result._hidden_params.get("litellm_overhead_time_ms") == 42.0
+    assert result._hidden_params.get("litellm_call_id") == "test-sync-call"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
+    """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    pre_first_chunk_error = MidStreamFallbackError(
+        message="429 Resource exhausted",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class AsyncIteratorPreFirstChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise pre_first_chunk_error
+
+    mock_response = AsyncIteratorPreFirstChunkError()
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+        async for _ in iterator:
+            pass
+
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        # Pre-first-chunk: should use original messages, no continuation prompt
+        assert fallback_kwargs["messages"] == messages
 
 
 @pytest.mark.asyncio
@@ -2559,3 +2739,99 @@ def test_credential_name_not_injected_when_absent():
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"] == ["A.101"]
+
+
+def test_update_kwargs_with_deployment_model_info_in_litellm_metadata():
+    """For generic_api_call, model_info with pricing must go to litellm_metadata.
+
+    Routes like /messages and /responses use generic_api_call which stores
+    model_info under litellm_metadata. Regression test for #23185.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
+    )
+
+    assert "litellm_metadata" in kwargs
+    model_info = kwargs["litellm_metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_update_kwargs_with_deployment_model_info_in_metadata():
+    """For acompletion (function_name=None), model_info goes to metadata.
+
+    /chat/completions uses acompletion which stores model_info under metadata.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "custom-pricing-id",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="claude-sonnet-4"
+    )
+    router._update_kwargs_with_deployment(
+        deployment=deployment, kwargs=kwargs, function_name=None
+    )
+
+    assert "metadata" in kwargs
+    model_info = kwargs["metadata"]["model_info"]
+    assert model_info["id"] == "custom-pricing-id"
+    assert model_info["input_cost_per_token"] == 0.0003
+    assert model_info["output_cost_per_token"] == 0.0015
+
+
+def test_combine_fallback_usage():
+    """Test that _combine_fallback_usage merges partial and fallback usage."""
+    from litellm.router import Router
+    from litellm.types.utils import Usage
+
+    # Create a stream chunk with usage
+    chunk = litellm.ModelResponseStream(
+        id="test",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Call _combine_fallback_usage with no extra usage
+    Router._combine_fallback_usage(chunk, None)
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 10
+    assert chunk.usage.completion_tokens == 5
+    assert chunk.usage.total_tokens == 15

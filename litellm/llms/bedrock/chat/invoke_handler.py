@@ -407,9 +407,9 @@ class BedrockLLM(BaseAWSLLM):
 
         # Claude 3+ indicators (all use Messages API)
         messages_api_indicators = [
-            "claude-3",      # Claude 3.x models
-            "claude-opus-4", # Claude Opus 4
-            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-3",  # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4
+            "claude-sonnet-4",  # Claude Sonnet 4
             "claude-haiku-4",  # Claude Haiku 4
         ]
 
@@ -559,7 +559,7 @@ class BedrockLLM(BaseAWSLLM):
                             "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                         )
                         # return an iterator
-                        streaming_model_response = ModelResponse(stream=True)
+                        streaming_model_response = ModelResponseStream()
                         streaming_model_response.choices[0].finish_reason = getattr(
                             model_response.choices[0], "finish_reason", "stop"
                         )
@@ -696,7 +696,7 @@ class BedrockLLM(BaseAWSLLM):
             )
 
         if stream and provider == "ai21":
-            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response = ModelResponseStream()
             streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
                 0
             ].finish_reason

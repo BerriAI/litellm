@@ -109,6 +109,8 @@ Key files:
 - `litellm/proxy/auth/` - Authentication logic
 - `litellm/proxy/management_endpoints/` - Admin API endpoints
 
+**Database (proxy)**: Use Prisma model methods (`prisma_client.db.<model>.upsert`, `.find_many`, `.find_unique`, etc.), not raw SQL (`execute_raw`/`query_raw`). See COMMON PITFALLS for details.
+
 ## MCP (MODEL CONTEXT PROTOCOL) SUPPORT
 
 LiteLLM supports MCP for agent workflows:
@@ -176,6 +178,7 @@ When opening issues or pull requests, follow these templates:
 5. **Dependencies**: Keep dependencies minimal and well-justified
 6. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
 7. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
+8. **Raw SQL in proxy DB code**: Do not use `execute_raw` or `query_raw` for proxy database access. Use Prisma model methods (e.g. `prisma_client.db.litellm_tooltable.upsert()`, `.find_many()`, `.find_unique()`) so behavior stays consistent with the schema, the client stays mockable in tests, and you avoid the pitfalls of hand-written SQL (parameter ordering, type casting, schema drift)
 
 8. **Do not hardcode model-specific flags**: Put model-specific capability flags in `model_prices_and_context_window.json` and read them via `get_model_info` (or existing helpers like `supports_reasoning`). This prevents users from needing to upgrade LiteLLM each time a new model supports a feature.
 
@@ -248,9 +251,11 @@ The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot
 See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 
 - `psycopg-binary` must be installed (`poetry run pip install psycopg-binary`) because the pytest-postgresql plugin requires it and the lock file only includes `psycopg` (no binary).
+- `openapi-core` must be installed (`poetry run pip install openapi-core`) for the OpenAPI compliance tests in `tests/test_litellm/interactions/`.
 - The `--timeout` pytest flag is NOT available; don't pass it.
 - Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
 - Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- If `poetry install` fails with "pyproject.toml changed significantly since poetry.lock was last generated", run `poetry lock` first to regenerate the lock file.
 
 ### Lint
 
@@ -259,3 +264,11 @@ cd litellm && poetry run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.
+
+### UI Dashboard development
+
+- The UI is at `ui/litellm-dashboard/`. Run `npm run dev` from that directory for the Next.js dev server on port 3000.
+- The proxy at port 4000 serves a **pre-built** static UI from `litellm/proxy/_experimental/out/`. After making UI code changes, you must run `npm run build` in the dashboard directory and copy the output: `cp -r ui/litellm-dashboard/out/* litellm/proxy/_experimental/out/` for the proxy to serve the updated UI.
+- SVGs used as provider logos (loaded via `<img>` tags) must NOT use `fill="currentColor"` — replace with an explicit color like `#000000` or use the `-color` variant from lobehub icons, since CSS color inheritance does not work inside `<img>` elements.
+- Provider logos live in `ui/litellm-dashboard/public/assets/logos/` (source) and `litellm/proxy/_experimental/out/assets/logos/` (pre-built). Both locations must have the file for it to work in dev and proxy-served modes.
+- UI Vitest tests: `cd ui/litellm-dashboard && npx vitest run`

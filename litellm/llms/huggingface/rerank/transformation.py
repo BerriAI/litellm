@@ -61,8 +61,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             return "https://api-inference.huggingface.co"
 
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:

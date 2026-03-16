@@ -809,6 +809,102 @@ def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
     assert usage_obj["total_tokens"] == 100
 
 
+def test_standard_logging_payload_uses_actual_model_for_azure_router():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model-router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-opt-in",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model-router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-opt-in",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
+def test_standard_logging_payload_uses_actual_model_for_azure_router_with_underscore():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model_router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-underscore",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model_router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-underscore",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
 def test_merge_litellm_metadata_basic():
     """
     Test that merge_litellm_metadata correctly merges metadata and litellm_metadata.
