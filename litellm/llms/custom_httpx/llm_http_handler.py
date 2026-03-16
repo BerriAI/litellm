@@ -4542,6 +4542,9 @@ class BaseLLMHTTPHandler:
             from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
                 FakeAnthropicMessagesStreamIterator,
             )
+            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+                BaseAnthropicMessagesStreamingIterator,
+            )
             from litellm.types.llms.anthropic_messages.anthropic_response import (
                 AnthropicMessagesResponse,
             )
@@ -4557,7 +4560,18 @@ class BaseLLMHTTPHandler:
                 fake_stream = FakeAnthropicMessagesStreamIterator(
                     response=cast(AnthropicMessagesResponse, response)
                 )
-                return fake_stream
+                # Wrap with async_sse_wrapper to ensure streaming logging
+                # (SpendLogs) is triggered after all chunks are yielded.
+                # Without this, the fake stream bypasses the logging
+                # machinery that real streaming responses use.
+                request_body = logging_obj.model_call_details.copy()
+                streaming_handler = BaseAnthropicMessagesStreamingIterator(
+                    litellm_logging_obj=logging_obj,
+                    request_body=request_body,
+                )
+                return streaming_handler.async_sse_wrapper(
+                    completion_stream=fake_stream,
+                )
 
         return None
 
