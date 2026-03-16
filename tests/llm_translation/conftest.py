@@ -93,18 +93,12 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
             if hasattr(litellm, attr):
                 setattr(litellm, attr, default_val)
 
-    if hasattr(litellm, "in_memory_llm_clients_cache"):
-        litellm.in_memory_llm_clients_cache.flush_cache()
-
     # Set the event loop from the fixture
     asyncio.set_event_loop(event_loop)
 
     yield
 
     # ---- Teardown ----
-    if hasattr(litellm, "in_memory_llm_clients_cache"):
-        litellm.in_memory_llm_clients_cache.flush_cache()
-
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
