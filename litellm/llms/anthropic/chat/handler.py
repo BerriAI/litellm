@@ -48,6 +48,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
+from litellm.types.responses.main import (
+    OutputCodeInterpreterCall,
+    OutputCodeInterpreterCallLog,
+)
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
@@ -538,6 +542,11 @@ class ModelResponseIterator:
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: List[Dict[str, Any]] = []
 
+        # Track server tool use inputs and results for code_interpreter_results
+        self._server_tool_inputs: Dict[str, Any] = {}
+        self.tool_results: List[Dict[str, Any]] = []
+        self._last_code_interpreter_results_count: int = 0
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -568,9 +577,7 @@ class ModelResponseIterator:
             speed=self.speed,
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -682,6 +689,44 @@ class ModelResponseIterator:
 
         return content_block_start
 
+    def _build_code_interpreter_results(self) -> list:
+        """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
+
+        Called during streaming to produce provider-neutral code_interpreter_results
+        alongside the raw tool_results, so the Responses API layer doesn't need
+        Anthropic-specific knowledge.
+        """
+        # Only convert tool_results added since the last call to avoid
+        # duplicates when _merge_provider_specific_fields extends the list.
+        new_results = self.tool_results[self._last_code_interpreter_results_count :]
+        self._last_code_interpreter_results_count = len(self.tool_results)
+        results = []
+        for tr in new_results:
+            call_id = tr.get("tool_use_id", "")
+            content = tr.get("content", {})
+            if isinstance(content, dict):
+                parts = []
+                if content.get("stdout"):
+                    parts.append(content["stdout"])
+                if content.get("stderr"):
+                    parts.append(f"STDERR: {content['stderr']}")
+                logs = "".join(parts) if parts else str(content)
+            else:
+                logs = str(content)
+            tool_input = self._server_tool_inputs.get(call_id, {})
+            code = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            results.append(
+                OutputCodeInterpreterCall(
+                    type="code_interpreter_call",
+                    id=call_id,
+                    code=code,
+                    container_id=None,
+                    status="completed",
+                    outputs=[OutputCodeInterpreterCallLog(type="logs", logs=logs)],
+                )
+            )
+        return results
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -748,6 +793,17 @@ class ModelResponseIterator:
                         ),
                         index=self.tool_index,
                     )
+                    # Track server tool use inputs for code_interpreter_results
+                    if (
+                        content_block_start["content_block"]["type"]
+                        == "server_tool_use"
+                    ):
+                        tool_input = content_block_start["content_block"].get(
+                            "input", {}
+                        )
+                        self._server_tool_inputs[
+                            content_block_start["content_block"]["id"]
+                        ] = tool_input
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
@@ -768,9 +824,9 @@ class ModelResponseIterator:
                     # Handle compaction blocks
                     # The full content comes in content_block_start
                     self.compaction_blocks.append(content_block_start["content_block"])
-                    provider_specific_fields[
-                        "compaction_blocks"
-                    ] = self.compaction_blocks
+                    provider_specific_fields["compaction_blocks"] = (
+                        self.compaction_blocks
+                    )
                     provider_specific_fields["compaction_start"] = {
                         "type": "compaction",
                         "content": content_block_start["content_block"].get(
@@ -792,9 +848,9 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields[
-                            "web_search_results"
-                        ] = self.web_search_results
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
@@ -802,16 +858,18 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields[
-                            "web_search_results"
-                        ] = self.web_search_results
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
                     elif content_type != "tool_search_tool_result":
                         # Handle other tool results (code execution, etc.)
                         # Skip tool_search_tool_result as it's internal metadata
-                        if not hasattr(self, "tool_results"):
-                            self.tool_results = []
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
+                        # Convert to provider-neutral code_interpreter_results
+                        provider_specific_fields["code_interpreter_results"] = (
+                            self._build_code_interpreter_results()
+                        )
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
