@@ -558,6 +558,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
+        ## EARLY EXIT: Pass-through routes with auth disabled must skip all auth parsing.
+        ## This avoids NoneType.split() when api_key is None and JWT/OAuth2 parsing runs.
+        if pass_through_endpoints is not None:
+            for ep in pass_through_endpoints:
+                if not isinstance(ep, dict):
+                    continue
+                ep_path = ep.get("path", "")
+                route_matches = route == ep_path or (
+                    ep.get("include_subpath") is True
+                    and route.startswith(ep_path + "/")
+                )
+                if route_matches and ep.get("auth") is not True:
+                    return UserAPIKeyAuth()
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
