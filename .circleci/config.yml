@@ -94,8 +94,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip uninstall fastuuid -y
             pip install "mypy==1.18.2"
       - run:
@@ -553,8 +553,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -601,8 +601,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.22.0"
             pip install "pytest-retry==1.6.3"
@@ -658,8 +658,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.22.0"
             pip install "pytest-retry==1.6.3"
@@ -1120,10 +1120,9 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            pip install wheel
-            pip install --upgrade pip wheel setuptools
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            pip install wheel setuptools
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "respx==0.22.0"
             pip install "pytest-retry==1.6.3"
@@ -1169,8 +1168,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -1218,8 +1217,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-cov==5.0.0" "pytest-asyncio==0.21.1" "respx==0.22.0" "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" "websockets"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1259,8 +1258,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1305,8 +1304,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1350,8 +1349,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1359,7 +1358,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
-            pip install "semantic_router==0.1.10"
+            pip install "semantic_router==0.1.10" --no-deps
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
       # Run pytest and generate JUnit XML report
@@ -1399,8 +1398,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1448,8 +1447,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -1486,8 +1485,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-cov==5.0.0" "pytest-asyncio==0.21.1" "respx==0.22.0" "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1525,8 +1524,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-cov==5.0.0" "pytest-asyncio==0.21.1" "respx==0.22.0" "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1698,8 +1697,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest-mock==3.12.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
@@ -1712,7 +1711,7 @@ jobs:
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
-            pip install "semantic_router==0.1.10"
+            pip install "semantic_router==0.1.10" --no-deps
             pip install "fastapi-offline==1.7.3"
       - setup_litellm_enterprise_pip
       - run:
@@ -1751,8 +1750,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
@@ -1797,9 +1796,9 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install numpydoc
-            python -m pip install -r requirements.txt
             pip install "respx==0.22.0"
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
@@ -1846,8 +1845,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-cov==5.0.0" "pytest-asyncio==0.21.1" "respx==0.22.0" "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1885,8 +1884,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1929,8 +1928,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -1981,8 +1980,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-cov==5.0.0"
@@ -2059,9 +2058,9 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install wheel setuptools
-            python -m pip install -r requirements.txt
+            python -m pip install --upgrade pip uv
+            pip install wheel setuptools
+            uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
