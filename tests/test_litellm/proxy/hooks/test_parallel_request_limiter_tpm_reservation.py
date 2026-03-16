@@ -165,7 +165,9 @@ async def test_reservation_cleared_after_success(handler, user_api_key_dict):
     except Exception:
         second_allowed = False
 
-    assert second_allowed, "Second request should be allowed after first completed with lower actual usage"
+    assert (
+        second_allowed
+    ), "Second request should be allowed after first completed with lower actual usage"
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,9 @@ async def test_reservation_released_on_failure(handler, user_api_key_dict):
     except Exception:
         allowed = False
 
-    assert allowed, "Request should be allowed after failed request released its reservation"
+    assert (
+        allowed
+    ), "Request should be allowed after failed request released its reservation"
 
 
 @pytest.mark.asyncio
