@@ -3,18 +3,9 @@ slug: sub-millisecond-proxy-overhead
 title: "Achieving Sub-Millisecond Proxy Overhead"
 date: 2026-02-02T10:00:00
 authors:
-  - name: Alexsander Hamir
-    title: "Performance Engineer, LiteLLM"
-    url: https://www.linkedin.com/in/alexsander-baptista/
-    image_url: https://github.com/AlexsanderHamir.png
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - alexsander
+  - krrish
+  - ishaan-alt
 description: "Our Q1 performance target and architectural direction for achieving sub-millisecond proxy overhead on modest hardware."
 tags: [performance, architecture]
 hide_table_of_contents: false
