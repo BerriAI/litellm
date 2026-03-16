@@ -1,0 +1,24 @@
+
+======================================================================
+  Benchmarking: Standard LiteLLM Proxy
+  URL: http://localhost:4000/chat/completions
+  Requests per level: 2000, Runs per level: 5
+  Concurrency levels: [10, 50, 100, 200]
+======================================================================
+
+  Concurrency=10 ... throughput=822 req/s, mean=12.0ms, p50=10.5ms, p95=28.7ms, p99=36.7ms
+
+  Concurrency=50 ... throughput=493 req/s, mean=99.9ms, p50=41.1ms, p95=247.8ms, p99=315.4ms
+
+  Concurrency=100 ... throughput=809 req/s, mean=117.8ms, p50=109.3ms, p95=238.6ms, p99=397.7ms
+
+  Concurrency=200 ... throughput=530 req/s, mean=313.9ms, p50=223.5ms, p95=604.9ms, p99=853.0ms
+
+    Conc |   Throughput |       Mean |        P50 |        P95 |        P99
+  -------+--------------+------------+------------+------------+-----------
+      10 |       822 rps |    12.0 ms |    10.5 ms |    28.7 ms |    36.7 ms
+      50 |       493 rps |    99.9 ms |    41.1 ms |   247.8 ms |   315.4 ms
+     100 |       809 rps |   117.8 ms |   109.3 ms |   238.6 ms |   397.7 ms
+     200 |       530 rps |   313.9 ms |   223.5 ms |   604.9 ms |   853.0 ms
+
+  Results saved to benchmark_results/standard_comprehensive.json

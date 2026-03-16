@@ -1,0 +1,52 @@
+Benchmarking http://localhost:4001/chat/completions
+  2000 requests, 100 concurrency, 3 run(s)
+
+============================================================
+  Run 1/3
+============================================================
+  Requests:    2000  (failures: 0)
+  Concurrency: 100
+  Wall time:   25.33s
+  Throughput:  79 req/s
+  Mean:        1246.09 ms
+  P50:         1202.74 ms
+  P95:         1807.99 ms
+  P99:         2234.76 ms
+
+============================================================
+  Run 2/3
+============================================================
+  Requests:    2000  (failures: 0)
+  Concurrency: 100
+  Wall time:   26.18s
+  Throughput:  76 req/s
+  Mean:        1272.32 ms
+  P50:         1261.65 ms
+  P95:         2184.16 ms
+  P99:         2406.41 ms
+
+============================================================
+  Run 3/3
+============================================================
+  Requests:    2000  (failures: 0)
+  Concurrency: 100
+  Wall time:   25.95s
+  Throughput:  77 req/s
+  Mean:        1268.84 ms
+  P50:         1178.08 ms
+  P95:         1719.05 ms
+  P99:         3159.39 ms
+
+============================================================
+  Aggregate (3 runs, 6000 total requests)
+============================================================
+  Failures:    0
+  Throughput:  77 req/s (avg across runs)
+  Mean:        1262.42 ms
+  P50:         1209.21 ms
+  P95:         2094.34 ms
+  P99:         2406.52 ms
+
+  Run-to-run variance:
+    Latency CoV:    1.1%
+    Throughput CoV: 1.7%

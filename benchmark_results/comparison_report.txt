@@ -1,0 +1,60 @@
+================================================================================
+  BENCHMARK REPORT: Standard LiteLLM Proxy vs fast-litellm Accelerated Proxy
+================================================================================
+
+  Test Configuration:
+    - Requests per concurrency level: 2000
+    - Runs per level (median taken):  5
+    - Mode: network_mock (pure proxy overhead, no real API calls)
+    - Database: Local PostgreSQL (eliminates network DB latency)
+    - Workers: 4 uvicorn workers
+
+  ----------------------------------------------------------------------------
+  Metric                 |  Conc |     Standard |   fast-litellm |       Diff
+  ----------------------------------------------------------------------------
+  Throughput             |    10 |     822.2 rps|       510.5 rps|     -37.9%
+  Mean latency           |    10 |      12.0 ms |        19.3 ms |     +60.8%
+  P50 latency            |    10 |      10.5 ms |        13.7 ms |     +29.7%
+  P95 latency            |    10 |      28.7 ms |        31.6 ms |     +10.0%
+  P99 latency            |    10 |      36.7 ms |        36.0 ms |      -2.0%
+  ----------------------------------------------------------------------------
+  Throughput             |    50 |     493.1 rps|       478.3 rps|      -3.0%
+  Mean latency           |    50 |      99.9 ms |       101.8 ms |      +1.9%
+  P50 latency            |    50 |      41.1 ms |        58.6 ms |     +42.6%
+  P95 latency            |    50 |     247.8 ms |       146.0 ms |     -41.1%
+  P99 latency            |    50 |     315.4 ms |       847.4 ms |    +168.7%
+  ----------------------------------------------------------------------------
+  Throughput             |   100 |     808.6 rps|       822.5 rps|      +1.7%
+  Mean latency           |   100 |     117.8 ms |       115.3 ms |      -2.2%
+  P50 latency            |   100 |     109.3 ms |       112.5 ms |      +3.0%
+  P95 latency            |   100 |     238.6 ms |       219.1 ms |      -8.2%
+  P99 latency            |   100 |     397.7 ms |       248.2 ms |     -37.6%
+  ----------------------------------------------------------------------------
+  Throughput             |   200 |     529.8 rps|       584.7 rps|     +10.4%
+  Mean latency           |   200 |     313.9 ms |       323.1 ms |      +2.9%
+  P50 latency            |   200 |     223.5 ms |       237.8 ms |      +6.4%
+  P95 latency            |   200 |     604.9 ms |       575.3 ms |      -4.9%
+  P99 latency            |   200 |     853.0 ms |       874.7 ms |      +2.5%
+  ----------------------------------------------------------------------------
+
+  SUMMARY TABLE (Throughput & Mean Latency)
+
+   Concurrency |  Std Throughput |  Fast Throughput |   Std Mean |   Fast Mean |  Speedup
+  -------------+-----------------+------------------+------------+-------------+---------
+            10 |          822 rps |           510 rps |    12.0 ms |     19.3 ms |   0.62x
+            50 |          493 rps |           478 rps |    99.9 ms |    101.8 ms |   0.97x
+           100 |          809 rps |           822 rps |   117.8 ms |    115.3 ms |   1.02x
+           200 |          530 rps |           585 rps |   313.9 ms |    323.1 ms |   1.10x
+
+  KEY FINDINGS:
+    - Overall throughput ratio: 0.90x (fast-litellm / standard)
+    - Avg mean latency: standard=135.9ms, fast-litellm=139.9ms (+2.9%)
+
+  NOTES:
+    - network_mock mode eliminates real API calls, measuring pure proxy overhead
+    - Local PostgreSQL eliminates network DB latency from the measurement
+    - fast-litellm v0.1.6 with Rust acceleration via PyO3
+    - Results may vary depending on hardware, OS, and Python version
+    - fast-litellm patches: routing, token_counting, rate_limiting, connection_pooling
+    - Some patches (SimpleRateLimiter, SimpleConnectionPool, count_tokens_batch)
+      failed to apply since the target classes/functions were not found in this version

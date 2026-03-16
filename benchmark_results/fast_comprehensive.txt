@@ -1,0 +1,24 @@
+
+======================================================================
+  Benchmarking: fast-litellm Accelerated Proxy
+  URL: http://localhost:4001/chat/completions
+  Requests per level: 2000, Runs per level: 5
+  Concurrency levels: [10, 50, 100, 200]
+======================================================================
+
+  Concurrency=10 ... throughput=510 req/s, mean=19.3ms, p50=13.7ms, p95=31.6ms, p99=36.0ms
+
+  Concurrency=50 ... throughput=478 req/s, mean=101.8ms, p50=58.6ms, p95=146.0ms, p99=847.4ms
+
+  Concurrency=100 ... throughput=822 req/s, mean=115.3ms, p50=112.5ms, p95=219.1ms, p99=248.2ms
+
+  Concurrency=200 ... throughput=585 req/s, mean=323.1ms, p50=237.8ms, p95=575.3ms, p99=874.7ms
+
+    Conc |   Throughput |       Mean |        P50 |        P95 |        P99
+  -------+--------------+------------+------------+------------+-----------
+      10 |       510 rps |    19.3 ms |    13.7 ms |    31.6 ms |    36.0 ms
+      50 |       478 rps |   101.8 ms |    58.6 ms |   146.0 ms |   847.4 ms
+     100 |       822 rps |   115.3 ms |   112.5 ms |   219.1 ms |   248.2 ms
+     200 |       585 rps |   323.1 ms |   237.8 ms |   575.3 ms |   874.7 ms
+
+  Results saved to benchmark_results/fast_comprehensive.json
