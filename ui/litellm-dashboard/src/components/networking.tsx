@@ -2606,6 +2606,7 @@ interface UiSpendLogsParams {
   key_alias?: string;
   error_code?: string;
   error_message?: string;
+  tags?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
   min_spend?: number;
@@ -5859,7 +5860,7 @@ export const deletePolicyAttachmentCall = async (accessToken: string, attachment
 export const testPipelineCall = async (
   accessToken: string,
   pipeline: any,
-  testMessages: Array<{role: string, content: string}>
+  testMessages: Array<{ role: string, content: string }>
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/test-pipeline` : `/policies/test-pipeline`;
@@ -6879,7 +6880,7 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
 };
 
 export const listMCPTools = async (
-  accessToken: string, 
+  accessToken: string,
   serverId: string,
   customHeaders?: Record<string, string>
 ) => {

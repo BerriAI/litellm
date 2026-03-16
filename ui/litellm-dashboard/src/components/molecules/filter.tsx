@@ -140,6 +140,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Error Message",
     "Key Hash",
     "Model",
+    "Tags"
   ];
 
   return (

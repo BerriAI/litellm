@@ -15,7 +15,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
-import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
+import { allEndUsersCall, allTagNamesCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
@@ -417,6 +417,24 @@ export default function SpendLogsTable({
         { label: "Success", value: "success" },
         { label: "Failure", value: "failure" },
       ],
+    },
+    {
+      name: "Tags",
+      label: "Tags",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        try {
+          const response = await allTagNamesCall(accessToken);
+          const tagNames: string[] = response.tag_names || [];
+          const filtered = tagNames.filter((t: string) =>
+            t.toLowerCase().includes(searchText.toLowerCase()),
+          );
+          return filtered.map((t: string) => ({ label: t, value: t }));
+        } catch {
+          return [];
+        }
+      },
     },
     {
       name: "Model",
