@@ -39,7 +39,18 @@ def isolate_litellm_state():
             original_state[attr] = val.copy() if val else []
 
     # Save other globals that tests commonly mutate
-    for attr in ("set_verbose", "cache", "num_retries"):
+    for attr in (
+        "set_verbose",
+        "cache",
+        "num_retries",
+        "num_retries_per_request",
+        "request_timeout",
+        "default_fallbacks",
+        "enable_azure_ad_token_refresh",
+        "tag_budget_config",
+        "model_cost",
+        "token_counter",
+    ):
         if hasattr(litellm, attr):
             original_state[attr] = getattr(litellm, attr)
 

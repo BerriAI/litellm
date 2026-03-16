@@ -1008,12 +1008,11 @@ jobs:
             ./docker/entrypoint.sh
             set -e
       - run:
-          name: Run proxy unit tests (part 1 - auth checks only, key generation in separate job)
+          name: Run proxy unit tests (part 1 - auth checks + proxy_utils + proxy_server)
           command: |
             pwd
             ls
-            # Run auth tests with parallel execution (test_key_generate_prisma moved to separate job to avoid event loop issues)
-            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -v
+            python -m pytest tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py tests/proxy_unit_tests/test_proxy_utils.py tests/proxy_unit_tests/test_proxy_server.py --junitxml=test-results/junit-part1.xml --durations=10 -n 8 --timeout=300 -v
           no_output_timeout: 15m
       - store_test_results:
           path: test-results
@@ -1109,7 +1108,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -v
+            python -m pytest tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --ignore=tests/proxy_unit_tests/test_proxy_utils.py --ignore=tests/proxy_unit_tests/test_proxy_server.py --junitxml=test-results/junit-part2.xml --durations=10 -n 8 --timeout=300 -v
           no_output_timeout: 15m
       - store_test_results:
           path: test-results
