@@ -181,3 +181,23 @@ class TestLangsmithLoggerInit:
 
         logger._start_periodic_flush_task.assert_called_once()
         assert len(logger.log_queue) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_log_failure_event_lazily_starts_periodic_flush(self):
+        """Test that async failure logging lazily starts periodic flush after sync init."""
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            start_periodic_flush=False,
+        )
+        logger._get_sampling_rate_to_use_for_request = MagicMock(return_value=1.0)
+        logger._get_credentials_to_use_for_request = MagicMock(
+            return_value=logger.default_credentials
+        )
+        logger._prepare_log_data = MagicMock(return_value={"id": "run-id"})
+        logger._start_periodic_flush_task = MagicMock(return_value=MagicMock())
+
+        await logger.async_log_failure_event({}, {}, None, None)
+
+        logger._start_periodic_flush_task.assert_called_once()
+        assert len(logger.log_queue) == 1
