@@ -89,7 +89,7 @@ async def async_embedding(
         logging_obj.post_call(
             input=input,
             api_key=api_key,
-            additional_args={"complete_input_dict": data},
+            additional_args={"complete_input_dict": data, "api_base": api_base},
             original_response=e.response.text,
         )
         raise e
@@ -98,7 +98,7 @@ async def async_embedding(
         logging_obj.post_call(
             input=input,
             api_key=api_key,
-            additional_args={"complete_input_dict": data},
+            additional_args={"complete_input_dict": data, "api_base": api_base},
             original_response=str(e),
         )
         raise e

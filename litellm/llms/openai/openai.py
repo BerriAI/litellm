@@ -562,9 +562,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider = (
                             litellm_params.copy() if litellm_params else {}
                         )
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
                         agentic_response = (
@@ -1372,7 +1372,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data, "api_base": api_base},
                 original_response=sync_embedding_response,
             )
             response: EmbeddingResponse = convert_to_model_response_object(
