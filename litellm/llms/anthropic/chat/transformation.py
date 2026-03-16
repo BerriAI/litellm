@@ -1691,8 +1691,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         citation_type = citation.get("type")
 
         if citation_type == "web_search_result_location":
+            url = citation.get("url")
+            if url is None:
+                return None
             url_citation = ChatCompletionAnnotationURLCitation(
-                url=citation.get("url"),
+                url=url,
                 title=citation.get("title"),
             )
         else:
