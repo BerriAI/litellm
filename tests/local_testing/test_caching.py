@@ -200,9 +200,9 @@ def test_caching_with_ttl():
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="gpt-3.5-turbo", messages=messages, caching=True, ttl=0, mock_response="Hello world from cache test"
+            model="gpt-3.5-turbo", messages=messages, caching=True, ttl=0, mock_response="Hello world from cache test 1"
         )
-        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test 2")
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None  # disable cache
