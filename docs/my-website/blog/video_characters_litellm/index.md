@@ -1,6 +1,6 @@
 ---
 slug: video_characters_api
-title: "Reusable Video Characters with LiteLLM"
+title: "New Video Characters, Edit and Extension API support"
 date: 2026-03-16T10:00:00
 authors:
   - name: Sameer Kankute
@@ -122,9 +122,3 @@ Router knows exactly which deployment to use
 - Character ID format: `character_<base64_encoded_metadata>`
 - Metadata includes: provider, model_id, original_character_id
 - Transparent to you - just use the ID, LiteLLM handles routing
-
-**Benefits:**
-- Multi-deployment load balancing
-- Automatic model resolution
-- Encoded IDs work across proxy restarts
-- Router picks optimal deployment
