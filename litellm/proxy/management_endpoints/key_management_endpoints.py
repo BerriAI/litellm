@@ -4763,7 +4763,6 @@ async def _check_key_admin_access(
 
     Raises HTTPException(403) if the caller is not authorized.
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj
 
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
