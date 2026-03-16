@@ -82,6 +82,7 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     model: Optional[str]
     seconds: Optional[str]
     size: Optional[str]
+    characters: Optional[List[Dict[str, str]]]
     user: Optional[str]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
