@@ -39,7 +39,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.9.0 --no-cache-dir
+RUN pip install PyJWT==2.12.0 --no-cache-dir
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime

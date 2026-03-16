@@ -144,6 +144,61 @@ async def test_claude_agent_sdk_streaming(litellm_proxy_config, model_name, mode
         f"Test failed for {model_name} ({model_description}) after {MAX_RETRIES} attempts: {last_error}"
     )
 
+    # Test query
+    test_query = "Say 'Hello from LiteLLM!' and nothing else."
+
+    # Track streaming
+    received_chunks = []
+    full_response = ""
+
+    try:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(test_query)
+
+            # Collect streaming response
+            async for msg in client.receive_response():
+                # Handle different message types
+                if hasattr(msg, 'type'):
+                    if msg.type == 'content_block_delta':
+                        # Streaming text delta
+                        if hasattr(msg, 'delta') and hasattr(msg.delta, 'text'):
+                            chunk_text = msg.delta.text
+                            received_chunks.append(chunk_text)
+                            full_response += chunk_text
+                    elif msg.type == 'content_block_start':
+                        # Start of content block
+                        if hasattr(msg, 'content_block') and hasattr(msg.content_block, 'text'):
+                            chunk_text = msg.content_block.text
+                            received_chunks.append(chunk_text)
+                            full_response += chunk_text
+
+                # Fallback to content handling
+                if hasattr(msg, 'content'):
+                    for content_block in msg.content:
+                        if hasattr(content_block, 'text'):
+                            chunk_text = content_block.text
+                            received_chunks.append(chunk_text)
+                            full_response += chunk_text
+
+        # Assertions
+        print(f"\n✅ Received {len(received_chunks)} chunks")
+        print(f"📝 Full response: {full_response[:100]}...")
+
+        # Verify we got a response
+        assert len(full_response) > 0, f"No response received from {model_name}"
+
+        # Verify streaming (should have multiple chunks for most responses)
+        # Note: Very short responses might come in 1 chunk, so we just verify we got content
+        assert len(received_chunks) > 0, f"No chunks received from {model_name}"
+
+        # Verify response is non-empty (don't assert on specific LLM content — it's non-deterministic)
+        assert len(full_response.strip()) > 0, f"Empty response received from {model_name}"
+
+        print(f"✅ Test passed for {model_name}")
+
+    except Exception as e:
+        pytest.fail(f"Test failed for {model_name} ({model_description}): {str(e)}")
+
 
 if __name__ == "__main__":
     # Run tests
