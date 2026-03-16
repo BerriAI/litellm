@@ -26,6 +26,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
+    get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
 )
 from litellm.types.llms.openai import (
@@ -589,7 +590,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping = cast(
                 Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping")
             )
+            # model_info may be at top-level or nested under litellm_metadata
+            # (batch/file operations use litellm_metadata)
             model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+            if model_id is None:
+                model_id = cast(
+                    Optional[str],
+                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(
@@ -897,6 +905,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            resolved_model_name = model_name
+
+            # Some providers (e.g. Vertex batch retrieve) do not set model_name on
+            # the response. In that case, recover target_model_names from the input
+            # managed file metadata so unified output IDs preserve routing metadata.
+            if not resolved_model_name and isinstance(unified_file_id, str):
+                decoded_unified_file_id = (
+                    _is_base64_encoded_unified_file_id(unified_file_id)
+                    or unified_file_id
+                )
+                target_model_names = get_models_from_unified_file_id(
+                    decoded_unified_file_id
+                )
+                if target_model_names:
+                    resolved_model_name = ",".join(target_model_names)
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:
@@ -912,7 +935,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         unified_file_id = self.get_unified_output_file_id(
                             output_file_id=original_file_id,
                             model_id=model_id,
-                            model_name=model_name,
+                            model_name=resolved_model_name,
                         )
                         setattr(response, file_attr, unified_file_id)
                         

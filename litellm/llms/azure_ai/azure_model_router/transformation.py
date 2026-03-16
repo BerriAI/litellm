@@ -17,7 +17,7 @@ from litellm.types.utils import ModelResponse
 class AzureModelRouterConfig(AzureAIStudioConfig):
     """
     Configuration for Azure AI Foundry Model Router.
-    
+
     Handles:
     - Stripping model_router prefix before sending to Azure API
     - Preserving full model path in responses for cost tracking
@@ -34,7 +34,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
     ) -> dict:
         """
         Transform request for Model Router.
-        
+
         Strips the model_router/ prefix so only the deployment name is sent to Azure.
         Example: model_router/azure-model-router -> azure-model-router
         """
@@ -42,7 +42,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
 
         # Get base model name (strips routing prefixes like model_router/)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
-        
+
         return super().transform_request(
             base_model, messages, optional_params, litellm_params, headers
         )
@@ -63,25 +63,18 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
     ) -> ModelResponse:
         """
         Transform response for Model Router.
-        
-        Preserves the original model path (including model_router/ prefix) in the response
-        for proper cost tracking and logging.
+
+        Extracts the actual model used from the Azure response (e.g., gpt-5-nano-2025-08-07)
+        and returns it with the azure_ai/ prefix for proper display and cost tracking.
         """
         from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
-        # Preserve the original model from litellm_params (includes routing prefixes like model_router/)
-        # This ensures cost tracking and logging use the full model path
-        original_model: str = litellm_params.get("model") or model
-        if not original_model.startswith("azure_ai/"):
-            # Add provider prefix if not already present
-            model_response.model = f"azure_ai/{original_model}"
-        else:
-            model_response.model = original_model
-        
         # Get base model for the parent call (strips routing prefixes for API compatibility)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
-        
-        return super().transform_response(
+
+        # Call parent transform_response first - this will extract the actual model
+        # from the raw response (e.g., "gpt-5-nano-2025-08-07")
+        model_response = super().transform_response(
             model=base_model,
             raw_response=raw_response,
             model_response=model_response,
@@ -94,32 +87,33 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        return model_response
 
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int
     ) -> Optional[dict]:
         """
         Calculate additional costs for Azure Model Router.
-        
+
         Adds a flat infrastructure cost of $0.14 per M input tokens for using the Model Router.
-        
+
         Args:
             model: The model name (should be a model router model)
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
-            
+
         Returns:
             Dictionary with additional costs, or None if not applicable.
         """
         from litellm.llms.azure_ai.cost_calculator import (
             calculate_azure_model_router_flat_cost,
         )
-        
+
         flat_cost = calculate_azure_model_router_flat_cost(
             model=model, prompt_tokens=prompt_tokens
         )
-        
+
         if flat_cost > 0:
             return {"Azure Model Router Flat Cost": flat_cost}
-        
+
         return None

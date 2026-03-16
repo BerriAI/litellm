@@ -120,7 +120,8 @@ def test_usage_completion_tokens_details_text_tokens():
         'reasoning_tokens': 65,
         'rejected_prediction_tokens': None,
         'text_tokens': 12,
-        'image_tokens': None
+        'image_tokens': None,
+        'video_tokens': None
     }
     assert dump_result['completion_tokens_details'] == expected_completion_details
     
@@ -222,3 +223,84 @@ def test_chat_completion_token_logprob_invalid_top_logprobs_rejected():
             logprob=-0.31725305,
             top_logprobs="invalid_string",
         )
+
+
+# ---------------------------------------------------------------------------
+# native_finish_reason in provider_specific_fields
+# ---------------------------------------------------------------------------
+
+
+class TestNativeFinishReason:
+    """Choices exposes the raw provider finish_reason in provider_specific_fields
+    when it differs from the mapped OpenAI-compatible value."""
+
+    def test_provider_reason_exposed_when_mapped(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="end_turn")
+        assert choice.finish_reason == "stop"
+        assert choice.provider_specific_fields["native_finish_reason"] == "end_turn"
+
+    def test_provider_reason_not_set_when_already_openai(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="stop")
+        assert choice.finish_reason == "stop"
+        assert not hasattr(choice, "provider_specific_fields")
+
+    def test_provider_reason_merged_with_existing_fields(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(
+            finish_reason="max_tokens",
+            provider_specific_fields={"citations": [{"url": "http://example.com"}]},
+        )
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
+        assert choice.provider_specific_fields["citations"] == [{"url": "http://example.com"}]
+
+    def test_gemini_safety_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="SAFETY")
+        assert choice.finish_reason == "content_filter"
+        assert choice.provider_specific_fields["native_finish_reason"] == "SAFETY"
+
+    def test_anthropic_tool_use_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="tool_use")
+        assert choice.finish_reason == "tool_calls"
+        assert choice.provider_specific_fields["native_finish_reason"] == "tool_use"
+
+    def test_max_tokens_reason_exposed(self):
+        from litellm.types.utils import Choices
+
+        choice = Choices(finish_reason="MAX_TOKENS")
+        assert choice.finish_reason == "length"
+        assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+def test_delta_maps_reasoning_to_reasoning_content():
+    """
+    Test that Delta maps 'reasoning' field to 'reasoning_content'.
+
+    Providers like Cerebras and Groq return delta.reasoning for gpt-oss models,
+    but LiteLLM expects delta.reasoning_content.
+    """
+    from litellm.types.utils import Delta
+
+    # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
+    delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
+    assert delta.reasoning_content == "thinking step by step"
+    assert not hasattr(delta, "reasoning"), "reasoning should not leak as an extra attribute"
+
+    # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
+    delta2 = Delta(content="hello", reasoning_content="direct reasoning")
+    assert delta2.reasoning_content == "direct reasoning"
+
+    # When both are present, reasoning_content takes precedence
+    delta3 = Delta(reasoning_content="from_rc", reasoning="from_r")
+    assert delta3.reasoning_content == "from_rc"
+
+    # When neither is present, reasoning_content is not set (OpenAI spec)
+    delta4 = Delta(content="hello")
+    assert not hasattr(delta4, "reasoning_content")

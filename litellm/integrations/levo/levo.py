@@ -6,7 +6,9 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
@@ -114,4 +116,3 @@ class LevoLogger(OpenTelemetry):
                 "status": "unhealthy",
                 "error_message": str(e),
             }
-

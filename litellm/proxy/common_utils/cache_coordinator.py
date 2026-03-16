@@ -181,9 +181,7 @@ class EventDrivenCacheCoordinator:
         event_to_wait = await self._claim_role()
 
         if event_to_wait is not None:
-            return await self._wait_for_signal_and_get(
-                event_to_wait, cache_key, cache
-            )
+            return await self._wait_for_signal_and_get(event_to_wait, cache_key, cache)
 
         try:
             result = await self._load_and_cache(cache_key, cache, load_fn)
