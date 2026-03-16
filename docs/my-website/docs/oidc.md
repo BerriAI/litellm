@@ -96,6 +96,10 @@ model_list:
       aws_web_identity_token: "oidc/google/https://example.com"
 ```
 
+:::tip Bedrock Guardrails on GCP
+If you use **Bedrock guardrails** with a LiteLLM instance deployed on GCP, see [Bedrock Guardrails with OIDC (GCP Deployment)](proxy/guardrails/bedrock#bedrock-guardrails-with-oidc-gcp-deployment) for a step-by-step guide including AWS IAM setup and UI configuration.
+:::
+
 ### CircleCI v2 -> Amazon Bedrock
 
 ```yaml

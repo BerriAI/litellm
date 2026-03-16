@@ -8,6 +8,10 @@ import TabItem from '@theme/TabItem';
 If you haven't set up or authenticated your Bedrock provider yet, see the [Bedrock Provider Setup & Authentication Guide](../../providers/bedrock.md).
 :::
 
+:::info LiteLLM on GCP?
+If your LiteLLM instance runs on GCP (Cloud Run, GKE, or Compute Engine) and you want to use Bedrock guardrails without storing AWS keys, see [Bedrock Guardrails with OIDC (GCP Deployment)](#bedrock-guardrails-with-oidc-gcp-deployment).
+:::
+
 LiteLLM supports Bedrock guardrails via the [Bedrock ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html). 
 
 ## Quick Start
@@ -140,6 +144,139 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 </Tabs>
+
+## Bedrock Guardrails with OIDC (GCP Deployment)
+
+When your LiteLLM instance runs on GCP (Cloud Run, GKE, or Compute Engine) and your Bedrock guardrails are in AWS, you can use **OIDC federation** to authenticate without storing AWS keys. This guide walks you through setup via the LiteLLM UI.
+
+:::info Prerequisites
+- LiteLLM instance deployed on GCP (Cloud Run, GKE, or Compute Engine)
+- Bedrock guardrail created in your AWS account
+- Access to the LiteLLM UI and your AWS account
+:::
+
+### Part 1: AWS Setup
+
+#### Step 1: Create an IAM role for OIDC
+
+1. In **AWS Console** → **IAM** → **Roles** → **Create role**
+2. Select **Web identity** as the trusted entity type
+3. For **Identity provider**, select **Google**
+4. For **Audience**, enter your LiteLLM instance URL (e.g. `https://litellm-proxy-xyz123-uc.a.run.app`)
+5. Click **Next**
+6. Attach the permissions policy (see Step 2)
+7. Name the role (e.g. `litellm-bedrock-guardrails`) and create it
+8. Copy the **Role ARN** (e.g. `arn:aws:iam::123456789012:role/litellm-bedrock-guardrails`)
+
+#### Step 2: Add permissions for Bedrock guardrails
+
+1. Open the role you created → **Add permissions** → **Create inline policy**
+2. Switch to the **JSON** tab and paste:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockGuardrails",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ApplyGuardrail"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1:YOUR_ACCOUNT_ID:guardrail/YOUR_GUARDRAIL_ID"
+      ]
+    }
+  ]
+}
+```
+
+3. Replace:
+   - `YOUR_ACCOUNT_ID` with your AWS account ID
+   - `us-east-1` with your Bedrock region if different
+   - `YOUR_GUARDRAIL_ID` with your Bedrock guardrail ID (or use `arn:aws:bedrock:*:YOUR_ACCOUNT_ID:guardrail/*` for all guardrails)
+4. Name the policy (e.g. `BedrockGuardrailAccess`) and create it
+
+#### Step 3: Get your Bedrock guardrail details
+
+1. In **AWS Console** → **Amazon Bedrock** → **Guardrails**
+2. Open your guardrail
+3. Note the **Guardrail ID** (e.g. `ff6ujrregl1q`), **Version** (e.g. `DRAFT`), and **Region** (e.g. `us-east-1`)
+
+### Part 2: Add the Guardrail in the LiteLLM UI
+
+#### Step 1: Open the Guardrails section
+
+1. Log in to your LiteLLM instance (e.g. `https://your-litellm-instance.run.app`)
+2. Go to **Guardrails** in the sidebar
+3. Click **Add Guardrail**
+
+#### Step 2: Select Bedrock
+
+1. Choose **AWS Bedrock Guardrails**
+2. Click **Next**
+
+#### Step 3: Fill in the guardrail configuration
+
+| Field | Value |
+|-------|-------|
+| **Guardrail Name** | e.g. `bedrock-content-guard` |
+| **Mode** | `pre_call`, `during_call`, or `post_call` |
+| **Guardrail Identifier** | Your Bedrock guardrail ID (e.g. `ff6ujrregl1q`) |
+| **Guardrail Version** | e.g. `DRAFT` or your version number |
+| **AWS Region Name** | Region where your guardrail lives (e.g. `us-east-1`) |
+| **AWS Role Name** | Full IAM role ARN (e.g. `arn:aws:iam::123456789012:role/litellm-bedrock-guardrails`) |
+| **AWS Session Name** | e.g. `litellm` |
+| **AWS Web Identity Token** | `oidc/google/` + your LiteLLM instance URL (e.g. `oidc/google/https://your-litellm-instance.run.app`) |
+
+:::tip Instance URL as audience
+Use the same URL you use to access the LiteLLM UI. It must match exactly what you entered in the AWS trust policy.
+:::
+
+#### Step 4: Save and enable
+
+1. Click **Create** or **Save**
+2. Enable the guardrail on the models you want to protect
+
+### Example values
+
+| Field | Example |
+|-------|---------|
+| LiteLLM instance URL | `https://litellm-proxy-abc123-uc.a.run.app` |
+| AWS Web Identity Token | `oidc/google/https://litellm-proxy-abc123-uc.a.run.app` |
+| AWS Role Name | `arn:aws:iam::123456789012:role/litellm-bedrock-guardrails` |
+| Guardrail Identifier | `ff6ujrregl1q` |
+| Guardrail Version | `DRAFT` |
+| AWS Region Name | `us-east-1` |
+
+### Troubleshooting
+
+| Issue | Action |
+|-------|--------|
+| "OIDC token could not be retrieved" | Ensure LiteLLM runs on GCP (Cloud Run, GKE, or Compute Engine) so the metadata server is available |
+| "Access Denied" from AWS | Verify the IAM role trust policy uses `accounts.google.com` and the audience matches your instance URL exactly |
+| "Guardrail not found" | Double-check guardrail ID, version, and region in AWS Bedrock |
+| `AssumeRoleWithWebIdentity` errors | Ensure the trust policy audience matches the value in **AWS Web Identity Token** (the part after `oidc/google/`) |
+
+### Config.yaml equivalent
+
+The same setup can be defined in `config.yaml`:
+
+```yaml
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      aws_region_name: "us-east-1"
+      aws_role_name: "arn:aws:iam::123456789012:role/litellm-bedrock-guardrails"
+      aws_session_name: "litellm"
+      aws_web_identity_token: "oidc/google/https://your-litellm-instance.run.app"
+```
+
+For more on OIDC with LiteLLM, see the [OIDC documentation](../../oidc).
 
 ## PII Masking with Bedrock Guardrails
 
