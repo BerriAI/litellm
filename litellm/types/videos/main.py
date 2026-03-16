@@ -1,9 +1,8 @@
 from typing import Any, Dict, List, Literal, Optional
 
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
-FileTypes = Any
 
 
 class VideoObject(BaseModel):
