@@ -56,7 +56,48 @@ prints the assistant text, for example:
 Hello! I'm doing well, thanks for asking.
 ```
 
-The full response is an OpenAI-style `ModelResponse` object. It looks like this:
+If you print the full object with:
+
+```python
+print(response)
+```
+
+you will see a Python `ModelResponse(...)` object. For an OpenAI-backed model, it can look like this:
+
+```python
+ModelResponse(
+    id='chatcmpl-abc123',
+    created=1773782130,
+    model='gpt-4o-2024-08-06',
+    object='chat.completion',
+    system_fingerprint='fp_4ff89bf575',
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content="Hello! I'm just a program, but I'm here to help you. How can I assist you today?",
+                role='assistant',
+                tool_calls=None,
+                function_call=None,
+                provider_specific_fields={'refusal': None},
+                annotations=[]
+            ),
+            provider_specific_fields={}
+        )
+    ],
+    usage=Usage(
+        completion_tokens=21,
+        prompt_tokens=13,
+        total_tokens=34,
+        completion_tokens_details=CompletionTokensDetailsWrapper(...),
+        prompt_tokens_details=PromptTokensDetailsWrapper(...)
+    ),
+    service_tier='default'
+)
+```
+
+The same response follows an OpenAI-style shape. Conceptually, it looks like this:
 
 ```json
 {
@@ -82,7 +123,9 @@ The full response is an OpenAI-style `ModelResponse` object. It looks like this:
 }
 ```
 
-`id`, `created`, token counts, and message text will vary by request. For the full output reference, see [completion output](/docs/completion/output).
+`id`, `created`, token counts, and message text will vary by request.
+
+If you call an OpenAI-backed model, you may also see extra fields such as `system_fingerprint`, `service_tier`, `tool_calls`, `function_call`, `annotations`, `provider_specific_fields`, and detailed token usage. For the full output reference, see [completion output](/docs/completion/output).
 
 Need more provider examples? See the main [Getting Started](/docs/#quick-start) page.
 

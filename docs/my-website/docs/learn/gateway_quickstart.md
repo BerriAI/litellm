@@ -59,7 +59,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## 6. Check The Response
 
-If the request succeeds, the proxy returns `200 OK` with the same OpenAI-style response shape LiteLLM uses in the SDK.
+If the request succeeds, the proxy returns `200 OK` with an OpenAI-style response.
 
 The assistant text will be in:
 
@@ -67,33 +67,48 @@ The assistant text will be in:
 choices[0].message.content
 ```
 
-It looks like this:
+If your gateway is routing to OpenAI, a real response can look like this:
 
 ```json
 {
   "id": "chatcmpl-abc123",
-  "object": "chat.completion",
   "created": 1677858242,
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o-mini-2024-07-18",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_406d6473f8",
   "choices": [
     {
+      "finish_reason": "stop",
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "Hello! How can I help?"
-      },
-      "finish_reason": "stop"
+        "content": "Hello! How can I assist you today?",
+        "tool_calls": null,
+        "function_call": null,
+        "annotations": []
+      }
     }
   ],
   "usage": {
-    "prompt_tokens": 12,
     "completion_tokens": 9,
-    "total_tokens": 21
-  }
+    "prompt_tokens": 13,
+    "total_tokens": 22,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": "default"
 }
 ```
 
-`id`, `created`, token counts, and message text will vary by request.
+`id`, `created`, the resolved model version, token counts, and message text will vary by request. Other providers may return a smaller or slightly different set of fields, but `choices[0].message.content` is the main field to read.
 
 ## 7. Add Keys And The UI
 
