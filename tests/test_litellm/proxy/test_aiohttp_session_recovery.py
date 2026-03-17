@@ -22,9 +22,7 @@ async def test_add_shared_session_attaches_open_session():
     mock_session = MagicMock()
     mock_session.closed = False
 
-    with patch(
-        "litellm.proxy.proxy_server.shared_aiohttp_session", mock_session
-    ):
+    with patch("litellm.proxy.proxy_server.shared_aiohttp_session", mock_session):
         data = {}
         await add_shared_session_to_data(data)
         assert data["shared_session"] is mock_session
@@ -129,9 +127,7 @@ async def test_add_shared_session_no_session_available():
     """When no session was ever created, data should not contain shared_session."""
     from litellm.proxy.route_llm_request import add_shared_session_to_data
 
-    with patch(
-        "litellm.proxy.proxy_server.shared_aiohttp_session", None
-    ):
+    with patch("litellm.proxy.proxy_server.shared_aiohttp_session", None):
         data = {}
         await add_shared_session_to_data(data)
         assert "shared_session" not in data
@@ -175,9 +171,7 @@ async def test_add_shared_session_concurrent_recreation_uses_lock():
         ):
             # Launch 5 concurrent calls
             results = [{} for _ in range(5)]
-            await asyncio.gather(
-                *(add_shared_session_to_data(d) for d in results)
-            )
+            await asyncio.gather(*(add_shared_session_to_data(d) for d in results))
 
             # Only 1 coroutine should have called _initialize (the rest see the
             # re-checked session as open under the lock)
