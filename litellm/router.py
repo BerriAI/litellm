@@ -5427,7 +5427,10 @@ class Router:
 
         try:
             # Check if request was rate-limited by pre-call hook (dynamic_rate_limiter_v3)
-            # If so, raise the error immediately to trigger fallback logic
+            # If so, raise the error immediately to trigger fallback logic.
+            # Note: This is raised before _handle_mock_testing_fallbacks, so rate-limited
+            # requests skip the mock testing path. This is intentional — in production,
+            # rate-limit errors should follow normal fallback logic, not mock testing.
             rate_limit_error = kwargs.pop("_litellm_rate_limit_error", None)
             if rate_limit_error is not None:
                 verbose_router_logger.info(
