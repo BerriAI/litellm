@@ -11,34 +11,6 @@ import NavigationCards from '@site/src/components/NavigationCards';
 
 ---
 
-## Start Here
-
-<NavigationCards
-columns={3}
-items={[
-  {
-    icon: "🐍",
-    title: "SDK Quickstart",
-    description: "Use this if you want to make your first LiteLLM call before following integration tutorials.",
-    to: "/docs/learn/sdk_quickstart",
-  },
-  {
-    icon: "🖥️",
-    title: "Gateway Quickstart",
-    description: "Use this if your tutorial depends on the LiteLLM proxy or shared infrastructure.",
-    to: "/docs/learn/gateway_quickstart",
-  },
-  {
-    icon: "📚",
-    title: "Need Feature References?",
-    description: "Use Guides when you know the capability you need and just want the doc for it.",
-    to: "/docs/guides",
-  },
-]}
-/>
-
----
-
 ## Getting Started
 
 <NavigationCards
@@ -74,8 +46,14 @@ items={[
   },
   {
     icon: "🐍",
-    title: "Provider Tutorials",
-    description: "Set up Azure OpenAI, HuggingFace, TogetherAI, local models, Gradio, and more.",
+    title: "Python SDK",
+    description: "Gradio, fallbacks, provider-specific params — no proxy required.",
+    to: "/docs/tutorials/python_sdk",
+  },
+  {
+    icon: "🔌",
+    title: "Provider Setup",
+    description: "Azure OpenAI, HuggingFace, TogetherAI, local models, and more.",
     to: "/docs/tutorials/provider_tutorials",
   },
 ]}
@@ -83,38 +61,38 @@ items={[
 
 ---
 
-## Production
+## Proxy
 
 <NavigationCards
 columns={2}
 items={[
   {
-    icon: "🖥️",
-    title: "Proxy & Gateway",
-    description: "Access control, SSO, SCIM, tag management, and prompt caching.",
-    to: "/docs/tutorials/proxy_gateway",
+    icon: "👥",
+    title: "Proxy: Admin & Access",
+    description: "User and team management, SSO, SCIM, and routing rules.",
+    to: "/docs/tutorials/proxy_admin_access",
   },
   {
-    icon: "🔍",
-    title: "Observability & Safety",
-    description: "Logging to Elasticsearch, Aporia guardrails, Presidio PII masking, and evaluation suites.",
-    to: "/docs/tutorials/observability_safety",
+    icon: "🛡️",
+    title: "Proxy: Features & Safety",
+    description: "Prompt caching, passthrough APIs, realtime, guardrails, and PII masking.",
+    to: "/docs/tutorials/proxy_features_safety",
   },
 ]}
 />
 
 ---
 
-## Advanced Features
+## Observability & Evaluation
 
 <NavigationCards
 columns={2}
 items={[
   {
-    icon: "⚙️",
-    title: "Advanced Features",
-    description: "Model fallbacks, provider-specific parameters, and realtime audio.",
-    to: "/docs/tutorials/advanced_features",
+    icon: "🔍",
+    title: "Observability & Evaluation",
+    description: "Logging to Elasticsearch, benchmarking, and evaluation suites.",
+    to: "/docs/tutorials/observability_evaluation",
   },
 ]}
 />

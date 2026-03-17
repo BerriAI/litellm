@@ -11,34 +11,6 @@ import NavigationCards from '@site/src/components/NavigationCards';
 
 ---
 
-## Start Here
-
-<NavigationCards
-columns={3}
-items={[
-  {
-    icon: "🐍",
-    title: "SDK Quickstart",
-    description: "Install LiteLLM, make your first call, then branch into feature guides.",
-    to: "/docs/learn/sdk_quickstart",
-  },
-  {
-    icon: "🖥️",
-    title: "Gateway Quickstart",
-    description: "Start the proxy, add keys, then move into proxy-specific guides.",
-    to: "/docs/learn/gateway_quickstart",
-  },
-  {
-    icon: "🛠️",
-    title: "Need Walkthroughs?",
-    description: "Use Tutorials for end-to-end integrations instead of feature references.",
-    to: "/docs/tutorials",
-  },
-]}
-/>
-
----
-
 ## Build With LiteLLM
 
 <NavigationCards
