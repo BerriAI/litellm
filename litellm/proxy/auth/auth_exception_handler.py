@@ -84,11 +84,30 @@ class UserAPIKeyAuthExceptionHandler:
             )
 
             # Log this exception to OTEL, Datadog etc
+            # Try to recover key metadata from cache - the key may have been fetched
+            # successfully before a validation check (e.g. team model access) failed.
             user_api_key_dict = UserAPIKeyAuth(
                 parent_otel_span=parent_otel_span,
                 api_key=api_key,
                 request_route=route,
             )
+            try:
+                from litellm.proxy.proxy_server import user_api_key_cache
+
+                cached_key = await user_api_key_cache.async_get_cache(key=api_key)
+                if cached_key is not None:
+                    if isinstance(cached_key, dict):
+                        cached_key = UserAPIKeyAuth(**cached_key)
+                    if isinstance(cached_key, UserAPIKeyAuth):
+                        user_api_key_dict.key_alias = cached_key.key_alias
+                        user_api_key_dict.team_id = cached_key.team_id
+                        user_api_key_dict.team_alias = cached_key.team_alias
+                        user_api_key_dict.user_id = cached_key.user_id
+                        user_api_key_dict.org_id = cached_key.org_id
+                        user_api_key_dict.spend = cached_key.spend
+                        user_api_key_dict.max_budget = cached_key.max_budget
+            except Exception:
+                pass  # non-blocking: best-effort metadata enrichment
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
