@@ -1,23 +1,23 @@
-#
-#  Akto Guardrail Integration for LiteLLM
-#  https://www.akto.io/
-#
-#  Two modes:
-#    on_flagged="block"   -> pre-call check + post-call ingest
-#    on_flagged="monitor" -> post-call only (log, don't block)
-#
+"""Akto guardrail integration for LiteLLM proxy.
 
+Uses a two-config-entry pattern:
+  - akto-validate (pre_call): Checks request against Akto guardrails, blocks if flagged.
+  - akto-ingest (post_call): Sends request+response to Akto for data ingestion.
+
+For monitor-only mode, enable only akto-ingest without akto-validate.
+"""
+
+import asyncio
 import json
 import os
-import asyncio
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type
+
 from fastapi import HTTPException
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type, cast
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -30,34 +30,22 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-GUARDRAIL_NAME = "akto"
 HTTP_PROXY_PATH = "/api/http-proxy"
 AKTO_CONNECTOR_NAME = "litellm"
 DEFAULT_GUARDRAIL_TIMEOUT = 5
 
 
 class AktoGuardrail(CustomGuardrail):
-    """
-    Akto guardrail — validates requests via the Akto HTTP proxy
-    and ingests request/response data for observability.
+    """LiteLLM guardrail hook that validates and ingests LLM traffic via the Akto API."""
 
-    Config example:
-
-        guardrails:
-          - guardrail_name: "akto-guard"
-            litellm_params:
-              guardrail: akto
-              mode: [pre_call, post_call]
-              akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
-              akto_api_key: os.environ/AKTO_API_KEY
-              on_flagged: block          # or "monitor"
-    """
+    # Maps event_hook to the input_type it should handle; mismatches are no-ops
+    HOOK_TO_INPUT = {"pre_call": "request", "post_call": "response"}
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> Type["GuardrailConfigModel"]:
+        """Return the Pydantic config model for YAML-based initialization."""
         from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
             AktoConfigModel,
         )
@@ -68,107 +56,91 @@ class AktoGuardrail(CustomGuardrail):
         self,
         akto_base_url: Optional[str] = None,
         akto_api_key: Optional[str] = None,
-        on_flagged: Optional[Literal["block", "monitor"]] = None,
+        akto_account_id: Optional[str] = None,
+        akto_vxlan_id: Optional[str] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         guardrail_timeout: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize the Akto guardrail.
+
+        Args:
+            akto_base_url: Akto API base URL. Falls back to AKTO_GUARDRAIL_API_BASE env var.
+            akto_api_key: Akto API key. Falls back to AKTO_API_KEY env var.
+            akto_account_id: Akto account ID. Falls back to AKTO_ACCOUNT_ID env var, then "1000000".
+            akto_vxlan_id: Akto VXLAN ID. Falls back to AKTO_VXLAN_ID env var, then "0".
+            unreachable_fallback: Behavior when Akto is unreachable — block or allow.
+            guardrail_timeout: HTTP timeout in seconds for Akto API calls.
+        """
         self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
+        self.background_tasks: set = set()
 
         self.akto_base_url = (
             akto_base_url or os.environ.get("AKTO_GUARDRAIL_API_BASE", "")
         ).rstrip("/")
         if not self.akto_base_url:
             raise ValueError(
-                "akto_base_url is required for Akto guardrail. "
-                "Set AKTO_GUARDRAIL_API_BASE environment variable or pass it in litellm_params."
+                "akto_base_url is required. Set AKTO_GUARDRAIL_API_BASE or pass it in litellm_params."
             )
 
         self.akto_api_key = akto_api_key or os.environ.get("AKTO_API_KEY", "")
         if not self.akto_api_key:
             raise ValueError(
-                "akto_api_key is required for Akto guardrail. "
-                "Set AKTO_API_KEY environment variable or pass akto_api_key in litellm_params."
+                "akto_api_key is required. Set AKTO_API_KEY or pass it in litellm_params."
             )
-
-        # on_flagged: param > env var > default "block"
-        if on_flagged:
-            self.on_flagged = on_flagged
-        else:
-            env_val = os.environ.get("AKTO_ON_FLAGGED", "block").lower()
-            self.on_flagged = cast(
-                Literal["block", "monitor"],
-                env_val if env_val in ("block", "monitor") else "block",
-            )
-
-        self.sync_mode = self.on_flagged == "block"
 
         self.unreachable_fallback: Literal[
             "fail_closed", "fail_open"
         ] = unreachable_fallback
-
         self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
+        self.akto_account_id = akto_account_id or os.environ.get(
+            "AKTO_ACCOUNT_ID", "1000000"
+        )
+        self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
 
-        # Don't override event_hook — it comes from config "mode" field.
         kwargs["supported_event_hooks"] = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
         ]
-
         super().__init__(**kwargs)
 
         verbose_proxy_logger.debug(
-            "Akto guardrail initialized: akto_base_url=%s sync_mode=%s unreachable_fallback=%s",
+            "Akto guardrail initialized: base_url=%s fallback=%s",
             self.akto_base_url,
-            self.sync_mode,
             self.unreachable_fallback,
         )
 
     @staticmethod
     def resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
-        """Look up a metadata value — checks litellm_metadata first, then metadata."""
+        """Look up a metadata value from litellm_metadata or metadata dicts."""
         if request_data is None:
             return None
-
-        litellm_metadata = request_data.get("litellm_metadata", {})
-        if litellm_metadata:
-            value = litellm_metadata.get(key)
-            if value is not None:
-                return str(value).strip()
-
-        metadata = request_data.get("metadata", {})
-        if metadata:
-            value = metadata.get(key)
-            if value is not None:
-                return str(value).strip()
-
+        for dict_key in ("litellm_metadata", "metadata"):
+            container = request_data.get(dict_key, {})
+            if container:
+                value = container.get(key)
+                if value is not None:
+                    return str(value).strip()
         return None
 
     @staticmethod
     def extract_request_path(request_data: dict) -> str:
-        """Get the original request path, defaults to /v1/chat/completions."""
-        fallback = "/v1/chat/completions"
-        try:
-            route = request_data.get("metadata", {}).get("user_api_key_request_route")
-            if route:
-                return route
-        except Exception:
-            pass
-        return fallback
+        """Extract the API route from request metadata, defaulting to /v1/chat/completions."""
+        route = request_data.get("metadata", {}).get("user_api_key_request_route")
+        return route if route else "/v1/chat/completions"
 
     def prepare_headers(self) -> Dict[str, str]:
-        """Headers for the Akto HTTP proxy call."""
-        headers: Dict[str, str] = {
-            "Content-Type": "application/json",
+        """Build HTTP headers for the Akto API call."""
+        return {
+            "content-type": "application/json",
             "Authorization": self.akto_api_key,
         }
-        return headers
 
     @staticmethod
     def build_query_params(*, guardrails: bool, ingest_data: bool) -> Dict[str, str]:
-        """Query params for the Akto HTTP proxy call."""
+        """Build query params that control Akto backend behavior (guardrail check and/or data ingestion)."""
         params: Dict[str, str] = {"akto_connector": AKTO_CONNECTOR_NAME}
         if guardrails:
             params["guardrails"] = "true"
@@ -176,40 +148,44 @@ class AktoGuardrail(CustomGuardrail):
             params["ingest_data"] = "true"
         return params
 
-    def build_request_headers(self, request_data: dict) -> Dict[str, str]:
-        """Extract request headers from the proxy context."""
+    @staticmethod
+    def build_request_headers(request_data: dict) -> Dict[str, str]:
+        """Build the requestHeaders field from proxy request headers."""
         headers: Dict[str, str] = {"content-type": "application/json"}
-
         proxy_req = request_data.get("proxy_server_request", {})
         if proxy_req.get("headers") and isinstance(proxy_req["headers"], dict):
             for key, val in proxy_req["headers"].items():
                 if key and val:
                     headers[str(key).lower()] = str(val)
-
         return headers
 
+    @staticmethod
     def build_request_body(
-        self,
         inputs: GenericGuardrailAPIInputs,
+        request_data: Optional[dict] = None,
     ) -> Dict[str, Any]:
-        """Reconstruct the LLM request body from guardrail inputs."""
+        """Build the LLM request body from guardrail inputs (messages, model, tools)."""
         model = inputs.get("model", "") or ""
         body: Dict[str, Any] = {"model": model}
 
-        # Use structured_messages if available (keeps role info)
         structured = inputs.get("structured_messages")
         if structured:
             body["messages"] = structured
+        elif request_data is not None and request_data.get("messages"):
+            body["messages"] = request_data["messages"]
+            if request_data.get("model"):
+                body["model"] = request_data["model"]
         else:
             texts = inputs.get("texts", [])
-            if texts:
-                body["messages"] = [{"role": "user", "content": t} for t in texts]
-            else:
-                body["messages"] = []
+            body["messages"] = (
+                [{"role": "user", "content": t} for t in texts] if texts else []
+            )
 
         tools = inputs.get("tools")
         if tools:
             body["tools"] = tools
+        elif request_data is not None and request_data.get("tools"):
+            body["tools"] = request_data["tools"]
 
         tool_calls = inputs.get("tool_calls")
         if tool_calls:
@@ -217,11 +193,16 @@ class AktoGuardrail(CustomGuardrail):
 
         return body
 
+    @staticmethod
     def build_response_body(
-        self,
         inputs: GenericGuardrailAPIInputs,
+        request_data: Optional[dict] = None,
     ) -> Dict[str, Any]:
-        """Build an LLM-style response body for Akto ingestion."""
+        """Build the LLM response body, preferring the actual model response if available."""
+        model_response = request_data.get("response") if request_data else None
+        if model_response is not None and hasattr(model_response, "model_dump"):
+            return model_response.model_dump()
+
         texts = inputs.get("texts", [])
         if texts:
             return {
@@ -231,17 +212,20 @@ class AktoGuardrail(CustomGuardrail):
             }
         return {}
 
-    def build_tag_metadata(self, request_data: dict) -> Dict[str, str]:
-        """Tags for Akto ingestion (gen-ai marker + user/team context)."""
+    @staticmethod
+    def build_tag_metadata(request_data: dict) -> Dict[str, str]:
+        """Build tag/metadata dict with user_id and team_id for Akto tracking."""
         tag: Dict[str, str] = {"gen-ai": "Gen AI"}
-
-        user_id = self.resolve_metadata_value(request_data, "user_api_key_user_id")
-        team_id = self.resolve_metadata_value(request_data, "user_api_key_team_id")
+        user_id = AktoGuardrail.resolve_metadata_value(
+            request_data, "user_api_key_user_id"
+        )
+        team_id = AktoGuardrail.resolve_metadata_value(
+            request_data, "user_api_key_team_id"
+        )
         if user_id:
             tag["user_id"] = user_id
         if team_id:
             tag["team_id"] = team_id
-
         return tag
 
     def build_akto_payload(
@@ -251,27 +235,27 @@ class AktoGuardrail(CustomGuardrail):
         *,
         status_code: int = 200,
         include_response: bool = False,
-        response_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Build the full payload in Akto's data-ingestion format."""
+        """Build the flat MIRRORING payload sent to Akto's HTTP proxy endpoint.
+
+        All body fields use double-encoding: json.dumps({"body": json.dumps(actual_body)})
+        to match the canonical CLI hook format.
+        """
         request_path = self.extract_request_path(request_data)
         request_headers = self.build_request_headers(request_data)
-        request_body = self.build_request_body(inputs)
+        request_body = self.build_request_body(inputs, request_data)
         tag = self.build_tag_metadata(request_data)
 
-        request_payload = json.dumps(request_body)
-
-        response_payload = ""
+        response_payload = json.dumps({})  # Empty body wrapper when no response yet
         response_headers: Dict[str, str] = {}
-        if response_override is not None:
-            response_payload = json.dumps(response_override)
-            response_headers = {"content-type": "application/json"}
-        elif include_response:
-            response_body = self.build_response_body(inputs)
-            response_payload = json.dumps(response_body)
+        if include_response:
+            response_body = self.build_response_body(inputs, request_data)
+            response_payload = json.dumps(
+                {"body": json.dumps(response_body)}
+            )  # Double-encoded
             response_headers = {"content-type": "application/json"}
 
-        # Client IP from proxy headers
+        # Extract client IP from proxy headers
         ip = ""
         proxy_req = request_data.get("proxy_server_request", {})
         proxy_headers = (
@@ -283,7 +267,6 @@ class AktoGuardrail(CustomGuardrail):
                 or proxy_headers.get("x-real-ip")
                 or ""
             )
-            # X-Forwarded-For can have multiple IPs, take the first
             if "," in ip:
                 ip = ip.split(",")[0].strip()
 
@@ -292,7 +275,9 @@ class AktoGuardrail(CustomGuardrail):
             "requestHeaders": json.dumps(request_headers),
             "responseHeaders": json.dumps(response_headers),
             "method": "POST",
-            "requestPayload": request_payload,
+            "requestPayload": json.dumps(
+                {"body": json.dumps(request_body)}
+            ),  # Double-encoded
             "responsePayload": response_payload,
             "ip": ip,
             "destIp": "127.0.0.1",
@@ -300,8 +285,8 @@ class AktoGuardrail(CustomGuardrail):
             "statusCode": str(status_code),
             "type": "HTTP/1.1",
             "status": str(status_code),
-            "akto_account_id": "1000000",
-            "akto_vxlan_id": "0",
+            "akto_account_id": self.akto_account_id,
+            "akto_vxlan_id": self.akto_vxlan_id,
             "is_pending": "false",
             "source": "MIRRORING",
             "direction": None,
@@ -321,11 +306,10 @@ class AktoGuardrail(CustomGuardrail):
         ingest_data: bool,
         payload: dict,
     ) -> httpx.Response:
-        """POST to the Akto HTTP proxy endpoint."""
+        """Send an HTTP POST to the Akto API endpoint."""
         endpoint = f"{self.akto_base_url}{HTTP_PROXY_PATH}"
         params = self.build_query_params(guardrails=guardrails, ingest_data=ingest_data)
         headers = self.prepare_headers()
-
         return await self.async_handler.post(
             url=endpoint,
             json=payload,
@@ -335,177 +319,152 @@ class AktoGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def parse_guardrails_result(result: Any) -> Tuple[bool, str]:
-        """Parse (allowed, reason) from Akto's response."""
-        if not isinstance(result, dict):
-            return True, ""
-        guardrails_result = result.get("data", {}).get("guardrailsResult", {}) or {}
-        return bool(guardrails_result.get("Allowed", True)), str(
-            guardrails_result.get("Reason", "")
-        )
-
-    def handle_guardrail_response(self, response: httpx.Response) -> Tuple[bool, str]:
-        """Parse the Akto response. Raises on non-200 so caller can handle it."""
+    def handle_guardrail_response(response: httpx.Response) -> Tuple[bool, str]:
+        """Parse the Akto guardrail response. Returns (allowed, reason)."""
         if response.status_code != 200:
-            verbose_proxy_logger.error(
-                "Akto guardrail returned HTTP %d", response.status_code
-            )
+            verbose_proxy_logger.error("Akto returned HTTP %d", response.status_code)
             raise httpx.HTTPStatusError(
-                f"Akto guardrail returned unexpected status {response.status_code}",
+                f"Akto returned unexpected status {response.status_code}",
                 request=response.request,
                 response=response,
             )
-
-        response_json = response.json()
-        verbose_proxy_logger.debug("Akto guardrail response: %s", response_json)
-        return self.parse_guardrails_result(response_json)
+        result = response.json()
+        if not isinstance(result, dict):
+            return True, ""
+        guardrails_result = result.get("data", {}).get("guardrailsResult", {}) or {}
+        return (
+            bool(guardrails_result.get("Allowed", True)),
+            str(guardrails_result.get("Reason", "")),
+        )
 
     def handle_unreachable(
         self,
         inputs: GenericGuardrailAPIInputs,
-        input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"],
         error: Exception,
-        http_status_code: Optional[int] = None,
     ) -> GenericGuardrailAPIInputs:
-        """Fail-open lets the request through, fail-closed blocks with 503."""
+        """Handle Akto being unreachable based on fail_open/fail_closed config."""
         if self.unreachable_fallback == "fail_open":
-            status_suffix = (
-                f" http_status_code={http_status_code}" if http_status_code else ""
-            )
             verbose_proxy_logger.critical(
-                "Akto guardrail unreachable (fail-open). Proceeding without guardrail.%s "
-                "guardrail_name=%s akto_base_url=%s input_type=%s",
-                status_suffix,
-                getattr(self, "guardrail_name", None),
-                self.akto_base_url,
-                input_type,
+                "Akto unreachable (fail-open): %s",
+                str(error),
                 exc_info=error,
             )
-            return dict(inputs)  # type: ignore[return-value]
+            return inputs
 
-        verbose_proxy_logger.error(
-            "Akto guardrail unreachable (fail-closed): %s", str(error)
-        )
+        verbose_proxy_logger.error("Akto unreachable (fail-closed): %s", str(error))
         raise HTTPException(
             status_code=503,
-            detail=f"Akto guardrail service unreachable: {str(error)}",
+            detail="Akto guardrail service unreachable",
         )
 
+    async def fire_and_forget_request(
+        self,
+        *,
+        guardrails: bool,
+        ingest_data: bool,
+        payload: dict,
+    ) -> None:
+        """Send a request without awaiting it in the caller. Errors are logged, not raised."""
+        try:
+            response = await self.send_request(
+                guardrails=guardrails,
+                ingest_data=ingest_data,
+                payload=payload,
+            )
+            if response.status_code != 200:
+                verbose_proxy_logger.error(
+                    "Akto fire-and-forget returned HTTP %d",
+                    response.status_code,
+                )
+        except Exception as e:
+            verbose_proxy_logger.error("Akto fire-and-forget error: %s", str(e))
+
     @log_guardrail_information
-    async def apply_guardrail(  # noqa: PLR0915
+    async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj=None,
     ) -> GenericGuardrailAPIInputs:
-        """Main entry point — called by LiteLLM for pre_call / post_call."""
-        if input_type == "response":
-            if request_data.get("_akto_response_ingested"):
-                return inputs
-            request_data["_akto_response_ingested"] = True
+        """Main entry point called by LiteLLM's guardrail framework.
 
-        if self.sync_mode:
-            if input_type == "request":
-                # Block mode pre-call: check guardrails
-                payload = self.build_akto_payload(
-                    inputs, request_data, include_response=False
-                )
-                try:
-                    response = await self.send_request(
-                        guardrails=True, ingest_data=False, payload=payload
-                    )
-                    allowed, reason = self.handle_guardrail_response(response)
+        Pre_call (input_type="request"):
+          - Awaits guardrail check. If blocked, fires off ingest with 403 marker and raises.
+        Post_call (input_type="response"):
+          - Fire-and-forget combined guardrail + ingest call.
+        """
+        # Skip if this hook doesn't handle the current input_type
+        expected = self.HOOK_TO_INPUT.get(str(self.event_hook))
+        if expected and expected != input_type:
+            return inputs
 
-                    if not allowed:
-                        # Send blocked details to Akto for tracking
-                        asyncio.create_task(
-                            self.ingest_blocked_request(
-                                inputs=inputs,
-                                request_data=request_data,
-                                reason=reason,
-                            )
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail=reason or "Blocked by Akto Guardrails",
-                        )
-                except HTTPException:
-                    raise
-                except (Timeout, httpx.RequestError, httpx.HTTPStatusError) as e:
-                    status_code = getattr(
-                        getattr(e, "response", None), "status_code", None
-                    )
-                    return self.handle_unreachable(
-                        inputs=inputs,
-                        input_type=input_type,
-                        logging_obj=logging_obj,
-                        error=e,
-                        http_status_code=status_code,
-                    )
+        if input_type == "request":
+            # Pre_call: awaited guardrail check (no ingestion)
+            payload = self.build_akto_payload(
+                inputs, request_data, include_response=False
+            )
+            try:
+                response = await self.send_request(
+                    guardrails=True,
+                    ingest_data=False,
+                    payload=payload,
+                )
+                allowed, reason = self.handle_guardrail_response(response)
+            except HTTPException:
+                raise
+            except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                return self.handle_unreachable(
+                    inputs=inputs,
+                    error=e,
+                )
 
-            else:
-                # Block mode post-call: ingest request+response
-                payload = self.build_akto_payload(
-                    inputs, request_data, include_response=True
+            if not allowed:
+                # Build a blocked marker payload with 403 status and reason
+                blocked_payload = self.build_akto_payload(
+                    inputs,
+                    request_data,
+                    include_response=False,
+                    status_code=403,
                 )
-                try:
-                    response = await self.send_request(
-                        guardrails=False, ingest_data=True, payload=payload
-                    )
-                    if response.status_code != 200:
-                        verbose_proxy_logger.error(
-                            "Akto guardrail: ingestion returned HTTP %d",
-                            response.status_code,
-                        )
-                except Exception as e:
-                    verbose_proxy_logger.error(
-                        "Akto guardrail: post-call ingestion error: %s", str(e)
-                    )
-        else:
-            # Monitor mode: post-call only
-            if input_type == "response":
-                payload = self.build_akto_payload(
-                    inputs, request_data, include_response=True
+                blocked_payload["responsePayload"] = json.dumps(
+                    {
+                        "body": json.dumps(
+                            {"x-blocked-by": "Akto Proxy", "reason": reason}
+                        ),
+                    }
                 )
-                try:
-                    response = await self.send_request(
-                        guardrails=True, ingest_data=True, payload=payload
+                blocked_payload["responseHeaders"] = json.dumps(
+                    {"content-type": "application/json"},
+                )
+                # Fire-and-forget ingest of the blocked request, then raise 403
+                task = asyncio.create_task(
+                    self.fire_and_forget_request(
+                        guardrails=False,
+                        ingest_data=True,
+                        payload=blocked_payload,
                     )
-                    if response.status_code == 200:
-                        allowed, reason = self.handle_guardrail_response(response)
-                        if not allowed:
-                            verbose_proxy_logger.info(
-                                "Akto guardrail: response flagged (async mode, logged only): %s",
-                                reason,
-                            )
-                except Exception as e:
-                    verbose_proxy_logger.error(
-                        "Akto guardrail: async post-call error: %s", str(e)
-                    )
+                )
+                self.background_tasks.add(task)
+                task.add_done_callback(self.background_tasks.discard)
+                raise HTTPException(
+                    status_code=403,
+                    detail=reason or "Blocked by Akto Guardrails",
+                )
+
+        elif input_type == "response":
+            # Post_call: fire-and-forget combined guardrail + ingest
+            payload = self.build_akto_payload(
+                inputs, request_data, include_response=True
+            )
+            task = asyncio.create_task(
+                self.fire_and_forget_request(
+                    guardrails=True,
+                    ingest_data=True,
+                    payload=payload,
+                )
+            )
+            self.background_tasks.add(task)
+            task.add_done_callback(self.background_tasks.discard)
 
         return inputs
-
-    async def ingest_blocked_request(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
-        reason: str,
-    ) -> None:
-        """Send blocked request details to Akto for tracking."""
-        blocked_response = {"x-blocked-by": "Akto Guardrails", "reason": reason}
-        payload = self.build_akto_payload(
-            inputs,
-            request_data,
-            status_code=403,
-            include_response=False,
-            response_override=blocked_response,
-        )
-
-        try:
-            await self.send_request(guardrails=False, ingest_data=True, payload=payload)
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Akto guardrail: failed to ingest blocked request: %s", str(e)
-            )

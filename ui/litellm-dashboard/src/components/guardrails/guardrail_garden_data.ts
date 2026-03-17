@@ -376,10 +376,10 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
   {
     id: "akto",
     name: "Akto Guardrail",
-    description: "AI security platform for LLMs with automatic data ingestion and guardrails.",
+    description: "AI security platform from Akto.io with automatic monitoring and guardrails for AI/ML applications.",
     category: "partner",
     logo: `${ASSET_PREFIX}akto.svg`,
-    tags: ["Security", "Data Ingestion", "Guardrails"],
+    tags: ["Security", "Safety", "Monitoring"],
   },
 ];
 

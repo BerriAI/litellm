@@ -1,18 +1,10 @@
-"""
-Unit tests for the Akto Guardrail integration.
-
-Tests cover both sync (blocking) and async (non-blocking) modes:
-  SYNC:  pre-call guardrails check + post-call ingest
-  ASYNC: single post-call with guardrails+ingest
-"""
-
+import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import asyncio
 
 from starlette.exceptions import HTTPException
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -40,27 +32,25 @@ def test_akto_in_guardrail_class_registry():
 
 
 @pytest.fixture
-def akto_sync():
-    """AktoGuardrail in sync (blocking) mode."""
+def akto_validate():
+    """AktoGuardrail configured for pre_call (akto-validate)."""
     return AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
-        on_flagged="block",
         unreachable_fallback="fail_closed",
-        guardrail_name="test-akto-sync",
+        guardrail_name="test-akto-validate",
         event_hook="pre_call",
     )
 
 
 @pytest.fixture
-def akto_async():
-    """AktoGuardrail in async (non-blocking) mode."""
+def akto_ingest():
+    """AktoGuardrail configured for post_call (akto-ingest)."""
     return AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
-        on_flagged="monitor",
         unreachable_fallback="fail_open",
-        guardrail_name="test-akto-async",
+        guardrail_name="test-akto-ingest",
         event_hook="post_call",
     )
 
@@ -93,20 +83,14 @@ def sample_request_data() -> dict:
 def _mock_allowed_response():
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
-    mock.raise_for_status = MagicMock()
-    mock.json.return_value = {
-        "data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}
-    }
+    mock.json.return_value = {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
     return mock
 
 
 def _mock_blocked_response(reason="Prompt injection detected"):
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
-    mock.raise_for_status = MagicMock()
-    mock.json.return_value = {
-        "data": {"guardrailsResult": {"Allowed": False, "Reason": reason}}
-    }
+    mock.json.return_value = {"data": {"guardrailsResult": {"Allowed": False, "Reason": reason}}}
     return mock
 
 
@@ -143,26 +127,45 @@ def test_init_from_env():
         {
             "AKTO_GUARDRAIL_API_BASE": "http://env-host:9090",
             "AKTO_API_KEY": "env-token",
-            "AKTO_ON_FLAGGED": "monitor",
+            "AKTO_ACCOUNT_ID": "2000000",
+            "AKTO_VXLAN_ID": "42",
         },
     ):
         g = AktoGuardrail(guardrail_name="env-test", event_hook="post_call")
         assert g.akto_base_url == "http://env-host:9090"
         assert g.akto_api_key == "env-token"
-        assert g.on_flagged == "monitor"
-        assert g.sync_mode is False
-        assert g.guardrail_timeout == 5  # default
+        assert g.guardrail_timeout == 5
+        assert g.akto_account_id == "2000000"
+        assert g.akto_vxlan_id == "42"
 
 
-def test_on_flagged_default_block():
+def test_init_defaults():
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
         guardrail_name="default-test",
         event_hook="pre_call",
     )
-    assert g.on_flagged == "block"
-    assert g.sync_mode is True
+    assert g.unreachable_fallback == "fail_closed"
+    assert g.guardrail_timeout == 5
+    assert g.akto_account_id == "1000000"
+    assert g.akto_vxlan_id == "0"
+
+
+def test_background_tasks_per_instance():
+    a = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        guardrail_name="instance-a",
+        event_hook="pre_call",
+    )
+    b = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        guardrail_name="instance-b",
+        event_hook="post_call",
+    )
+    assert a.background_tasks is not b.background_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -170,11 +173,8 @@ def test_on_flagged_default_block():
 # ---------------------------------------------------------------------------
 
 
-def testbuild_akto_payload_format(akto_sync, sample_inputs, sample_request_data):
-    """Verify payload matches the exact Akto data-ingestion schema."""
-    payload = akto_sync.build_akto_payload(
-        sample_inputs, sample_request_data, include_response=False
-    )
+def test_build_akto_payload_format(akto_validate, sample_inputs, sample_request_data):
+    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data, include_response=False)
 
     assert payload["path"] == "/v1/chat/completions"
     assert payload["method"] == "POST"
@@ -189,29 +189,41 @@ def testbuild_akto_payload_format(akto_sync, sample_inputs, sample_request_data)
     req_headers = json.loads(payload["requestHeaders"])
     assert "content-type" in req_headers
 
-    req_body = json.loads(payload["requestPayload"])
+    req_wrapper = json.loads(payload["requestPayload"])
+    req_body = json.loads(req_wrapper["body"])
     assert req_body["model"] == "gpt-4"
     assert req_body["messages"][0]["content"] == "Hello, how are you?"
 
     tag = json.loads(payload["tag"])
     assert tag["gen-ai"] == "Gen AI"
 
-    assert payload["responsePayload"] == ""
+    assert payload["responsePayload"] == json.dumps({})
     assert payload["time"].isdigit()
     assert len(payload["time"]) >= 13
 
 
-def testbuild_akto_payload_with_response(
-    akto_sync, sample_inputs, sample_request_data
-):
-    payload = akto_sync.build_akto_payload(
-        sample_inputs, sample_request_data, include_response=True
-    )
-    resp_body = json.loads(payload["responsePayload"])
+def test_build_akto_payload_with_response(akto_validate, sample_inputs, sample_request_data):
+    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data, include_response=True)
+    resp_wrapper = json.loads(payload["responsePayload"])
+    resp_body = json.loads(resp_wrapper["body"])
     assert "choices" in resp_body
 
 
-def testbuild_query_params():
+def test_build_akto_payload_custom_account_ids(sample_inputs, sample_request_data):
+    g = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        akto_account_id="9999",
+        akto_vxlan_id="7",
+        guardrail_name="custom-ids-test",
+        event_hook="pre_call",
+    )
+    payload = g.build_akto_payload(sample_inputs, sample_request_data, include_response=False)
+    assert payload["akto_account_id"] == "9999"
+    assert payload["akto_vxlan_id"] == "7"
+
+
+def test_build_query_params():
     params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=False)
     assert params == {"akto_connector": "litellm", "guardrails": "true"}
 
@@ -227,192 +239,175 @@ def testbuild_query_params():
 
 
 # ---------------------------------------------------------------------------
-#  Guardrail result parsing
+#  Guardrail response handling
 # ---------------------------------------------------------------------------
 
 
-def testparse_guardrails_result_allowed():
-    allowed, reason = AktoGuardrail.parse_guardrails_result(
-        {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
-    )
+def test_handle_guardrail_response_allowed():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}
+    allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is True
     assert reason == ""
 
 
-def testparse_guardrails_result_blocked():
-    allowed, reason = AktoGuardrail.parse_guardrails_result(
-        {"data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}}
-    )
+def test_handle_guardrail_response_blocked():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"data": {"guardrailsResult": {"Allowed": False, "Reason": "PII detected"}}}
+    allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is False
     assert reason == "PII detected"
 
 
-def testparse_guardrails_result_missing():
-    allowed, _ = AktoGuardrail.parse_guardrails_result({})
+def test_handle_guardrail_response_missing_result():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {}
+    allowed, _ = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is True
 
-    allowed, _ = AktoGuardrail.parse_guardrails_result("invalid")
+
+def test_handle_guardrail_response_non_dict():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = "invalid"
+    allowed, _ = AktoGuardrail.handle_guardrail_response(mock_resp)
     assert allowed is True
+
+
+def test_handle_guardrail_response_error_status():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 500
+    mock_resp.request = MagicMock()
+    with pytest.raises(httpx.HTTPStatusError):
+        AktoGuardrail.handle_guardrail_response(mock_resp)
 
 
 # ---------------------------------------------------------------------------
-#  SYNC MODE — pre-call allowed
+#  Pre-call (akto-validate) — allowed
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sync_pre_call_allowed(akto_sync, sample_inputs, sample_request_data):
-    """Sync pre-call: Allowed=true → request passes through, 1 API call made."""
-    akto_sync.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+async def test_pre_call_allowed(akto_validate, sample_inputs, sample_request_data):
+    akto_validate.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
 
-    result = await akto_sync.apply_guardrail(
+    result = await akto_validate.apply_guardrail(
         inputs=sample_inputs,
         request_data=sample_request_data,
         input_type="request",
     )
 
     assert result == sample_inputs
-    # Only 1 call: guardrails=true
-    akto_sync.async_handler.post.assert_called_once()
-    call_params = akto_sync.async_handler.post.call_args.kwargs["params"]
+    akto_validate.async_handler.post.assert_called_once()
+    call_params = akto_validate.async_handler.post.call_args.kwargs["params"]
     assert call_params.get("guardrails") == "true"
     assert "ingest_data" not in call_params
 
 
 # ---------------------------------------------------------------------------
-#  SYNC MODE — pre-call blocked → ingest blocked + raise error
+#  Pre-call (akto-validate) — blocked
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sync_pre_call_blocked(akto_sync, sample_inputs, sample_request_data):
-    """Sync pre-call: Allowed=false → ingests blocked request + raises error. 2 API calls."""
-    akto_sync.async_handler.post = AsyncMock(
+async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_data):
+    akto_validate.async_handler.post = AsyncMock(
         side_effect=[
-            _mock_blocked_response("PII detected"),  # 1st call: guardrails
-            _mock_allowed_response(),  # 2nd call: ingest blocked
+            _mock_blocked_response("PII detected"),
+            _mock_allowed_response(),
         ]
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await akto_sync.apply_guardrail(
+        await akto_validate.apply_guardrail(
             inputs=sample_inputs,
             request_data=sample_request_data,
             input_type="request",
         )
 
-    # Await the fire-and-forget background tasks so the mock gets called
-    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    if pending:
-        await asyncio.gather(*pending)
+    await asyncio.sleep(0)
 
-    # Blocked requests should return 400 (not 500) so clients don't retry
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 403
 
-    # 2 calls: guardrails check + ingest blocked request
-    assert akto_sync.async_handler.post.call_count == 2
+    assert akto_validate.async_handler.post.call_count == 2
 
-    # 1st call: guardrails=true
-    first_call_params = akto_sync.async_handler.post.call_args_list[0].kwargs["params"]
+    first_call_params = akto_validate.async_handler.post.call_args_list[0].kwargs["params"]
     assert first_call_params.get("guardrails") == "true"
 
-    # 2nd call: ingest_data=true (blocked details)
-    second_call_params = akto_sync.async_handler.post.call_args_list[1].kwargs["params"]
+    second_call_params = akto_validate.async_handler.post.call_args_list[1].kwargs["params"]
     assert second_call_params.get("ingest_data") == "true"
-    second_payload = akto_sync.async_handler.post.call_args_list[1].kwargs["json"]
+    assert "guardrails" not in second_call_params
+    second_payload = akto_validate.async_handler.post.call_args_list[1].kwargs["json"]
     assert second_payload["statusCode"] == "403"
+    resp_body = json.loads(second_payload["responsePayload"])
+    inner = json.loads(resp_body["body"])
+    assert inner["x-blocked-by"] == "Akto Proxy"
+    assert inner["reason"] == "PII detected"
 
 
 # ---------------------------------------------------------------------------
-#  SYNC MODE — post-call ingestion
+#  Pre-call (akto-validate) — response input is no-op
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sync_post_call_ingest(akto_sync, sample_inputs, sample_request_data):
-    """Sync post-call: ingests request+response. 1 API call with ingest_data=true."""
-    mock_resp = MagicMock(spec=httpx.Response)
-    mock_resp.status_code = 200
-    akto_sync.async_handler.post = AsyncMock(return_value=mock_resp)
+async def test_validate_response_noop(akto_validate, sample_inputs, sample_request_data):
+    akto_validate.async_handler.post = AsyncMock()
 
-    result = await akto_sync.apply_guardrail(
+    result = await akto_validate.apply_guardrail(
         inputs=sample_inputs,
         request_data=sample_request_data,
         input_type="response",
     )
 
     assert result == sample_inputs
-    akto_sync.async_handler.post.assert_called_once()
-    call_params = akto_sync.async_handler.post.call_args.kwargs["params"]
-    assert call_params.get("ingest_data") == "true"
-    assert "guardrails" not in call_params
+    akto_validate.async_handler.post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
-#  ASYNC MODE — single post-call with guardrails+ingest
+#  Post-call (akto-ingest) — combined guardrail + ingest
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_async_post_call(akto_async, sample_inputs, sample_request_data):
-    """Async post-call: single call with guardrails=true&ingest_data=true."""
-    akto_async.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+async def test_post_call_combined(akto_ingest, sample_inputs, sample_request_data):
+    akto_ingest.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
 
-    result = await akto_async.apply_guardrail(
+    result = await akto_ingest.apply_guardrail(
         inputs=sample_inputs,
         request_data=sample_request_data,
         input_type="response",
     )
 
+    await asyncio.sleep(0)
+
     assert result == sample_inputs
-    akto_async.async_handler.post.assert_called_once()
-    call_params = akto_async.async_handler.post.call_args.kwargs["params"]
+    akto_ingest.async_handler.post.assert_called_once()
+    call_params = akto_ingest.async_handler.post.call_args.kwargs["params"]
     assert call_params.get("guardrails") == "true"
     assert call_params.get("ingest_data") == "true"
 
 
 # ---------------------------------------------------------------------------
-#  ASYNC MODE — flagged response (log-only, no block)
+#  Post-call (akto-ingest) — request input is no-op
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_flagged_no_block(
-    akto_async, sample_inputs, sample_request_data
-):
-    """Async post-call: Allowed=false → logs but does NOT block."""
-    akto_async.async_handler.post = AsyncMock(
-        return_value=_mock_blocked_response("suspicious content")
-    )
+async def test_ingest_request_noop(akto_ingest, sample_inputs, sample_request_data):
+    akto_ingest.async_handler.post = AsyncMock()
 
-    # Should NOT raise
-    result = await akto_async.apply_guardrail(
-        inputs=sample_inputs,
-        request_data=sample_request_data,
-        input_type="response",
-    )
-
-    assert result == sample_inputs
-
-
-# ---------------------------------------------------------------------------
-#  ASYNC MODE — pre-call is no-op
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_async_pre_call_noop(akto_async, sample_inputs, sample_request_data):
-    """Async mode: pre-call returns inputs immediately without API call."""
-    akto_async.async_handler.post = AsyncMock()
-
-    result = await akto_async.apply_guardrail(
+    result = await akto_ingest.apply_guardrail(
         inputs=sample_inputs,
         request_data=sample_request_data,
         input_type="request",
     )
 
     assert result == sample_inputs
-    akto_async.async_handler.post.assert_not_called()
+    akto_ingest.async_handler.post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -425,21 +420,16 @@ async def test_fail_open_on_unreachable():
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
-        on_flagged="block",
         unreachable_fallback="fail_open",
         guardrail_name="fail-open-test",
         event_hook="pre_call",
     )
-    g.async_handler.post = AsyncMock(
-        side_effect=httpx.ConnectError("Connection refused")
-    )
+    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
     inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
-    result = await g.apply_guardrail(
-        inputs=inputs, request_data={}, input_type="request"
-    )
+    result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
 
-    assert result["texts"] == ["test"]
+    assert result.get("texts") == ["test"]
 
 
 @pytest.mark.asyncio
@@ -447,21 +437,33 @@ async def test_fail_closed_on_unreachable():
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",
         akto_api_key="test-token",
-        on_flagged="block",
         unreachable_fallback="fail_closed",
         guardrail_name="fail-closed-test",
         event_hook="pre_call",
     )
-    g.async_handler.post = AsyncMock(
-        side_effect=httpx.ConnectError("Connection refused")
-    )
+    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
     inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
     with pytest.raises(HTTPException) as exc_info:
-        await g.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
-        )
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert exc_info.value.status_code == 503
+
+
+def test_fail_closed_generic_message():
+    g = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        unreachable_fallback="fail_closed",
+        guardrail_name="msg-test",
+        event_hook="pre_call",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        g.handle_unreachable(
+            inputs=GenericGuardrailAPIInputs(texts=["test"], model="gpt-4"),
+            error=Exception("http://internal-host:9090/secret-path"),
+        )
+    assert "internal-host" not in exc_info.value.detail
+    assert exc_info.value.detail == "Akto guardrail service unreachable"
 
 
 # ---------------------------------------------------------------------------
@@ -469,23 +471,19 @@ async def test_fail_closed_on_unreachable():
 # ---------------------------------------------------------------------------
 
 
-def testextract_request_path_from_metadata():
-    path = AktoGuardrail.extract_request_path(
-        {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
-    )
+def test_extract_request_path_from_metadata():
+    path = AktoGuardrail.extract_request_path({"metadata": {"user_api_key_request_route": "/v1/embeddings"}})
     assert path == "/v1/embeddings"
 
 
-def testextract_request_path_fallback():
+def test_extract_request_path_fallback():
     path = AktoGuardrail.extract_request_path({})
     assert path == "/v1/chat/completions"
 
 
-def testresolve_metadata_value():
+def test_resolve_metadata_value():
     assert (
-        AktoGuardrail.resolve_metadata_value(
-            {"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id"
-        )
+        AktoGuardrail.resolve_metadata_value({"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id")
         == "u1"
     )
     assert (
@@ -499,8 +497,8 @@ def testresolve_metadata_value():
     assert AktoGuardrail.resolve_metadata_value(None, "some_key") is None
 
 
-def testbuild_tag_metadata(akto_sync, sample_request_data):
-    tag = akto_sync.build_tag_metadata(sample_request_data)
+def test_build_tag_metadata(akto_validate, sample_request_data):
+    tag = akto_validate.build_tag_metadata(sample_request_data)
     assert tag["gen-ai"] == "Gen AI"
     assert tag["user_id"] == "user-1"
     assert tag["team_id"] == "team-1"
