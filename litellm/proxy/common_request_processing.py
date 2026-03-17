@@ -26,7 +26,7 @@ from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     STREAM_SSE_DATA_PREFIX,
 )
-from litellm.litellm_core_utils.dd_tracing import set_active_span_tag, tracer
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -235,26 +236,6 @@ async def create_response(
         headers=headers,
         status_code=final_status_code,
     )
-
-
-def _add_dd_apm_tags_for_litellm_call_id(litellm_call_id: Optional[str]) -> None:
-    """
-    Attach LiteLLM call id to the active Datadog APM span.
-
-    This enables searching APM traces by LiteLLM call id returned in
-    `x-litellm-call-id`.
-    """
-    if not litellm_call_id:
-        return
-
-    try:
-        set_active_span_tag("litellm.call_id", str(litellm_call_id))
-    except Exception:
-        # Tagging is best-effort and should never impact request processing.
-        verbose_proxy_logger.debug(
-            "Failed to tag active ddtrace span with litellm.call_id",
-            exc_info=True,
-        )
 
 
 def _override_openai_response_model(
@@ -619,7 +600,27 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
-        _add_dd_apm_tags_for_litellm_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
+        DDSpanTagger.tag_request(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=self.data.get("model"),
+        )
+
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
