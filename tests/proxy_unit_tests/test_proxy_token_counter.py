@@ -885,7 +885,6 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         ("us-central1", "us-east5"),
     ],
 )
-)
 async def test_vertex_ai_claude_count_tokens_region_validation(
     vertex_location, expected_location
 ):
