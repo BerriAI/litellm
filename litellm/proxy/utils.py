@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import random
 import smtplib
 import sys
 import threading
@@ -24,6 +25,8 @@ from typing import (
     overload,
 )
 
+import prisma.errors
+
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
@@ -34,8 +37,16 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
+
+PRISMA_DEADLOCK_CODE = "P2034"
+
+
+def _is_deadlock_error(e: Exception) -> bool:
+    """Check if a Prisma error is a PostgreSQL deadlock / write conflict (P2034)."""
+    return isinstance(e, prisma.errors.DataError) and getattr(e, "code", None) == PRISMA_DEADLOCK_CODE
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -4538,10 +4549,7 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
+                        for end_user_id, response_cost in sorted(end_user_list_transactions.items()):
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
@@ -4562,9 +4570,12 @@ class ProxyUpdateSpend:
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
-                # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                # Randomized backoff to reduce repeated collisions across pods
+                await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
             except Exception as e:
+                if _is_deadlock_error(e) and i < n_retry_times:
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                    continue
                 _raise_failed_update_spend_exception(
                     e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                 )
@@ -4657,7 +4668,23 @@ class ProxyUpdateSpend:
                     )
                     if i >= n_retry_times:
                         raise
-                    await asyncio.sleep(2**i)
+                    # Randomized backoff to reduce repeated collisions across pods
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                except Exception as e:
+                    if i is None:
+                        i = 0
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        verbose_proxy_logger.warning(
+                            "Spend tracking - deadlock writing spend logs, "
+                            "retry %d/%d. logs_count=%d, error=%s",
+                            i + 1,
+                            n_retry_times,
+                            len(logs_to_process),
+                            str(e),
+                        )
+                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                        continue
+                    raise
         except Exception as e:
             # Logs already removed from queue at start - don't put them back
             # This matches the original behavior where logs are removed even on error

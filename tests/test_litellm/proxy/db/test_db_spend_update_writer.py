@@ -1219,6 +1219,137 @@ async def test_commit_key_spend_updates_includes_last_active():
 
 
 @pytest.mark.asyncio
+async def test_deadlock_error_retried_on_user_spend_update():
+    """
+    Test that a PostgreSQL deadlock (Prisma P2034) is retried with backoff
+    instead of immediately failing and losing spend data.
+    """
+    import prisma.errors
+
+    db_writer = DBSpendUpdateWriter()
+
+    # First call raises a deadlock error, second call succeeds
+    deadlock_error = prisma.errors.DataError(
+        data={"user_facing_error": {"error_code": "P2034"}},
+        message="Transaction failed due to a write conflict or a deadlock",
+    )
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+
+    mock_transaction_ok = AsyncMock()
+    mock_transaction_ok.__aenter__ = AsyncMock(return_value=mock_transaction_ok)
+    mock_transaction_ok.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction_ok.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    # First call raises deadlock, second succeeds
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(
+        side_effect=[
+            # First attempt: raise deadlock inside the transaction context
+            AsyncMock(
+                __aenter__=AsyncMock(side_effect=deadlock_error),
+                __aexit__=AsyncMock(return_value=False),
+            ),
+            # Second attempt: succeed
+            mock_transaction_ok,
+        ]
+    )
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details = {}
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {"user_1": 0.05},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"), \
+         patch("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=3,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    # Verify: tx was called twice (first deadlock, then success)
+    assert mock_prisma_client.db.tx.call_count == 2
+    # Verify: sleep was called for backoff between retries
+    mock_sleep.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_non_deadlock_prisma_error_not_retried():
+    """
+    Test that a non-deadlock Prisma error (e.g. UniqueViolationError)
+    is NOT retried — it should fail immediately.
+    """
+    import prisma.errors
+
+    db_writer = DBSpendUpdateWriter()
+
+    # A non-deadlock DataError (e.g. unique violation, code P2002)
+    non_deadlock_error = prisma.errors.DataError(
+        data={"user_facing_error": {"error_code": "P2002"}},
+        message="Unique constraint failed on the fields: (`user_id`)",
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(side_effect=non_deadlock_error),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details = {}
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {"user_1": 0.05},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    mock_raise = MagicMock()
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception", mock_raise), \
+         patch("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", new_callable=AsyncMock):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=3,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    # Verify: _raise_failed_update_spend_exception was called immediately (no retry)
+    # The first call should be for the user table non-deadlock error
+    mock_raise.assert_called()
+    first_call_error = mock_raise.call_args_list[0][1]["e"]
+    assert isinstance(first_call_error, prisma.errors.DataError)
+    assert first_call_error.code == "P2002"
+
+
+@pytest.mark.asyncio
 async def test_update_database_creates_single_task():
     """
     Test that update_database() fires exactly 1 asyncio.create_task() call
