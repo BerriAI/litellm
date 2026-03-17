@@ -337,7 +337,7 @@ async def background_streaming_task(  # noqa: PLR0915
         )
 
         verbose_proxy_logger.info(
-            f"Finished background streaming for {polling_id}, status={final_status}, error={terminal_error}, output_items={len(output_items)}"
+            f"Finished background streaming for {polling_id}, status={final_status}, error={terminal_error}, incomplete_details={incomplete_details_data}, output_items={len(output_items)}"
         )
 
     except Exception as e:
