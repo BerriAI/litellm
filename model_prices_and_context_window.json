@@ -30431,7 +30431,7 @@
         "output_cost_per_token": 5.4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supported_regions": [
-            "us-west2"
+            "us-central1"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -30451,7 +30451,7 @@
         "output_cost_per_token_batches": 8.4e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supported_regions": [
-            "us-west2"
+            "global"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -30472,7 +30472,10 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supported_regions": [
+            "us-central1"
+        ]
     },
     "vertex_ai/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -31092,7 +31095,10 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "ocr_cost_per_page": 0.0003,
-        "source": "https://cloud.google.com/vertex-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/pricing",
+        "supported_regions": [
+            "us-central1"
+        ]
     },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,
