@@ -481,17 +481,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return event
 
     def _merge_provider_specific_fields(self, src: dict) -> None:
-        """Merge provider_specific_fields, extending list values instead of replacing."""
+        """Merge provider_specific_fields using last-value-wins for lists.
+
+        List-valued keys (web_search_results, tool_results,
+        code_interpreter_results, etc.) are emitted cumulatively — each
+        emission contains the full list so far.  Using "last value wins"
+        matches stream_chunk_builder's semantics and avoids quadratic
+        growth from repeated extend calls.
+        """
         for key, val in src.items():
-            existing = self._accumulated_provider_specific_fields.get(key)
-            if (
-                existing is not None
-                and isinstance(val, list)
-                and isinstance(existing, list)
-            ):
-                existing.extend(val)
-            else:
-                self._accumulated_provider_specific_fields[key] = val
+            self._accumulated_provider_specific_fields[key] = val
 
     def create_litellm_model_response(self) -> Optional[ModelResponse]:
         response = cast(

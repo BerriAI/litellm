@@ -1738,7 +1738,10 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
         if tool_result_items:
-            result_by_id = {item.id: item for item in tool_result_items}
+            result_by_id = {
+                (item.get("id") if isinstance(item, dict) else item.id): item
+                for item in tool_result_items
+            }
             replaced_ids = set(result_by_id.keys())
             responses_output = [
                 (

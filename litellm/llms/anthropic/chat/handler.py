@@ -545,7 +545,7 @@ class ModelResponseIterator:
         # Track server tool use inputs and results for code_interpreter_results
         self._server_tool_inputs: Dict[str, Any] = {}
         self.tool_results: List[Dict[str, Any]] = []
-        self._last_code_interpreter_results_count: int = 0
+        self._current_server_tool_id: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -695,13 +695,14 @@ class ModelResponseIterator:
         Called during streaming to produce provider-neutral code_interpreter_results
         alongside the raw tool_results, so the Responses API layer doesn't need
         Anthropic-specific knowledge.
+
+        Returns the full cumulative list each time (not incremental), matching
+        how web_search_results works.  stream_chunk_builder uses "last value
+        wins" for list-valued provider_specific_fields keys, so the last
+        emission must contain every result.
         """
-        # Only convert tool_results added since the last call to avoid
-        # duplicates when _merge_provider_specific_fields extends the list.
-        new_results = self.tool_results[self._last_code_interpreter_results_count :]
-        self._last_code_interpreter_results_count = len(self.tool_results)
         results = []
-        for tr in new_results:
+        for tr in self.tool_results:
             call_id = tr.get("tool_use_id", "")
             content = tr.get("content", {})
             if isinstance(content, dict):
@@ -793,17 +794,23 @@ class ModelResponseIterator:
                         ),
                         index=self.tool_index,
                     )
-                    # Track server tool use inputs for code_interpreter_results
+                    # Track server tool use inputs for code_interpreter_results.
+                    # The initial input in content_block_start is typically {}
+                    # for streaming; the full input arrives via input_json_delta
+                    # and is assembled at content_block_stop.
                     if (
                         content_block_start["content_block"]["type"]
                         == "server_tool_use"
                     ):
+                        self._current_server_tool_id = content_block_start[
+                            "content_block"
+                        ]["id"]
                         tool_input = content_block_start["content_block"].get(
                             "input", {}
                         )
-                        self._server_tool_inputs[
-                            content_block_start["content_block"]["id"]
-                        ] = tool_input
+                        self._server_tool_inputs[self._current_server_tool_id] = (
+                            tool_input
+                        )
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
@@ -886,6 +893,24 @@ class ModelResponseIterator:
                             ),
                             index=self.tool_index,
                         )
+                    # Update server_tool_inputs with fully assembled input
+                    # from input_json_delta chunks (content_block_start has {})
+                    if (
+                        self.current_content_block_type == "server_tool_use"
+                        and self._current_server_tool_id
+                    ):
+                        args = ""
+                        for block in self.content_blocks:
+                            if block["delta"]["type"] == "input_json_delta":
+                                args += block["delta"].get("partial_json", "")
+                        if args:
+                            try:
+                                self._server_tool_inputs[
+                                    self._current_server_tool_id
+                                ] = json.loads(args)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        self._current_server_tool_id = None
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
                 # Reset current content block type
