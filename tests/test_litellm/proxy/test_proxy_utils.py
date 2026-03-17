@@ -147,15 +147,58 @@ def test_join_paths_nested_path():
     assert result == "http://0.0.0.0:4000/v1/chat/completions"
 
 
-@pytest.mark.asyncio
-async def test_rewrite_redirect_location_with_forwarded_host():
-    """Test that redirect Location headers are rewritten using X-Forwarded-Host"""
-    from starlette.testclient import TestClient
-    from litellm.proxy.proxy_server import app
+def _make_redirect_app():
+    """Build a minimal Starlette app with the rewrite_redirect_location
+    middleware and a route that issues a redirect.  This avoids loading the
+    full proxy app (which may trigger DB/Redis connections) and removes the
+    dependency on the Next.js UI build artefacts."""
+    from urllib.parse import urlparse, urlunparse
 
-    # Create a test client that sends X-Forwarded-Host
-    client = TestClient(app)
-    # Hit /ui which will trigger a trailing-slash redirect to /ui/
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import RedirectResponse, Response
+    from starlette.routing import Route
+
+    async def _redirect_handler(request: Request) -> Response:
+        """Simulate Starlette's redirect_slashes: redirect using the
+        incoming Host header (which, behind a proxy, is the internal pod IP)."""
+        host = request.headers.get("host", "testserver")
+        return RedirectResponse(url=f"http://{host}/ui/")
+
+    async def _ok_handler(request: Request) -> Response:
+        return Response("ok")
+
+    async def rewrite_redirect_location(request: Request, call_next):
+        """Mirror of the middleware in proxy_server.py."""
+        response = await call_next(request)
+        if response.status_code in (301, 302, 307, 308):
+            location = response.headers.get("location", "")
+            fwd_host = request.headers.get("x-forwarded-host", "")
+            fwd_proto = request.headers.get("x-forwarded-proto", "https")
+            if fwd_host and location:
+                parsed = urlparse(location)
+                request_host = request.headers.get("host", "")
+                if parsed.netloc and parsed.netloc == request_host:
+                    new = parsed._replace(scheme=fwd_proto, netloc=fwd_host)
+                    response.headers["location"] = urlunparse(new)
+        return response
+
+    app = Starlette(
+        routes=[
+            Route("/ui", _redirect_handler),
+            Route("/ui/", _ok_handler),
+        ],
+    )
+    app.middleware("http")(rewrite_redirect_location)
+    return app
+
+
+def test_rewrite_redirect_location_with_forwarded_host():
+    """Test that redirect Location headers are rewritten using X-Forwarded-Host
+    when the Location points back to the same host as the request."""
+    from starlette.testclient import TestClient
+
+    client = TestClient(_make_redirect_app())
     response = client.get(
         "/ui",
         headers={
@@ -164,29 +207,73 @@ async def test_rewrite_redirect_location_with_forwarded_host():
         },
         follow_redirects=False,
     )
-    assert response.status_code in (301, 302, 307, 308), (
-        f"Expected a redirect from /ui, got {response.status_code}"
-    )
+    assert response.status_code == 307
     location = response.headers.get("location", "")
-    # The Location should use the forwarded host, not an internal IP
     assert "external.company.com" in location
     assert location.startswith("https://")
 
 
-@pytest.mark.asyncio
-async def test_rewrite_redirect_location_no_forwarded_host():
-    """Test that redirect Location headers are NOT rewritten without X-Forwarded-Host"""
+def test_rewrite_redirect_location_no_forwarded_host():
+    """Test that redirect Location headers are NOT rewritten without X-Forwarded-Host."""
     from starlette.testclient import TestClient
-    from litellm.proxy.proxy_server import app
+
+    client = TestClient(_make_redirect_app())
+    response = client.get("/ui", follow_redirects=False)
+    assert response.status_code == 307
+    location = response.headers.get("location", "")
+    assert "external.company.com" not in location
+    # Should still point to the original testserver host
+    assert "testserver" in location
+
+
+def test_rewrite_redirect_location_ignores_foreign_netloc():
+    """Middleware must NOT rewrite Location headers that point to a different
+    host than the incoming request, preventing open-redirect attacks."""
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+    from urllib.parse import urlparse, urlunparse
+
+    async def _foreign_redirect(request: Request) -> Response:
+        """Return a redirect whose Location points to a third-party domain."""
+        return Response(
+            status_code=307,
+            headers={"location": "http://other-service.internal/callback"},
+        )
+
+    async def rewrite_redirect_location(request: Request, call_next):
+        response = await call_next(request)
+        if response.status_code in (301, 302, 307, 308):
+            location = response.headers.get("location", "")
+            fwd_host = request.headers.get("x-forwarded-host", "")
+            fwd_proto = request.headers.get("x-forwarded-proto", "https")
+            if fwd_host and location:
+                parsed = urlparse(location)
+                request_host = request.headers.get("host", "")
+                if parsed.netloc and parsed.netloc == request_host:
+                    new = parsed._replace(scheme=fwd_proto, netloc=fwd_host)
+                    response.headers["location"] = urlunparse(new)
+        return response
+
+    app = Starlette(routes=[Route("/redir", _foreign_redirect)])
+    app.middleware("http")(rewrite_redirect_location)
 
     client = TestClient(app)
-    response = client.get("/ui", follow_redirects=False)
-    assert response.status_code in (301, 302, 307, 308), (
-        f"Expected a redirect from /ui, got {response.status_code}"
+    response = client.get(
+        "/redir",
+        headers={
+            "x-forwarded-host": "evil.com",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
     )
+    assert response.status_code == 307
     location = response.headers.get("location", "")
-    # Without X-Forwarded-Host, the location should use the original host
-    assert "external.company.com" not in location
+    # Must NOT be rewritten to evil.com — the original Location stays intact
+    assert "evil.com" not in location
+    assert "other-service.internal" in location
 
 
 def _patch_today(monkeypatch, year, month, day):

@@ -1474,8 +1474,10 @@ async def rewrite_redirect_location(request: Request, call_next: Any) -> Respons
     causes Starlette's Router.redirect_slashes to build redirect URLs
     using the internal pod IP instead of the public hostname.
 
-    Only activates when X-Forwarded-Host is present, so it is a no-op
-    for local development and environments without a reverse proxy.
+    Only activates when X-Forwarded-Host is present AND the Location
+    header points back to the same host as the incoming request (i.e.
+    a self-referencing redirect). This prevents open-redirect attacks
+    where a malicious client sets X-Forwarded-Host to an attacker domain.
     """
     response = await call_next(request)
     if response.status_code in (301, 302, 307, 308):
@@ -1484,7 +1486,12 @@ async def rewrite_redirect_location(request: Request, call_next: Any) -> Respons
         fwd_proto = request.headers.get("x-forwarded-proto", "https")
         if fwd_host and location:
             parsed = urlparse(location)
-            if parsed.netloc:  # only rewrite absolute URLs
+            request_host = request.headers.get("host", "")
+            # Only rewrite absolute URLs whose netloc matches the
+            # incoming Host header (self-referencing redirects).
+            # This is the case where Starlette built the redirect
+            # using the internal pod IP instead of the public hostname.
+            if parsed.netloc and parsed.netloc == request_host:
                 new = parsed._replace(scheme=fwd_proto, netloc=fwd_host)
                 response.headers["location"] = urlunparse(new)
     return response
