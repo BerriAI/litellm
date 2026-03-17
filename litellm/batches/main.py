@@ -884,7 +884,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -930,7 +930,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -1047,9 +1047,35 @@ def cancel_batch(
                 cancel_batch_data=_cancel_batch_request,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
