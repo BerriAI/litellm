@@ -459,7 +459,7 @@ class TestCallToolFlowsHookHeaders:
                             proxy_logging_obj=proxy_logging,
                         )
 
-                    assert exc_info.value.status_code == 500
+                    assert exc_info.value.status_code == 400
                     assert "does not support hook header injection" in str(
                         exc_info.value.detail
                     )

@@ -2235,6 +2235,21 @@ class MCPServerManager:
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]
 
+        # OpenAPI-backed servers cannot forward hook-injected headers — reject early
+        # before scheduling any background tasks to avoid orphaned asyncio.Tasks.
+        if mcp_server.spec_path and hook_result.get("extra_headers"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "pre_mcp_call hook returned extra_headers for an "
+                        "OpenAPI-backed MCP server, which does not support "
+                        "hook header injection. Use a regular MCP server "
+                        "(SSE/HTTP transport) for hook header support."
+                    )
+                },
+            )
+
         # Prepare tasks for during hooks
         tasks = []
         if proxy_logging_obj:
@@ -2251,20 +2266,8 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                "Calling OpenAPI tool %s directly via HTTP handler", name
+                f"Calling OpenAPI tool {name} directly via HTTP handler"
             )
-            if hook_result.get("extra_headers"):
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": (
-                            "pre_mcp_call hook returned extra_headers for an "
-                            "OpenAPI-backed MCP server, which does not support "
-                            "hook header injection. Use a regular MCP server "
-                            "(SSE/HTTP transport) for hook header support."
-                        )
-                    },
-                )
             tasks.append(
                 asyncio.create_task(
                     self._call_openapi_tool_handler(mcp_server, name, arguments)
