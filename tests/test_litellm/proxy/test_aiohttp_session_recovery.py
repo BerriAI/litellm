@@ -97,3 +97,54 @@ async def test_add_shared_session_no_session_available():
         data = {}
         await add_shared_session_to_data(data)
         assert "shared_session" not in data
+
+
+@pytest.mark.asyncio
+async def test_add_shared_session_concurrent_recreation_uses_lock():
+    """When multiple coroutines detect a closed session concurrently,
+    only one should recreate it (double-checked locking via asyncio.Lock)."""
+    import litellm.proxy.route_llm_request as route_module
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.route_llm_request import add_shared_session_to_data
+
+    # Reset the module-level lock so each test is isolated
+    route_module._shared_session_lock = None
+
+    closed_session = MagicMock()
+    closed_session.closed = True
+
+    new_session = MagicMock()
+    new_session.closed = False
+
+    call_count = 0
+
+    async def mock_init():
+        nonlocal call_count
+        call_count += 1
+        # Simulate some async work
+        await asyncio.sleep(0.01)
+        proxy_server_module.shared_aiohttp_session = new_session
+        return new_session
+
+    with patch.object(
+        proxy_server_module,
+        "shared_aiohttp_session",
+        closed_session,
+    ):
+        with patch.object(
+            proxy_server_module,
+            "_initialize_shared_aiohttp_session",
+            side_effect=mock_init,
+        ):
+            # Launch 5 concurrent calls
+            results = [{} for _ in range(5)]
+            await asyncio.gather(
+                *(add_shared_session_to_data(d) for d in results)
+            )
+
+            # Only 1 coroutine should have called _initialize (the rest see the
+            # re-checked session as open under the lock)
+            assert call_count == 1, f"Expected 1 init call, got {call_count}"
+            # All should have the new session
+            for d in results:
+                assert d.get("shared_session") is new_session

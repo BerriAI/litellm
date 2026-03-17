@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException, status
@@ -123,11 +124,24 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
+_shared_session_lock: Optional[asyncio.Lock] = None
+
+
+def _get_shared_session_lock() -> asyncio.Lock:
+    """Lazily create the shared session lock (must be called within a running event loop)."""
+    global _shared_session_lock
+    if _shared_session_lock is None:
+        _shared_session_lock = asyncio.Lock()
+    return _shared_session_lock
+
+
 async def add_shared_session_to_data(data: dict) -> None:
     """
     Add shared aiohttp session for connection reuse (prevents cold starts).
     If the session was closed (e.g. due to network interruption or idle timeout),
     automatically recreates it so connection pooling is restored.
+    Uses an asyncio.Lock to prevent race conditions where multiple concurrent
+    requests could each create a new session, leaking intermediate ones.
     Silently continues without session reuse if import fails or session is unavailable.
 
     Args:
@@ -146,23 +160,32 @@ async def add_shared_session_to_data(data: dict) -> None:
             )
         elif session is not None and session.closed:
             # Session was created at startup but has since closed — recreate it
-            verbose_proxy_logger.warning(
-                f"SESSION REUSE: Shared aiohttp session is closed (ID: {id(session)}), recreating..."
-            )
-            new_session = await proxy_server._initialize_shared_aiohttp_session()
-            if new_session is not None:
-                proxy_server.shared_aiohttp_session = new_session
-                data["shared_session"] = new_session
-            else:
-                verbose_proxy_logger.info(
-                    "SESSION REUSE: Failed to recreate shared session, continuing without session reuse"
+            # Use lock to prevent concurrent recreation (avoids session/connector leak)
+            lock = _get_shared_session_lock()
+            async with lock:
+                # Double-check under lock — another coroutine may have already recreated it
+                session = proxy_server.shared_aiohttp_session
+                if session is not None and not session.closed:
+                    data["shared_session"] = session
+                    return
+
+                verbose_proxy_logger.warning(
+                    f"SESSION REUSE: Shared aiohttp session is closed (ID: {id(session)}), recreating..."
                 )
+                new_session = await proxy_server._initialize_shared_aiohttp_session()
+                if new_session is not None:
+                    proxy_server.shared_aiohttp_session = new_session
+                    data["shared_session"] = new_session
+                else:
+                    verbose_proxy_logger.info(
+                        "SESSION REUSE: Failed to recreate shared session, continuing without session reuse"
+                    )
         else:
             verbose_proxy_logger.info(
                 "SESSION REUSE: No shared session available for this request"
             )
     except Exception:
-        # Silently continue without session reuse if import fails or session unavailable
+        # Silently continue without session reuse if import fails or session is unavailable
         pass
 
 
