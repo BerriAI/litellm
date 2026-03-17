@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
+import prisma.errors
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -3571,6 +3572,17 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadError,
     httpx.ReadTimeout,
 )
+
+PRISMA_DEADLOCK_CODE = "P2034"
+"""Prisma error code for PostgreSQL deadlock / write conflict."""
+
+
+def _is_deadlock_error(e: Exception) -> bool:
+    """Check if a Prisma error is a PostgreSQL deadlock / write conflict (P2034)."""
+    return (
+        isinstance(e, prisma.errors.DataError)
+        and getattr(e, "code", None) == PRISMA_DEADLOCK_CODE
+    )
 
 
 class SSOUserDefinedValues(TypedDict):

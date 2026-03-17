@@ -25,8 +25,6 @@ from typing import (
     overload,
 )
 
-import prisma.errors
-
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
@@ -36,17 +34,11 @@ from litellm.proxy._types import (
     ProxyException,
     SpendLogsMetadata,
     SpendLogsPayload,
+    _is_deadlock_error,
 )
 
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
-
-PRISMA_DEADLOCK_CODE = "P2034"
-
-
-def _is_deadlock_error(e: Exception) -> bool:
-    """Check if a Prisma error is a PostgreSQL deadlock / write conflict (P2034)."""
-    return isinstance(e, prisma.errors.DataError) and getattr(e, "code", None) == PRISMA_DEADLOCK_CODE
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -4549,6 +4541,7 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
+                        # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                         for end_user_id, response_cost in sorted(end_user_list_transactions.items()):
                             if litellm.max_end_user_budget is not None:
                                 pass

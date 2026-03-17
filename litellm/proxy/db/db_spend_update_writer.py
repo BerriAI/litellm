@@ -25,8 +25,6 @@ from typing import (
     overload,
 )
 
-import prisma.errors
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
@@ -48,6 +46,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
+    _is_deadlock_error,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
@@ -65,14 +64,6 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
-
-PRISMA_DEADLOCK_CODE = "P2034"
-
-
-def _is_deadlock_error(e: Exception) -> bool:
-    """Check if a Prisma error is a PostgreSQL deadlock / write conflict (P2034)."""
-    return isinstance(e, prisma.errors.DataError) and getattr(e, "code", None) == PRISMA_DEADLOCK_CODE
-
 
 class DBSpendUpdateWriter:
     """
@@ -1093,6 +1084,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                             for user_id, response_cost in sorted(user_list_transactions.items()):
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
@@ -1148,6 +1140,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                             for token, response_cost in sorted(key_list_transactions.items()):
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
@@ -1192,6 +1185,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                             for team_id, response_cost in sorted(team_list_transactions.items()):
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
@@ -1250,6 +1244,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                             for key, response_cost in sorted(team_member_list_transactions.items()):
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
@@ -1307,6 +1302,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
                             for org_id, response_cost in sorted(org_list_transactions.items()):
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
@@ -1395,7 +1391,7 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for entity_id, response_cost in sorted(transactions.items()):
+                            for entity_id, response_cost in transactions.items():
                                 verbose_proxy_logger.debug(
                                     f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
                                 )
@@ -1411,12 +1407,8 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Randomized backoff to reduce repeated collisions across pods
-                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                    await asyncio.sleep(2**i)  # Exponential backoff
                 except Exception as e:
-                    if _is_deadlock_error(e) and i < n_retry_times:
-                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
-                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
