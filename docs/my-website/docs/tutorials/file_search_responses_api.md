@@ -15,11 +15,11 @@ LiteLLM keeps one OpenAI-compatible output shape while routing requests through 
 Two paths are covered:
 
 | Path | When it runs | What LiteLLM does |
-|---|---|---|
+||||
 | **Native passthrough** | Provider natively supports `file_search` (OpenAI, Azure) | Decodes unified vector store ID → forwards to provider as-is |
 | **Emulated fallback** | Provider doesn't support `file_search` (Anthropic, Bedrock, etc.) | Converts to a function tool → intercepts tool call → runs vector search → synthesizes OpenAI-format output |
 
----
+
 
 ## Usage
 
@@ -102,11 +102,11 @@ print(response.output)
 ### Behavior Matrix
 
 | Path | SDK model | Proxy model | Behavior |
-|---|---|---|---|
+|||||
 | Native passthrough | `openai/gpt-4.1` | `gpt-4.1` | Provider executes native `file_search` |
 | Emulated fallback | `anthropic/claude-sonnet-4-5` | `claude-sonnet` | LiteLLM converts to function tool and synthesizes OpenAI-format output |
 
----
+
 
 ## Architecture Diagram
 
@@ -130,7 +130,7 @@ flowchart TD
     E5 --> Z[OpenAI-compatible output]
 ```
 
----
+
 
 ## Prerequisites
 
@@ -140,7 +140,7 @@ export OPENAI_API_KEY="sk-..."          # for native path
 export ANTHROPIC_API_KEY="sk-ant-..."  # for emulated path
 ```
 
----
+
 
 ## Example response shape
 
@@ -216,7 +216,7 @@ def validate_file_search_response(response):
 validate_file_search_response(response)
 ```
 
----
+
 
 ## Q&A
 
@@ -245,7 +245,7 @@ A: The caller does not have access to that vector store.
 A: `file_citation` annotations require `file_id` metadata in search results.
 If your vector backend does not return file-level metadata, the answer text is still generated but citations can be empty.
 
----
+
 
 ## What to check next
 
