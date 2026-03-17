@@ -55,7 +55,7 @@ def test_reconstruct_model_name_returns_original_for_other_providers():
 # map_finish_reason tests
 # ---------------------------------------------------------------------------
 
-VALID_OPENAI_FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", "content_filter"}
+VALID_OPENAI_FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", "content_filter", "refusal"}
 
 
 class TestMapFinishReasonAnthropic:
@@ -68,6 +68,7 @@ class TestMapFinishReasonAnthropic:
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
             ("content_filtered", "content_filter"),
+            ("refusal", "refusal"),
         ],
     )
     def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
@@ -132,11 +133,11 @@ class TestMapFinishReasonOpenAIPassthrough:
 
 
 class TestMapFinishReasonUnknown:
-    def test_unknown_value_defaults_to_stop(self):
-        assert map_finish_reason("some_unknown_value") == "stop"
+    def test_unknown_value_passes_through(self):
+        assert map_finish_reason("some_unknown_value") == "some_unknown_value"
 
-    def test_empty_string_defaults_to_stop(self):
-        assert map_finish_reason("") == "stop"
+    def test_empty_string_passes_through(self):
+        assert map_finish_reason("") == ""
 
 
 class TestFinishReasonMapOutputsAreValid:
