@@ -339,9 +339,7 @@ def _synthesize_responses_api_response(
       output[0] = file_search_call item
       output[1] = message item (with citations)
     """
-    import litellm
-
-    return ResponsesAPIResponse(
+    synthesized = ResponsesAPIResponse(
         id=getattr(original_response, "id", f"resp_{uuid.uuid4().hex}"),
         object="response",
         created_at=getattr(original_response, "created_at", int(time.time())),
@@ -351,6 +349,9 @@ def _synthesize_responses_api_response(
         usage=getattr(original_response, "usage", None),
         error=None,
     )
+    if hasattr(original_response, "_hidden_params"):
+        synthesized._hidden_params = getattr(original_response, "_hidden_params")
+    return synthesized
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +514,7 @@ async def aresponses_with_emulated_file_search(
             input=follow_up_input,
             model=model,
             tools=None,  # no tools needed for the answer step
-            **{k: v for k, v in kwargs.items() if k not in ("tools",)},
+            **kwargs,
         ),
     )
 
