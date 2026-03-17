@@ -8,7 +8,10 @@ their respective publisher-specific count-tokens endpoints.
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_AI_CLAUDE_COUNT_TOKENS_SUPPORTED_REGIONS,
+    get_vertex_base_url,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -107,9 +110,12 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # Map empty location/cluade models to a supported region for count-tokens endpoint
-        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if not vertex_location or "claude" in model.lower():
+        # For Claude models, validate region is supported for count-tokens
+        # https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        if "claude" in model.lower():
+            if not vertex_location or vertex_location not in VERTEX_AI_CLAUDE_COUNT_TOKENS_SUPPORTED_REGIONS:
+                vertex_location = "us-east5"
+        elif not vertex_location:
             vertex_location = "us-central1"
 
         # Get access token and resolved project ID

@@ -873,6 +873,69 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "vertex_location, expected_location",
+    [
+        # Supported region should be preserved
+        ("europe-west1", "europe-west1"),
+        # Unsupported region should fall back to us-east5
+        ("global", "us-east5"),
+        ("us-central1", "us-east5"),
+    ],
+)
+async def test_vertex_ai_claude_count_tokens_region_validation(
+    vertex_location, expected_location
+):
+    """
+    Test that handle_count_tokens_request validates the region for Claude models
+    and only falls back to us-east5 for unsupported regions.
+
+    Supported regions per:
+    https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+        VertexAIPartnerModelsTokenCounter,
+    )
+
+    counter = VertexAIPartnerModelsTokenCounter()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"input_tokens": 10}
+
+    with patch.object(
+        counter, "get_vertex_ai_credentials", return_value=None
+    ), patch.object(
+        counter, "get_vertex_ai_project", return_value="test-project"
+    ), patch.object(
+        counter, "get_vertex_ai_location", return_value=vertex_location
+    ), patch.object(
+        counter,
+        "_ensure_access_token_async",
+        new_callable=AsyncMock,
+        return_value=("fake-token", "test-project"),
+    ), patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        mock_get_client.return_value = mock_client
+
+        await counter.handle_count_tokens_request(
+            model="claude-3-5-sonnet-20241022",
+            request_data={"messages": [{"role": "user", "content": "Hello"}]},
+            litellm_params={},
+        )
+
+        # Verify the endpoint URL uses the expected location
+        call_args = mock_client.post.call_args
+        endpoint_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+        assert f"/locations/{expected_location}/" in endpoint_url, (
+            f"Expected location '{expected_location}' in URL, got: {endpoint_url}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_bedrock_token_counter_error_propagation_bedrock_error():
     """
     Test that BedrockTokenCounter properly returns error response when BedrockError is raised.

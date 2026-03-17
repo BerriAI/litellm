@@ -42,6 +42,14 @@ class VertexAIModelRoute(str, Enum):
 
 VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
+# Supported regions for Claude count-tokens endpoint on Vertex AI
+# https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+VERTEX_AI_CLAUDE_COUNT_TOKENS_SUPPORTED_REGIONS = {
+    "us-east5",
+    "europe-west1",
+    "asia-southeast1",
+}
+
 
 def get_vertex_ai_model_route(
     model: str, litellm_params: Optional[dict] = None
