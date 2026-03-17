@@ -3223,6 +3223,7 @@ class LlmProviders(str, Enum):
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
     CHARITY_ENGINE = "charity_engine"
+    OPENFPGA = "openfpga"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     GRADIENT_AI = "gradient_ai"
