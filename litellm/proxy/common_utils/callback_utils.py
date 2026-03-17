@@ -46,7 +46,21 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
-                imported_list.append(callback)
+                # Instantiate the callback class (e.g., OpenTelemetry) instead
+                # of just adding the string. This ensures open_telemetry_logger
+                # and similar globals are set at startup, not deferred to
+                # add_deployment() which may fail silently when
+                # store_model_in_db is true.
+                from litellm.utils import (
+                    _add_custom_logger_callback_to_specific_event,
+                )
+
+                _add_custom_logger_callback_to_specific_event(
+                    callback, "success"
+                )
+                _add_custom_logger_callback_to_specific_event(
+                    callback, "failure"
+                )
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,

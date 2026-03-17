@@ -81,3 +81,78 @@ def test_normalize_callback_names_none_returns_empty_list():
 def test_normalize_callback_names_lowercases_strings():
     assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
 
+
+def test_initialize_callbacks_on_proxy_instantiates_otel():
+    """
+    Test that initialize_callbacks_on_proxy() actually instantiates the
+    OpenTelemetry callback class (not just adding the string "otel").
+
+    Regression test for: when store_model_in_db=true, OTEL callback was
+    never instantiated because initialize_callbacks_on_proxy() only added
+    the string "otel" to litellm.callbacks without creating the instance.
+    """
+    import litellm
+    from litellm.proxy.common_utils.callback_utils import (
+        initialize_callbacks_on_proxy,
+    )
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    # Save original state
+    original_callbacks = litellm.callbacks[:]
+    original_success = litellm.success_callback[:]
+    original_async_success = litellm._async_success_callback[:]
+    original_failure = litellm.failure_callback[:]
+    original_async_failure = litellm._async_failure_callback[:]
+
+    try:
+        # Clear callbacks
+        litellm.callbacks = []
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        litellm.failure_callback = []
+        litellm._async_failure_callback = []
+
+        initialize_callbacks_on_proxy(
+            value=["otel"],
+            premium_user=False,
+            config_file_path="",
+            litellm_settings={},
+        )
+
+        # Verify an OpenTelemetry instance exists in success callbacks
+        otel_in_success = any(
+            isinstance(cb, OpenTelemetry)
+            for cb in litellm.success_callback + litellm._async_success_callback
+        )
+        assert otel_in_success, (
+            "OpenTelemetry instance not found in success callbacks. "
+            f"success_callback={litellm.success_callback}, "
+            f"_async_success_callback={litellm._async_success_callback}"
+        )
+
+        # Verify an OpenTelemetry instance exists in failure callbacks
+        otel_in_failure = any(
+            isinstance(cb, OpenTelemetry)
+            for cb in litellm.failure_callback + litellm._async_failure_callback
+        )
+        assert otel_in_failure, (
+            "OpenTelemetry instance not found in failure callbacks."
+        )
+
+        # Verify open_telemetry_logger is set on proxy_server
+        from litellm.proxy import proxy_server
+
+        assert proxy_server.open_telemetry_logger is not None, (
+            "proxy_server.open_telemetry_logger should be set after "
+            "initializing otel callback"
+        )
+        assert isinstance(proxy_server.open_telemetry_logger, OpenTelemetry)
+
+    finally:
+        # Restore original state
+        litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success
+        litellm._async_success_callback = original_async_success
+        litellm.failure_callback = original_failure
+        litellm._async_failure_callback = original_async_failure
+
