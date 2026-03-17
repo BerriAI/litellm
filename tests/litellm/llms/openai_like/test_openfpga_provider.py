@@ -75,3 +75,15 @@ def test_openfpga_provider_config_manager():
 
     assert config is not None
     assert config.custom_llm_provider == "openfpga"
+
+
+def test_openfpga_model_info():
+    from litellm.utils import get_model_info
+
+    info = get_model_info(
+        model="openfpga/llama-3.1-8b-fpga",
+        custom_llm_provider="openfpga",
+    )
+    assert info["litellm_provider"] == "openfpga"
+    assert info["max_input_tokens"] == 131072
+    assert info["supports_function_calling"] is True
