@@ -41,12 +41,15 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _transform_verification_tokens_to_deleted_records,
     _validate_max_budget,
     _validate_reset_spend_value,
+    _validate_update_key_data,
     can_modify_verification_token,
     check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
     delete_verification_tokens,
+    generate_key_fn,
     generate_key_helper_fn,
     key_aliases,
+    key_generation_check,
     list_keys,
     prepare_key_update_data,
     reset_key_spend_fn,
@@ -7535,3 +7538,298 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     )
 
     assert result is not None
+
+
+# ============================================================================
+# LIT-1884: Internal users cannot create invalid keys
+# ============================================================================
+
+
+class TestLIT1884KeyGenerateValidation:
+    """Tests for LIT-1884: internal users should not be able to generate invalid keys."""
+
+    @pytest.mark.asyncio
+    async def test_internal_user_generate_key_no_user_id_auto_assigns(self):
+        """
+        When an internal_user calls /key/generate without user_id,
+        the caller's user_id should be auto-assigned before reaching
+        _common_key_generation_helper.
+        """
+        mock_prisma_client = AsyncMock()
+
+        data = GenerateKeyRequest(key_alias="test-alias")
+        assert data.user_id is None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        # Patch _common_key_generation_helper to avoid needing full DB mocks.
+        # We just want to verify user_id is set before we reach this point.
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_custom_key_generate", None), \
+             patch(
+                 "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+                 new_callable=AsyncMock,
+                 return_value=MagicMock(),
+             ):
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
+        # The data object should have been mutated to include the caller's user_id
+        assert data.user_id == "internal-user-123"
+
+    @pytest.mark.asyncio
+    async def test_internal_user_generate_key_invalid_team_id_rejected(self):
+        """
+        When an internal_user provides a non-existent team_id,
+        key/generate should raise ProxyException with status 400.
+        """
+        mock_prisma_client = AsyncMock()
+
+        data = GenerateKeyRequest(
+            key_alias="test-alias",
+            team_id="nonexistent-team-id",
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_custom_key_generate", None), \
+             patch(
+                 "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                 AsyncMock(side_effect=Exception("Team not found")),
+             ):
+            with pytest.raises(ProxyException) as exc_info:
+                await generate_key_fn(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+            assert str(exc_info.value.code) == "400"
+            assert "Team not found" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_admin_generate_key_invalid_team_id_allowed(self):
+        """
+        Admin callers should be allowed to create keys with any team_id,
+        even if the team doesn't exist (team_table=None is OK for admins).
+        """
+        data = GenerateKeyRequest(
+            key_alias="admin-key",
+            team_id="nonexistent-team-id",
+            user_id="admin-user",
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_prisma_client = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_custom_key_generate", None), \
+             patch(
+                 "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+                 AsyncMock(side_effect=Exception("Team not found")),
+             ), \
+             patch(
+                 "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+                 new_callable=AsyncMock,
+                 return_value=MagicMock(),
+             ):
+            # Should NOT raise — admin bypasses team validation
+            result = await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+            assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_admin_generate_key_no_user_id_not_auto_assigned(self):
+        """
+        Admin callers should NOT have user_id auto-assigned — they may
+        intentionally create keys without a user_id.
+        """
+        data = GenerateKeyRequest(key_alias="admin-unbound-key")
+        assert data.user_id is None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_prisma_client = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_custom_key_generate", None), \
+             patch(
+                 "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+                 new_callable=AsyncMock,
+                 return_value=MagicMock(),
+             ):
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
+        # user_id should remain None for admin
+        assert data.user_id is None
+
+    def test_key_generation_check_non_admin_no_team_table_raises(self):
+        """
+        key_generation_check should raise 400 for non-admin when team_table is None
+        and key_generation_settings is not set.
+        """
+        data = GenerateKeyRequest(team_id="some-team-id")
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch.object(litellm, "key_generation_settings", None):
+            with pytest.raises(HTTPException) as exc_info:
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+            assert exc_info.value.status_code == 400
+            assert "Unable to find team object" in str(exc_info.value.detail)
+
+    def test_key_generation_check_admin_no_team_table_allowed(self):
+        """
+        key_generation_check should allow admin to proceed even when team_table is None.
+        """
+        data = GenerateKeyRequest(team_id="some-team-id")
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with patch.object(litellm, "key_generation_settings", None):
+            result = key_generation_check(
+                team_table=None,
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                route="key_generate",
+            )
+            assert result is True
+
+
+class TestLIT1884KeyUpdateValidation:
+    """Tests for LIT-1884: internal users should not be able to update keys to remove user_id or set invalid team."""
+
+    @pytest.mark.asyncio
+    async def test_internal_user_cannot_remove_user_id(self):
+        """
+        Non-admin users should not be able to set user_id to empty string (remove it).
+        """
+        data = UpdateKeyRequest(key="sk-test-key", user_id="")
+        existing_key_row = MagicMock()
+        existing_key_row.user_id = "internal-user-123"
+        existing_key_row.token = "hashed_token"
+        existing_key_row.team_id = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc_info.value.status_code == 403
+        assert "cannot remove the user_id" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_internal_user_cannot_set_invalid_team_id(self):
+        """
+        Non-admin users should not be able to update a key to a non-existent team.
+        get_team_object raises HTTPException(404) when team doesn't exist in DB.
+        """
+        data = UpdateKeyRequest(key="sk-test-key", team_id="nonexistent-team")
+        existing_key_row = MagicMock()
+        existing_key_row.user_id = "internal-user-123"
+        existing_key_row.token = "hashed_token"
+        existing_key_row.team_id = None
+        existing_key_row.organization_id = None
+        existing_key_row.project_id = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            AsyncMock(side_effect=HTTPException(
+                status_code=404,
+                detail="Team doesn't exist in db. Team=nonexistent-team.",
+            )),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _validate_update_key_data(
+                    data=data,
+                    existing_key_row=existing_key_row,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=None,
+                    premium_user=False,
+                    prisma_client=AsyncMock(),
+                    user_api_key_cache=MagicMock(),
+                )
+            assert exc_info.value.status_code == 404
+            assert "Team doesn't exist" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_admin_can_remove_user_id(self):
+        """
+        Admin users should be allowed to set user_id to empty string.
+        """
+        data = UpdateKeyRequest(key="sk-test-key", user_id="")
+        existing_key_row = MagicMock()
+        existing_key_row.user_id = "some-user"
+        existing_key_row.token = "hashed_token"
+        existing_key_row.team_id = None
+        existing_key_row.organization_id = None
+        existing_key_row.project_id = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_prisma_client = AsyncMock()
+
+        # Should NOT raise
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            premium_user=False,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
