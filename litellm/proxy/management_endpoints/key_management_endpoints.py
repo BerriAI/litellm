@@ -91,6 +91,7 @@ from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
     PersonalUIKeyGenerationConfig,
+    StandardCallbackDynamicParams,
     TeamUIKeyGenerationConfig,
 )
 
@@ -2525,6 +2526,8 @@ async def info_key_fn_v2(
             except Exception:
                 # if using pydantic v1
                 k = k.dict()
+            # Sanitize metadata to prevent leaking sensitive callback credentials
+            k = _sanitize_key_metadata_for_response(k)
             filtered_key_info.append(k)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -2607,6 +2610,9 @@ async def info_key_fn(
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")
+
+        # Sanitize metadata to prevent leaking sensitive callback credentials
+        key_info = _sanitize_key_metadata_for_response(key_info)
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
@@ -5049,6 +5055,68 @@ async def key_health(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+def _sanitize_key_metadata_for_response(key_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Sanitize key metadata for API responses by redacting sensitive callback credentials.
+
+    When key-level logging is configured, the metadata contains callback_vars with sensitive
+    credentials (langfuse_secret_key, langfuse_public_key, etc.). This function redacts those
+    values to prevent credential leakage via the /key/info endpoint.
+
+    Args:
+        key_info: Dictionary containing key information, including metadata
+
+    Returns:
+        Dictionary with sanitized metadata - sensitive credential values are replaced with "REDACTED"
+    """
+    if not isinstance(key_info, dict):
+        return key_info
+
+    # Create a deep copy to avoid modifying the original
+    sanitized = copy.deepcopy(key_info)
+
+    # Get sensitive field names from StandardCallbackDynamicParams
+    sensitive_fields = set(StandardCallbackDynamicParams.__annotations__.keys())
+
+    # Remove non-sensitive fields that might be in StandardCallbackDynamicParams
+    non_sensitive_fields = {
+        "langfuse_host",
+        "langfuse_prompt_version",
+        "gcs_bucket_name",
+        "langsmith_project",
+        "langsmith_base_url",
+        "langsmith_sampling_rate",
+        "langsmith_tenant_id",
+        "posthog_api_url",
+        "weave_project_id",
+        "turn_off_message_logging",
+        "litellm_disabled_callbacks",
+    }
+    sensitive_fields = sensitive_fields - non_sensitive_fields
+
+    metadata = sanitized.get("metadata")
+    if metadata and isinstance(metadata, dict):
+        # Sanitize logging configuration in metadata
+        logging_config = metadata.get("logging")
+        if logging_config and isinstance(logging_config, list):
+            sanitized_logging = []
+            for callback in logging_config:
+                if isinstance(callback, dict) and "callback_vars" in callback:
+                    # Create a copy of callback with redacted sensitive values
+                    sanitized_callback = copy.deepcopy(callback)
+                    callback_vars = sanitized_callback.get("callback_vars", {})
+                    if isinstance(callback_vars, dict):
+                        for field in sensitive_fields:
+                            if field in callback_vars:
+                                sanitized_callback["callback_vars"][field] = "REDACTED"
+                    sanitized_logging.append(sanitized_callback)
+                else:
+                    sanitized_logging.append(callback)
+            sanitized["metadata"]["logging"] = sanitized_logging
+
+    return sanitized
 
 
 async def _can_user_query_key_info(
