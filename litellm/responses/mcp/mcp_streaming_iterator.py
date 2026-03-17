@@ -305,10 +305,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Mark as async iterator
         self.is_async = True
-        
+
         # Track if we've emitted initial OpenAI lifecycle events
         self.initial_events_emitted = False
-        
+
         # Cache the response ID to ensure consistency across all events
         self._cached_response_id: Optional[str] = None
 
@@ -489,7 +489,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         response_obj = getattr(chunk, "response", None)
                         if response_obj and hasattr(response_obj, "id"):
                             self._cached_response_id = response_obj.id
-                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
+                            verbose_logger.debug(
+                                f"Cached response ID: {self._cached_response_id}"
+                            )
 
                     # After emitting response.output_item.added, transition to MCP discovery
                     if not self.initial_events_emitted and hasattr(chunk, "type"):
@@ -542,15 +544,17 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """
         if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
             raise StopAsyncIteration
-            
+
         chunk = await cast(Any, self.base_iterator).__anext__()  # type: ignore[attr-defined]
 
         # Ensure response ID consistency - update chunk if needed
-        if self._cached_response_id and hasattr(chunk, 'response'):
-            response_obj = getattr(chunk, 'response', None)
-            if response_obj and hasattr(response_obj, 'id'):
+        if self._cached_response_id and hasattr(chunk, "response"):
+            response_obj = getattr(chunk, "response", None)
+            if response_obj and hasattr(response_obj, "id"):
                 if response_obj.id != self._cached_response_id:
-                    verbose_logger.debug(f"Updating response ID from {response_obj.id} to {self._cached_response_id}")
+                    verbose_logger.debug(
+                        f"Updating response ID from {response_obj.id} to {self._cached_response_id}"
+                    )
                     response_obj.id = self._cached_response_id
 
         # If auto-execution is enabled, check for completed responses

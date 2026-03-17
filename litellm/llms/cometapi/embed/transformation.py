@@ -19,7 +19,7 @@ from ..common_utils import CometAPIException
 class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
     """
     Configuration class for CometAPI Embedding API.
-    
+
     Since CometAPI is OpenAI-compatible, this class provides OpenAI-standard
     embedding functionality with CometAPI-specific authentication and endpoints.
     """

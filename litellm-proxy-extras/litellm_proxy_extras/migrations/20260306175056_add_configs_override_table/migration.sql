@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "spec_path" TEXT;
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "spec_path" TEXT;
 

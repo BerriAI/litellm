@@ -58,13 +58,18 @@ export const useTestMCPConnection = ({
   const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
-  const canFetchTools = !!(
-    hasEndpoint &&
-    formValues.transport &&
-    formValues.auth_type &&
-    accessToken &&
-    (!requiresOAuthToken || oauthAccessToken)
-  );
+
+  // For OpenAPI: tools are derived from the spec itself — no auth needed to load them.
+  // For other transports: auth_type is required, and OAuth interactive flows need a token.
+  const canFetchTools = isOpenAPITransport
+    ? !!(hasEndpoint && accessToken)
+    : !!(
+        hasEndpoint &&
+        formValues.transport &&
+        formValues.auth_type &&
+        accessToken &&
+        (!requiresOAuthToken || oauthAccessToken)
+      );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
@@ -74,7 +79,8 @@ export const useTestMCPConnection = ({
       return;
     }
 
-    if (requiresOAuthToken && !oauthAccessToken) {
+    // For OpenAPI transport, tools are derived from the spec — no OAuth token needed.
+    if (requiresOAuthToken && !oauthAccessToken && !isOpenAPITransport) {
       return;
     }
 

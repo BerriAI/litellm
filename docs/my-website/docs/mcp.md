@@ -133,6 +133,21 @@ LiteLLM attempts [OAuth 2.0 Authorization Server Discovery](https://datatracker.
 
 <br/>
 
+### AWS SigV4 Authentication
+
+For MCP servers hosted on [AWS Bedrock AgentCore](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html), select **AWS SigV4** as the authentication type. LiteLLM will sign every outgoing MCP request with your AWS credentials using [Signature Version 4](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html).
+
+<Image
+  img={require('../img/mcp_aws_sigv4_ui.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+Fill in your AWS region, service name (defaults to `bedrock-agentcore`), and optionally your AWS access key and secret. If credentials are omitted, LiteLLM falls back to the boto3 credential chain (IAM roles, environment variables, etc.).
+
+[**See full SigV4 setup guide**](./mcp_aws_sigv4.md)
+
+<br/>
+
 ### Static Headers
 
 Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.
@@ -217,6 +232,7 @@ mcp_servers:
   | `bearer_token` | `Authorization: Bearer <auth_value>` |
   | `basic` | `Authorization: Basic <auth_value>` |
   | `authorization` | `Authorization: <auth_value>` |
+  | `aws_sigv4` | Per-request AWS SigV4 signature ([details](./mcp_aws_sigv4.md)) |
 
 - **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
 - **Static Headers**: Optional map of header key/value pairs to include every request to the MCP server.
@@ -256,6 +272,16 @@ mcp_servers:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # AWS SigV4 for Bedrock AgentCore MCP servers
+  agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_region_name: us-east-1
+    aws_service_name: bedrock-agentcore
 
   # Example with extra headers forwarding
   github_mcp:

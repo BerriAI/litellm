@@ -54,6 +54,12 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_status": "/videos/{video_id}",
     "avideo_content": "/videos/{video_id}/content",
     "avideo_remix": "/videos/{video_id}/remix",
+    "avideo_create_character": "/videos/characters",
+    "avideo_get_character": "/videos/characters/{character_id}",
+    "avideo_edit": "/videos/edits",
+    "avideo_extension": "/videos/extensions",
+    "acreate_realtime_client_secret": "/realtime/client_secrets",
+    "arealtime_calls": "/realtime/calls",
     "acreate_container": "/containers",
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
@@ -164,13 +170,28 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
+        "acreate_realtime_client_secret",
+        "arealtime_calls",
         "_aresponses_websocket",  # private function for responses WebSocket mode
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",
         "allm_passthrough_route",
+        "acreate_batch",
+        "aretrieve_batch",
+        "alist_batches",
+        "afile_content",
+        "afile_retrieve",
+        "acreate_fine_tuning_job",
+        "acancel_fine_tuning_job",
+        "alist_fine_tuning_jobs",
+        "aretrieve_fine_tuning_job",
         "avector_store_search",
         "avector_store_create",
+        "avector_store_retrieve",
+        "avector_store_list",
+        "avector_store_update",
+        "avector_store_delete",
         "avector_store_file_create",
         "avector_store_file_list",
         "avector_store_file_retrieve",
@@ -184,6 +205,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "avideo_status",
         "avideo_content",
         "avideo_remix",
+        "avideo_create_character",
+        "avideo_get_character",
+        "avideo_edit",
+        "avideo_extension",
         "acreate_container",
         "alist_containers",
         "aretrieve_container",
@@ -203,6 +228,8 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "aget_interaction",
         "adelete_interaction",
         "acancel_interaction",
+        "asend_message",
+        "call_mcp_tool",
         "acancel_batch",
         "afile_delete",
         "acreate_eval",
@@ -296,18 +323,26 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "aget_run",
             "acancel_run",
             "adelete_run",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
             if model and llm_router:
                 try:
                     # Try to get deployment credentials for this model
-                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+                    deployment_creds = llm_router.get_deployment_credentials(
+                        model_id=model
+                    )
                     if not deployment_creds:
                         # Try by model group name
-                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        deployment = llm_router.get_deployment_by_model_group_name(
+                            model_group_name=model
+                        )
                         if deployment and deployment.litellm_params:
-                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+                            deployment_creds = deployment.litellm_params.model_dump(
+                                exclude_none=True
+                            )
 
                     # If we found credentials, merge them into data (but don't override user-provided values)
                     if deployment_creds:
@@ -343,6 +378,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
             "avector_store_file_list",
             "avector_store_file_retrieve",
             "avector_store_file_content",
@@ -422,8 +461,13 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "avideo_create_character",
+                "avideo_get_character",
+                "avideo_edit",
+                "avideo_extension",
             ]:
-                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
+                # try router first to allow for multi-deployment load balancing
                 try:
                     return getattr(llm_router, f"{route_type}")(**data)
                 except Exception:
@@ -433,7 +477,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
                 )
-                
+
                 result = route_a2a_agent_request(data, route_type)
                 if result is not None:
                     return result
