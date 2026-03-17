@@ -83,7 +83,26 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        asyncio.create_task(self.periodic_flush())
+        self._flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
+
+    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+        """Start the periodic flush task only when an event loop is already running."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            verbose_logger.debug(
+                "Langsmith logger init: no running event loop, skipping periodic flush task startup"
+            )
+            return None
+
+        return loop.create_task(self.periodic_flush())
+
+    def _ensure_periodic_flush_task(self) -> None:
+        # This helper is intentionally synchronous. In asyncio's cooperative
+        # execution model, there is no await between the check and assignment,
+        # so one caller cannot interleave here and create a duplicate task.
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = self._start_periodic_flush_task()
 
     def get_credentials_from_env(
         self,
@@ -255,6 +274,7 @@ class LangsmithLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self._ensure_periodic_flush_task()
             sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample = random.random()
             if random_sample > sampling_rate:
@@ -296,17 +316,18 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
-        random_sample = random.random()
-        if random_sample > sampling_rate:
-            verbose_logger.info(
-                "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                    sampling_rate, random_sample
-                )
-            )
-            return  # Skip logging
-        verbose_logger.info("Langsmith Failure Event Logging!")
         try:
+            self._ensure_periodic_flush_task()
+            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
+            random_sample = random.random()
+            if random_sample > sampling_rate:
+                verbose_logger.info(
+                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                        sampling_rate, random_sample
+                    )
+                )
+                return  # Skip logging
+            verbose_logger.info("Langsmith Failure Event Logging!")
             credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
             data = self._prepare_log_data(
                 kwargs=kwargs,
