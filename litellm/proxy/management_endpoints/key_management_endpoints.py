@@ -2107,8 +2107,6 @@ async def update_key_fn(
                 llm_router=llm_router,
             )
 
-            # Set Management Endpoint Metadata Fields
-
         # Validate MCP servers in object_permission against the effective team
         if data.object_permission is not None:
             effective_team_obj = team_obj

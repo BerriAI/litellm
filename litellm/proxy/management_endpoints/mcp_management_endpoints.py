@@ -709,7 +709,7 @@ if MCP_AVAILABLE:
         ```
         """
 
-        # If team_id is provided, return team-scoped servers + allow_all_keys servers
+        # If team_id is provided, return only team-scoped servers (allow_all_keys servers are globally accessible at request time)
         is_restricted_virtual_key = _is_restricted_virtual_key_request(
             user_api_key_dict
         )
@@ -773,10 +773,6 @@ if MCP_AVAILABLE:
                     for server in servers:
                         if server.server_id not in aggregated_servers:
                             aggregated_servers[server.server_id] = server
-
-                redacted_mcp_servers = _redact_mcp_credentials_list(
-                    aggregated_servers.values()
-                )
 
                 redacted_mcp_servers = _redact_mcp_credentials_list(
                     aggregated_servers.values()
