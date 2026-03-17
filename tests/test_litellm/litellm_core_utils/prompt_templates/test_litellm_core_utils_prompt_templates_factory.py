@@ -1,4 +1,4 @@
-import json
+import base64
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    anthropic_messages_pt,
     ollama_pt,
 )
 
@@ -1590,3 +1591,89 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     # Verify $defs have been removed (Bedrock doesn't support them)
     tool_schema = result[0]["toolSpec"].get("inputSchema", {}).get("json", {})
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
+
+
+def test_anthropic_messages_pt_file_block_preserves_cache_control():
+    """
+    Test that cache_control on file-type content blocks is preserved
+    when translating to Anthropic message format.
+    Regression test for https://github.com/BerriAI/litellm/issues/23873
+    """
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 fake pdf content").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "document.pdf",
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize this document.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 1
+    content_blocks = result[0]["content"]
+    assert len(content_blocks) == 2
+
+    file_block = content_blocks[0]
+    assert file_block["type"] == "document"
+    assert "cache_control" in file_block, (
+        "cache_control should be preserved on file/document content blocks"
+    )
+    assert file_block["cache_control"]["type"] == "ephemeral"
+
+    text_block = content_blocks[1]
+    assert text_block["type"] == "text"
+    assert "cache_control" in text_block
+    assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_anthropic_messages_pt_file_block_without_cache_control():
+    """
+    Test that file blocks without cache_control still work correctly.
+    """
+    import base64
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 fake").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "doc.pdf",
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 1
+    file_block = result[0]["content"][0]
+    assert file_block["type"] == "document"
+    assert "cache_control" not in file_block
