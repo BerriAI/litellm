@@ -1,13 +1,11 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# File Search in the Responses API — E2E Testing Guide
+# File Search in the Responses API
 
 LiteLLM now supports `file_search` in the Responses API across both:
 - providers that support it natively (like OpenAI / Azure), and
 - providers that do not (like Anthropic, Bedrock, and other non-native providers) via emulation.
-
-This page is both a quick blog-style overview and an end-to-end implementation guide.
 
 ## What this is
 
