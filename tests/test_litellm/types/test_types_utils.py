@@ -304,3 +304,52 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_usage_openrouter_cache_tokens_from_prompt_tokens_details():
+    """OpenRouter returns cache token counts in prompt_tokens_details (OpenAI format).
+    Usage.__init__ must map them to the Anthropic-style private fields so that cost
+    calculations and the Anthropic pass-through streaming adapter see correct values."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    # Simulate what OpenRouter sends in the final streaming chunk
+    usage = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=17000,
+            cache_write_tokens=400,
+        ),
+    )
+
+    # Private Anthropic-style fields must be populated from prompt_tokens_details
+    assert usage._cache_read_input_tokens == 17000
+    assert usage._cache_creation_input_tokens == 400
+
+    # When Anthropic native params are provided they must take precedence over
+    # prompt_tokens_details so existing callers are not broken.
+    usage_native = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        cache_read_input_tokens=999,
+        cache_creation_input_tokens=888,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=17000,
+            cache_write_tokens=400,
+        ),
+    )
+    assert usage_native._cache_read_input_tokens == 999
+    assert usage_native._cache_creation_input_tokens == 888
+
+    # cache_write_tokens must not appear in serialised output when absent
+    usage_no_writes = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=50),
+    )
+    dumped = usage_no_writes.model_dump()
+    ptd = dumped.get("prompt_tokens_details", {})
+    assert "cache_write_tokens" not in ptd

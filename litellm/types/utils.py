@@ -1493,6 +1493,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
 
 
 class ServerToolUse(BaseModel):
