@@ -5,62 +5,102 @@ sidebar_label: Overview
 
 import NavigationCards from '@site/src/components/NavigationCards';
 
-**Guides** are focused references for specific LiteLLM SDK features and proxy configuration options. Each guide is self-contained — jump to any topic without reading the others first.
+**Guides** are focused references organized by the job you are trying to do with LiteLLM: make requests, use tools, handle media, manage context, or operate the gateway safely.
 
-> Looking for step-by-step integration walkthroughs? See [Tutorials →](/docs/tutorials)
+> New to LiteLLM or not sure whether you need the SDK or Gateway path first? Start at [Learn →](/docs/learn)
 
 ---
 
-## Core Features
+## Start Here
 
 <NavigationCards
-columns={2}
+columns={3}
 items={[
   {
-    icon: "⚡",
-    title: "Completion Basics",
-    description: "Streaming, function calling, JSON mode, vision, audio, and more.",
-    to: "/docs/guides/completion_basics",
+    icon: "🐍",
+    title: "SDK Quickstart",
+    description: "Install LiteLLM, make your first call, then branch into feature guides.",
+    to: "/docs/learn/sdk_quickstart",
   },
   {
-    icon: "📥",
-    title: "Documents, Images & Messages",
-    description: "Document understanding, image generation, message trimming, and sanitization.",
-    to: "/docs/guides/input_output_handling",
+    icon: "🖥️",
+    title: "Gateway Quickstart",
+    description: "Start the proxy, add keys, then move into proxy-specific guides.",
+    to: "/docs/learn/gateway_quickstart",
   },
   {
-    icon: "🔄",
-    title: "Prompt Optimization",
-    description: "Prompt caching and prompt formatting for better performance.",
-    to: "/docs/guides/prompt_optimization",
-  },
-  {
-    icon: "🤖",
-    title: "AI Capabilities",
-    description: "Web search, code interpreter, knowledge base, and more.",
-    to: "/docs/guides/ai_capabilities",
+    icon: "🛠️",
+    title: "Need Walkthroughs?",
+    description: "Use Tutorials for end-to-end integrations instead of feature references.",
+    to: "/docs/tutorials",
   },
 ]}
 />
 
 ---
 
-## Configuration & Cost
+## Build With LiteLLM
 
 <NavigationCards
-columns={2}
+columns={3}
+items={[
+  {
+    icon: "⚡",
+    title: "Core Requests",
+    description: "Streaming, batching, structured outputs, and reasoning behavior.",
+    to: "/docs/guides/core_request_response_patterns",
+  },
+  {
+    icon: "🛠️",
+    title: "Tool Calling",
+    description: "Function calling, web tools, interception patterns, computer use, code interpreter, and tool-call hygiene.",
+    to: "/docs/guides/tools_integrations",
+  },
+  {
+    icon: "🖼️",
+    title: "Multimodal I/O",
+    description: "Vision, audio, PDFs, image generation, and video generation.",
+    to: "/docs/guides/multimodal_io",
+  },
+  {
+    icon: "📚",
+    title: "Retrieval & Knowledge",
+    description: "Vector stores, file search, citations, and knowledge-base routing.",
+    to: "/docs/guides/retrieval_knowledge",
+  },
+  {
+    icon: "🧠",
+    title: "Prompts & Context",
+    description: "Prompt caching, trimming, formatting, assistant prefill, and predicted outputs.",
+    to: "/docs/guides/prompts_context",
+  },
+]}
+/>
+
+---
+
+## Operate & Extend
+
+<NavigationCards
+columns={3}
 items={[
   {
     icon: "🎛️",
-    title: "Models & Configuration",
-    description: "Fine-tuned models, security settings, and adapters.",
-    to: "/docs/guides/models_configuration",
+    title: "Compatibility & Extensibility",
+    description: "Provider-specific params, model aliases, fine-tuned models, and adapters.",
+    to: "/docs/guides/compatibility_extensibility",
   },
   {
-    icon: "💰",
-    title: "Budgets & Cost",
-    description: "Set spend limits and track costs across teams and deployments.",
-    to: "/docs/guides/budgets_cost",
+    icon: "🧪",
+    title: "Reliability, Testing & Spend",
+    description: "Retries, fallbacks, mock responses, and budget controls.",
+    to: "/docs/guides/reliability_testing_spend",
+  },
+  {
+    icon: "🔒",
+    title: "Security & Network",
+    description: "SSL, custom CA bundles, HTTP proxy settings, and per-service verification.",
+    to: "/docs/guides/security_network",
   },
 ]}
 />

@@ -18,11 +18,6 @@ const sidebars = {
     { type: "doc", id: "integrations/index" },
     { type: "doc", id: "integrations/community" },
     {
-      type: "doc",
-      id: "integrations/websearch_interception",
-      label: "Web Search Integration"
-    },
-    {
       type: "category",
       label: "Observability",
       link: { type: "doc", id: "integrations/observability_index" },
@@ -1140,6 +1135,16 @@ const learnSidebar = {
   learnSidebar: [
     // ── Landing page ──────────────────────────────────────────────────
     { type: "doc", id: "learn/index", label: "Learn" },
+    {
+      type: "category",
+      label: "Start Here",
+      collapsible: true,
+      collapsed: false,
+      items: [
+        "learn/sdk_quickstart",
+        "learn/gateway_quickstart",
+      ],
+    },
 
     // ── Guides ────────────────────────────────────────────────────────
     {
@@ -1151,116 +1156,149 @@ const learnSidebar = {
       items: [
         {
           type: "category",
-          label: "Completion Basics",
+          label: "Core Requests",
           collapsible: true,
           collapsed: false,
           link: {
             type: "generated-index",
-            title: "Completion Basics",
-            description: "Streaming, function calling, JSON mode, vision, audio, and more",
-            slug: "/guides/completion_basics"
+            title: "Core Requests",
+            description: "Streaming, batching, structured outputs, and reasoning behavior",
+            slug: "/guides/core_request_response_patterns"
           },
           items: [
             "completion/stream",
-            "completion/function_call",
-            "completion/json_mode",
-            "completion/vision",
-            "completion/audio",
             "completion/batching",
-            "completion/prefix",
-            "completion/predict_outputs",
-            "completion/provider_specific_params",
+            "completion/json_mode",
             "reasoning_content",
-            "completion/drop_params",
-            "completion/model_alias",
-            "completion/mock_requests",
-            "completion/reliable_completions",
           ],
         },
         {
           type: "category",
-          label: "Documents, Images & Messages",
+          label: "Tool Calling",
           collapsible: true,
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Documents, Images & Messages",
-            description: "Document understanding, image generation, message trimming, and sanitization",
-            slug: "/guides/input_output_handling"
+            title: "Tool Calling",
+            description: "Function calling, web tools, interception patterns, computer use, code interpreter, and tool-call hygiene",
+            slug: "/guides/tools_integrations"
           },
           items: [
-            "completion/document_understanding",
-            "completion/image_generation_chat",
-            "completion/message_trimming",
+            "completion/function_call",
+            "completion/web_search",
+            {
+              type: "doc",
+              id: "integrations/websearch_interception",
+              label: "Web Search Interception",
+            },
+            "completion/web_fetch",
+            "completion/computer_use",
+            "guides/code_interpreter",
             "completion/message_sanitization",
           ],
         },
         {
           type: "category",
-          label: "Prompt Optimization",
+          label: "Multimodal I/O",
           collapsible: true,
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Prompt Optimization",
-            description: "Prompt caching and prompt formatting",
-            slug: "/guides/prompt_optimization"
+            title: "Multimodal I/O",
+            description: "Vision, audio, PDFs, image generation, and video generation",
+            slug: "/guides/multimodal_io"
           },
           items: [
+            "completion/vision",
+            "completion/audio",
+            "completion/document_understanding",
+            "completion/image_generation_chat",
+            "proxy/veo_video_generation",
+          ],
+        },
+        {
+          type: "category",
+          label: "Retrieval & Knowledge",
+          collapsible: true,
+          collapsed: true,
+          link: {
+            type: "generated-index",
+            title: "Retrieval & Knowledge",
+            description: "Vector stores, file search, citations, and knowledge-base routing",
+            slug: "/guides/retrieval_knowledge"
+          },
+          items: [
+            "completion/knowledgebase",
+          ],
+        },
+        {
+          type: "category",
+          label: "Prompts & Context",
+          collapsible: true,
+          collapsed: true,
+          link: {
+            type: "generated-index",
+            title: "Prompts & Context",
+            description: "Prompt caching, trimming, formatting, assistant prefill, and predicted outputs",
+            slug: "/guides/prompts_context"
+          },
+          items: [
+            "completion/prefix",
+            "completion/predict_outputs",
+            "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",
           ],
         },
         {
           type: "category",
-          label: "AI Capabilities",
+          label: "Compatibility & Extensibility",
           collapsible: true,
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "AI Capabilities",
-            description: "Web search, code interpreter, knowledge base, and more",
-            slug: "/guides/ai_capabilities"
+            title: "Compatibility & Extensibility",
+            description: "Provider-specific params, model aliases, fine-tuned models, and adapters",
+            slug: "/guides/compatibility_extensibility"
           },
           items: [
-            "completion/web_search",
-            "completion/web_fetch",
-            "completion/computer_use",
-            "completion/knowledgebase",
-            "guides/code_interpreter",
-            "proxy/veo_video_generation",
-          ],
-        },
-        {
-          type: "category",
-          label: "Models & Configuration",
-          collapsible: true,
-          collapsed: true,
-          link: {
-            type: "generated-index",
-            title: "Models & Configuration",
-            description: "Fine-tuned models, security settings, and adapters",
-            slug: "/guides/models_configuration"
-          },
-          items: [
+            "completion/provider_specific_params",
+            "completion/drop_params",
+            "completion/model_alias",
             "guides/finetuned_models",
-            "guides/security_settings",
             "extras/creating_adapters",
           ],
         },
         {
           type: "category",
-          label: "Budgets & Cost",
+          label: "Reliability, Testing & Spend",
           collapsible: true,
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Budgets & Cost",
-            description: "Set spend limits and track costs",
-            slug: "/guides/budgets_cost"
+            title: "Reliability, Testing & Spend",
+            description: "Retries, fallbacks, mock responses, and budget controls",
+            slug: "/guides/reliability_testing_spend"
           },
           items: [
+            "completion/mock_requests",
+            "completion/reliable_completions",
             "budget_manager",
+          ],
+        },
+        {
+          type: "category",
+          label: "Security & Network",
+          collapsible: true,
+          collapsed: true,
+          link: {
+            type: "generated-index",
+            title: "Security & Network",
+            description: "SSL, custom CA bundles, HTTP proxy settings, and per-service verification",
+            slug: "/guides/security_network"
+          },
+          items: [
+            "guides/security_settings",
           ],
         },
       ],
