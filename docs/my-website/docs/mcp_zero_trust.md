@@ -65,15 +65,81 @@ export MCP_JWT_SIGNING_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
 export MCP_JWT_SIGNING_KEY="file:///secrets/mcp-signing-key.pem"
 ```
 
-### 3. Configure your MCP server to verify tokens
+### 3. Build a verified MCP server with FastMCP
 
-Point your MCP server at LiteLLM's OIDC discovery endpoint:
+[FastMCP](https://gofastmcp.com) has a built-in `JWTVerifier` that fetches LiteLLM's JWKS automatically, handles key rotation, and enforces `iss`/`aud`/`exp` — zero boilerplate.
 
+**Install:**
+```bash
+pip install fastmcp PyJWT cryptography
 ```
-https://<your-litellm>/.well-known/openid-configuration
+
+**`weather_server.py`:**
+```python
+from fastmcp import FastMCP, Context
+from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+LITELLM_BASE_URL = "https://my-litellm.example.com"
+
+# Point JWTVerifier at LiteLLM's JWKS endpoint.
+# It auto-fetches and caches the RSA public key — no key material to manage.
+auth = JWTVerifier(
+    jwks_uri=f"{LITELLM_BASE_URL}/.well-known/jwks.json",
+    issuer=LITELLM_BASE_URL,   # must match MCPJWTSigner `issuer:` in config.yaml
+    audience="mcp",            # must match MCPJWTSigner `audience:`
+    algorithm="RS256",
+)
+
+mcp = FastMCP("weather-server", auth=auth)
+
+
+@mcp.tool()
+async def get_weather(city: str, ctx: Context) -> str:
+    """Return weather for a city. Caller identity comes from the verified JWT."""
+    caller = ctx.client_id  # = JWT `sub` claim (user_id or apikey hash)
+    await ctx.info(f"Request from {caller}")
+    return f"Weather in {city}: sunny, 72°F"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="http", host="0.0.0.0", port=8000)
 ```
 
-Most JWT middleware (e.g. `python-jose`, `jsonwebtoken`, AWS Lambda authorizers) supports OIDC auto-discovery.
+`ctx.client_id` is populated from the JWT `sub` claim after verification — you get the caller's identity for free with no extra code.
+
+**Wire it into LiteLLM `config.yaml`:**
+```yaml title="config.yaml"
+mcp_servers:
+  - server_name: weather
+    url: http://localhost:8000/mcp
+    transport: http
+
+guardrails:
+  - guardrail_name: mcp-jwt-signer
+    litellm_params:
+      guardrail: mcp_jwt_signer
+      mode: pre_mcp_call
+      default_on: true
+      issuer: "https://my-litellm.example.com"
+      audience: "mcp"
+```
+
+**Run and test:**
+```bash
+# Terminal 1 — start the MCP server
+python weather_server.py
+
+# Terminal 2 — start LiteLLM
+litellm --config config.yaml
+
+# Terminal 3 — call through LiteLLM (JWT is injected automatically)
+curl -X POST http://localhost:4000/mcp/weather/call_tool \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "get_weather", "arguments": {"city": "San Francisco"}}'
+```
+
+LiteLLM signs the JWT, sends it to the weather server, and FastMCP verifies it in one round-trip. A request without a valid token gets a `401` back from FastMCP before any tool code runs.
 
 ## JWT Claims
 
@@ -89,8 +155,8 @@ Most JWT middleware (e.g. `python-jose`, `jsonwebtoken`, AWS Lambda authorizers)
 
 ## Limitations
 
-- **OpenAPI-backed MCP servers** (`spec_path` set) do not support hook header injection. Calls to these servers will fail with a 500 if `MCPJWTSigner` is active with `default_on: true`. Use SSE/HTTP transport MCP servers instead.
-- The keypair is **in-memory by default** — rotated on every restart unless `MCP_JWT_SIGNING_KEY` is set. MCP servers should re-fetch JWKS on verification failure (short JWKS cache TTL recommended).
+- **OpenAPI-backed MCP servers** (`spec_path` set) do not support hook header injection. When `MCPJWTSigner` is active, calls to these servers log a warning and the JWT header is skipped. Use SSE/HTTP transport MCP servers to get full JWT injection.
+- The keypair is **in-memory by default** — rotated on every restart unless `MCP_JWT_SIGNING_KEY` is set. FastMCP's `JWTVerifier` automatically re-fetches JWKS on key ID miss, so rotation is handled transparently.
 
 ## Related
 
