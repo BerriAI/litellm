@@ -11,7 +11,7 @@ echo "Starting security scans for LiteLLM..."
 install_trivy() {
     echo "Installing Trivy and required tools..."
     sudo apt-get update
-    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl
+    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl bsdmainutils
     wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
     echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
     sudo apt-get update
@@ -140,12 +140,14 @@ run_grype_scans() {
         "GHSA-34x7-hfp2-rc4v" # node-tar hardlink path traversal - not applicable, tar CLI not exposed in application code
         "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
         "GHSA-8rrh-rw8j-w5fx" # wheel is from chainguard and will be handled by then TODO: Remove this after Chainguard updates the wheel
-        "CVE-2025-59465" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-55131" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
-        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59465" # Node only used for Admin UI build/prisma
+        "CVE-2025-55131" # Node only used for Admin UI build/prisma
+        "CVE-2025-59466" # Node only used for Admin UI build/prisma
+        "CVE-2025-55130" # Node only used for Admin UI build/prisma
+        "CVE-2025-59467" # Node only used for Admin UI build/prisma
+        "CVE-2026-21637" # Node only used for Admin UI build/prisma
+        "CVE-2025-55132" # Node only used for Admin UI build/prisma
+        "GHSA-hx9q-6w63-j58v" # orjson dumps recursion; allowlisted
         "CVE-2025-15281" # No fix available yet
         "CVE-2026-0865" # No fix available yet
         "CVE-2025-15282" # No fix available yet
@@ -155,6 +157,12 @@ run_grype_scans() {
         "CVE-2025-12781" # No fix available yet
         "CVE-2025-11468" # No fix available yet
         "CVE-2026-1299" # Python 3.13 email module header injection - not applicable, LiteLLM doesn't use BytesGenerator for email serialization
+        "CVE-2026-0775" # npm cli incorrect permission assignment - no fix available yet, npm is only used at build/prisma-generate time
+        "GHSA-3ppc-4f35-3m26" # minimatch ReDoS via repeated wildcards - from nodejs_wheel bundled npm, not used in application runtime code
+        "GHSA-83g3-92jg-28cx" # tar arbitrary file read/write via hardlink - from nodejs_wheel bundled npm, not used in application runtime code
+        "CVE-2026-25639" # axios - full fix requires 1.x major version bump; pinned to >=0.30.2 to clear other axios CVEs, upgrade to 1.x in follow-up
+        "CVE-2026-2297" # Python 3.13 SourcelessFileLoader audit hook bypass - no fix available in base image
+        "GHSA-qffp-2rhf-9h96" # tar hardlink path traversal - from nodejs_wheel bundled npm, not used in application runtime code
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

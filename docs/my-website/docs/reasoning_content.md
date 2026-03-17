@@ -592,6 +592,14 @@ Expected Response
 </TabItem>
 </Tabs>
 
+:::tip gpt-5.4: reasoning_effort + function tools
+
+LiteLLM drops `reasoning_effort` from `gpt-5.4` requests to `litellm.completion()` that include tools, since that combination is supported in the Responses API.
+
+If you need reasoning **and** tools together, use `openai/responses/gpt-5.4` to route through the Responses API instead. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+:::
+
 ## OpenAI Responses API - Auto-Summary Control
 
 When using OpenAI Responses API models (like `gpt-5`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.
@@ -640,6 +648,25 @@ model_list:
   - model_name: gpt-5-mini
     litellm_params:
       model: openai/responses/gpt-5-mini
+```
+
+**Per-model configuration** (recommended when using Open WebUI or clients that cannot set `extra_body`):
+
+```yaml
+model_list:
+  - model_name: gpt-5.1
+    litellm_params:
+      model: openai/gpt-5.1
+      # String format - uses reasoning_auto_summary for summary when set
+      reasoning_effort: "high"
+    model_info:
+      mode: responses  # if using Responses API bridge
+
+  - model_name: gpt-5.1-with-summary
+    litellm_params:
+      model: openai/gpt-5.1
+      # Dict format - explicit control over effort and summary
+      reasoning_effort: {"effort": "high", "summary": "detailed"}
 ```
 
 </TabItem>

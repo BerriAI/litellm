@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Divider, Button, TextInput } from "@tremor/react";
-import { Typography, Spin, Switch, Select } from "antd";
-import { getDefaultTeamSettings, updateDefaultTeamSettings, modelAvailableCall } from "./networking";
+import { Card, Button, InputNumber, Typography, Spin, Select, Tag, Row, Col } from "antd";
+import { EditOutlined, SaveOutlined } from "@ant-design/icons";
+import { getDefaultTeamSettings, updateDefaultTeamSettings } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+
+const { Title, Text } = Typography;
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -13,18 +15,82 @@ interface TeamSSOSettingsProps {
   userRole: string;
 }
 
-const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, userRole }) => {
+const PERMISSION_OPTIONS = [
+  "/key/generate",
+  "/key/update",
+  "/key/delete",
+  "/key/regenerate",
+  "/key/service-account/generate",
+  "/key/{key_id}/regenerate",
+  "/key/block",
+  "/key/unblock",
+  "/key/bulk_update",
+  "/key/{key_id}/reset_spend",
+];
+
+interface SettingRowProps {
+  label: string;
+  description: string;
+  isEditing: boolean;
+  viewContent: React.ReactNode;
+  editContent: React.ReactNode;
+}
+
+const SettingRow: React.FC<SettingRowProps> = ({ label, description, isEditing, viewContent, editContent }) => (
+  <Row className="py-5 border-b border-gray-100 last:border-0">
+    <Col span={8} className="pr-6">
+      <div className="text-sm font-semibold text-gray-900">{label}</div>
+      <div className="text-xs text-gray-500 mt-1 leading-relaxed">{description}</div>
+    </Col>
+    <Col span={16} className="flex items-center">
+      <div className="w-full">{isEditing ? editContent : viewContent}</div>
+    </Col>
+  </Row>
+);
+
+const NotSet = () => <Text className="text-gray-400 italic">Not set</Text>;
+
+const renderTags = (values: string[], displayFn?: (v: string) => string) => {
+  if (!values || values.length === 0) return <NotSet />;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {values.map((v) => (
+        <Tag key={v} color="blue">
+          {displayFn ? displayFn(v) : v}
+        </Tag>
+      ))}
+    </div>
+  );
+};
+
+interface SettingsValues {
+  max_budget: number | null;
+  budget_duration: string | null;
+  tpm_limit: number | null;
+  rpm_limit: number | null;
+  models: string[];
+  team_member_permissions: string[];
+}
+
+const DEFAULT_VALUES: SettingsValues = {
+  max_budget: null,
+  budget_duration: null,
+  tpm_limit: null,
+  rpm_limit: null,
+  models: [],
+  team_member_permissions: [],
+};
+
+const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState<boolean>(true);
-  const [settings, setSettings] = useState<any>(null);
+  const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [editedValues, setEditedValues] = useState<any>({});
+  const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [saving, setSaving] = useState<boolean>(false);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const { Paragraph } = Typography;
-  const { Option } = Select;
+  const [fetchError, setFetchError] = useState<boolean>(false);
 
   useEffect(() => {
-    const fetchTeamSSOSettings = async () => {
+    const fetchSettings = async () => {
       if (!accessToken) {
         setLoading(false);
         return;
@@ -32,39 +98,30 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
 
       try {
         const data = await getDefaultTeamSettings(accessToken);
-        setSettings(data);
-        setEditedValues(data.values || {});
-
-        // Fetch available models
-        if (accessToken) {
-          try {
-            const modelResponse = await modelAvailableCall(accessToken, userID, userRole);
-            if (modelResponse && modelResponse.data) {
-              const modelNames = modelResponse.data.map((model: { id: string }) => model.id);
-              setAvailableModels(modelNames);
-            }
-          } catch (error) {
-            console.error("Error fetching available models:", error);
-          }
-        }
+        const fetched = { ...DEFAULT_VALUES, ...(data.values || {}) };
+        setValues(fetched);
+        setEditedValues(fetched);
       } catch (error) {
         console.error("Error fetching team SSO settings:", error);
+        setFetchError(true);
         NotificationsManager.fromBackend("Failed to fetch team settings");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchTeamSSOSettings();
+    fetchSettings();
   }, [accessToken]);
 
-  const handleSaveSettings = async () => {
+  const handleSave = async () => {
     if (!accessToken) return;
 
     setSaving(true);
     try {
       const updatedSettings = await updateDefaultTeamSettings(accessToken, editedValues);
-      setSettings({ ...settings, values: updatedSettings.settings });
+      const newValues = { ...DEFAULT_VALUES, ...(updatedSettings.settings || {}) };
+      setValues(newValues);
+      setEditedValues(newValues);
       setIsEditing(false);
       NotificationsManager.success("Default team settings updated successfully");
     } catch (error) {
@@ -75,129 +132,13 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
     }
   };
 
-  const handleTextInputChange = (key: string, value: any) => {
-    setEditedValues((prev: Record<string, any>) => ({
-      ...prev,
-      [key]: value,
-    }));
+  const handleCancel = () => {
+    setIsEditing(false);
+    setEditedValues(values);
   };
 
-  const renderEditableField = (key: string, property: any, value: any) => {
-    const type = property.type;
-
-    if (key === "budget_duration") {
-      return (
-        <BudgetDurationDropdown
-          value={editedValues[key] || null}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        />
-      );
-    } else if (type === "boolean") {
-      return (
-        <div className="mt-2">
-          <Switch checked={!!editedValues[key]} onChange={(checked) => handleTextInputChange(key, checked)} />
-        </div>
-      );
-    } else if (type === "array" && property.items?.enum) {
-      return (
-        <Select
-          mode="multiple"
-          style={{ width: "100%" }}
-          value={editedValues[key] || []}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          {property.items.enum.map((option: string) => (
-            <Option key={option} value={option}>
-              {option}
-            </Option>
-          ))}
-        </Select>
-      );
-    } else if (key === "models") {
-      return (
-        <ModelSelect
-          value={editedValues[key] || []}
-          onChange={(value) => handleTextInputChange(key, value)}
-          context="global"
-          style={{ width: "100%" }}
-          options={{
-            includeSpecialOptions: true,
-          }}
-        />
-      );
-    } else if (type === "string" && property.enum) {
-      return (
-        <Select
-          style={{ width: "100%" }}
-          value={editedValues[key] || ""}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          {property.enum.map((option: string) => (
-            <Option key={option} value={option}>
-              {option}
-            </Option>
-          ))}
-        </Select>
-      );
-    } else {
-      return (
-        <TextInput
-          value={editedValues[key] !== undefined ? String(editedValues[key]) : ""}
-          onChange={(e) => handleTextInputChange(key, e.target.value)}
-          placeholder={property.description || ""}
-          className="mt-2"
-        />
-      );
-    }
-  };
-
-  const renderValue = (key: string, value: any): JSX.Element => {
-    if (value === null || value === undefined) return <span className="text-gray-400">Not set</span>;
-
-    if (key === "budget_duration") {
-      return <span>{getBudgetDurationLabel(value)}</span>;
-    }
-
-    if (typeof value === "boolean") {
-      return <span>{value ? "Enabled" : "Disabled"}</span>;
-    }
-
-    if (key === "models" && Array.isArray(value)) {
-      if (value.length === 0) return <span className="text-gray-400">None</span>;
-
-      return (
-        <div className="flex flex-wrap gap-2 mt-1">
-          {value.map((model, index) => (
-            <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-              {getModelDisplayName(model)}
-            </span>
-          ))}
-        </div>
-      );
-    }
-
-    if (typeof value === "object") {
-      if (Array.isArray(value)) {
-        if (value.length === 0) return <span className="text-gray-400">None</span>;
-
-        return (
-          <div className="flex flex-wrap gap-2 mt-1">
-            {value.map((item, index) => (
-              <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-                {typeof item === "object" ? JSON.stringify(item) : String(item)}
-              </span>
-            ))}
-          </div>
-        );
-      }
-
-      return <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">{JSON.stringify(value, null, 2)}</pre>;
-    }
-
-    return <span>{String(value)}</span>;
+  const update = <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => {
+    setEditedValues((prev) => ({ ...prev, [key]: value }));
   };
 
   if (loading) {
@@ -208,7 +149,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
     );
   }
 
-  if (!settings) {
+  if (fetchError) {
     return (
       <Card>
         <Text>No team settings available or you do not have permission to view them.</Text>
@@ -216,70 +157,166 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
     );
   }
 
-  // Dynamically render settings based on the schema
-  const renderSettings = () => {
-    const { values, field_schema } = settings;
-
-    if (!field_schema || !field_schema.properties) {
-      return <Text>No schema information available</Text>;
-    }
-
-    return Object.entries(field_schema.properties).map(([key, property]: [string, any]) => {
-      const value = values[key];
-      const displayName = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-
-      return (
-        <div key={key} className="mb-6 pb-6 border-b border-gray-200 last:border-0">
-          <Text className="font-medium text-lg">{displayName}</Text>
-          <Paragraph className="text-sm text-gray-500 mt-1">
-            {property.description || "No description available"}
-          </Paragraph>
-
-          {isEditing ? (
-            <div className="mt-2">{renderEditableField(key, property, value)}</div>
-          ) : (
-            <div className="mt-1 p-2 bg-gray-50 rounded">{renderValue(key, value)}</div>
-          )}
-        </div>
-      );
-    });
-  };
-
   return (
-    <Card>
-      <div className="flex justify-between items-center mb-4">
-        <Title className="text-xl">Default Team Settings</Title>
-        {!loading &&
-          settings &&
-          (isEditing ? (
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setIsEditing(false);
-                  setEditedValues(settings.values || {});
-                }}
-                disabled={saving}
-              >
+    <Card styles={{ body: { padding: 32 } }}>
+      {/* Header */}
+      <div className="flex justify-between items-start mb-2">
+        <div>
+          <Title level={3} className="m-0 text-gray-900">
+            Default Team Settings
+          </Title>
+          <Text className="text-gray-500 mt-1 block">
+            These settings will be applied by default when creating new teams.
+          </Text>
+        </div>
+        <div>
+          {isEditing ? (
+            <div className="flex gap-3">
+              <Button onClick={handleCancel} disabled={saving}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveSettings} loading={saving}>
+              <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>
                 Save Changes
               </Button>
             </div>
           ) : (
-            <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
-          ))}
+            <Button onClick={() => setIsEditing(true)} icon={<EditOutlined />}>
+              Edit Settings
+            </Button>
+          )}
+        </div>
       </div>
 
-      <Text>These settings will be applied by default when creating new teams.</Text>
+      <div className="mt-8">
+        {/* Budget & Rate Limits */}
+        <div className="mb-8">
+          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Budget & Rate Limits</div>
+          <div className="border-t border-gray-100">
+            <SettingRow
+              label="Max Budget"
+              description="Maximum budget (in USD) for new automatically created teams."
+              isEditing={isEditing}
+              viewContent={
+                values.max_budget != null ? <Text>${Number(values.max_budget).toLocaleString()}</Text> : <NotSet />
+              }
+              editContent={
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.max_budget}
+                  onChange={(v) => update("max_budget", v)}
+                  placeholder="Not set"
+                  prefix="$"
+                  min={0}
+                />
+              }
+            />
 
-      {settings?.field_schema?.description && (
-        <Paragraph className="mb-4 mt-2">{settings.field_schema.description}</Paragraph>
-      )}
-      <Divider />
+            <SettingRow
+              label="Budget Duration"
+              description="How frequently the team's budget resets."
+              isEditing={isEditing}
+              viewContent={
+                values.budget_duration ? <Text>{getBudgetDurationLabel(values.budget_duration)}</Text> : <NotSet />
+              }
+              editContent={
+                <BudgetDurationDropdown
+                  value={editedValues.budget_duration || null}
+                  onChange={(v) => update("budget_duration", v)}
+                  style={{ maxWidth: 320 }}
+                />
+              }
+            />
 
-      <div className="mt-4 space-y-4">{renderSettings()}</div>
+            <SettingRow
+              label="TPM Limit"
+              description="Maximum tokens per minute allowed across all models."
+              isEditing={isEditing}
+              viewContent={
+                values.tpm_limit != null ? <Text>{values.tpm_limit.toLocaleString()}</Text> : <NotSet />
+              }
+              editContent={
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.tpm_limit}
+                  onChange={(v) => update("tpm_limit", v)}
+                  placeholder="Not set"
+                  min={0}
+                />
+              }
+            />
+
+            <SettingRow
+              label="RPM Limit"
+              description="Maximum requests per minute allowed across all models."
+              isEditing={isEditing}
+              viewContent={
+                values.rpm_limit != null ? <Text>{values.rpm_limit.toLocaleString()}</Text> : <NotSet />
+              }
+              editContent={
+                <InputNumber
+                  className="w-full"
+                  style={{ maxWidth: 320 }}
+                  value={editedValues.rpm_limit}
+                  onChange={(v) => update("rpm_limit", v)}
+                  placeholder="Not set"
+                  min={0}
+                />
+              }
+            />
+          </div>
+        </div>
+
+        {/* Access & Permissions */}
+        <div className="mb-8">
+          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Access & Permissions</div>
+          <div className="border-t border-gray-100">
+            <SettingRow
+              label="Models"
+              description="Default list of models that new teams can access."
+              isEditing={isEditing}
+              viewContent={renderTags(values.models, getModelDisplayName)}
+              editContent={
+                <ModelSelect
+                  value={editedValues.models || []}
+                  onChange={(v) => update("models", v)}
+                  context="global"
+                  style={{ width: "100%" }}
+                  options={{ includeSpecialOptions: true }}
+                />
+              }
+            />
+
+            <SettingRow
+              label="Team Member Permissions"
+              description="Default permissions granted to members of newly created teams. /key/info and /key/health are always included."
+              isEditing={isEditing}
+              viewContent={renderTags(values.team_member_permissions)}
+              editContent={
+                <Select
+                  mode="multiple"
+                  style={{ width: "100%" }}
+                  value={editedValues.team_member_permissions || []}
+                  onChange={(v) => update("team_member_permissions", v)}
+                  placeholder="Select permissions"
+                  tagRender={({ label, closable, onClose }) => (
+                    <Tag color="blue" closable={closable} onClose={onClose} className="mr-1 mt-1 mb-1">
+                      {label}
+                    </Tag>
+                  )}
+                >
+                  {PERMISSION_OPTIONS.map((option) => (
+                    <Select.Option key={option} value={option}>
+                      {option}
+                    </Select.Option>
+                  ))}
+                </Select>
+              }
+            />
+          </div>
+        </div>
+      </div>
     </Card>
   );
 };

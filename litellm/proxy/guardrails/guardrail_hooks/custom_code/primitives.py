@@ -10,7 +10,11 @@ import re
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlparse
 
+import httpx
+
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -350,6 +354,228 @@ def get_url_domain(url: str) -> Optional[str]:
 
 
 # =============================================================================
+# HTTP Request Primitives (Async)
+# =============================================================================
+
+# Default timeout for HTTP requests (in seconds)
+_HTTP_DEFAULT_TIMEOUT = 30.0
+
+# Maximum allowed timeout (in seconds)
+_HTTP_MAX_TIMEOUT = 60.0
+
+
+def _http_error_response(error: str) -> Dict[str, Any]:
+    """Create a standardized error response for HTTP requests."""
+    return {
+        "status_code": 0,
+        "body": None,
+        "headers": {},
+        "success": False,
+        "error": error,
+    }
+
+
+def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
+    """Create a standardized success response from an httpx Response."""
+    parsed_body: Any
+    try:
+        parsed_body = response.json()
+    except (json.JSONDecodeError, ValueError):
+        parsed_body = response.text
+
+    return {
+        "status_code": response.status_code,
+        "body": parsed_body,
+        "headers": dict(response.headers),
+        "success": 200 <= response.status_code < 300,
+        "error": None,
+    }
+
+
+def _prepare_http_body(
+    body: Optional[Any],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Prepare body arguments for HTTP request - returns (json_body, data_body)."""
+    if body is None:
+        return None, None
+    if isinstance(body, dict):
+        return body, None
+    if isinstance(body, list):
+        return None, json.dumps(body)
+    if isinstance(body, str):
+        return None, body
+    return None, str(body)
+
+
+async def http_request(
+    url: str,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    body: Optional[Any] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Make an async HTTP request to an external service.
+
+    This function allows custom guardrails to call external APIs for
+    additional validation, content moderation, or data enrichment.
+
+    Uses LiteLLM's global cached AsyncHTTPHandler for connection pooling
+    and better performance.
+
+    Args:
+        url: The URL to request
+        method: HTTP method (GET, POST, PUT, DELETE, PATCH). Defaults to GET.
+        headers: Optional dict of HTTP headers
+        body: Optional request body (will be JSON-encoded if dict/list)
+        timeout: Optional timeout in seconds (default: 30, max: 60)
+
+    Returns:
+        Dict containing:
+            - status_code: HTTP status code
+            - body: Response body (parsed as JSON if possible, otherwise string)
+            - headers: Response headers as dict
+            - success: True if status code is 2xx
+            - error: Error message if request failed, None otherwise
+
+    Example:
+        # Simple GET request
+        response = await http_request("https://api.example.com/check")
+        if response["success"]:
+            data = response["body"]
+
+        # POST request with JSON body
+        response = await http_request(
+            "https://api.example.com/moderate",
+            method="POST",
+            headers={"Authorization": "Bearer token"},
+            body={"text": "content to check"}
+        )
+    """
+    # Validate URL
+    if not is_valid_url(url):
+        return _http_error_response(f"Invalid URL: {url}")
+
+    # Validate and normalize method
+    method = method.upper()
+    allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+    if method not in allowed_methods:
+        return _http_error_response(
+            f"Invalid HTTP method: {method}. Allowed: {', '.join(allowed_methods)}"
+        )
+
+    # Apply timeout limits
+    if timeout is None:
+        timeout = _HTTP_DEFAULT_TIMEOUT
+    else:
+        timeout = min(max(0.1, timeout), _HTTP_MAX_TIMEOUT)
+
+    # Get the global cached async HTTP client
+    client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.GuardrailCallback,
+        params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
+    )
+
+    try:
+        response = await _execute_http_request(
+            client, method, url, headers, body, timeout
+        )
+        return _http_success_response(response)
+
+    except httpx.TimeoutException as e:
+        verbose_proxy_logger.warning(f"Custom code http_request timeout: {e}")
+        return _http_error_response(f"Request timeout after {timeout}s")
+    except httpx.HTTPStatusError as e:
+        # Return the response even for non-2xx status codes
+        return _http_success_response(e.response)
+    except httpx.RequestError as e:
+        verbose_proxy_logger.warning(f"Custom code http_request error: {e}")
+        return _http_error_response(f"Request failed: {str(e)}")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Custom code http_request unexpected error: {e}")
+        return _http_error_response(f"Unexpected error: {str(e)}")
+
+
+async def _execute_http_request(
+    client: Any,
+    method: str,
+    url: str,
+    headers: Optional[Dict[str, str]],
+    body: Optional[Any],
+    timeout: float,
+) -> httpx.Response:
+    """Execute the HTTP request using the appropriate client method."""
+    json_body, data_body = _prepare_http_body(body)
+
+    if method == "GET":
+        return await client.get(url=url, headers=headers)
+    elif method == "POST":
+        return await client.post(
+            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
+        )
+    elif method == "PUT":
+        return await client.put(
+            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
+        )
+    elif method == "DELETE":
+        return await client.delete(
+            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
+        )
+    elif method == "PATCH":
+        return await client.patch(
+            url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
+        )
+    else:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+
+async def http_get(
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Make an async HTTP GET request.
+
+    Convenience wrapper around http_request for GET requests.
+
+    Args:
+        url: The URL to request
+        headers: Optional dict of HTTP headers
+        timeout: Optional timeout in seconds
+
+    Returns:
+        Same as http_request
+    """
+    return await http_request(url=url, method="GET", headers=headers, timeout=timeout)
+
+
+async def http_post(
+    url: str,
+    body: Optional[Any] = None,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Make an async HTTP POST request.
+
+    Convenience wrapper around http_request for POST requests.
+
+    Args:
+        url: The URL to request
+        body: Optional request body (will be JSON-encoded if dict/list)
+        headers: Optional dict of HTTP headers
+        timeout: Optional timeout in seconds
+
+    Returns:
+        Same as http_request
+    """
+    return await http_request(
+        url=url, method="POST", headers=headers, body=body, timeout=timeout
+    )
+
+
+# =============================================================================
 # Code Detection Primitives
 # =============================================================================
 
@@ -575,6 +801,10 @@ def get_custom_code_primitives() -> Dict[str, Any]:
         "is_valid_url": is_valid_url,
         "all_urls_valid": all_urls_valid,
         "get_url_domain": get_url_domain,
+        # HTTP (async)
+        "http_request": http_request,
+        "http_get": http_get,
+        "http_post": http_post,
         # Code detection
         "detect_code": detect_code,
         "detect_code_languages": detect_code_languages,

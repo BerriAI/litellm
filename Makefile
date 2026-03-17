@@ -1,7 +1,9 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-integration test-unit-helm \
+.PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
+	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
+	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
 	install-dev install-proxy-dev install-test-deps \
 	install-helm-unittest check-circular-imports check-import-safety
@@ -25,6 +27,16 @@ help:
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
 	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
+	@echo "  make test-unit-llms     - Run LLM provider tests (~225 files)"
+	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
+	@echo "  make test-unit-proxy-core - Run proxy auth+client+db+hooks tests (~52 files)"
+	@echo "  make test-unit-proxy-misc - Run proxy misc tests (~77 files)"
+	@echo "  make test-unit-integrations - Run integration tests (~60 files)"
+	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
+	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
+	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
+	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
+	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 
@@ -128,6 +140,38 @@ test:
 
 test-unit: install-test-deps
 	poetry run pytest tests/test_litellm -x -vv -n 4
+
+# Matrix test targets (matching CI workflow groups)
+test-unit-llms: install-test-deps
+	poetry run pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy-guardrails: install-test-deps
+	poetry run pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy-core: install-test-deps
+	poetry run pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy-misc: install-test-deps
+	poetry run pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+
+test-unit-integrations: install-test-deps
+	poetry run pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+
+test-unit-core-utils: install-test-deps
+	poetry run pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+
+test-unit-other: install-test-deps
+	poetry run pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+
+test-unit-root: install-test-deps
+	poetry run pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+
+# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+test-proxy-unit-a: install-test-deps
+	poetry run pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+
+test-proxy-unit-b: install-test-deps
+	poetry run pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
 
 test-integration:
 	poetry run pytest tests/ -k "not test_litellm"

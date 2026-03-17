@@ -26,6 +26,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -55,10 +56,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     # Beta header patterns that are not supported by Bedrock Invoke API
     # These will be filtered out to prevent 400 "invalid beta flag" errors
-    UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS = [
-        "advanced-tool-use",  # Bedrock Invoke doesn't support advanced-tool-use beta headers
-        "prompt-caching-scope",
-    ]
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -122,10 +119,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         self, anthropic_messages_request: Dict, model: Optional[str] = None
     ) -> None:
         """
-        Remove `ttl` field from cache_control in messages.
-        Bedrock doesn't support the ttl field in cache_control.
+        Remove unsupported fields from cache_control for Bedrock.
 
-        Update: Bedock supports `5m` and `1h` for Claude 4.5 models.
+        Bedrock only supports `type` and `ttl` in cache_control. It does NOT support:
+        - `scope` (e.g., "global") - always removed
+        - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
+
+        Processes both `system` and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -135,23 +135,36 @@ class AmazonAnthropicClaudeMessagesConfig(
         if model:
             is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
 
+        def _sanitize_cache_control(cache_control: dict) -> None:
+            if not isinstance(cache_control, dict):
+                return
+            # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
+            cache_control.pop("scope", None)
+            # Remove ttl for models that don't support it
+            if "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if is_claude_4_5 and ttl in ["5m", "1h"]:
+                    return
+                cache_control.pop("ttl", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize_cache_control(item["cache_control"])
+
+        # Process system (list of content blocks)
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        # Process messages
         if "messages" in anthropic_messages_request:
             for message in anthropic_messages_request["messages"]:
                 if isinstance(message, dict) and "content" in message:
                     content = message["content"]
                     if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and "cache_control" in item:
-                                cache_control = item["cache_control"]
-                                if (
-                                    isinstance(cache_control, dict)
-                                    and "ttl" in cache_control
-                                ):
-                                    ttl = cache_control["ttl"]
-                                    if is_claude_4_5 and ttl in ["5m", "1h"]:
-                                        continue
-
-                                    cache_control.pop("ttl", None)
+                        _process_content_list(content)
 
     def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
         """
@@ -184,6 +197,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4",  # Opus 4
             "sonnet-4",
             "sonnet_4",  # Sonnet 4
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -250,65 +271,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.5",
             "sonnet-4-5",
             "sonnet_4_5",
+            # Opus 4.6
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
+            # sonnet 4.6
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
-
-    def _filter_unsupported_beta_headers_for_bedrock(
-        self, model: str, beta_set: set
-    ) -> None:
-        """
-        Remove beta headers that are not supported on Bedrock for the given model.
-
-        Extended thinking beta headers are only supported on specific Claude 4+ models.
-        Advanced tool use headers are not supported on Bedrock Invoke API, but need to be
-        translated to Bedrock-specific headers for models that support tool search
-        (Claude Opus 4.5, Sonnet 4.5).
-        This prevents 400 "invalid beta flag" errors on Bedrock.
-
-        Note: Bedrock Invoke API fails with a 400 error when unsupported beta headers
-        are sent, returning: {"message":"invalid beta flag"}
-
-        Translation for models supporting tool search (Opus 4.5, Sonnet 4.5):
-        - advanced-tool-use-2025-11-20 -> tool-search-tool-2025-10-19 + tool-examples-2025-10-29
-
-        Args:
-            model: The model name
-            beta_set: The set of beta headers to filter in-place
-        """
-        beta_headers_to_remove = set()
-        has_advanced_tool_use = False
-
-        # 1. Filter out beta headers that are universally unsupported on Bedrock Invoke and track if advanced-tool-use header is present
-        for beta in beta_set:
-            for unsupported_pattern in self.UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS:
-                if unsupported_pattern in beta.lower():
-                    beta_headers_to_remove.add(beta)
-                    has_advanced_tool_use = True
-                    break
-
-        # 2. Filter out extended thinking headers for models that don't support them
-        extended_thinking_patterns = [
-            "extended-thinking",
-            "interleaved-thinking",
-        ]
-        if not self._supports_extended_thinking_on_bedrock(model):
-            for beta in beta_set:
-                for pattern in extended_thinking_patterns:
-                    if pattern in beta.lower():
-                        beta_headers_to_remove.add(beta)
-                        break
-
-        # Remove all filtered headers
-        for beta in beta_headers_to_remove:
-            beta_set.discard(beta)
-
-        # 3. Translate advanced-tool-use to Bedrock-specific headers for models that support tool search
-        # Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-        # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
-        if has_advanced_tool_use and self._supports_tool_search_on_bedrock(model):
-            beta_set.add("tool-search-tool-2025-10-19")
-            beta_set.add("tool-examples-2025-10-29")
 
     def _get_tool_search_beta_header_for_bedrock(
         self,
@@ -340,7 +315,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
     def _convert_output_format_to_inline_schema(
@@ -444,6 +419,16 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
+        # 5b. Strip `output_config` — Bedrock Invoke doesn't support it
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        anthropic_messages_request.pop("output_config", None)
+
+        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(anthropic_messages_request)
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
@@ -475,11 +460,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set=beta_set,
         )
 
-        # Filter out unsupported beta headers for Bedrock (e.g., advanced-tool-use, extended-thinking on non-Opus/Sonnet 4 models)
-        self._filter_unsupported_beta_headers_for_bedrock(
-            model=model,
-            beta_set=beta_set,
-        )
+        if "tool-search-tool-2025-10-19" in beta_set:
+            beta_set.add("tool-examples-2025-10-29")
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)

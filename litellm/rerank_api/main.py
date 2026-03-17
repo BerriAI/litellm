@@ -10,6 +10,7 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
+from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
@@ -29,7 +30,11 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage"]] = None,
+    custom_llm_provider: Optional[
+        Literal[
+            "cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"
+        ]
+    ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
@@ -85,6 +90,7 @@ def rerank(  # noqa: PLR0915
             "deepinfra",
             "fireworks_ai",
             "voyage",
+            "watsonx",
         ]
     ] = None,
     top_n: Optional[int] = None,
@@ -102,7 +108,6 @@ def rerank(  # noqa: PLR0915
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     user = kwargs.get("user", None)
     client = kwargs.get("client", None)
     try:
@@ -158,7 +163,8 @@ def rerank(  # noqa: PLR0915
 
         model_response = RerankResponse()
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(optional_rerank_params),
@@ -166,7 +172,6 @@ def rerank(  # noqa: PLR0915
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),
@@ -175,7 +180,10 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == litellm.LlmProviders.COHERE or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY:
+        if (
+            _custom_llm_provider == litellm.LlmProviders.COHERE
+            or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
+        ):
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -363,6 +371,7 @@ def rerank(  # noqa: PLR0915
                 max_chunks_per_doc=max_chunks_per_doc,
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
+                timeout=optional_params.timeout,
                 api_base=api_base,
                 extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
@@ -477,6 +486,33 @@ def rerank(  # noqa: PLR0915
                 or optional_params.api_base
                 or get_secret_str("VOYAGE_API_BASE")
             )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
+            credentials = IBMWatsonXMixin.get_watsonx_credentials(
+                optional_params=dict(optional_params),
+                api_key=dynamic_api_key,
+                api_base=dynamic_api_base,
+            )
+
+            api_key = credentials["api_key"]
+            api_base = credentials["api_base"]
+
+            if credentials.get("token") is not None:
+                optional_rerank_params["token"] = credentials["token"]
 
             response = base_llm_http_handler.rerank(
                 model=model,

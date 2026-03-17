@@ -20,6 +20,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
+  MessageOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -31,7 +32,7 @@ import {
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "@/utils/roles";
-import UsageIndicator from "@/components/usage_indicator";
+import UsageIndicator from "@/components/UsageIndicator";
 import { serverRootPath } from "@/components/networking";
 
 const { Sider } = Layout;
@@ -47,6 +48,7 @@ interface SidebarProps {
 
 interface MenuItemCfg {
   key: string;
+  newTab?: boolean;
   page: string; // legacy id; we map this to a path below
   label: string;
   roles?: string[];
@@ -64,7 +66,7 @@ const getBasePath = () => {
   const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
   const uiPath = trimmed ? `/${trimmed}/` : "/";
-  
+
   // If serverRootPath is set and not "/", prepend it to the UI path
   if (serverRootPath && serverRootPath !== "/") {
     // Remove trailing slash from serverRootPath and ensure uiPath has no leading slash for proper joining
@@ -72,7 +74,7 @@ const getBasePath = () => {
     const cleanUiPath = uiPath.replace(/^\/+/, "");
     return `${cleanServerRoot}/${cleanUiPath}`;
   }
-  
+
   return uiPath;
 };
 
@@ -105,12 +107,16 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "chat":
+      return "chat";
 
     // tools
     case "mcp-servers":
       return "tools/mcp-servers";
     case "vector-stores":
       return "tools/vector-stores";
+    case "byok-demo":
+      return "tools/byok-demo";
 
     // experimental
     case "caching":
@@ -153,170 +159,170 @@ const toHref = (slugOrPath: string) => {
 
 // ----- Menu config (unchanged labels/icons; same appearance) -----
 const menuItems: MenuItemCfg[] = [
-    { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
-    {
-      key: "3",
-      page: "llm-playground",
-      label: "Test Key",
-      icon: <PlayCircleOutlined style={{ fontSize: 18 }} />,
-      roles: rolesWithWriteAccess,
-    },
-    {
-      key: "2",
-      page: "models",
-      label: "Models + Endpoints",
-      icon: <BlockOutlined style={{ fontSize: 18 }} />,
-      roles: rolesWithWriteAccess,
-    },
-    {
-      key: "12",
-      page: "new_usage",
-      label: "Usage",
-      icon: <BarChartOutlined style={{ fontSize: 18 }} />,
-      roles: [...all_admin_roles, ...internalUserRoles],
-    },
-    { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: 18 }} /> },
-    {
-      key: "17",
-      page: "organizations",
-      label: "Organizations",
-      icon: <BankOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-    },
-    {
-      key: "5",
-      page: "users",
-      label: "Internal Users",
-      icon: <UserOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-    },
-    { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
-    {
-      key: "16",
-      page: "model-hub-table",
-      label: "Model Hub",
-      icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
-    },
-    { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: 18 }} /> },
-    {
-      key: "11",
-      page: "guardrails",
-      label: "Guardrails",
-      icon: <SafetyOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-    },
-    {
-      key: "28",
-      page: "policies",
-      label: "Policies",
-      icon: <AuditOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-    },
-    {
-      key: "26",
-      page: "tools",
-      label: "Tools",
-      icon: <ToolOutlined style={{ fontSize: 18 }} />,
-      children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: 18 }} /> },
-        {
-          key: "21",
-          page: "vector-stores",
-          label: "Vector Stores",
-          icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-      ],
-    },
-    {
-      key: "experimental",
-      page: "experimental",
-      label: "Experimental",
-      icon: <ExperimentOutlined style={{ fontSize: 18 }} />,
-      children: [
-        {
-          key: "9",
-          page: "caching",
-          label: "Caching",
-          icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "25",
-          page: "prompts",
-          label: "Prompts",
-          icon: <FileTextOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "10",
-          page: "budgets",
-          label: "Budgets",
-          icon: <BankOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "20",
-          page: "transform-request",
-          label: "API Playground",
-          icon: <ApiOutlined style={{ fontSize: 18 }} />,
-          roles: [...all_admin_roles, ...internalUserRoles],
-        },
-        {
-          key: "19",
-          page: "tag-management",
-          label: "Tag Management",
-          icon: <TagsOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "27",
-          page: "claude-code-plugins",
-          label: "Claude Code Plugins",
-          icon: <ToolOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined style={{ fontSize: 18 }} /> },
-      ],
-    },
-    {
-      key: "settings",
-      page: "settings",
-      label: "Settings",
-      icon: <SettingOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-      children: [
-        {
-          key: "11",
-          page: "general-settings",
-          label: "Router Settings",
-          icon: <SettingOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "8",
-          page: "settings",
-          label: "Logging & Alerts",
-          icon: <SettingOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "13",
-          page: "admin-panel",
-          label: "Admin Settings",
-          icon: <SettingOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "14",
-          page: "ui-theme",
-          label: "UI Theme",
-          icon: <SettingOutlined style={{ fontSize: 18 }} />,
-          roles: all_admin_roles,
-        },
-      ],
-    },
-  ];
+  { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "3",
+    page: "llm-playground",
+    label: "Test Key",
+    icon: <PlayCircleOutlined style={{ fontSize: 18 }} />,
+    roles: rolesWithWriteAccess,
+  },
+  {
+    key: "2",
+    page: "models",
+    label: "Models + Endpoints",
+    icon: <BlockOutlined style={{ fontSize: 18 }} />,
+    roles: rolesWithWriteAccess,
+  },
+  {
+    key: "12",
+    page: "new_usage",
+    label: "Usage",
+    icon: <BarChartOutlined style={{ fontSize: 18 }} />,
+    roles: [...all_admin_roles, ...internalUserRoles],
+  },
+  { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "17",
+    page: "organizations",
+    label: "Organizations",
+    icon: <BankOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
+  {
+    key: "5",
+    page: "users",
+    label: "Internal Users",
+    icon: <UserOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
+  { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "16",
+    page: "model-hub-table",
+    label: "Model Hub",
+    icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
+  },
+  { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "11",
+    page: "guardrails",
+    label: "Guardrails",
+    icon: <SafetyOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
+  {
+    key: "28",
+    page: "policies",
+    label: "Policies",
+    icon: <AuditOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
+  {
+    key: "26",
+    page: "tools",
+    label: "Tools",
+    icon: <ToolOutlined style={{ fontSize: 18 }} />,
+    children: [
+      { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: 18 }} /> },
+      {
+        key: "21",
+        page: "vector-stores",
+        label: "Vector Stores",
+        icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+  {
+    key: "experimental",
+    page: "experimental",
+    label: "Experimental",
+    icon: <ExperimentOutlined style={{ fontSize: 18 }} />,
+    children: [
+      {
+        key: "9",
+        page: "caching",
+        label: "Caching",
+        icon: <DatabaseOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "25",
+        page: "prompts",
+        label: "Prompts",
+        icon: <FileTextOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "10",
+        page: "budgets",
+        label: "Budgets",
+        icon: <BankOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "20",
+        page: "transform-request",
+        label: "API Playground",
+        icon: <ApiOutlined style={{ fontSize: 18 }} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
+      {
+        key: "19",
+        page: "tag-management",
+        label: "Tag Management",
+        icon: <TagsOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "27",
+        page: "claude-code-plugins",
+        label: "Claude Code Plugins",
+        icon: <ToolOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined style={{ fontSize: 18 }} /> },
+    ],
+  },
+  {
+    key: "settings",
+    page: "settings",
+    label: "Settings",
+    icon: <SettingOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+    children: [
+      {
+        key: "11",
+        page: "general-settings",
+        label: "Router Settings",
+        icon: <SettingOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "8",
+        page: "settings",
+        label: "Logging & Alerts",
+        icon: <SettingOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "13",
+        page: "admin-panel",
+        label: "Admin Settings",
+        icon: <SettingOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "14",
+        page: "ui-theme",
+        label: "UI Theme",
+        icon: <SettingOutlined style={{ fontSize: 18 }} />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+];
 
 const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelectedKey, collapsed = false }) => {
   const router = useRouter();
@@ -369,9 +375,40 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
   }, [pathname, filteredMenuItems, defaultSelectedKey]);
 
   // ----- Navigation -----
-  const goTo = (slug: string) => {
+  const goTo = (slug: string, newTab?: boolean) => {
     const href = toHref(slug);
-    router.push(href);
+    if (newTab) {
+      window.open(href, "_blank");
+    } else {
+      router.push(href);
+    }
+  };
+
+  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
+  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
+  const renderNavLink = (label: string, page: string, newTab?: boolean): React.ReactNode => {
+    const href = toHref(page);
+    return (
+      <a
+        href={href}
+        target={newTab ? "_blank" : undefined}
+        rel={newTab ? "noopener noreferrer" : undefined}
+        onClick={(e) => {
+          if (newTab) {
+            e.stopPropagation();
+            return;
+          }
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+        }}
+        style={{ color: "inherit", textDecoration: "none" }}
+      >
+        {label}
+      </a>
+    );
   };
 
   return (
@@ -386,6 +423,8 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
         style={{
           transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
           position: "relative",
+          display: "flex",
+          flexDirection: "column",
         }}
       >
         <ConfigProvider
@@ -408,22 +447,60 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
               borderRight: 0,
               backgroundColor: "transparent",
               fontSize: "14px",
+              flex: 1,
+              overflowY: "auto",
             }}
             items={filteredMenuItems.map((item) => ({
               key: item.key,
               icon: item.icon,
-              label: item.label,
+              label: renderNavLink(item.label, item.page, item.newTab),
               children: item.children?.map((child) => ({
                 key: child.key,
                 icon: child.icon,
-                label: child.label,
-                onClick: () => goTo(child.page),
+                label: renderNavLink(child.label, child.page, child.newTab),
+                onClick: () => goTo(child.page, child.newTab),
               })),
-              onClick: !item.children ? () => goTo(item.page) : undefined,
+              onClick: !item.children ? () => goTo(item.page, item.newTab) : undefined,
             }))}
           />
         </ConfigProvider>
         {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+
+        {/* Pinned "Open Chat" button at bottom */}
+        <div style={{
+          padding: collapsed ? "10px 8px" : "10px 12px",
+          borderTop: "1px solid #f0f0f0",
+          flexShrink: 0,
+        }}>
+          <a
+            href={toHref("chat")}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: collapsed ? "center" : "flex-start",
+              gap: 8,
+              padding: collapsed ? "8px 0" : "8px 10px",
+              borderRadius: 8,
+              background: "#1677ff",
+              color: "#fff",
+              textDecoration: "none",
+              fontSize: 13,
+              fontWeight: 600,
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.background = "#0958d9";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLAnchorElement).style.background = "#1677ff";
+            }}
+          >
+            <MessageOutlined style={{ fontSize: 16, flexShrink: 0 }} />
+            {!collapsed && <span>Open Chat</span>}
+          </a>
+        </div>
       </Sider>
     </Layout>
   );

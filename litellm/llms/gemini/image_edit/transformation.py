@@ -73,7 +73,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
+        base_url = (
+            api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
+        )
         base_url = base_url.rstrip("/")
         return f"{base_url}/models/{model}:generateContent"
 
@@ -109,9 +111,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             # Move aspectRatio into imageConfig inside generationConfig
             if "imageConfig" not in generation_config:
                 generation_config["imageConfig"] = {}
-            generation_config["imageConfig"]["aspectRatio"] = image_edit_optional_request_params[
+            generation_config["imageConfig"][
                 "aspectRatio"
-            ]
+            ] = image_edit_optional_request_params["aspectRatio"]
 
         if generation_config:
             request_body["generationConfig"] = generation_config

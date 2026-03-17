@@ -1,4 +1,4 @@
-import { createApiClient } from "@neondatabase/api-client";
+import { createApiClient, EndpointType } from "@neondatabase/api-client";
 import { config } from "dotenv";
 import { resolve } from "path";
 
@@ -27,6 +27,13 @@ export async function createNeonE2ETestingBranch(projectId: string, parentBranch
         parent_id: parentBranchId,
         expires_at: expireAt ?? new Date(Date.now() + 1000 * 60 * 30).toISOString(),
       },
+      endpoints: [
+        {
+          type: EndpointType.ReadWrite,
+          autoscaling_limit_min_cu: 0.25,
+          autoscaling_limit_max_cu: 1,
+        },
+      ],
     });
     return response;
   } catch (error) {
@@ -35,13 +42,15 @@ export async function createNeonE2ETestingBranch(projectId: string, parentBranch
 }
 
 export async function getNeonE2ETestingBranchConnectionString() {
-  await createNeonE2ETestingBranch(PROJECT_ID, PARENT_BRANCH);
-
+  const createBranchResponse = await createNeonE2ETestingBranch(PROJECT_ID, PARENT_BRANCH);
+  const projectId = createBranchResponse.data.branch.project_id;
   const response = await apiClient.getConnectionUri({
     database_name: NEON_E2E_UI_TEST_DB_NAME,
     role_name: "neondb_owner",
-    projectId: PROJECT_ID,
+    projectId: projectId,
   });
   console.log("connection string:", response.data.uri);
   return response.data.uri;
 }
+
+getNeonE2ETestingBranchConnectionString();
