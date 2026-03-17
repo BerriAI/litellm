@@ -516,3 +516,86 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     )
 
     assert "reasoning_effort" not in supported_params
+
+
+def test_openrouter_extra_body_tools_should_not_overwrite_processed_tools():
+    """
+    Test that tools in extra_body do not overwrite correctly processed tools.
+    
+    Regression test for: https://github.com/BerriAI/litellm/issues/23803
+    
+    When extra_body contains a 'tools' key with malformed/invalid tools,
+    it should not overwrite the tools that were correctly processed by
+    the parent transform_request method.
+    """
+    config = OpenrouterConfig()
+
+    # Valid tools that should be preserved
+    valid_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_time",
+                "description": "Get time",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_date",
+                "description": "Get date",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_news",
+                "description": "Get news",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+
+    # Malformed tools that might be in extra_body (should be ignored)
+    malformed_tools = [
+        {"type": "function", "function": {"name": "tool1"}},
+        {"type": "function", "function": {"name": "tool2"}},
+        {"type": "function", "function": {"name": "tool3"}},
+        {"type": "invalid", "something": "else"},  # Invalid tool at index 3
+    ]
+
+    transformed_request = config.transform_request(
+        model="openrouter/openai/gpt-5.4",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "tools": valid_tools,
+            "extra_body": {"tools": malformed_tools},  # Should be ignored
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify that valid tools are preserved, not malformed ones
+    assert "tools" in transformed_request
+    assert len(transformed_request["tools"]) == 4
+
+    # All tools should have type="function" and valid function object
+    for i, tool in enumerate(transformed_request["tools"]):
+        assert tool.get("type") == "function", f"Tool {i} has invalid type"
+        assert tool.get("function") is not None, f"Tool {i} has None function"
+        assert "name" in tool["function"], f"Tool {i} function missing name"
+
+    # Specifically verify the tool names are from valid_tools, not malformed_tools
+    tool_names = [t["function"]["name"] for t in transformed_request["tools"]]
+    assert tool_names == ["get_weather", "get_time", "get_date", "get_news"]
+

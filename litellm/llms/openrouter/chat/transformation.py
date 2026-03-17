@@ -166,6 +166,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
+        # Don't let extra_body overwrite critical request fields like 'tools'
+        # Tools are processed by the parent transform_request and should not be
+        # overwritten by extra_body contents (which may contain stale/malformed data)
+        extra_body.pop("tools", None)
         response.update(extra_body)
 
         # ALWAYS add usage parameter to get cost data from OpenRouter
