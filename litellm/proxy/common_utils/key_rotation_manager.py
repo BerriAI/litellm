@@ -10,6 +10,7 @@ from typing import List
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+    LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
     LITELLM_KEY_ROTATION_GRACE_PERIOD,
 )
 from litellm.proxy._types import (
@@ -45,15 +46,24 @@ class KeyRotationManager:
         try:
             # If we have a pod lock manager with Redis, try to acquire the lock
             if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                # Use the check interval as lock TTL so the lock covers the entire
+                # rotation window. The default 60s TTL can expire mid-rotation for
+                # large key fleets, allowing another pod to start concurrently.
+                lock_ttl = max(
+                    LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS, 300
+                )  # At least 5 minutes
                 lock_acquired = (
                     await self.pod_lock_manager.acquire_lock(
                         cronjob_id=KEY_ROTATION_JOB_NAME,
+                        ttl=lock_ttl,
                     )
                     or False
                 )
                 if not lock_acquired:
-                    verbose_proxy_logger.debug(
-                        "Key rotation: another pod is already running rotation, skipping"
+                    verbose_proxy_logger.warning(
+                        "Key rotation: another pod is already running rotation "
+                        "or Redis lock acquisition failed — skipping this cycle. "
+                        "Keys will be rotated on the next cycle."
                     )
                     return
 

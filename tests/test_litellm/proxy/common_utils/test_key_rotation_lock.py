@@ -42,10 +42,11 @@ class TestKeyRotationLock:
 
         await manager.process_rotations()
 
-        # Verify lock was acquired
-        mock_pod_lock_manager.acquire_lock.assert_called_once_with(
-            cronjob_id="litellm_key_rotation_job",
-        )
+        # Verify lock was acquired with custom TTL
+        mock_pod_lock_manager.acquire_lock.assert_called_once()
+        call_kwargs = mock_pod_lock_manager.acquire_lock.call_args
+        assert call_kwargs.kwargs["cronjob_id"] == "litellm_key_rotation_job"
+        assert call_kwargs.kwargs["ttl"] >= 300  # At least 5 minutes
 
         # Verify rotation logic ran (cleanup + find keys called)
         manager._cleanup_expired_deprecated_keys.assert_called_once()

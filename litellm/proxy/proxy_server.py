@@ -6167,12 +6167,11 @@ class ProxyStartupEvent:
                     KeyRotationManager,
                 )
 
-                # Get prisma_client from global scope
+                # Get prisma_client and proxy_logging_obj from global scope
                 global prisma_client
+                global proxy_logging_obj
                 if prisma_client is not None:
                     # Reuse the PodLockManager from db_spend_update_writer
-                    from litellm.proxy.proxy_server import proxy_logging_obj
-
                     pod_lock_manager = (
                         proxy_logging_obj.db_spend_update_writer.pod_lock_manager
                     )
