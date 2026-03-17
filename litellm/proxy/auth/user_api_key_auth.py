@@ -399,6 +399,20 @@ def get_api_key(
     return api_key, passed_in_key
 
 
+def _is_pass_through_endpoint_auth_disabled(
+    pass_through_endpoints: Optional[List[dict]],
+    route: str,
+) -> bool:
+    """Return True when the route matches a config-based pass-through endpoint
+    whose ``auth`` flag is not explicitly ``True``."""
+    if pass_through_endpoints is None:
+        return False
+    for endpoint in pass_through_endpoints:
+        if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
+            return endpoint.get("auth") is not True
+    return False
+
+
 async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     request: Request,
     route: str,
@@ -415,12 +429,11 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     if is_mapped_pass_through_route:
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""
+    if _is_pass_through_endpoint_auth_disabled(pass_through_endpoints, route):
+        return UserAPIKeyAuth()
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                ## IF AUTH DISABLED
-                if endpoint.get("auth") is not True:
-                    return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
                 if (
@@ -570,6 +583,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             route=route,
             request=request,
         )
+
+        if _is_pass_through_endpoint_auth_disabled(pass_through_endpoints, route):
+            return UserAPIKeyAuth()
+
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:

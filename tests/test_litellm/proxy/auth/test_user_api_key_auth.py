@@ -18,7 +18,11 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import get_api_key, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    _is_pass_through_endpoint_auth_disabled,
+    get_api_key,
+    user_api_key_auth,
+)
 
 
 def test_get_api_key():
@@ -685,3 +689,191 @@ class TestJWTOAuth2Coexistence:
             # OAuth2 should handle it since JWT auth is disabled
             mock_oauth2.assert_called_once_with(token=jwt_like_token)
             assert result.user_id == "oauth2-user"
+
+
+class TestIsPassThroughEndpointAuthDisabled:
+    """Tests for _is_pass_through_endpoint_auth_disabled helper."""
+
+    def test_should_return_false_when_pass_through_endpoints_is_none(self):
+        assert _is_pass_through_endpoint_auth_disabled(None, "/v1/foo") is False
+
+    def test_should_return_false_when_no_matching_route(self):
+        endpoints = [{"path": "/v1/bar", "auth": False}]
+        assert _is_pass_through_endpoint_auth_disabled(endpoints, "/v1/foo") is False
+
+    def test_should_return_true_when_auth_is_false(self):
+        endpoints = [{"path": "/v1/foo", "auth": False}]
+        assert _is_pass_through_endpoint_auth_disabled(endpoints, "/v1/foo") is True
+
+    def test_should_return_true_when_auth_is_not_set(self):
+        endpoints = [{"path": "/v1/foo", "target": "https://example.com"}]
+        assert _is_pass_through_endpoint_auth_disabled(endpoints, "/v1/foo") is True
+
+    def test_should_return_false_when_auth_is_true(self):
+        endpoints = [{"path": "/v1/foo", "auth": True}]
+        assert _is_pass_through_endpoint_auth_disabled(endpoints, "/v1/foo") is False
+
+    def test_should_skip_non_dict_entries(self):
+        endpoints = ["not_a_dict", {"path": "/v1/foo", "auth": False}]
+        assert _is_pass_through_endpoint_auth_disabled(endpoints, "/v1/foo") is True
+
+
+class TestPassThroughAuthDisabledE2E:
+    """End-to-end tests for pass-through endpoints with auth: false.
+
+    Ensures that requests without an Authorization header succeed when
+    a pass-through endpoint is configured with auth disabled.
+    """
+
+    @pytest.mark.asyncio
+    async def test_should_skip_auth_when_auth_false_and_no_auth_header(self):
+        """Core bug-fix test: auth: false + no Authorization header must not crash."""
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+                "auth": False,
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=None,
+            )
+            assert isinstance(result, UserAPIKeyAuth)
+
+    @pytest.mark.asyncio
+    async def test_should_skip_auth_when_auth_not_set_and_no_auth_header(self):
+        """auth not specified defaults to disabled for pass-through endpoints."""
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=None,
+            )
+            assert isinstance(result, UserAPIKeyAuth)
+
+    @pytest.mark.asyncio
+    async def test_should_require_auth_when_auth_true(self):
+        """auth: true must still enforce authentication — missing key should fail."""
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+                "auth": True,
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):
+            with pytest.raises(Exception):
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_should_skip_auth_when_auth_false_with_jwt_enabled(self):
+        """auth: false must skip auth even when JWT auth is globally enabled.
+
+        This was the original crash scenario: is_jwt() called .split() on None api_key.
+        """
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+                "auth": False,
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+            "enable_jwt_auth": True,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=None,
+            )
+            assert isinstance(result, UserAPIKeyAuth)
+
+    @pytest.mark.asyncio
+    async def test_should_skip_auth_when_auth_false_with_valid_auth_header(self):
+        """Even with a valid-looking auth header, auth: false should skip validation."""
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+                "auth": False,
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {"authorization": "Bearer sk-some-key"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ):
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key="Bearer sk-some-key",
+            )
+            assert isinstance(result, UserAPIKeyAuth)
