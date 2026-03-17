@@ -653,11 +653,114 @@ This is useful when you want discoverability for MCP offerings without granting 
 
 ## Publish MCP Registry
 
-If you want other systems—for example external agent frameworks such as MCP-capable IDEs running outside your network—to automatically discover the MCP servers hosted on LiteLLM, you can expose a Model Context Protocol Registry endpoint. This registry lists the built-in LiteLLM MCP server and every server you have configured, using the [official MCP Registry spec](https://github.com/modelcontextprotocol/registry).
+LiteLLM can expose a public MCP Registry endpoint at `GET /v1/mcp/registry.json` that follows the [official MCP Registry spec](https://github.com/modelcontextprotocol/registry). This allows MCP clients to dynamically discover available servers without prior configuration.
 
-1. Set `enable_mcp_registry: true` under `general_settings` in your proxy config (or DB settings) and restart the proxy.
-2. LiteLLM will serve the registry at `GET /v1/mcp/registry.json`.
-3. Each entry points to either `/mcp` (built-in server) or `/{mcp_server_name}/mcp` for your custom servers, so clients can connect directly using the advertised Streamable HTTP URL.
+### Overview
+
+When enabled, the registry endpoint returns metadata about all registered MCP servers, including:
+- **Server name and description** - Human-readable identifiers
+- **Endpoint URLs** - Direct connection URLs for each server
+- **Transport type** - Currently supports `streamable-http`
+- **Version information** - For compatibility checking
+
+External callers (requests from outside your network) will only see servers marked as `available_on_public_internet: true`, ensuring internal-only servers remain hidden.
+
+### Enable the Registry
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+
+```yaml title="Enable MCP registry in config.yaml"
+general_settings:
+  enable_mcp_registry: true
+
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    available_on_public_internet: true  # Visible to external clients
+  
+  internal_tools:
+    url: "https://internal.company.com/mcp"
+    auth_type: api_key
+    # available_on_public_internet defaults to false - hidden from external clients
+```
+
+</TabItem>
+<TabItem value="ui" label="Admin UI">
+
+1. Navigate to **Settings** in the Admin UI
+2. Under **General Settings**, enable **MCP Registry**
+3. For each MCP server you want externally visible, toggle **Available on Public Internet**
+
+</TabItem>
+</Tabs>
+
+### Registry Response Format
+
+The registry endpoint returns a JSON object following the MCP Registry spec:
+
+```json
+{
+  "servers": [
+    {
+      "server": {
+        "name": "litellm-mcp-server",
+        "title": "litellm-mcp-server",
+        "description": "MCP Server for LiteLLM",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://your-litellm-proxy.com/mcp"
+          }
+        ]
+      }
+    },
+    {
+      "server": {
+        "name": "github_mcp",
+        "title": "github_mcp",
+        "description": "github_mcp",
+        "version": "1.0.0",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://your-litellm-proxy.com/github_mcp/mcp"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+### Usage Example
+
+```bash title="Fetch the MCP registry"
+curl https://your-litellm-proxy.com/v1/mcp/registry.json
+```
+
+MCP clients can parse this response and connect to servers using the URLs provided in the `remotes` array.
+
+### IP-Based Filtering
+
+The registry automatically filters servers based on the client's IP address:
+
+| Client Location | Servers Returned |
+|----------------|------------------|
+| **Internal** (localhost, private IP ranges) | All registered servers |
+| **External** (public IP) | Only servers with `available_on_public_internet: true` |
+
+This ensures that internal-only MCP servers (databases, internal APIs, etc.) are not exposed to external clients, even when the registry itself is publicly accessible.
+
+### How It Works
+
+1. When `enable_mcp_registry: true` is set, LiteLLM serves the registry at `GET /v1/mcp/registry.json`
+2. The registry always includes the built-in LiteLLM MCP server (at `/mcp`)
+3. Each configured MCP server gets an entry pointing to `/{server_name}/mcp`
+4. Servers are sorted alphabetically by name for consistent ordering
+5. External requests are filtered to only show publicly available servers
 
 :::note Permissions still apply
 The registry only advertises server URLs. Actual access control is still enforced by LiteLLM when the client connects to `/mcp` or `/{server}/mcp`, so publishing the registry does not bypass per-key permissions.
