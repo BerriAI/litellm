@@ -5569,23 +5569,21 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
             litellm_params["_langfuse_masking_function"] = masking_fn
         litellm_params["metadata"] = metadata
 
-    ## remove sensitive logging/callback keys from metadata dicts
-    ## these contain credentials (langfuse_secret_key, langfuse_public_key, etc.)
-    _sensitive_keys = {"logging", "callback_settings"}
-
-    for metadata_field in (
-        "user_api_key_metadata",
-        "user_api_key_auth_metadata",
-        "user_api_key_team_metadata",
+    ## check user_api_key_metadata for sensitive logging keys
+    cleaned_user_api_key_metadata = {}
+    if "user_api_key_metadata" in metadata and isinstance(
+        metadata["user_api_key_metadata"], dict
     ):
-        if metadata_field in metadata and isinstance(metadata[metadata_field], dict):
-            for sensitive_key in _sensitive_keys:
-                metadata[metadata_field].pop(sensitive_key, None)
+        for k, v in metadata["user_api_key_metadata"].items():
+            if k == "logging":  # prevent logging user logging keys
+                cleaned_user_api_key_metadata[k] = (
+                    "scrubbed_by_litellm_for_sensitive_keys"
+                )
+            else:
+                cleaned_user_api_key_metadata[k] = v
 
-    ## remove user_api_key_auth entirely - contains full auth object with nested credentials
-    metadata.pop("user_api_key_auth", None)
-
-    litellm_params["metadata"] = metadata
+        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
+        litellm_params["metadata"] = metadata
 
     return litellm_params
 
