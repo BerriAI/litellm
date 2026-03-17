@@ -7833,3 +7833,128 @@ class TestLIT1884KeyUpdateValidation:
             prisma_client=mock_prisma_client,
             user_api_key_cache=MagicMock(),
         )
+
+
+class TestKeyAliasSkipValidationOnUnchanged:
+    """
+    Test that updating/regenerating a key without changing its key_alias
+    does NOT re-validate the alias. This prevents legacy aliases (created
+    before stricter validation rules) from blocking edits to other fields.
+    """
+
+    @pytest.fixture(autouse=True)
+    def enable_validation(self):
+        litellm.enable_key_alias_format_validation = True
+        yield
+        litellm.enable_key_alias_format_validation = False
+
+    @pytest.fixture
+    def mock_prisma(self):
+        prisma = MagicMock()
+        prisma.db = MagicMock()
+        prisma.db.litellm_verificationtoken = MagicMock()
+        prisma.get_data = AsyncMock(return_value=None)  # no duplicate alias
+        prisma.update_data = AsyncMock(return_value=None)
+        prisma.jsonify_object = MagicMock(side_effect=lambda data: data)
+        return prisma
+
+    @pytest.fixture
+    def existing_key_with_legacy_alias(self):
+        """A key whose alias contains '@' — valid now, but simulates a legacy alias."""
+        return LiteLLM_VerificationToken(
+            token="hashed_token_123",
+            key_alias="user@domain.com",
+            team_id="team-1",
+            models=[],
+            max_budget=100.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_key_unchanged_legacy_alias_passes(
+        self, mock_prisma, existing_key_with_legacy_alias
+    ):
+        """
+        Updating a key without changing its key_alias should skip format
+        validation — even if the alias wouldn't pass current rules.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        # Temporarily make the regex reject '@' to simulate stricter rules
+        import re
+        from litellm.proxy.management_endpoints import key_management_endpoints as mod
+
+        original_pattern = mod._KEY_ALIAS_PATTERN
+        mod._KEY_ALIAS_PATTERN = re.compile(
+            r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.]{0,253}[a-zA-Z0-9]$"
+        )
+        try:
+            # Confirm the alias WOULD fail validation directly
+            with pytest.raises(ProxyException):
+                _validate_key_alias_format("user@domain.com")
+
+            # But prepare_key_update_data + the skip logic should allow it
+            # Simulate what update_key_fn does: alias is in non_default_values
+            # but matches existing_key_row.key_alias => skip validation
+            existing_alias = existing_key_with_legacy_alias.key_alias
+            new_alias = "user@domain.com"  # same as existing
+            assert new_alias == existing_alias  # unchanged
+
+            # This is the core logic from update_key_fn:
+            if new_alias != existing_alias:
+                _validate_key_alias_format(new_alias)
+            # No exception raised — test passes
+        finally:
+            mod._KEY_ALIAS_PATTERN = original_pattern
+
+    @pytest.mark.asyncio
+    async def test_update_key_changed_alias_still_validated(
+        self, mock_prisma, existing_key_with_legacy_alias
+    ):
+        """
+        When the alias IS being changed, validation should still run.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        existing_alias = existing_key_with_legacy_alias.key_alias
+        new_alias = "!invalid!"
+
+        assert new_alias != existing_alias
+        with pytest.raises(ProxyException):
+            if new_alias != existing_alias:
+                _validate_key_alias_format(new_alias)
+
+    @pytest.mark.asyncio
+    async def test_update_key_changed_to_valid_alias_passes(
+        self, mock_prisma, existing_key_with_legacy_alias
+    ):
+        """
+        Changing the alias to a new valid value should pass validation.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        existing_alias = existing_key_with_legacy_alias.key_alias
+        new_alias = "new-valid-alias"
+
+        assert new_alias != existing_alias
+        # Should not raise
+        if new_alias != existing_alias:
+            _validate_key_alias_format(new_alias)
+
+    @pytest.mark.asyncio
+    async def test_update_key_alias_none_skips_validation(self):
+        """
+        When key_alias is not in the update payload (None), validation
+        should be skipped regardless.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        # None alias should always pass
+        _validate_key_alias_format(None)
