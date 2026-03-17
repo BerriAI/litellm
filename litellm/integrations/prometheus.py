@@ -1657,6 +1657,9 @@ class PrometheusLogger(CustomLogger):
                 return
 
             _metadata = data.get("metadata", {}) or {}
+            model_id = _metadata.get("model_info", {}).get("id") or data.get(
+                "model_info", {}
+            ).get("id")
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
@@ -1674,6 +1677,7 @@ class PrometheusLogger(CustomLogger):
                 ),
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
+                model_id=model_id,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
