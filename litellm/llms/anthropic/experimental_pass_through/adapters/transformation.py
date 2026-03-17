@@ -369,6 +369,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content, text_obj, model
                             )
                             new_user_content_list.append(text_obj)  # type: ignore
+                        elif content.get("type") == "input_text":
+                            # Claude Agent SDK uses "input_text" instead of "text"
+                            text_obj = ChatCompletionTextObject(
+                                type="text", text=content.get("text", "")
+                            )
+                            new_user_content_list.append(text_obj)  # type: ignore
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
@@ -865,7 +871,7 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_system_content: List[Dict[str, Any]] = []
             model_name = anthropic_message_request.get("model", "")
             for block in system_content:
-                if isinstance(block, dict) and block.get("type") == "text":
+                if isinstance(block, dict) and block.get("type") in ("text", "input_text"):
                     text_block: Dict[str, Any] = {
                         "type": "text",
                         "text": block.get("text", ""),

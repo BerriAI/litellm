@@ -946,6 +946,11 @@ def responses_api_bridge_check(
                 model=model, custom_llm_provider=custom_llm_provider
             ),
         )
+        # Check if user has opted out of Responses API routing
+        if litellm.use_chat_completions_url_for_anthropic_messages:
+            # Skip Responses API bridging - use chat/completions instead
+            return model_info, model
+
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.replace("responses/", "")
             mode = "responses"

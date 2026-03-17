@@ -60,6 +60,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if custom_llm_provider != "openai":
             return
 
+        # Check if user has opted out of Responses API routing
+        if litellm.use_chat_completions_url_for_anthropic_messages:
+            return
+
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
             return
 

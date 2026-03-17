@@ -88,7 +88,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         if not isinstance(block, dict):
                             continue
                         btype = block.get("type")
-                        if btype == "text":
+                        if btype in ("text", "input_text"):
                             user_parts.append(
                                 {"type": "input_text", "text": block.get("text", "")}
                             )
@@ -111,7 +111,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 parts = [
                                     c.get("text", "")
                                     for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "text"
+                                    if isinstance(c, dict) and c.get("type") in ("text", "input_text")
                                 ]
                                 output_text = "\n".join(parts)
                             else:
@@ -302,7 +302,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 text_parts = [
                     b.get("text", "")
                     for b in system
-                    if isinstance(b, dict) and b.get("type") == "text"
+                    if isinstance(b, dict) and b.get("type") in ("text", "input_text")
                 ]
                 responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
 
