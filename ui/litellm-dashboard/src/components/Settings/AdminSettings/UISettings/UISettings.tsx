@@ -24,6 +24,7 @@ export default function UISettings() {
   const disableVectorStoresProperty = schema?.properties?.disable_vector_stores_for_internal_users;
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
+  const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -171,6 +172,20 @@ export default function UISettings() {
   const handleToggleScopeUserSearch = (checked: boolean) => {
     updateSettings(
       { scope_user_search_to_org: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleDisableCustomApiKeys = (checked: boolean) => {
+    updateSettings(
+      { disable_custom_api_keys: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -376,6 +391,26 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {scopeUserSearchProperty?.description ??
                   "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Disable custom API key values */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.disable_custom_api_keys)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleDisableCustomApiKeys}
+              aria-label={disableCustomApiKeysProperty?.description ?? "Disable custom API key values"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Disable custom API key values</Typography.Text>
+              <Typography.Text type="secondary">
+                {disableCustomApiKeysProperty?.description ??
+                  "If true, users cannot specify custom API key values. All keys must be auto-generated."}
               </Typography.Text>
             </Space>
           </Space>
