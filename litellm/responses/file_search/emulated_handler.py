@@ -14,9 +14,7 @@ Flow:
 import json
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
-
-import httpx
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -220,7 +218,13 @@ def _build_search_results_for_include(
     file_search_call.search_results (mirrors OpenAI's include= format).
     """
     formatted: List[Dict[str, Any]] = []
+    seen_file_ids: set = set()
     for result in results:
+        file_id = _get_field(result, "file_id") or ""
+        if file_id and file_id in seen_file_ids:
+            continue
+        if file_id:
+            seen_file_ids.add(file_id)
         content_items = _get_field(result, "content") or []
         text_chunks = [
             c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
@@ -229,7 +233,7 @@ def _build_search_results_for_include(
         text = " ".join(t for t in text_chunks if t)
         formatted.append(
             {
-                "file_id": _get_field(result, "file_id") or "",
+                "file_id": file_id,
                 "filename": _get_field(result, "filename") or "",
                 "score": _get_field(result, "score"),
                 "text": text,

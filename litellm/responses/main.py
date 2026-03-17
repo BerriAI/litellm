@@ -732,6 +732,7 @@ def responses(
                 aresponses_with_emulated_file_search,
             )
 
+            _internal_skip = {"litellm_logging_obj", "litellm_call_id", "aresponses"}
             emulated_kwargs = {
                 "include": include,
                 "instructions": instructions,
@@ -759,7 +760,7 @@ def responses(
                 "extra_body": extra_body,
                 "timeout": timeout,
                 "custom_llm_provider": custom_llm_provider,
-                **kwargs,
+                **{k: v for k, v in kwargs.items() if k not in _internal_skip},
             }
             if _is_async:
                 return aresponses_with_emulated_file_search(
