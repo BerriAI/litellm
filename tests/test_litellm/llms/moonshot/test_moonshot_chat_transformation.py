@@ -615,7 +615,8 @@ class TestMoonshotConfig:
         ]
 
         # Apply fill_reasoning_content
-        result = config.fill_reasoning_content(messages)
-
+        assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
+        # Verify non-assistant or non-tool-call messages are not modified
+        assert result[0].get("reasoning_content") is None
         assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
         assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
