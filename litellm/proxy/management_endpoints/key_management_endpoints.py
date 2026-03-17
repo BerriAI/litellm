@@ -35,6 +35,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
 )
@@ -2525,6 +2526,8 @@ async def info_key_fn_v2(
             except Exception:
                 # if using pydantic v1
                 k = k.dict()
+            # Mask sensitive fields in metadata to prevent credential leaks
+            k = _mask_sensitive_fields_in_key_info(k)
             filtered_key_info.append(k)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -2610,6 +2613,9 @@ async def info_key_fn(
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
+
+        # Mask sensitive fields in metadata to prevent credential leaks
+        key_info = _mask_sensitive_fields_in_key_info(key_info)
 
         return {"key": key, "info": key_info}
     except Exception as e:
@@ -5075,6 +5081,30 @@ async def _can_user_query_key_info(
     ):
         return True
     return False
+
+
+def _mask_sensitive_fields_in_key_info(key_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Masks sensitive fields (API keys, secrets, tokens) in key metadata before returning
+    to the client. This prevents credential leaks in the key/info endpoint response.
+
+    Specifically handles:
+    - metadata.logging[*].callback_vars (contains langfuse_public_key, langfuse_secret_key, etc.)
+    - metadata.callback_settings.callback_vars
+    - Any other nested dicts with sensitive field names
+    """
+    if not key_info or not isinstance(key_info, dict):
+        return key_info
+
+    # Create a copy to avoid modifying the original
+    masked_key_info = copy.deepcopy(key_info)
+    metadata = masked_key_info.get("metadata")
+
+    if metadata and isinstance(metadata, dict):
+        masker = SensitiveDataMasker()
+        masked_key_info["metadata"] = masker.mask_dict(metadata)
+
+    return masked_key_info
 
 
 async def test_key_logging(
