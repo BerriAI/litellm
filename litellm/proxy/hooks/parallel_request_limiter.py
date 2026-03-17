@@ -732,6 +732,29 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             self.print_verbose(e)  # noqa
 
+    async def _append_failure_release_entry(
+        self,
+        entity_key: str,
+        precise_minute: str,
+        reserved_tokens: int,
+        values_to_update_in_cache: list,
+        litellm_parent_otel_span,
+        label: str = "",
+    ) -> None:
+        """Read-modify-append one cache bucket for async_log_failure_event."""
+        request_count_key = f"{entity_key}::{precise_minute}::request_count"
+        current = await self.internal_usage_cache.async_get_cache(
+            key=request_count_key,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+        ) or {"current_requests": 1, "current_tpm": 0, "current_rpm": 0}
+        new_val = {
+            "current_requests": max(current["current_requests"] - 1, 0),
+            "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
+            "current_rpm": current["current_rpm"],
+        }
+        self.print_verbose(f"updated_value in failure call{label}: {new_val}")
+        values_to_update_in_cache.append((request_count_key, new_val))
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
@@ -799,27 +822,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # Release reservation - API Key
                 # ------------
                 if user_api_key is not None:
-                    request_count_api_key = (
-                        f"{user_api_key}::{precise_minute}::request_count"
-                    )
-
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._append_failure_release_entry(
+                        entity_key=user_api_key,
+                        precise_minute=precise_minute,
+                        reserved_tokens=reserved_tokens,
+                        values_to_update_in_cache=values_to_update_in_cache,
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(f"updated_value in failure call: {new_val}")
-                    values_to_update_in_cache.append((request_count_api_key, new_val))
+                    )
 
                 # ------------
                 # Release reservation - model group + API Key
@@ -834,111 +843,53 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         or user_api_key_model_max_budget is not None
                     )
                 ):
-                    request_count_api_key = f"{user_api_key}::{model_group}::{precise_minute}::request_count"
-
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._append_failure_release_entry(
+                        entity_key=f"{user_api_key}::{model_group}",
+                        precise_minute=precise_minute,
+                        reserved_tokens=reserved_tokens,
+                        values_to_update_in_cache=values_to_update_in_cache,
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(
-                        f"updated_value in failure call (model_per_key): {new_val}"
+                        label=" (model_per_key)",
                     )
-                    values_to_update_in_cache.append((request_count_api_key, new_val))
 
                 # ------------
                 # Release reservation - User
                 # ------------
                 if user_api_key_user_id is not None:
-                    request_count_api_key = (
-                        f"{user_api_key_user_id}::{precise_minute}::request_count"
-                    )
-
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._append_failure_release_entry(
+                        entity_key=user_api_key_user_id,
+                        precise_minute=precise_minute,
+                        reserved_tokens=reserved_tokens,
+                        values_to_update_in_cache=values_to_update_in_cache,
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(
-                        f"updated_value in failure call (user): {new_val}"
+                        label=" (user)",
                     )
-                    values_to_update_in_cache.append((request_count_api_key, new_val))
 
                 # ------------
                 # Release reservation - Team
                 # ------------
                 if user_api_key_team_id is not None:
-                    request_count_api_key = (
-                        f"{user_api_key_team_id}::{precise_minute}::request_count"
-                    )
-
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._append_failure_release_entry(
+                        entity_key=user_api_key_team_id,
+                        precise_minute=precise_minute,
+                        reserved_tokens=reserved_tokens,
+                        values_to_update_in_cache=values_to_update_in_cache,
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(
-                        f"updated_value in failure call (team): {new_val}"
+                        label=" (team)",
                     )
-                    values_to_update_in_cache.append((request_count_api_key, new_val))
 
                 # ------------
                 # Release reservation - End User
                 # ------------
                 if user_api_key_end_user_id is not None:
-                    request_count_api_key = (
-                        f"{user_api_key_end_user_id}::{precise_minute}::request_count"
-                    )
-
-                    current = await self.internal_usage_cache.async_get_cache(
-                        key=request_count_api_key,
+                    await self._append_failure_release_entry(
+                        entity_key=user_api_key_end_user_id,
+                        precise_minute=precise_minute,
+                        reserved_tokens=reserved_tokens,
+                        values_to_update_in_cache=values_to_update_in_cache,
                         litellm_parent_otel_span=litellm_parent_otel_span,
-                    ) or {
-                        "current_requests": 1,
-                        "current_tpm": 0,
-                        "current_rpm": 0,
-                    }
-
-                    new_val = {
-                        "current_requests": max(current["current_requests"] - 1, 0),
-                        "current_tpm": max(current["current_tpm"] - reserved_tokens, 0),
-                        "current_rpm": current["current_rpm"],
-                    }
-
-                    self.print_verbose(
-                        f"updated_value in failure call (end_user): {new_val}"
+                        label=" (end_user)",
                     )
-                    values_to_update_in_cache.append((request_count_api_key, new_val))
 
                 await self.internal_usage_cache.async_batch_set_cache(
                     cache_list=values_to_update_in_cache,
