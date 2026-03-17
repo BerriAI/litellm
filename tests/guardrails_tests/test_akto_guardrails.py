@@ -285,6 +285,17 @@ def test_handle_guardrail_response_error_status():
         AktoGuardrail.handle_guardrail_response(mock_resp)
 
 
+def test_handle_guardrail_response_non_json_body():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.request = MagicMock()
+    mock_resp.text = "<html>not json</html>"
+    mock_resp.json.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+
+    with pytest.raises(httpx.RequestError):
+        AktoGuardrail.handle_guardrail_response(mock_resp)
+
+
 # ---------------------------------------------------------------------------
 #  Pre-call (akto-validate) — allowed
 # ---------------------------------------------------------------------------

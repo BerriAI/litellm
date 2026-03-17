@@ -9,6 +9,10 @@ Akto now uses a **two-entry guardrail pattern** in LiteLLM:
 
 There is no `on_flagged` setting anymore.
 
+Use these as two separate guardrails in `config.yaml`:
+- `guardrail_name: "akto-validate"`
+- `guardrail_name: "akto-ingest"`
+
 ## 1. Get Your Akto Credentials
 
 Set up the Akto Guardrail API Service and grab:
@@ -22,6 +26,8 @@ Set up the Akto Guardrail API Service and grab:
 Use both entries below. This gives you:
 - pre-call block decision
 - post-call ingestion for allowed traffic
+
+Keep these as two separate entries (`akto-validate` and `akto-ingest`).
 
 ```yaml
 guardrails:
