@@ -10,6 +10,8 @@ before response.completed.
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -31,6 +33,20 @@ class _StaticSyncStream:
     def __next__(self):
         if self._index >= len(self._chunks):
             raise StopIteration
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+
+class _StaticAsyncStream:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self._index = 0
+        self.logging_obj = AsyncMock()
+
+    async def __anext__(self):
+        if self._index >= len(self._chunks):
+            raise StopAsyncIteration
         chunk = self._chunks[self._index]
         self._index += 1
         return chunk
@@ -189,6 +205,168 @@ def test_sync_iterator_emits_message_item_when_text_arrives_after_tool_call():
     assert len(message_item_events) == 1
     assert len(text_delta_events) == 1
     assert text_delta_events[0].delta == "Final answer after tool call"
+
+
+def test_sync_iterator_emits_reasoning_done_events_before_completion():
+    reasoning_chunk = ModelResponseStream(
+        id="chunk-reasoning-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    reasoning_content="step1 ",
+                ),
+            )
+        ],
+    )
+    text_chunk = ModelResponseStream(
+        id="chunk-text-1",
+        created=124,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="answer",
+                ),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_StaticSyncStream([reasoning_chunk, text_chunk]),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    seen_events = []
+    while True:
+        try:
+            seen_events.append(next(iterator))
+        except StopIteration:
+            break
+
+    event_types = [event.type for event in seen_events]
+    assert ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE in event_types
+    assert ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE in event_types
+
+    reasoning_item_done_indexes = [
+        idx
+        for idx, event in enumerate(seen_events)
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(getattr(event, "item", None), "type", None) == "reasoning"
+    ]
+    response_completed_index = event_types.index(
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+
+    assert len(reasoning_item_done_indexes) == 1
+    assert reasoning_item_done_indexes[0] < response_completed_index
+
+
+@pytest.mark.asyncio
+async def test_async_mixed_reasoning_chunk_closes_reasoning_item_before_completion():
+    mixed_chunk = ModelResponseStream(
+        id="chunk-mixed-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="final answer",
+                    reasoning_content="thinking...",
+                ),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_StaticAsyncStream([mixed_chunk]),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    seen_events = []
+    while True:
+        try:
+            seen_events.append(await iterator.__anext__())
+        except StopAsyncIteration:
+            break
+
+    event_types = [event.type for event in seen_events]
+    assert ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE in event_types
+    assert ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE in event_types
+
+    reasoning_item_done_indexes = [
+        idx
+        for idx, event in enumerate(seen_events)
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(getattr(event, "item", None), "type", None) == "reasoning"
+    ]
+    response_completed_index = event_types.index(
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+
+    assert len(reasoning_item_done_indexes) == 1
+    assert reasoning_item_done_indexes[0] < response_completed_index
+
+
+def test_reasoning_delta_item_id_matches_reasoning_output_item_id():
+    chunk = ModelResponseStream(
+        id="chunk-reasoning-id-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    reasoning_content="thinking...",
+                ),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    iterator._ensure_output_item_for_chunk(chunk)
+    output_item_added_event = iterator._pending_response_events.pop(0)
+    reasoning_delta_event = (
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    )
+
+    assert output_item_added_event is not None
+    assert reasoning_delta_event is not None
+    assert output_item_added_event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    assert (
+        reasoning_delta_event.type
+        == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    )
+    assert output_item_added_event.item.type == "reasoning"
+    assert reasoning_delta_event.item_id == output_item_added_event.item.id
 
 
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():

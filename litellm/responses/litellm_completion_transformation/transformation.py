@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.utils import supports_reasoning
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -246,13 +247,15 @@ class LiteLLMCompletionResponsesConfig:
 
         deepseek_reasoning_required = False
         if custom_llm_provider == "deepseek":
-            model_l = (model or "").lower()
-            if "reasoner" in model_l or "r1" in model_l:
-                deepseek_reasoning_required = True
             if reasoning_effort and reasoning_effort != "none":
                 deepseek_reasoning_required = True
             if responses_api_request.get("thinking") is not None:
                 deepseek_reasoning_required = True
+            if not deepseek_reasoning_required:
+                deepseek_reasoning_required = supports_reasoning(
+                    model=model or "",
+                    custom_llm_provider=custom_llm_provider,
+                )
 
         if deepseek_reasoning_required:
             messages = (
@@ -415,9 +418,6 @@ class LiteLLMCompletionResponsesConfig:
 
         deepseek_reasoning_required = False
         if litellm_completion_request.get("custom_llm_provider") == "deepseek":
-            model_l = str(litellm_completion_request.get("model") or "").lower()
-            if "reasoner" in model_l or "r1" in model_l:
-                deepseek_reasoning_required = True
             if (
                 litellm_completion_request.get("reasoning_effort")
                 and litellm_completion_request.get("reasoning_effort") != "none"
@@ -425,6 +425,13 @@ class LiteLLMCompletionResponsesConfig:
                 deepseek_reasoning_required = True
             if litellm_completion_request.get("thinking") is not None:
                 deepseek_reasoning_required = True
+            if not deepseek_reasoning_required:
+                deepseek_reasoning_required = supports_reasoning(
+                    model=str(litellm_completion_request.get("model") or ""),
+                    custom_llm_provider=litellm_completion_request.get(
+                        "custom_llm_provider"
+                    ),
+                )
 
         if deepseek_reasoning_required:
             combined_messages = (
