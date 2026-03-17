@@ -663,14 +663,60 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             setattr(chunk, "usage", usage)
         return chunk
 
-    def _extract_reasoning_from_delta(self, delta: dict) -> Optional[str]:
-        """Extract reasoning text from a contentBlockDelta's delta dict."""
-        reasoning_content = delta.get("reasoningContent")
-        if isinstance(reasoning_content, dict):
-            text = reasoning_content.get("text")
-            if text:
-                return text
-        return delta.get("reasoningText")
+    def _extract_reasoning_from_delta(
+        self, delta: dict
+    ) -> Optional[AgentCoreReasoningContentBlock]:
+        """Extract reasoning content block from a contentBlockDelta's delta dict.
+
+        Returns an AgentCoreReasoningContentBlock preserving text, signature,
+        and redacted content for downstream consumers.
+        """
+        reasoning_text = None
+        signature = None
+        redacted_content = delta.get("redactedContent")
+
+        reasoning_content_block = delta.get("reasoningContent")
+        if isinstance(reasoning_content_block, dict):
+            reasoning_text = reasoning_content_block.get("text")
+            signature = reasoning_content_block.get("signature")
+            if not redacted_content:
+                redacted_content = reasoning_content_block.get("redactedContent")
+
+        if not reasoning_text:
+            reasoning_text = delta.get("reasoningText")
+        if not signature:
+            signature = delta.get("signature")
+
+        if reasoning_text:
+            block: AgentCoreReasoningContentBlock = {
+                "reasoningText": {"text": reasoning_text}
+            }
+            if signature:
+                block["reasoningText"]["signature"] = signature
+            return block
+        elif redacted_content:
+            return {"redactedContent": redacted_content}
+        return None
+
+    def _reasoning_block_to_chunk(
+        self,
+        reasoning_block: AgentCoreReasoningContentBlock,
+        model: str,
+    ) -> ModelResponseStream:
+        """Convert a reasoning content block to a streaming chunk.
+
+        Handles both reasoningText and redactedContent blocks, preserving
+        signatures for multi-turn thinking chain support.
+        """
+        if "reasoningText" in reasoning_block:
+            return self._make_stream_chunk(
+                model,
+                reasoning_content=reasoning_block["reasoningText"]["text"],
+            )
+        return self._make_stream_chunk(
+            model,
+            reasoning_content=reasoning_block.get("redactedContent", ""),
+        )
 
     def _process_streaming_data_obj(
         self, data_obj: dict, model: str
@@ -686,12 +732,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if content_block_delta:
                 delta = content_block_delta.get("delta", {})
                 text = delta.get("text", "")
-                reasoning_text = self._extract_reasoning_from_delta(delta)
+                reasoning_block = self._extract_reasoning_from_delta(delta)
 
-                if reasoning_text:
-                    chunks.append(self._make_stream_chunk(
-                        model, reasoning_content=reasoning_text
-                    ))
+                if reasoning_block:
+                    chunks.append(
+                        self._reasoning_block_to_chunk(reasoning_block, model)
+                    )
                 if text:
                     chunks.append(self._make_stream_chunk(model, content=text))
 
@@ -710,14 +756,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 ))
 
         # Check for top-level reasoning events (Strands format)
-        # Skip if event has nested structure (already handled above)
-        if "event" not in data_obj or not isinstance(data_obj.get("event"), dict):
+        # Only process if there is no nested event wrapper (avoids double-processing)
+        if "event" not in data_obj:
             if reasoning_block := self._extract_reasoning_from_event(data_obj):
-                reasoning_text = reasoning_block.get("reasoningText", {}).get("text")
-                if reasoning_text:
-                    chunks.append(self._make_stream_chunk(
-                        model, reasoning_content=reasoning_text
-                    ))
+                chunks.append(
+                    self._reasoning_block_to_chunk(reasoning_block, model)
+                )
 
         # Process final message
         if "message" in data_obj and isinstance(data_obj["message"], dict):
@@ -1083,15 +1127,18 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     "reasoningContentBlocks": reasoning_blocks,
                 }
                 # Add reasoning_content (concatenated text for deepseek compatibility)
-                message_dict["reasoning_content"] = self._transform_reasoning_content(
+                # Only set when non-empty to avoid masking redacted-only blocks
+                reasoning_content_text = self._transform_reasoning_content(
                     reasoning_blocks
                 )
+                if reasoning_content_text:
+                    message_dict["reasoning_content"] = reasoning_content_text
                 # Add thinking_blocks (OpenAI-compatible format)
                 message_dict["thinking_blocks"] = self._transform_thinking_blocks(
                     reasoning_blocks
                 )
                 verbose_logger.debug(
-                    f"Added reasoning_content: {len(message_dict['reasoning_content'])} chars"
+                    f"Added reasoning_content: {len(reasoning_content_text)} chars"
                 )
 
             message = Message(**message_dict)
