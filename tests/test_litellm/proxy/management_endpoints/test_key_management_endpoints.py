@@ -7768,12 +7768,15 @@ class TestLIT1884KeyUpdateValidation:
     async def test_internal_user_cannot_set_invalid_team_id(self):
         """
         Non-admin users should not be able to update a key to a non-existent team.
+        get_team_object raises HTTPException(404) when team doesn't exist in DB.
         """
         data = UpdateKeyRequest(key="sk-test-key", team_id="nonexistent-team")
         existing_key_row = MagicMock()
         existing_key_row.user_id = "internal-user-123"
         existing_key_row.token = "hashed_token"
         existing_key_row.team_id = None
+        existing_key_row.organization_id = None
+        existing_key_row.project_id = None
 
         user_api_key_dict = UserAPIKeyAuth(
             user_id="internal-user-123",
@@ -7782,7 +7785,10 @@ class TestLIT1884KeyUpdateValidation:
 
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
-            AsyncMock(side_effect=Exception("Team not found")),
+            AsyncMock(side_effect=HTTPException(
+                status_code=404,
+                detail="Team doesn't exist in db. Team=nonexistent-team.",
+            )),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _validate_update_key_data(
@@ -7794,8 +7800,8 @@ class TestLIT1884KeyUpdateValidation:
                     prisma_client=AsyncMock(),
                     user_api_key_cache=MagicMock(),
                 )
-            assert exc_info.value.status_code == 400
-            assert "Team not found" in str(exc_info.value.detail)
+            assert exc_info.value.status_code == 404
+            assert "Team doesn't exist" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_admin_can_remove_user_id(self):

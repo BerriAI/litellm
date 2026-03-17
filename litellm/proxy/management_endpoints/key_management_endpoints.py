@@ -1865,31 +1865,6 @@ async def _validate_update_key_data(
             detail=f"User={data.user_id} is not allowed to update key={data.key} to belong to user={existing_key_row.user_id}",
         )
 
-    # Validate team exists when non-admin changes team_id (LIT-1884)
-    if (
-        data.team_id is not None
-        and not _is_proxy_admin
-    ):
-        try:
-            _team_obj = await get_team_object(
-                team_id=data.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_db_only=True,
-            )
-            if _team_obj is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
-            )
-
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
@@ -1928,6 +1903,13 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
+
+        # Validate team exists when non-admin sets a new team_id (LIT-1884)
+        if team_obj is None and data.team_id is not None and not _is_proxy_admin:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
+            )
 
         if team_obj is not None:
             await _check_team_key_limits(
