@@ -1300,10 +1300,12 @@ class AmazonConverseConfig(BaseConfig):
                     continue
                 filtered_tools.append(tool)
 
+        # Defensive copy so we don't mutate caller data (router fallback/retry may reuse optional_params).
         # Strip custom field from tools before sending to Bedrock Converse.
         # Claude Code sends custom: {eager_input_streaming: true} etc. which Anthropic
         # accepts but Bedrock rejects for some models (e.g. Haiku 4.5) with
         # "Extra inputs are not permitted". Ref: https://github.com/BerriAI/litellm/issues/23825
+        filtered_tools = [copy.deepcopy(t) for t in filtered_tools]
         strip_custom_from_tools_list(filtered_tools)
 
         # Only separate tools if computer use tools are actually present

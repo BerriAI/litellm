@@ -354,8 +354,8 @@ def test_process_tools_and_beta_strips_custom_field():
     assert len(bedrock_tools) == 1
     assert "toolSpec" in bedrock_tools[0]
     assert bedrock_tools[0]["toolSpec"]["name"] == "get_weather"
-    # Original tools list should have been modified in-place (custom stripped)
-    assert "custom" not in tools_with_custom[0]
+    # Caller data should not be mutated (defensive copy used for router fallback safety)
+    assert "custom" in tools_with_custom[0]
 
 
 def test_transform_request_helper_includes_anthropic_beta_and_tools():

@@ -62,10 +62,7 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
 
     Ref: https://github.com/BerriAI/litellm/issues/22847
     """
-    tools = request_body.get("tools")
-    if not tools or not isinstance(tools, list):
-        return
-    strip_custom_from_tools_list(tools)
+    strip_custom_from_tools_list(request_body.get("tools"))
 
 
 def strip_custom_from_tools_list(tools: list) -> None:
