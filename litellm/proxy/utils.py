@@ -824,16 +824,21 @@ class ProxyLogging:
     ) -> dict:
         """
         Helper function to convert pre_call_hook response back to kwargs for MCP usage.
+
+        Supports:
+        - modified_arguments: Override tool call arguments
+        - extra_headers: Inject custom headers into the outbound MCP request
         """
         if not response_data:
             return original_kwargs
 
-        # Apply any argument modifications from the hook response
         modified_kwargs = original_kwargs.copy()
 
-        # If the response contains modified arguments, apply them
         if response_data.get("modified_arguments"):
             modified_kwargs["arguments"] = response_data["modified_arguments"]
+
+        if response_data.get("extra_headers"):
+            modified_kwargs["extra_headers"] = response_data["extra_headers"]
 
         return modified_kwargs
 
