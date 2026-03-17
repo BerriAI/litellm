@@ -381,6 +381,9 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   options={getLogFilterOptions(accessToken)}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                  initialValues={filters}
+                  initialShowFilters={showFilters}
+                  onShowFiltersChange={setShowFilters}
                 />
                 <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
