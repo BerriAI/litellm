@@ -354,6 +354,10 @@ def key_generation_check(
 
     ## check if key is for team or individual
     is_team_key = _is_team_key(data=data)
+    _is_admin = (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
@@ -361,7 +365,13 @@ def key_generation_check(
                 detail=f"Unable to find team object in database. Team ID: {data.team_id}",
             )
         elif team_table is None:
-            return True  # assume user is assigning team_id without using the team table
+            if _is_admin:
+                return True  # admins can assign team_id without team table
+            # Non-admin callers must have a valid team (LIT-1884)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unable to find team object in database. Team ID: {data.team_id}",
+            )
         return _team_key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
@@ -1214,6 +1224,19 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+        # For non-admin internal users: auto-assign caller's user_id if not provided
+        # This prevents creating unbound keys with no user association (LIT-1884)
+        _is_proxy_admin = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not _is_proxy_admin and data.user_id is None:
+            data.user_id = user_api_key_dict.user_id
+            verbose_proxy_logger.warning(
+                "key/generate: auto-assigning user_id=%s for non-admin caller",
+                user_api_key_dict.user_id,
+            )
+
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:
             try:
@@ -1228,6 +1251,12 @@ async def generate_key_fn(
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
                 )
+                # For non-admin callers, team must exist (LIT-1884)
+                if not _is_proxy_admin:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot create keys for non-existent teams.",
+                    )
 
         key_generation_check(
             team_table=team_table,
@@ -1810,16 +1839,56 @@ async def _validate_update_key_data(
     user_api_key_cache: Any,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    _is_proxy_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+    # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
+    if (
+        data.user_id is not None
+        and data.user_id == ""
+        and not _is_proxy_admin
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the user_id from a key.",
+        )
+
     # sanity check - prevent non-proxy admin user from updating key to belong to a different user
     if (
         data.user_id is not None
         and data.user_id != existing_key_row.user_id
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_proxy_admin
     ):
         raise HTTPException(
             status_code=403,
             detail=f"User={data.user_id} is not allowed to update key={data.key} to belong to user={existing_key_row.user_id}",
         )
+
+    # Validate team exists when non-admin changes team_id (LIT-1884)
+    if (
+        data.team_id is not None
+        and not _is_proxy_admin
+    ):
+        try:
+            _team_obj = await get_team_object(
+                team_id=data.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+            if _team_obj is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
+            )
 
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
