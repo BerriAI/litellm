@@ -185,7 +185,9 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
                     )
                 try:
-                    new_session = await proxy_server._initialize_shared_aiohttp_session()
+                    new_session = (
+                        await proxy_server._initialize_shared_aiohttp_session()
+                    )
                 except Exception:
                     verbose_proxy_logger.exception(
                         "SESSION REUSE: Exception during shared session recreation"
