@@ -22,6 +22,7 @@ import { Agent, AgentKeyInfo } from "./agents/types";
 import { Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { getMockDriftSummary, DriftBadgeCell } from "./agents/agent_drift_helpers";
 
 interface AgentsPanelProps {
   accessToken: string | null;
@@ -156,7 +157,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     return dateB - dateA;
   });
 
-  const columnCount = isAdmin ? 7 : 6;
+  const columnCount = isAdmin ? 8 : 7;
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
@@ -212,6 +213,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                   <TableHeaderCell>Model</TableHeaderCell>
                   <TableHeaderCell>Created</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Drift</TableHeaderCell>
                   {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
                 </TableRow>
               </TableHead>
@@ -223,55 +225,64 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                     </TableCell>
                   </TableRow>
                 ) : (
-                  sortedAgents.map((agent) => (
-                    <TableRow key={agent.agent_id}>
-                      <TableCell>
-                        <Text>{agent.agent_name}</Text>
-                      </TableCell>
-                      <TableCell>
-                        <Tooltip title={agent.agent_id}>
-                          <Button
-                            size="xs"
-                            variant="light"
-                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                            onClick={() => setSelectedAgentId(agent.agent_id)}
-                          >
-                            {agent.agent_id.slice(0, 7)}...
-                          </Button>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell>
-                        <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
-                      </TableCell>
-                      <TableCell>
-                        <Badge size="xs" color="blue">
-                          {agent.litellm_params?.model || "N/A"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Text>
-                          {agent.created_at
-                            ? new Date(agent.created_at).toLocaleDateString()
-                            : "N/A"}
-                        </Text>
-                      </TableCell>
-                      <TableCell>
-                        {keyInfoMap[agent.agent_id]?.has_key ? (
-                          <Badge color="green">Active</Badge>
-                        ) : (
-                          <Badge color="yellow">Needs Setup</Badge>
-                        )}
-                      </TableCell>
-                      {isAdmin && (
+                  sortedAgents.map((agent) => {
+                    const drift = getMockDriftSummary(agent.agent_id);
+                    return (
+                      <TableRow key={agent.agent_id}>
                         <TableCell>
-                          <TableIconActionButton
-                            variant="Delete"
-                            onClick={() => handleDeleteClick(agent.agent_id, agent.agent_name)}
+                          <Text>{agent.agent_name}</Text>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={agent.agent_id}>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                              onClick={() => setSelectedAgentId(agent.agent_id)}
+                            >
+                              {agent.agent_id.slice(0, 7)}...
+                            </Button>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
+                        </TableCell>
+                        <TableCell>
+                          <Badge size="xs" color="blue">
+                            {agent.litellm_params?.model || "N/A"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Text>
+                            {agent.created_at
+                              ? new Date(agent.created_at).toLocaleDateString()
+                              : "N/A"}
+                          </Text>
+                        </TableCell>
+                        <TableCell>
+                          {keyInfoMap[agent.agent_id]?.has_key ? (
+                            <Badge color="green">Active</Badge>
+                          ) : (
+                            <Badge color="yellow">Needs Setup</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <DriftBadgeCell
+                            drift={drift}
+                            onClick={() => setSelectedAgentId(agent.agent_id)}
                           />
                         </TableCell>
-                      )}
-                    </TableRow>
-                  ))
+                        {isAdmin && (
+                          <TableCell>
+                            <TableIconActionButton
+                              variant="Delete"
+                              onClick={() => handleDeleteClick(agent.agent_id, agent.agent_name)}
+                            />
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

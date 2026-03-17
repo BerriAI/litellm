@@ -8,6 +8,7 @@ import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
 import AgentCostView from "./agent_cost_view";
+import AgentEvalView from "./agent_eval_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 
 interface AgentInfoViewProps {
@@ -163,6 +164,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
+          <Tab key="evaluations">Evaluations</Tab>
           {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
         </TabList>
 
@@ -268,6 +270,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                 </Descriptions>
               </div>
             )}
+          </TabPanel>
+
+          {/* Evaluations Panel */}
+          <TabPanel>
+            <AgentEvalView
+              agent={agent}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
           </TabPanel>
 
           {/* Settings Panel (only for admins) */}

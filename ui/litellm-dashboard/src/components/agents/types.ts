@@ -37,3 +37,28 @@ export interface Agent {
 export interface AgentsResponse {
   agents: Agent[];
 }
+
+export interface AgentEvalConfig {
+  eval_config_id: string;
+  agent_id: string;
+  name: string;
+  criteria: string;
+  threshold: number;
+  eval_model?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentEvalResult {
+  id: string;
+  agent_id: string;
+  eval_config_id: string;
+  score: number;
+  reason?: string;
+  created_at: string;
+}
+
+export interface AgentDriftDataPoint {
+  date: string;
+  [evalName: string]: string | number;
+}
