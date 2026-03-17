@@ -10,6 +10,7 @@ from typing import List
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+    LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
     LITELLM_KEY_ROTATION_GRACE_PERIOD,
 )
 from litellm.proxy._types import (
@@ -30,14 +31,42 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient):
+    def __init__(self, prisma_client: PrismaClient, pod_lock_manager=None):
         self.prisma_client = prisma_client
+        self.pod_lock_manager = pod_lock_manager
 
     async def process_rotations(self):
         """
-        Main entry point - find and rotate keys that are due for rotation
+        Main entry point - find and rotate keys that are due for rotation.
+        Uses PodLockManager to ensure only one pod runs rotation in multi-pod deployments.
         """
+        from litellm.constants import KEY_ROTATION_JOB_NAME
+
+        lock_acquired = False
         try:
+            # If we have a pod lock manager with Redis, try to acquire the lock
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                # Use the check interval as lock TTL so the lock covers the entire
+                # rotation window. The default 60s TTL can expire mid-rotation for
+                # large key fleets, allowing another pod to start concurrently.
+                lock_ttl = max(
+                    LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS, 300
+                )  # At least 5 minutes
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=KEY_ROTATION_JOB_NAME,
+                        ttl=lock_ttl,
+                    )
+                    or False
+                )
+                if not lock_acquired:
+                    verbose_proxy_logger.warning(
+                        "Key rotation: another pod is already running rotation "
+                        "or Redis lock acquisition failed — skipping this cycle. "
+                        "Keys will be rotated on the next cycle."
+                    )
+                    return
+
             verbose_proxy_logger.info("Starting scheduled key rotation check...")
 
             # Clean up expired deprecated keys first
@@ -74,6 +103,16 @@ class KeyRotationManager:
 
         except Exception as e:
             verbose_proxy_logger.error(f"Key rotation process failed: {e}")
+        finally:
+            # Only release the lock if it was actually acquired
+            if (
+                lock_acquired
+                and self.pod_lock_manager
+                and self.pod_lock_manager.redis_cache
+            ):
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=KEY_ROTATION_JOB_NAME,
+                )
 
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """

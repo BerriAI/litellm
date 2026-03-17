@@ -5955,10 +5955,24 @@ class ProxyStartupEvent:
                     KeyRotationManager,
                 )
 
-                # Get prisma_client from global scope
+                # Get prisma_client and proxy_logging_obj from global scope
                 global prisma_client
+                global proxy_logging_obj
                 if prisma_client is not None:
-                    key_rotation_manager = KeyRotationManager(prisma_client)
+                    # Reuse the PodLockManager from db_spend_update_writer
+                    pod_lock_manager = (
+                        getattr(
+                            getattr(proxy_logging_obj, "db_spend_update_writer", None),
+                            "pod_lock_manager",
+                            None,
+                        )
+                        if proxy_logging_obj is not None
+                        else None
+                    )
+                    key_rotation_manager = KeyRotationManager(
+                        prisma_client,
+                        pod_lock_manager=pod_lock_manager,
+                    )
                     verbose_proxy_logger.debug(
                         f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)"
                     )
