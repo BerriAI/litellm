@@ -229,9 +229,13 @@ class LiteLLMCompletionResponsesConfig:
             if litellm_logging_obj:
                 litellm_logging_obj.stream_options = stream_options
 
-        # only pass non-None values
+        # only pass non-None / non-empty values
+        # Explicitly exclude an empty tools list — sending tools=[] to providers
+        # like Anthropic in a tool_result conversation makes them return empty content.
         litellm_completion_request = {
-            k: v for k, v in litellm_completion_request.items() if v is not None
+            k: v
+            for k, v in litellm_completion_request.items()
+            if v is not None and not (k == "tools" and v == [])
         }
         return litellm_completion_request
 
