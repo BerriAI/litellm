@@ -2258,8 +2258,11 @@ async def initialize_pass_through_endpoints(
         _default_query_params = endpoint.get("default_query_params", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
-        if _auth is not None and str(_auth).lower() == "true":
-            if premium_user is not True:
+        auth_explicitly_false = _auth is False or (
+            isinstance(_auth, str) and str(_auth).lower() == "false"
+        )
+        if not auth_explicitly_false:
+            if _auth is not None and str(_auth).lower() == "true" and premium_user is not True:
                 raise ValueError(
                     "Error Setting Authentication on Pass Through Endpoint: {}".format(
                         CommonProxyErrors.not_premium_user.value

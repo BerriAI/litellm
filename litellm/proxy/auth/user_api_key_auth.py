@@ -418,8 +418,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                ## IF AUTH DISABLED
-                if endpoint.get("auth") is not True:
+                ## IF AUTH DISABLED (explicitly false). Default: auth required.
+                ep_auth = endpoint.get("auth")
+                auth_explicitly_false = ep_auth is False or (
+                    isinstance(ep_auth, str) and str(ep_auth).lower() == "false"
+                )
+                if auth_explicitly_false:
                     return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
@@ -560,8 +564,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         ## EARLY EXIT: Pass-through routes with auth disabled must skip all auth parsing.
         ## This avoids NoneType.split() when api_key is None and JWT/OAuth2 parsing runs.
-        ## Align with registration logic (pass_through_endpoints.py): auth required when
-        ## auth is True or str(auth).lower() == "true".
+        ## Default: auth required when auth is not set (None). Only bypass when explicitly false.
         if pass_through_endpoints is not None:
             for ep in pass_through_endpoints:
                 if not isinstance(ep, dict):
@@ -572,8 +575,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     and route.startswith(ep_path + "/")
                 )
                 ep_auth = ep.get("auth")
-                auth_required = ep_auth is True or (
-                    ep_auth is not None and str(ep_auth).lower() == "true"
+                auth_required = not (
+                    ep_auth is False
+                    or (isinstance(ep_auth, str) and str(ep_auth).lower() == "false")
                 )
                 if route_matches and not auth_required:
                     return UserAPIKeyAuth()

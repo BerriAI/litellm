@@ -1074,6 +1074,11 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
         assert result["user_object"] == user_object
 
 
+def test_is_jwt_returns_false_for_none():
+    """JWTHandler.is_jwt(None) returns False to avoid NoneType.split() when token is missing."""
+    assert JWTHandler.is_jwt(None) is False
+
+
 def test_get_team_id_from_header():
     """Test get_team_id_from_header returns team when valid, None when missing, raises on invalid."""
     from fastapi import HTTPException
