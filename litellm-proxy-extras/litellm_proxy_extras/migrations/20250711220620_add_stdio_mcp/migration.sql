@@ -1,10 +1,10 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "args" TEXT[] DEFAULT ARRAY[]::TEXT[],
-ADD COLUMN     "command" TEXT,
-ADD COLUMN     "env" JSONB DEFAULT '{}',
-ADD COLUMN     "mcp_access_groups" TEXT[],
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "args" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN IF NOT EXISTS "command" TEXT,
+ADD COLUMN IF NOT EXISTS "env" JSONB DEFAULT '{}',
+ADD COLUMN IF NOT EXISTS "mcp_access_groups" TEXT[],
 ALTER COLUMN "url" DROP NOT NULL;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_ObjectPermissionTable" ADD COLUMN     "mcp_access_groups" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_ObjectPermissionTable" ADD COLUMN IF NOT EXISTS "mcp_access_groups" TEXT[] DEFAULT ARRAY[]::TEXT[];
 

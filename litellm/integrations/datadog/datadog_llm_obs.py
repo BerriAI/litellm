@@ -48,13 +48,15 @@ class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
-            
+
             self.is_mock_mode = should_use_datadog_mock()
-            
+
             if self.is_mock_mode:
                 create_mock_datadog_client()
-                verbose_logger.debug("[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode")
-            
+                verbose_logger.debug(
+                    "[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode"
+                )
+
             # Configure DataDog endpoint (Agent or Direct API)
             # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
             # Check for agent mode FIRST - agent mode doesn't require DD_API_KEY or DD_SITE
@@ -189,9 +191,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"DataDogLLMObs: Flushing {len(self.log_queue)} events"
             )
-            
+
             if self.is_mock_mode:
-                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
+                verbose_logger.debug(
+                    "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
+                )
 
             # Prepare the payload
             payload = {

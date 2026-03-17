@@ -209,13 +209,113 @@ Expect to see the following response header when this works
 x-litellm-model-id: default-model
 ```
 
+## Regex-based tag routing (`tag_regex`)
+
+Use `tag_regex` to route requests based on regex patterns matched against request headers, without requiring clients to pass a tag explicitly. This is useful when clients already send a recognisable header, such as `User-Agent`.
+
+**Use case: route all Claude Code traffic to dedicated AWS accounts**
+
+Claude Code always sends `User-Agent: claude-code/<version>`. With `tag_regex` you can route that traffic to a dedicated deployment automatically — no per-developer configuration needed.
+
+### 1. Config
+
+```yaml
+model_list:
+  # Claude Code traffic → dedicated deployment, matched by User-Agent
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/converse/anthropic-claude-sonnet-4-6
+      aws_region_name: us-east-1
+      aws_role_name: arn:aws:iam::111122223333:role/LiteLLMClaudeCode
+      tag_regex:
+        - "^User-Agent: claude-code\\/"   # matches claude-code/1.x, 2.x, etc.
+    model_info:
+      id: claude-code-deployment
+
+  # All other traffic falls back to the default deployment
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/converse/anthropic-claude-sonnet-4-6
+      aws_region_name: us-east-1
+      aws_role_name: arn:aws:iam::444455556666:role/LiteLLMDefault
+      tags:
+        - default
+    model_info:
+      id: regular-deployment
+
+router_settings:
+  enable_tag_filtering: true
+  tag_filtering_match_any: true
+
+general_settings:
+  master_key: sk-1234
+```
+
+### 2. Verify routing
+
+Claude Code sets `User-Agent: claude-code/<version>` automatically — no client config needed:
+
+```shell
+# Claude Code request (User-Agent set automatically by Claude Code)
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
+  -H "User-Agent: claude-code/1.2.3" \
+  -d '{"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}'
+# → x-litellm-model-id: claude-code-deployment
+
+# Any other client (no matching User-Agent) → default deployment
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}'
+# → x-litellm-model-id: regular-deployment
+```
+
+### How matching works
+
+| Priority | Condition | Result |
+|----------|-----------|--------|
+| 1 | Request has `tags` AND deployment has `tags` | Exact tag match (respects `match_any` setting) |
+| 2 | Deployment has `tag_regex` AND request has a `User-Agent` | Regex match (always OR logic — any pattern match suffices) |
+| 3 | Deployment has `tags: [default]` | Default fallback |
+| 4 | No default set | All healthy deployments returned |
+
+`tag_regex` always uses OR semantics — `tag_filtering_match_any=False` applies only to exact tag matching, not to regex patterns.
+
+### Observability
+
+When a regex matches, `tag_routing` is written into request metadata and flows to SpendLogs:
+
+```json
+{
+  "tag_routing": {
+    "matched_via": "tag_regex",
+    "matched_value": "^User-Agent: claude-code\\/",
+    "user_agent": "claude-code/1.2.3",
+    "request_tags": []
+  }
+}
+```
+
+### Security note
+
+:::caution
+
+**`User-Agent` is a client-supplied header and can be set to any value.** Any API consumer can send `User-Agent: claude-code/1.0` regardless of whether they are actually using Claude Code.
+
+Do not rely on `tag_regex` routing to enforce access controls or spend limits — use [team/key-based routing](./users) for that. `tag_regex` is a **traffic classification hint** (useful for billing visibility, capacity planning, and routing convenience), not a security boundary.
+
+:::
+
+
+---
+
 ## ✨ Team based tag routing (Enterprise)
 
 LiteLLM Proxy supports team-based tag routing, allowing you to associate specific tags with teams and route requests accordingly. Example **Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B** (LLM Access Control For Teams)
 
 :::info
 
-This is an enterprise feature, [Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+This is an enterprise feature, [Contact us here to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 

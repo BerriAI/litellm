@@ -144,6 +144,12 @@ async def image_generation(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
         )
+
+        ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -236,9 +242,13 @@ async def image_edit_api(
     ```
     """
     if image is not None and image_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+        raise HTTPException(
+            status_code=422, detail="Cannot specify both 'image' and 'image[]'"
+        )
     if mask is not None and mask_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
+        raise HTTPException(
+            status_code=422, detail="Cannot specify both 'mask' and 'mask[]'"
+        )
     if image is None and image_array is not None:
         image = image_array
     if mask is None and mask_array is not None:
@@ -274,7 +284,7 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
-    
+
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:
         data["prompt"] = None

@@ -113,7 +113,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<KeyLifecycleSettings {...defaultProps} isCreateMode={false} />);
 
       const input = screen.getByTestId("duration-input");
-      expect(input).toHaveAttribute("placeholder", "e.g., 30d or -1 to never expire");
+      expect(input).toHaveAttribute("placeholder", "e.g., 30d");
     });
 
     it("should show correct tooltip in create mode", () => {
@@ -121,12 +121,12 @@ describe("KeyLifecycleSettings", () => {
 
       const tooltips = screen.getAllByTestId("tooltip");
       const expiryTooltip = tooltips.find((tooltip) =>
-        tooltip.getAttribute("title")?.includes("Leave empty to never expire")
+        tooltip.getAttribute("title")?.includes("Leave empty to keep the current expiry unchanged")
       );
       expect(expiryTooltip).toBeInTheDocument();
       expect(expiryTooltip).toHaveAttribute(
         "title",
-        "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to never expire."
+        "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged."
       );
     });
 
@@ -135,12 +135,12 @@ describe("KeyLifecycleSettings", () => {
 
       const tooltips = screen.getAllByTestId("tooltip");
       const expiryTooltip = tooltips.find((tooltip) =>
-        tooltip.getAttribute("title")?.includes("Use -1 to never expire")
+        tooltip.getAttribute("title")?.includes("Leave empty to keep the current expiry unchanged")
       );
       expect(expiryTooltip).toBeInTheDocument();
       expect(expiryTooltip).toHaveAttribute(
         "title",
-        "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Use -1 to never expire."
+        "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged."
       );
     });
 

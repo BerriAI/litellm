@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
-import { Form, Input, Button as AntButton, message, Spin, Descriptions } from "antd";
+import { Form, Input, InputNumber, Button as AntButton, message, Spin, Descriptions, Divider } from "antd";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import { Agent } from "./types";
@@ -201,9 +201,51 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               {agent.agent_card_params?.documentationUrl && (
                 <Descriptions.Item label="Documentation URL">{agent.agent_card_params.documentationUrl}</Descriptions.Item>
               )}
+              <Descriptions.Item label="TPM Limit">{agent.tpm_limit ?? "Unlimited"}</Descriptions.Item>
+              <Descriptions.Item label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</Descriptions.Item>
+              <Descriptions.Item label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</Descriptions.Item>
+              <Descriptions.Item label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</Descriptions.Item>
               <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>
+
+            {agent.object_permission &&
+              (agent.object_permission.mcp_servers?.length ||
+                agent.object_permission.mcp_access_groups?.length ||
+                (agent.object_permission.mcp_tool_permissions &&
+                  Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
+              <div style={{ marginTop: 24 }}>
+                <Title>MCP Tool Permissions</Title>
+                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                  {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
+                    <Descriptions.Item label="MCP Servers">
+                      {agent.object_permission.mcp_servers.join(", ")}
+                    </Descriptions.Item>
+                  )}
+                  {agent.object_permission.mcp_access_groups &&
+                    agent.object_permission.mcp_access_groups.length > 0 && (
+                      <Descriptions.Item label="MCP Access Groups">
+                        {agent.object_permission.mcp_access_groups.join(", ")}
+                      </Descriptions.Item>
+                    )}
+                  {agent.object_permission.mcp_tool_permissions &&
+                    Object.keys(agent.object_permission.mcp_tool_permissions).length > 0 && (
+                      <Descriptions.Item label="Tool permissions per server">
+                        <div className="space-y-1">
+                          {Object.entries(agent.object_permission.mcp_tool_permissions).map(
+                            ([serverId, tools]) => (
+                              <div key={serverId}>
+                                <span className="font-medium">{serverId}:</span>{" "}
+                                {Array.isArray(tools) ? tools.join(", ") : String(tools)}
+                              </div>
+                            )
+                          )}
+                        </div>
+                      </Descriptions.Item>
+                    )}
+                </Descriptions>
+              </div>
+            )}
 
             <AgentCostView agent={agent} />
 
@@ -256,6 +298,25 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     ) : (
                     <AgentFormFields showAgentName={true} />
                     )}
+
+                    <Divider />
+                    <Title className="mb-4">Rate Limits</Title>
+                    <div className="grid grid-cols-2 gap-4">
+                      <Form.Item label="TPM Limit" name="tpm_limit">
+                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
+                      </Form.Item>
+                      <Form.Item label="RPM Limit" name="rpm_limit">
+                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
+                      </Form.Item>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <Form.Item label="Session TPM Limit" name="session_tpm_limit">
+                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
+                      </Form.Item>
+                      <Form.Item label="Session RPM Limit" name="session_rpm_limit">
+                        <InputNumber className="w-full" min={0} placeholder="Unlimited" />
+                      </Form.Item>
+                    </div>
 
                     <div className="flex justify-end gap-2 mt-6">
                       <AntButton onClick={() => {

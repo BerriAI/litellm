@@ -217,9 +217,10 @@ class TestVolcengineResponsesAPITransformation:
         """Errors should be wrapped with VolcEngineError for consistent handling."""
         config = VolcEngineResponsesAPIConfig()
         error = config.get_error_class("bad request", 400, headers={"x": "y"})
-        from litellm.llms.volcengine.common_utils import VolcEngineError
 
-        assert isinstance(error, VolcEngineError)
+        # Use class name comparison instead of isinstance to avoid issues with
+        # module reloading during parallel test execution (conftest reloads litellm)
+        assert type(error).__name__ == "VolcEngineError", f"Expected VolcEngineError, got {type(error).__name__}"
         assert error.status_code == 400
         assert error.message == "bad request"
         assert error.headers.get("x") == "y"

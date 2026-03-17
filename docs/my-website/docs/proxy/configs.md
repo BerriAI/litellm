@@ -469,6 +469,7 @@ credential_list:
       api_version: "2023-05-15"
     credential_info:
       description: "Production credentials for EU region"
+      custom_llm_provider: "azure"
 ```
 
 #### Key Parameters

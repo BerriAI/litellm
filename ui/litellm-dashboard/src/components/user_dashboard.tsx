@@ -14,9 +14,9 @@ import {
   keyInfoCall,
   modelAvailableCall,
   Organization,
-  userInfoCall,
+  userGetInfoV2,
 } from "./networking";
-import CreateKey from "./organisms/create_key_button";
+import CreateKey, { CreateKeyPrefillData } from "./organisms/create_key_button";
 import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
@@ -55,6 +55,8 @@ interface UserDashboardProps {
   organizations: Organization[] | null;
   addKey: (data: any) => void;
   createClicked: boolean;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 type TeamInterface = {
@@ -77,6 +79,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   organizations,
   addKey,
   createClicked,
+  autoOpenCreate,
+  prefillData,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -93,15 +97,17 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
+
+  // Clear session storage on page unload so next load fetches fresh data.
+  // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+  // They are only cleared on logout
+  useEffect(() => {
+    const handleBeforeUnload = () => {
       sessionStorage.clear();
-      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-      // They are only cleared on logout
-    });
-  }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   function formatUserRole(userRole: string) {
     if (!userRole) {
@@ -159,7 +165,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         }
       }
     }
-    if (userID && accessToken && userRole && !keys && !userSpendData) {
+    if (userID && accessToken && userRole && !userSpendData) {
       const cachedUserModels = sessionStorage.getItem("userModels" + userID);
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
@@ -170,26 +176,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
-            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
+            const response = await userGetInfoV2(accessToken, userID);
 
-            setUserSpendData(response["user_info"]);
-            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`);
+            setUserSpendData(response);
 
-            // set keys for admin and users
-            if (!response?.teams[0].keys) {
-              setKeys(response["keys"]);
-            } else {
-              setKeys(
-                response["keys"].concat(
-                  response.teams
-                    .filter((team: any) => userRole === "Admin" || team.user_id === userID)
-                    .flatMap((team: any) => team.keys),
-                ),
-              );
-            }
-
-            sessionStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
-            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response["user_info"]));
+            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response));
 
             const model_available = await modelAvailableCall(accessToken, userID, userRole);
             // loop through model_info["data"] and create an array of element.model_name
@@ -212,7 +203,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
       }
     }
-  }, [userID, token, accessToken, keys, userRole]);
+  }, [userID, token, accessToken, userRole]);
 
   useEffect(() => {
     // check key health - if it's invalid, redirect to login
@@ -350,6 +341,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             teams={teams as Team[]}
             data={keys}
             addKey={addKey}
+            autoOpenCreate={autoOpenCreate}
+            prefillData={prefillData}
           />
           <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>

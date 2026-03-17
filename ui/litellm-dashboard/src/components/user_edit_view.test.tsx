@@ -47,38 +47,47 @@ vi.mock("antd", async (importOriginal) => {
       children,
     );
   };
-  SelectComponent.Option = ({ value: optionValue, children: optionChildren }: any) =>
+  SelectComponent.displayName = "Select";
+  const SelectOption = ({ value: optionValue, children: optionChildren }: any) =>
     React.createElement("option", { value: optionValue }, optionChildren);
+  SelectOption.displayName = "SelectOption";
+  SelectComponent.Option = SelectOption;
+  const Tooltip = ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children);
+  Tooltip.displayName = "Tooltip";
+  const Checkbox = ({ checked, onChange, children, ...props }: any) =>
+    React.createElement(
+      "label",
+      { style: { display: "flex", alignItems: "center", gap: "8px" } },
+      React.createElement("input", {
+        type: "checkbox",
+        checked: checked,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange({ target: { checked: e.target.checked } }),
+        ...props,
+      }),
+      children,
+    );
+  Checkbox.displayName = "Checkbox";
   return {
     ...actual,
     Select: SelectComponent,
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-    Checkbox: ({ checked, onChange, children, ...props }: any) =>
-      React.createElement(
-        "label",
-        { style: { display: "flex", alignItems: "center", gap: "8px" } },
-        React.createElement("input", {
-          type: "checkbox",
-          checked: checked,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange({ target: { checked: e.target.checked } }),
-          ...props,
-        }),
-        children,
-      ),
+    Tooltip,
+    Checkbox,
   };
 });
 
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   const React = await import("react");
+  const SelectItem = ({ value, children, title }: any) => {
+    const childText = React.Children.toArray(children)
+      .map((child: any) => (typeof child === "string" ? child : child?.props?.children || ""))
+      .join(" ");
+    return React.createElement("option", { value, title }, childText || title || value);
+  };
+  SelectItem.displayName = "SelectItem";
   return {
     ...actual,
-    SelectItem: ({ value, children, title }: any) => {
-      const childText = React.Children.toArray(children)
-        .map((child: any) => (typeof child === "string" ? child : child?.props?.children || ""))
-        .join(" ");
-      return React.createElement("option", { value, title }, childText || title || value);
-    },
+    SelectItem,
   };
 });
 

@@ -7,6 +7,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+- `datadog_metrics` [Datadog Custom Metrics](#datadog-custom-metrics)
 - `datadog_cost_management` [Datadog Cloud Cost Management](#datadog-cloud-cost-management)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
@@ -168,6 +169,65 @@ On the Datadog LLM Observability page, you should see that both input messages a
 <Image img={require('../../img/dd_llm_obs.png')} />
 
 
+## Datadog Custom Metrics
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | Latency metrics, request counts by status code |
+| **Events** | Success + Failure |
+| **Product Link** | [Datadog Metrics](https://docs.datadoghq.com/metrics/) |
+
+Publishes the following metrics to Datadog via the `/api/v2/series` endpoint:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `litellm.request.total_latency` | Gauge | End-to-end request latency (seconds) |
+| `litellm.llm_api.latency` | Gauge | Time spent waiting for the LLM provider response (seconds) |
+| `litellm.llm_api.request_count` | Count | Request count, tagged with status code |
+
+Using `total_latency` and `llm_api.latency`, you can derive **internal latency** = `total_latency - llm_api.latency`.
+
+All metrics include the following tags: `env`, `service`, `version`, `HOSTNAME`, `POD_NAME`, `provider`, `model_name`, `model_group`, `team`, `status_code`.
+
+**Step 1**: Create a `config.yaml` file
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["datadog_metrics"]
+  failure_callback: ["datadog_metrics"]
+```
+
+**Step 2**: Set required env variables
+
+```shell
+DD_API_KEY="your-api-key"
+DD_SITE="us5.datadoghq.com"  # your datadog site
+```
+
+**Step 3**: Start the proxy and make a test request
+
+```shell
+litellm --config config.yaml
+```
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "hello"}]
+}'
+```
+
+**Step 4**: View metrics in Datadog Metrics Explorer
+
+Navigate to **Metrics > Explorer** in Datadog and search for `litellm.request.total_latency`, `litellm.llm_api.latency`, or `litellm.llm_api.request_count`.
+
 ## Datadog Cloud Cost Management
 
 | Feature | Details |
@@ -252,4 +312,13 @@ LiteLLM supports customizing the following Datadog environment variables
 
 \* **Required when using Direct API** (default): `DD_API_KEY` and `DD_SITE` are required  
 \* **Optional when using DataDog Agent**: Set `LITELLM_DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required for **Datadog Logs**. (**Note: `DD_API_KEY` IS REQUIRED for Datadog LLM Observability**)
+
+## Automatic Tags
+
+LiteLLM automatically adds the following tags to your Datadog logs and metrics if the information is available in the request:
+
+| Tag | Description | Source |
+|-----|-------------|--------|
+| `team` | The team alias or ID associated with the API Key | `user_api_key_team_alias`, `team_alias`, `user_api_key_team_id`, or `team_id` in metadata |
+| `request_tag` | Custom tags passed in the request | `request_tags` in logging payload |
 

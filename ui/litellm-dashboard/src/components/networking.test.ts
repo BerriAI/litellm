@@ -317,3 +317,57 @@ describe("UI config and public endpoints", () => {
     expect(configCall).toBeDefined();
   });
 });
+
+describe("individualModelHealthCheckCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should call /health with model_id query param so health checks run by deployment id", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        healthy_count: 1,
+        unhealthy_count: 0,
+        healthy_endpoints: [],
+        unhealthy_endpoints: [],
+      }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.individualModelHealthCheckCall("token-123", "deployment-abc-456");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    expect(urlStr).toContain("health");
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("model_id")).toBe("deployment-abc-456");
+    expect(parsed.searchParams.has("model")).toBe(false);
+  });
+
+  it("should encode model_id in URL", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        healthy_count: 0,
+        unhealthy_count: 0,
+        healthy_endpoints: [],
+        unhealthy_endpoints: [],
+      }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.individualModelHealthCheckCall("token", "id/with/slashes");
+
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("model_id")).toBe("id/with/slashes");
+  });
+});

@@ -104,8 +104,17 @@ There are other keys you can use to specify costs for different scenarios and mo
 - `input_cost_per_video_per_second` - Cost per second of video input
 - `input_cost_per_video_per_second_above_128k_tokens` - Video cost for large contexts
 - `input_cost_per_character` - Character-based pricing for some providers
+- `input_cost_per_token_priority` / `output_cost_per_token_priority` - Priority/PayGo pricing (Vertex AI Gemini, Bedrock)
+- `input_cost_per_token_flex` / `output_cost_per_token_flex` - Batch/flex pricing
 
 These keys evolve based on how new models handle multimodality. The latest version can be found at [https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
+
+### Service Tier / PayGo Pricing (Vertex AI, Bedrock)
+
+For providers that support multiple pricing tiers (e.g., Vertex AI PayGo, Bedrock service tiers), LiteLLM automatically applies the correct cost based on the response:
+
+- **Vertex AI Gemini**: Uses `usageMetadata.trafficType` (`ON_DEMAND_PRIORITY` → priority, `FLEX`/`BATCH` → flex). See [Vertex AI - PayGo / Priority Cost Tracking](../providers/vertex.md#paygo--priority-cost-tracking).
+- **Bedrock**: Uses `serviceTier` from the response. See [Bedrock - Usage - Service Tier](../providers/bedrock.md#usage---service-tier).
 
 ## Zero-Cost Models (Bypass Budget Checks)
 

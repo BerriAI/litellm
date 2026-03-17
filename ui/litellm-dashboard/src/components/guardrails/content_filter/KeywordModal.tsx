@@ -1,6 +1,5 @@
 import React from "react";
-import { Typography, Select, Modal, Space } from "antd";
-import { Button, TextInput, Textarea } from "@tremor/react";
+import { Typography, Select, Modal, Space, Button, Input } from "antd";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -39,10 +38,10 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
       <Space direction="vertical" style={{ width: "100%" }} size="large">
         <div>
           <Text strong>Keyword</Text>
-          <TextInput
+          <Input
             placeholder="Enter sensitive keyword or phrase"
             value={keyword}
-            onValueChange={onKeywordChange}
+            onChange={(e) => onKeywordChange(e.target.value)}
             style={{ marginTop: 8 }}
           />
         </div>
@@ -64,10 +63,10 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
 
         <div>
           <Text strong>Description (optional)</Text>
-          <Textarea
+          <Input.TextArea
             placeholder="Explain why this keyword is sensitive"
             value={description}
-            onValueChange={onDescriptionChange}
+            onChange={(e) => onDescriptionChange(e.target.value)}
             rows={3}
             style={{ marginTop: 8 }}
           />
@@ -75,10 +74,10 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button variant="secondary" onClick={onCancel}>
+        <Button onClick={onCancel}>
           Cancel
         </Button>
-        <Button onClick={onAdd}>
+        <Button type="primary" onClick={onAdd}>
           Add
         </Button>
       </div>

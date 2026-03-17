@@ -70,7 +70,11 @@ class PolicyValidator:
             )
 
             guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
-            return {g.get("guardrail_name", "") for g in guardrails if g.get("guardrail_name")}
+            return {
+                g.get("guardrail_name", "")
+                for g in guardrails
+                if g.get("guardrail_name")
+            }
         except Exception as e:
             verbose_proxy_logger.warning(
                 f"Could not get guardrails from registry: {str(e)}"
@@ -145,17 +149,17 @@ class PolicyValidator:
 
             # Check if model matches any pattern via pattern router
             if hasattr(self.llm_router, "pattern_router"):
-                pattern_deployments = self.llm_router.pattern_router.get_deployments_by_pattern(
-                    model=model
+                pattern_deployments = (
+                    self.llm_router.pattern_router.get_deployments_by_pattern(
+                        model=model
+                    )
                 )
                 if pattern_deployments:
                     return True
 
             return False
         except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Could not check model '{model}': {str(e)}"
-            )
+            verbose_proxy_logger.warning(f"Could not check model '{model}': {str(e)}")
             return True  # Assume valid on error
 
     def _validate_inheritance_chain(
@@ -283,8 +287,14 @@ class PolicyValidator:
                         )
                     )
 
-            # Note: Team, key, and model validation is done via policy_attachments
-            # Policies no longer have scope - attachments define where policies apply
+            # Validate pipeline if present
+            if policy.pipeline is not None:
+                pipeline_errors = PolicyValidator._validate_pipeline(
+                    policy_name=policy_name,
+                    policy=policy,
+                    available_guardrails=available_guardrails,
+                )
+                errors.extend(pipeline_errors)
 
             # Validate inheritance
             inheritance_errors = self._validate_inheritance_chain(
@@ -297,6 +307,53 @@ class PolicyValidator:
             errors=errors,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _validate_pipeline(
+        policy_name: str,
+        policy: Policy,
+        available_guardrails: Set[str],
+    ) -> List[PolicyValidationError]:
+        """Validate a policy's pipeline configuration."""
+        errors: List[PolicyValidationError] = []
+        pipeline = policy.pipeline
+        if pipeline is None:
+            return errors
+
+        guardrails_add = set(policy.guardrails.get_add())
+
+        for i, step in enumerate(pipeline.steps):
+            # Check guardrail is in policy's guardrails.add
+            if step.guardrail not in guardrails_add:
+                errors.append(
+                    PolicyValidationError(
+                        policy_name=policy_name,
+                        error_type=PolicyValidationErrorType.INVALID_GUARDRAIL,
+                        message=(
+                            f"Pipeline step {i} guardrail '{step.guardrail}' "
+                            f"is not in the policy's guardrails.add list"
+                        ),
+                        field="pipeline.steps",
+                        value=step.guardrail,
+                    )
+                )
+
+            # Check guardrail exists in registry
+            if available_guardrails and step.guardrail not in available_guardrails:
+                errors.append(
+                    PolicyValidationError(
+                        policy_name=policy_name,
+                        error_type=PolicyValidationErrorType.INVALID_GUARDRAIL,
+                        message=(
+                            f"Pipeline step {i} guardrail '{step.guardrail}' "
+                            f"not found in guardrail registry"
+                        ),
+                        field="pipeline.steps",
+                        value=step.guardrail,
+                    )
+                )
+
+        return errors
 
     async def validate_policy_config(
         self,

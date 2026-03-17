@@ -13,6 +13,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
 
     background: Optional[Literal["transparent", "opaque", "auto"]]
+    input_fidelity: Optional[Literal["high", "low"]]
     mask: Optional[str]
     n: Optional[int]
     quality: Optional[Literal["high", "medium", "low", "standard", "auto"]]

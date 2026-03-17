@@ -7,6 +7,7 @@ PublicAI is an OpenAI-compatible provider with minor customizations.
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -51,9 +52,13 @@ class TestPublicAIConfig:
         assert result["Authorization"] == f"Bearer {api_key}"
         assert result["Content-Type"] == "application/json"
 
-    def test_get_supported_openai_params(self, config):
+    @patch("litellm.utils.supports_function_calling", return_value=True)
+    def test_get_supported_openai_params(self, mock_supports_fc, config):
         """
-        Test that get_supported_openai_params returns correct params
+        Test that get_supported_openai_params returns correct params.
+        We mock supports_function_calling because the test model name
+        'swiss-ai-apertus' is not in the model registry; this test validates
+        config behaviour, not registry lookups.
         """
         supported_params = config.get_supported_openai_params(model="swiss-ai-apertus")
         
@@ -66,9 +71,12 @@ class TestPublicAIConfig:
         # Note: JSON-based configs inherit from OpenAIGPTConfig which includes functions
         # This is expected behavior for JSON-based providers
 
-    def test_map_openai_params_includes_functions(self, config):
+    @patch("litellm.utils.supports_function_calling", return_value=True)
+    def test_map_openai_params_includes_functions(self, mock_supports_fc, config):
         """
-        Test that functions parameter is mapped (JSON-based configs don't exclude functions)
+        Test that functions parameter is mapped (JSON-based configs don't exclude functions).
+        We mock supports_function_calling because the test model name
+        'swiss-ai-apertus' is not in the model registry.
         """
         non_default_params = {
             "functions": [{"name": "test_function", "description": "Test function"}],

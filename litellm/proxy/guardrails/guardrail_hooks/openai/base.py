@@ -49,4 +49,4 @@ class OpenAIGuardrailBase:
             user_prompt += text_content + "\n"
 
         result = user_prompt.strip()
-        return result if result else None 
+        return result if result else None

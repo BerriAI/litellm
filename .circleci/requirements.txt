@@ -18,3 +18,4 @@ semantic_router==0.1.10 # for auto-routing with litellm
 fastuuid==0.12.0
 responses==0.25.7  # for proxy client tests
 pytest-retry==1.6.3  # for automatic test retries
+litellm-proxy-extras  # for prisma migrations

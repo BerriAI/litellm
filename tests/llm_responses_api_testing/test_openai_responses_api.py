@@ -36,6 +36,9 @@ class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
             "model": "openai/gpt-5-mini",
         }
 
+    def get_advanced_model_for_shell_tool(self):
+        return "openai/gpt-5.2"
+
 
 class TestCustomLogger(CustomLogger):
     def __init__(

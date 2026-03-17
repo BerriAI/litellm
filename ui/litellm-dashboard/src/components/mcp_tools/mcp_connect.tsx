@@ -256,7 +256,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "${proxyBaseUrl}/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_VIRTUAL_KEY",

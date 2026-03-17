@@ -26,6 +26,11 @@ for (const { role, storage } of roles) {
 
     test("should navigate to correct URL when clicking sidebar menu items from homepage", async ({ page }) => {
       await page.goto("/ui");
+      await page.evaluate(() => {
+        window.localStorage.setItem("disableUsageIndicator", "true");
+        window.localStorage.setItem("disableShowPrompts", "true");
+        window.localStorage.setItem("disableShowNewBadge", "true");
+      });
 
       for (const buttonLabel of sidebarButtons[role as keyof typeof sidebarButtons]) {
         const expectedPage = menuLabelToPage[buttonLabel];
@@ -45,6 +50,13 @@ for (const { role, storage } of roles) {
     });
 
     test("should navigate directly to page using navigation helper", async ({ page }) => {
+      await page.goto("/ui");
+      await page.evaluate(() => {
+        window.localStorage.setItem("disableUsageIndicator", "true");
+        window.localStorage.setItem("disableShowPrompts", "true");
+        window.localStorage.setItem("disableShowNewBadge", "true");
+      });
+
       // Test direct navigation to verify the helper function works
       await navigateToPage(page, Page.ApiKeys);
       await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.ApiKeys}(&|$)`));

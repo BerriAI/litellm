@@ -31,6 +31,14 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         description="Additional provider-specific parameters to send with the guardrail request",
     )
 
+    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when the guardrail endpoint is unreachable due to network errors. "
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
@@ -60,6 +68,14 @@ class GenericGuardrailAPIRequest(BaseModel):
     tools: Optional[List[ChatCompletionToolParam]] = None
     texts: Optional[List[str]] = None
     request_data: GenericGuardrailAPIMetadata
+    request_headers: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Sanitized inbound request headers from the original proxy request.",
+    )
+    litellm_version: Optional[str] = Field(
+        default=None,
+        description="LiteLLM library version running this proxy.",
+    )
     additional_provider_specific_params: Optional[Dict[str, Any]] = None
     tool_calls: Optional[
         Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]

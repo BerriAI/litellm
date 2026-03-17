@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
+    _sanitize_empty_content,
 )
 
 
@@ -215,3 +216,45 @@ def test_chunk_parser_with_citation():
             "end_char_index": 50,
         }
     }
+
+
+def test_sanitize_empty_content_pops_none():
+    message = {"role": "user", "content": None}
+    _sanitize_empty_content(message)
+    assert "content" not in message
+
+
+def test_sanitize_empty_content_pops_empty_string():
+    message = {"role": "user", "content": ""}
+    _sanitize_empty_content(message)
+    assert "content" not in message
+
+
+def test_sanitize_empty_content_pops_single_empty_text_block():
+    message = {"role": "user", "content": [{"type": "text", "text": ""}]}
+    _sanitize_empty_content(message)
+    assert "content" not in message
+
+
+def test_sanitize_empty_content_filters_empty_blocks_keeps_non_empty():
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "Hello"},
+            {"type": "text", "text": "  "},
+        ],
+    }
+    _sanitize_empty_content(message)
+    assert message["content"] == [{"type": "text", "text": "Hello"}]
+
+
+def test_transform_messages_sanitizes_empty_content():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": ""}]},
+        {"role": "user", "content": "Hi"},
+    ]
+    result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
+    assert "content" not in result[0]
+    assert result[1]["content"] == "Hi"

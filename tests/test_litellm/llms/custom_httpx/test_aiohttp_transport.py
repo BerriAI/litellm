@@ -12,8 +12,40 @@ sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory 
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
+    AiohttpTransport,
     LiteLLMAiohttpTransport,
 )
+
+
+@pytest.mark.asyncio
+async def test_aclose_does_not_close_shared_session():
+    """Test that aclose() does not close a session it does not own (shared session)."""
+    session = aiohttp.ClientSession()
+    try:
+        transport = LiteLLMAiohttpTransport(client=session, owns_session=False)
+        await transport.aclose()
+        assert not session.closed, "Shared session should not be closed by transport"
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_session():
+    """Test that aclose() closes a session it owns."""
+    session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=session, owns_session=True)
+    await transport.aclose()
+    assert session.closed, "Owned session should be closed by transport"
+
+
+@pytest.mark.asyncio
+async def test_owns_session_defaults_to_true():
+    """Test that owns_session defaults to True for backwards compatibility."""
+    session = aiohttp.ClientSession()
+    transport = AiohttpTransport(client=session)
+    assert transport._owns_session is True
+    await transport.aclose()
+    assert session.closed
 
 
 class MockAiohttpResponse:

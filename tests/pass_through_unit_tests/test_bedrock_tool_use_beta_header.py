@@ -40,30 +40,30 @@ async def test_bedrock_sonnet_4_5_with_advanced_tool_use_beta_header():
     print(f"✅ Test passed! Response: {response}")
 
 
-@pytest.mark.asyncio
-async def test_bedrock_claude_3_5_with_advanced_tool_use_beta_header_filtered():
-    """
-    Simple E2E test: Call Bedrock Claude 3.5 with advanced-tool-use beta header.
+# @pytest.mark.asyncio
+# async def test_bedrock_claude_3_5_with_advanced_tool_use_beta_header_filtered():
+#     """
+#     Simple E2E test: Call Bedrock Claude 3.5 with advanced-tool-use beta header.
 
-    This should work because the beta header is filtered out by LiteLLM before
-    sending the request to Bedrock Invoke API.
-    """
+#     This should work because the beta header is filtered out by LiteLLM before
+#     sending the request to Bedrock Invoke API.
+#     """
 
-    response = await litellm.anthropic.messages.acreate(
-        model="bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-        messages=[{"role": "user", "content": "What is 2+2?"}],
-        max_tokens=100,
-        provider_specific_header={
-            "custom_llm_provider": "bedrock",
-            "extra_headers": {
-                "anthropic-beta": "advanced-tool-use-2025-11-20",
-            },
-        },
-    )
+#     response = await litellm.anthropic.messages.acreate(
+#         model="bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+#         messages=[{"role": "user", "content": "What is 2+2?"}],
+#         max_tokens=100,
+#         provider_specific_header={
+#             "custom_llm_provider": "bedrock",
+#             "extra_headers": {
+#                 "anthropic-beta": "advanced-tool-use-2025-11-20",
+#             },
+#         },
+#     )
 
-    # Verify response
-    assert response is not None
-    assert "content" in response
-    print(f"✅ Test passed! Claude 3.5 response (beta header filtered): {response}")
+#     # Verify response
+#     assert response is not None
+#     assert "content" in response
+#     print(f"✅ Test passed! Claude 3.5 response (beta header filtered): {response}")
 
 

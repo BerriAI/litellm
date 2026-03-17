@@ -3,8 +3,7 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
-import { MCPServer } from "../../mcp_tools/types";
-import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import { MCPServer, type MCPEvent } from "../../mcp_tools/types";
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -30,6 +29,7 @@ export async function makeOpenAIChatCompletionRequest(
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
   onMCPEvent?: (event: MCPEvent) => void,
+  mockTestFallbacks?: boolean,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -115,6 +115,7 @@ export async function makeOpenAIChatCompletionRequest(
         ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
         ...(max_tokens !== undefined ? { max_tokens } : {}),
+        ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
       },
       { signal },
     );

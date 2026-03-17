@@ -14,7 +14,8 @@ vi.mock("./networking", () => ({
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
   v2TeamListCall: vi.fn(),
-  getGuardrailsList: vi.fn(),
+  getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
+  getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
 }));
 
 vi.mock("./common_components/fetch_teams", () => ({
@@ -52,7 +53,7 @@ vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   }),
 }));
 
-vi.mock("@/components/team/team_info", () => ({
+vi.mock("@/components/team/TeamInfo", () => ({
   __esModule: true,
   default: (props: any) => {
     mockTeamInfoView(props);
@@ -70,12 +71,16 @@ vi.mock("./ModelSelect/ModelSelect", () => {
         data-testid={dataTestId || "model-select"}
         value={Array.isArray(value) ? value.join(", ") : ""}
         onChange={(e) => {
-          // Mock onChange - in real usage this would be handled by Ant Design Select
           if (onChange) {
-            onChange(value || []);
+            const newVal = e.target.value
+              ? e.target.value
+                .split(",")
+                .map((s: string) => s.trim())
+                .filter(Boolean)
+              : [];
+            onChange(newVal);
           }
         }}
-        readOnly
       />
     );
   });
@@ -87,6 +92,27 @@ vi.mock("./ModelSelect/ModelSelect", () => {
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => mockUseOrganizations(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("./common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <input
+      data-testid="access-group-selector"
+      value={Array.isArray(value) ? value.join(",") : ""}
+      onChange={(e) => onChange?.(e.target.value ? e.target.value.split(",").map((s) => s.trim()) : [])}
+    />
+  ),
 }));
 
 const createQueryClient = () => {
@@ -738,6 +764,79 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
 
     expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
   });
+});
+
+describe("OldTeams - access_group_ids in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    } as any);
+    mockUseOrganizations.mockReturnValue({ data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }] });
+  });
+
+  it("should pass access_group_ids to teamCreateCall when creating team", async () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }]}
+      />,
+    );
+
+    const createButton = screen.getByRole("button", { name: /create new team/i });
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    const teamNameInput = screen.getByLabelText(/team name/i);
+    fireEvent.change(teamNameInput, { target: { value: "Test Team" } });
+
+    const modelsInput = screen.getByTestId("create-team-models-select");
+    fireEvent.change(modelsInput, { target: { value: "gpt-4" } });
+
+    const additionalSettingsAccordion = screen.getByText("Additional Settings");
+    fireEvent.click(additionalSettingsAccordion);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
+    });
+
+    const accessGroupInput = screen.getByTestId("access-group-selector");
+    fireEvent.change(accessGroupInput, { target: { value: "ag-1,ag-2" } });
+
+    const createTeamSubmitButton = screen.getByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButton);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "Test Team",
+          models: ["gpt-4"],
+          access_group_ids: ["ag-1", "ag-2"],
+        }),
+      );
+    });
+  }, { timeout: 30000 });
 });
 
 describe("OldTeams - models dropdown options", () => {

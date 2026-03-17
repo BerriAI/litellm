@@ -127,15 +127,15 @@ describe("responses_api", () => {
     expect(callArgs.tools).toEqual([
       {
         type: "mcp",
-        server_label: "litellm",
-        server_url: "litellm_proxy/mcp/alpha",
+        server_label: "Alpha",
+        server_url: "https://example.com/mcp/Alpha",
         require_approval: "never",
         allowed_tools: ["toolA"],
       },
       {
         type: "mcp",
-        server_label: "litellm",
-        server_url: "litellm_proxy/mcp/Beta",
+        server_label: "Beta",
+        server_url: "https://example.com/mcp/Beta",
         require_approval: "never",
         allowed_tools: ["toolB", "toolC"],
       },

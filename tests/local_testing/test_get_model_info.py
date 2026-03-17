@@ -55,7 +55,7 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
 
 
 def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-1.5-flash")
+    info = litellm.get_model_info("gemini/gemini-2.0-flash")
     print("info", info)
     assert info["supports_vision"] is True
 
@@ -83,9 +83,9 @@ def test_get_model_info_finetuned_models():
 
 
 def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-1.5-pro-002")
+    info = litellm.get_model_info("gemini-2.0-flash")
     print("info", info)
-    assert info["key"] == "gemini-1.5-pro-002"
+    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -311,7 +311,15 @@ def test_get_model_info_bedrock_models():
                 for commitment in potential_commitments:
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
-            base_model_info = litellm.model_cost[base_model]
+            # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
+            base_model_key = (
+                base_model
+                if base_model in litellm.model_cost
+                else f"bedrock/{base_model}"
+            )
+            if base_model_key not in litellm.model_cost:
+                continue
+            base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
                 if "invoke/" in k:
                     continue

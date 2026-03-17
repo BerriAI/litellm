@@ -1,5 +1,5 @@
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
@@ -7,6 +7,20 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
 
 
 class TestLangfusePromptManagement:
+    def setup_method(self):
+        # Mock langfuse package to avoid triggering real import.
+        # The real langfuse import fails on Python 3.14 due to pydantic v1 incompatibility.
+        # This also prevents test-ordering issues when earlier tests remove sys.modules["langfuse"].
+        self._mock_langfuse = MagicMock()
+        self._mock_langfuse.version.__version__ = "3.0.0"
+        self._langfuse_patcher = patch.dict(
+            "sys.modules", {"langfuse": self._mock_langfuse}
+        )
+        self._langfuse_patcher.start()
+
+    def teardown_method(self):
+        self._langfuse_patcher.stop()
+
     def test_get_prompt_from_id(self):
         langfuse_prompt_management = LangfusePromptManagement()
         with patch.object(

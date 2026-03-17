@@ -3,6 +3,8 @@
 
 Prevent projects from gobbling too much tpm/rpm.
 
+**See Also:** [Request Prioritization](../scheduler.md) - Prioritize LLM API requests in high-traffic by adding them to a priority queue.
+
 Dynamically allocate TPM/RPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
 
 ## Quick Start Usage

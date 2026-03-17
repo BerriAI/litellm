@@ -2,15 +2,15 @@
 Tests for Vertex AI Qwen MaaS models that require the global endpoint.
 
 These tests verify that:
-1. Qwen models are correctly identified as global-only models
-2. The correct global URL is constructed (https://aiplatform.googleapis.com)
+1. The correct global URL is constructed (https://aiplatform.googleapis.com)
+2. The get_vertex_region method resolves regions from model_cost supported_regions
 3. The completion() and responses() API work with Qwen models
 """
 
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
@@ -19,71 +19,64 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
-class TestQwenGlobalOnlyDetection:
-    """Test that Qwen models are correctly identified as global-only."""
+@pytest.fixture(autouse=True)
+def clean_vertex_env():
+    """Clear Google/Vertex AI environment variables before each test to prevent test isolation issues."""
+    saved_env = {}
+    env_vars_to_clear = [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_PROJECT",
+        "VERTEX_PROJECT",
+        "VERTEX_LOCATION",
+        "VERTEX_AI_PROJECT",
+    ]
+    for var in env_vars_to_clear:
+        if var in os.environ:
+            saved_env[var] = os.environ[var]
+            del os.environ[var]
 
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
-            "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas",
-            "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas",
-            "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas",
-        ],
-    )
-    def test_qwen_models_are_global_only(self, model):
-        """Test that Qwen MaaS models are identified as global-only."""
-        # This test requires the model_cost to have supported_regions: ["global"]
-        # If the model is not in model_cost, it should return False (fallback behavior)
-        result = is_global_only_vertex_model(model)
-        # Note: This will return True only if the model is in model_cost with supported_regions: ["global"]
-        # If running without the updated model_cost, this may return False
-        assert isinstance(result, bool)
+    yield
 
-    def test_non_global_model_returns_false(self):
-        """Test that non-global models return False."""
-        result = is_global_only_vertex_model("vertex_ai/gemini-1.5-pro")
-        assert result is False
-
-    def test_unknown_model_returns_false(self):
-        """Test that unknown models return False (fallback behavior)."""
-        result = is_global_only_vertex_model("vertex_ai/unknown-model-xyz")
-        assert result is False
+    # Restore saved environment variables
+    for var, value in saved_env.items():
+        os.environ[var] = value
 
 
 class TestVertexBaseGetVertexRegion:
-    """Test the get_vertex_region method."""
+    """Test the get_vertex_region method using model_cost lookup."""
 
-    def test_global_only_model_returns_global(self):
-        """Test that global-only models return 'global' regardless of input."""
+    def test_global_model_no_user_region_returns_global(self):
+        """Test that global-only models return 'global' when user doesn't specify region."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=True,
-        ):
-            result = vertex_base.get_vertex_region(
-                vertex_region="us-central1",
-                model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
-            )
-            assert result == "global"
-
-    def test_global_only_model_with_none_returns_global(self):
-        """Test that global-only models return 'global' even with None input."""
-        vertex_base = VertexBase()
-
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=True,
+        with patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
         ):
             result = vertex_base.get_vertex_region(
                 vertex_region=None,
-                model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
+                model="qwen/qwen3-next-80b-a3b-instruct-maas",
+            )
+            assert result == "global"
+
+    def test_global_model_with_unsupported_user_region_overrides(self):
+        """Test that unsupported user region is overridden for global-only models."""
+        vertex_base = VertexBase()
+
+        with patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
+        ):
+            result = vertex_base.get_vertex_region(
+                vertex_region="us-central1",
+                model="qwen/qwen3-next-80b-a3b-instruct-maas",
             )
             assert result == "global"
 
@@ -91,13 +84,10 @@ class TestVertexBaseGetVertexRegion:
         """Test that non-global models use the provided region."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=False,
-        ):
+        with patch.dict(litellm.model_cost, {}, clear=False):
             result = vertex_base.get_vertex_region(
                 vertex_region="europe-west1",
-                model="vertex_ai/gemini-1.5-pro",
+                model="gemini-1.5-pro",
             )
             assert result == "europe-west1"
 
@@ -105,13 +95,10 @@ class TestVertexBaseGetVertexRegion:
         """Test that non-global models with None region fallback to us-central1."""
         vertex_base = VertexBase()
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-            return_value=False,
-        ):
+        with patch.dict(litellm.model_cost, {}, clear=False):
             result = vertex_base.get_vertex_region(
                 vertex_region=None,
-                model="vertex_ai/gemini-1.5-pro",
+                model="unknown-model-xyz",
             )
             assert result == "us-central1"
 
@@ -154,11 +141,6 @@ async def test_vertex_ai_qwen_global_endpoint_url():
     """
     Test that Qwen models use the global endpoint URL.
     """
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
     # Mock response
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -181,29 +163,33 @@ async def test_vertex_ai_qwen_global_endpoint_url():
         "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
     }
 
-    client = AsyncHTTPHandler()
+    mock_vertexai = MagicMock()
+    mock_vertexai.preview = MagicMock()
 
-    async def mock_post_func(*args, **kwargs):
-        return mock_response
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
+         patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+         ), \
+         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
+         patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
+         ):
+        mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
-    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
-        VertexLLM, "_ensure_access_token", return_value=("fake-token", "test-project")
-    ), patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model",
-        return_value=True,
-    ):
         response = await litellm.acompletion(
             model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
             messages=[{"role": "user", "content": "Hello"}],
             vertex_ai_project="test-project",
-            client=client,
         )
 
         # Verify the mock was called
-        mock_post.assert_called_once()
+        mock_http_handler.return_value.post.assert_called_once()
 
         # Get the call arguments
-        call_args = mock_post.call_args
+        call_args = mock_http_handler.return_value.post.call_args
         called_url = call_args.kwargs["url"]
 
         # Verify the URL uses global endpoint (no region prefix)

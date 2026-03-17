@@ -253,6 +253,9 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
         "content-length": "1234",  # Should be removed
         "host": "localhost:4000",  # Should be removed
     })
+    # Prevent MagicMock from auto-creating a truthy _cached_headers attribute,
+    # which would short-circuit _safe_get_request_headers before reading .headers
+    mock_request.state._cached_headers = None
 
     # Create mock vertex credentials
     mock_vertex_credentials = MagicMock()

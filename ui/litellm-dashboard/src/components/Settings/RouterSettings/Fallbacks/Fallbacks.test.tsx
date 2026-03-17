@@ -14,6 +14,10 @@ vi.mock("../../../playground/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: vi.fn().mockReturnValue({ data: null }),
+}));
+
 vi.mock("openai", () => ({
   default: {
     OpenAI: vi.fn().mockImplementation(() => ({
@@ -97,20 +101,9 @@ describe("Fallbacks", () => {
     modelData: mockModelData,
   };
 
-  const findDeleteButton = (container: HTMLElement) => {
-    const tableRows = container.querySelectorAll("tbody tr");
-    if (tableRows.length === 0) return null;
-    const firstRow = tableRows[0];
-    const actionCells = firstRow.querySelectorAll("td");
-    const lastCell = actionCells[actionCells.length - 1];
-    const buttons = lastCell.querySelectorAll("button");
-    if (buttons.length >= 2) {
-      return buttons[buttons.length - 1];
-    }
-    const clickableElements = lastCell.querySelectorAll("[class*='cursor-pointer'], button");
-    return Array.from(clickableElements).find((el) =>
-      el.className.includes("red") || el.className.includes("hover:text-red")
-    ) || clickableElements[clickableElements.length - 1];
+  const getFirstRowDeleteButton = () => {
+    const deleteButtons = screen.getAllByTestId("delete-fallback-button");
+    return deleteButtons.length > 0 ? deleteButtons[0] : null;
   };
 
   beforeEach(() => {
@@ -156,20 +149,31 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-      expect(screen.getByText("gpt-3.5-turbo, claude-3-opus")).toBeInTheDocument();
-      expect(screen.getByText("claude-3-opus")).toBeInTheDocument();
+      expect(screen.getAllByText(/gpt-3\.5-turbo/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/claude-3-opus/).length).toBeGreaterThan(0);
     });
   });
 
-  it("should open delete modal when delete icon is clicked", async () => {
-    const user = userEvent.setup();
-    const { container } = render(<Fallbacks {...defaultProps} />);
+  it("should show delete button for each fallback row when fallbacks exist", async () => {
+    render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     });
 
-    const deleteButton = findDeleteButton(container);
+    const deleteButtons = screen.getAllByTestId("delete-fallback-button");
+    expect(deleteButtons.length).toBe(2);
+  });
+
+  it("should open delete modal when delete icon is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Fallbacks {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+    });
+
+    const deleteButton = getFirstRowDeleteButton();
     expect(deleteButton).not.toBeNull();
 
     await user.click(deleteButton as HTMLElement);
@@ -182,13 +186,13 @@ describe("Fallbacks", () => {
 
   it("should delete fallback when confirmed", async () => {
     const user = userEvent.setup();
-    const { container } = render(<Fallbacks {...defaultProps} />);
+    render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     });
 
-    const deleteButton = findDeleteButton(container);
+    const deleteButton = getFirstRowDeleteButton();
     expect(deleteButton).not.toBeNull();
 
     await user.click(deleteButton as HTMLElement);
@@ -210,13 +214,13 @@ describe("Fallbacks", () => {
 
   it("should close delete modal when cancel is clicked", async () => {
     const user = userEvent.setup();
-    const { container } = render(<Fallbacks {...defaultProps} />);
+    render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     });
 
-    const deleteButton = findDeleteButton(container);
+    const deleteButton = getFirstRowDeleteButton();
     expect(deleteButton).not.toBeNull();
 
     await user.click(deleteButton as HTMLElement);
@@ -237,13 +241,13 @@ describe("Fallbacks", () => {
     const user = userEvent.setup();
     const error = new Error("Delete failed");
     vi.mocked(networkingModule.setCallbacksCall).mockRejectedValueOnce(error);
-    const { container } = render(<Fallbacks {...defaultProps} />);
+    render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     });
 
-    const deleteButton = findDeleteButton(container);
+    const deleteButton = getFirstRowDeleteButton();
     expect(deleteButton).not.toBeNull();
 
     await user.click(deleteButton as HTMLElement);
@@ -264,13 +268,13 @@ describe("Fallbacks", () => {
     const user = userEvent.setup();
     const error = new Error("Delete failed");
     vi.mocked(networkingModule.setCallbacksCall).mockRejectedValueOnce(error);
-    const { container } = render(<Fallbacks {...defaultProps} />);
+    render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
     });
 
-    const deleteButton = findDeleteButton(container);
+    const deleteButton = getFirstRowDeleteButton();
     expect(deleteButton).not.toBeNull();
 
     await user.click(deleteButton as HTMLElement);
@@ -296,6 +300,9 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("add-fallbacks-button")).toBeInTheDocument();
+      expect(
+        screen.getByText(/No fallbacks configured. Add fallbacks to automatically try another model/),
+      ).toBeInTheDocument();
     });
 
     expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
@@ -309,6 +316,9 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("add-fallbacks-button")).toBeInTheDocument();
+      expect(
+        screen.getByText(/No fallbacks configured. Add fallbacks to automatically try another model/),
+      ).toBeInTheDocument();
     });
   });
 

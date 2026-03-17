@@ -12,7 +12,7 @@ from typing import Literal, Optional, cast
 from fastapi import HTTPException
 
 import litellm
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -178,7 +178,7 @@ async def authenticate_user(  # noqa: PLR0915
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "24hr",
+                    "duration": LITELLM_UI_SESSION_DURATION,
                     "key_max_budget": litellm.max_ui_session_budget,
                     "models": [],
                     "aliases": {},
@@ -258,13 +258,15 @@ async def authenticate_user(  # noqa: PLR0915
         hash_password = hash_token(token=password)
         if secrets.compare_digest(
             password.encode("utf-8"), _password.encode("utf-8")
-        ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
+        ) or secrets.compare_digest(
+            hash_password.encode("utf-8"), _password.encode("utf-8")
+        ):
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore
                         "user_role": user_role,
-                        "duration": "24hr",
+                        "duration": LITELLM_UI_SESSION_DURATION,
                         "key_max_budget": litellm.max_ui_session_budget,
                         "models": [],
                         "aliases": {},
@@ -340,4 +342,3 @@ def create_ui_token_object(
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
-

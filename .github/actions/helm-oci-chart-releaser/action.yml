@@ -40,36 +40,31 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Helm | Setup
+      uses: azure/setup-helm@v4
+      with:
+        version: v3.20.0
+
     - name: Helm | Login
       shell: bash
       run: echo ${{ inputs.registry_password }} | helm registry login -u ${{ inputs.registry_username }} --password-stdin ${{ inputs.registry }}
-      env:
-        HELM_EXPERIMENTAL_OCI: '1'
-    
+
     - name: Helm | Dependency
       if: inputs.update_dependencies == 'true'
       shell: bash
       run: helm dependency update ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }}
-      env:
-        HELM_EXPERIMENTAL_OCI: '1'
 
     - name: Helm | Package
       shell: bash
       run: helm package ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }} --version ${{ inputs.tag }} --app-version ${{ inputs.app_version }}
-      env:
-        HELM_EXPERIMENTAL_OCI: '1'
 
     - name: Helm | Push
       shell: bash
       run: helm push ${{ inputs.name }}-${{ inputs.tag }}.tgz oci://${{ inputs.registry }}/${{ inputs.repository }}
-      env:
-        HELM_EXPERIMENTAL_OCI: '1'
 
     - name: Helm | Logout
       shell: bash
       run: helm registry logout ${{ inputs.registry }}
-      env:
-        HELM_EXPERIMENTAL_OCI: '1'
 
     - name: Helm | Output
       id: output

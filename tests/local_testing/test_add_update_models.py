@@ -219,6 +219,7 @@ async def _create_new_team(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_add_team_model_to_db(prisma_client):
     """
     Test adding a team model and verifying the team_public_model_name is stored correctly

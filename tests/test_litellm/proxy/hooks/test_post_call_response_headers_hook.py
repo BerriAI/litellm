@@ -195,3 +195,134 @@ async def test_default_hook_returns_none():
         response=None,
     )
     assert result is None
+
+
+# --- Tests for litellm_call_info parameter ---
+
+
+class CallInfoInspectorLogger(CustomLogger):
+    """Logger that captures litellm_call_info for inspection."""
+
+    def __init__(self):
+        self.called = False
+        self.received_call_info = None
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+        litellm_call_info: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, str]]:
+        self.called = True
+        self.received_call_info = litellm_call_info
+        return None
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_from_hidden_params():
+    """Test that litellm_call_info is built from response._hidden_params."""
+    inspector = CallInfoInspectorLogger()
+
+    class MockResponse:
+        _hidden_params = {
+            "custom_llm_provider": "openai",
+            "api_base": "https://api.openai.com",
+            "model_id": "model-abc",
+        }
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={"model": "gpt-4", "metadata": {"model_info": {"id": "model-abc", "provider": "HubSpot"}}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockResponse(),
+        )
+
+        assert inspector.called is True
+        assert inspector.received_call_info is not None
+        assert inspector.received_call_info["custom_llm_provider"] == "openai"
+        assert inspector.received_call_info["api_base"] == "https://api.openai.com"
+        assert inspector.received_call_info["model_id"] == "model-abc"
+        assert inspector.received_call_info["model_info"]["provider"] == "HubSpot"
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_from_litellm_metadata():
+    """Test that litellm_call_info finds model_info under litellm_metadata (responses API path)."""
+    inspector = CallInfoInspectorLogger()
+
+    class MockResponse:
+        _hidden_params = {
+            "custom_llm_provider": "azure",
+            "api_base": "https://east.openai.azure.com",
+            "model_id": "deploy-xyz",
+        }
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={"model": "gpt-4", "litellm_metadata": {"model_info": {"id": "deploy-xyz"}}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockResponse(),
+        )
+
+        assert inspector.received_call_info["model_info"]["id"] == "deploy-xyz"
+        assert inspector.received_call_info["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_with_none_response():
+    """Test that litellm_call_info handles None response (failure path)."""
+    inspector = CallInfoInspectorLogger()
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={"model": "gpt-4", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=None,
+        )
+
+        assert inspector.called is True
+        assert inspector.received_call_info is not None
+        assert inspector.received_call_info["custom_llm_provider"] is None
+        assert inspector.received_call_info["model_info"] == {}
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_backwards_compatible():
+    """Test that existing callbacks without litellm_call_info parameter still work."""
+    # HeaderInjectorLogger doesn't accept litellm_call_info — must not crash
+    injector = HeaderInjectorLogger(headers={"x-test": "1"})
+
+    class MockResponse:
+        _hidden_params = {"custom_llm_provider": "openai", "api_base": "https://api.openai.com", "model_id": "m1"}
+
+    with patch("litellm.callbacks", [injector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        result = await proxy_logging.post_call_response_headers_hook(
+            data={"model": "gpt-4", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockResponse(),
+        )
+
+        assert result == {"x-test": "1"}
+        assert injector.called is True

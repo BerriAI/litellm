@@ -37,7 +37,6 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
-
             raw_response = (
                 await openai_aclient.audio.transcriptions.with_raw_response.create(
                     **data, timeout=timeout
@@ -209,7 +208,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             else:
                 duration = extract_duration_from_srt_or_vtt(response)
                 stringified_response = TranscriptionResponse(text=response).model_dump()
-                stringified_response["duration"] = duration
+                stringified_response["_audio_transcription_duration"] = duration
             ## LOGGING
             logging_obj.post_call(
                 input=get_audio_file_name(audio_file),

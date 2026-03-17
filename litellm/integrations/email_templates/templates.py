@@ -85,6 +85,30 @@ SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     The LiteLLM team <br />
 """
 
+TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
+                    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+
+                    <p> Hi {team_alias} team member, <br/>
+
+                    Your LiteLLM team has crossed its <b>soft budget limit of {soft_budget}</b>. <br /> <br />
+
+                    <b>Current Spend:</b> {spend} <br />
+                    <b>Soft Budget:</b> {soft_budget} <br />
+                    {max_budget_info}
+
+                    <p style="color: #dc2626; font-weight: 500;">
+                    ⚠️ Note: Your API requests will continue to work, but you should monitor your usage closely. 
+                    If you reach your maximum budget, requests will be rejected.
+                    </p>
+
+                    You can view your usage and manage your budget in the <a href="{base_url}">LiteLLM Dashboard</a>. <br /> <br />
+
+                    If you have any questions, please send an email to {email_support_contact} <br /> <br />
+
+                    Best, <br />
+                    The LiteLLM team <br />
+"""
+
 MAX_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 

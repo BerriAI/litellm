@@ -4,9 +4,14 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 
 interface StdioConfigurationProps {
   isVisible: boolean;
+  /**
+   * When true, stdio_config is required + validated as JSON.
+   * Edit screen can set this to false when using dedicated command/args/env fields.
+   */
+  required?: boolean;
 }
 
-const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible }) => {
+const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, required = true }) => {
   if (!isVisible) return null;
 
   return (
@@ -21,7 +26,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible }) =>
       }
       name="stdio_config"
       rules={[
-        { required: true, message: "Please enter stdio configuration" },
+        ...(required ? [{ required: true, message: "Please enter stdio configuration" }] : []),
         {
           validator: (_, value) => {
             if (!value) return Promise.resolve();

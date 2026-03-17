@@ -1,0 +1,19 @@
+# LiteLLM Observatory Test Configuration
+# This config is used by CI to spin up a temporary LiteLLM instance
+# for running observatory tests against RC/stable releases.
+#
+# Add model definitions for the providers you want to test.
+# Provider API keys are injected via environment variables in CI.
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: azure/gpt-4o-mini
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE

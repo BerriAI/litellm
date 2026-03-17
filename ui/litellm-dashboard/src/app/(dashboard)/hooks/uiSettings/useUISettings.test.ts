@@ -10,12 +10,6 @@ vi.mock("@/components/networking", () => ({
   getUiSettings: vi.fn(),
 }));
 
-// Mock useAuthorized hook - we can override this in individual tests
-const mockUseAuthorized = vi.fn();
-vi.mock("../useAuthorized", () => ({
-  default: () => mockUseAuthorized(),
-}));
-
 // Mock data
 const mockUISettings: Record<string, any> = {
   theme: "dark",
@@ -39,18 +33,6 @@ describe("useUISettings", () => {
 
     // Reset all mocks
     vi.clearAllMocks();
-
-    // Set default mock for useAuthorized (enabled state)
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "test-access-token",
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
-    });
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
@@ -74,7 +56,7 @@ describe("useUISettings", () => {
 
     expect(result.current.data).toEqual(mockUISettings);
     expect(result.current.error).toBeNull();
-    expect(getUiSettings).toHaveBeenCalledWith("test-access-token");
+    expect(getUiSettings).toHaveBeenCalledWith();
     expect(getUiSettings).toHaveBeenCalledTimes(1);
   });
 
@@ -98,56 +80,8 @@ describe("useUISettings", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(getUiSettings).toHaveBeenCalledWith("test-access-token");
+    expect(getUiSettings).toHaveBeenCalledWith();
     expect(getUiSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("should not execute query when accessToken is missing", async () => {
-    // Mock missing accessToken
-    mockUseAuthorized.mockReturnValue({
-      accessToken: null,
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: null,
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
-    });
-
-    const { result } = renderHook(() => useUISettings(), { wrapper });
-
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
-    expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(getUiSettings).not.toHaveBeenCalled();
-  });
-
-  it("should not execute query when accessToken is empty string", async () => {
-    // Mock empty accessToken
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "",
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: "",
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
-    });
-
-    const { result } = renderHook(() => useUISettings(), { wrapper });
-
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
-    expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(getUiSettings).not.toHaveBeenCalled();
   });
 
   it("should return empty object when API returns empty settings", async () => {
@@ -163,7 +97,7 @@ describe("useUISettings", () => {
     });
 
     expect(result.current.data).toEqual({});
-    expect(getUiSettings).toHaveBeenCalledWith("test-access-token");
+    expect(getUiSettings).toHaveBeenCalledWith();
   });
 
   it("should handle network timeout error", async () => {

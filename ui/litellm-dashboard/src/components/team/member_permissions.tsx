@@ -83,8 +83,8 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
             <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
-            <Button onClick={handleSave} loading={saving} type="primary">
-              <SaveOutlined /> Save Changes
+            <Button onClick={handleSave} loading={saving} type="primary" icon={<SaveOutlined />}>
+              Save Changes
             </Button>
           </div>
         )}

@@ -425,6 +425,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "add_message",
             "arun_thread_stream",
             "aresponses",
+            "aresponses_websocket",
             "alist_input_items",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -563,6 +564,10 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         call_type == CallTypes.avideo_content
         or call_type == CallTypes.avideo_list
         or call_type == CallTypes.avideo_remix
+        or call_type == CallTypes.avideo_create_character
+        or call_type == CallTypes.avideo_get_character
+        or call_type == CallTypes.avideo_edit
+        or call_type == CallTypes.avideo_extension
     ):
         # Skip video call types as they don't use Azure SDK client initialization
         pytest.skip(f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client")

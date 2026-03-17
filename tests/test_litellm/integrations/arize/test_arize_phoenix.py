@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -7,6 +7,7 @@ from litellm.integrations.arize.arize_phoenix import (
     ArizePhoenixConfig,
     ArizePhoenixLogger,
 )
+from litellm.integrations.arize._utils import ArizeOTELAttributes
 
 
 class TestArizePhoenixConfig(unittest.TestCase):
@@ -193,6 +194,64 @@ def test_get_arize_phoenix_config_expection_on_missing_api_key(monkeypatch, env_
     with pytest.raises(ValueError, match="PHOENIX_API_KEY must be set when using Phoenix Cloud"):
         ArizePhoenixLogger.get_arize_phoenix_config()
 
+
+
+# ---------------------------------------------------------------------------
+# Dynamic project naming from metadata
+# ---------------------------------------------------------------------------
+
+
+class TestGetDynamicProjectName:
+    """Tests for _get_dynamic_project_name extraction logic."""
+
+    def test_extracts_from_standard_logging_object_metadata(self):
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {"phoenix_project_name": "my-project"},
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "my-project"
+
+    def test_extracts_from_litellm_params_metadata(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"phoenix_project_name": "sdk-project"},
+            }
+        }
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) == "sdk-project"
+
+    def test_returns_none_when_no_metadata(self):
+        assert ArizePhoenixLogger._get_dynamic_project_name({}) is None
+
+    def test_non_dict_standard_logging_object_does_not_raise(self):
+        """isinstance(dict) guard prevents AttributeError on non-dict payloads."""
+        kwargs = {"standard_logging_object": "not-a-dict"}
+        assert ArizePhoenixLogger._get_dynamic_project_name(kwargs) is None
+
+
+class TestDynamicProjectNameOnSpan:
+    """set_arize_phoenix_attributes sets openinference.project.name on the span."""
+
+    @patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "env-fallback"}, clear=False)
+    @patch("litellm.integrations.arize._utils.set_attributes")
+    def test_dynamic_name_sets_span_attribute(self, _mock_set_attrs):
+        span = MagicMock()
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {"phoenix_project_name": "dynamic-proj"},
+            }
+        }
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj=None)
+
+        span.set_attribute.assert_called_once_with("openinference.project.name", "dynamic-proj")
+
+    @patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "env-project"}, clear=False)
+    @patch("litellm.integrations.arize._utils.set_attributes")
+    def test_falls_back_to_env_var_when_no_dynamic_name(self, _mock_set_attrs):
+        span = MagicMock()
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, {}, response_obj=None)
+
+        span.set_attribute.assert_called_once_with("openinference.project.name", "env-project")
 
 
 if __name__ == "__main__":

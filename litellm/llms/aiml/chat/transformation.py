@@ -20,4 +20,5 @@ class AIMLChatConfig(OpenAIGPTConfig):
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("AIML_API_KEY")
         return api_base, dynamic_api_key
+
     pass

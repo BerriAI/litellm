@@ -30,6 +30,7 @@ interface ModelDataTableProps<TData, TValue> {
   pagination?: PaginationState;
   onPaginationChange?: OnChangeFn<PaginationState>;
   enablePagination?: boolean;
+  onRowClick?: (row: TData) => void;
 }
 
 export function ModelDataTable<TData, TValue>({
@@ -40,6 +41,7 @@ export function ModelDataTable<TData, TValue>({
   pagination,
   onPaginationChange,
   enablePagination = false,
+  onRowClick,
 }: ModelDataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
@@ -94,7 +96,14 @@ export function ModelDataTable<TData, TValue>({
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
         <div className="relative min-w-full">
-          <Table className="[&_td]:py-2 [&_th]:py-2 w-full">
+          <Table
+            className="[&_td]:py-2 [&_th]:py-2"
+            style={{
+              width: tableInstance.getTotalSize(),
+              minWidth: "100%",
+              tableLayout: "fixed",
+            }}
+          >
             <TableHead>
               {tableInstance.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
@@ -157,11 +166,15 @@ export function ModelDataTable<TData, TValue>({
                 </TableRow>
               ) : tableInstance.getRowModel().rows.length > 0 ? (
                 tableInstance.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow
+                    key={row.id}
+                    onClick={() => onRowClick?.(row.original)}
+                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className={`py-0.5 ${
+                        className={`py-0.5 overflow-hidden ${
                           cell.column.id === "actions"
                             ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                             : ""

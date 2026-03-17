@@ -91,6 +91,72 @@ async def test_acompletion_with_mcp_without_auto_execution_calls_model(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_tools(
+    monkeypatch,
+):
+    """
+    Test that MCP auth headers extracted from secret_fields (e.g. x-mcp-linear_config-authorization)
+    are passed to _process_mcp_tools_without_openai_transform for dynamic auth when fetching tools.
+    """
+    tools = [{"type": "mcp", "server_url": "litellm_proxy"}]
+    mock_acompletion = AsyncMock(return_value="ok")
+
+    captured_process_kwargs = {}
+
+    async def mock_process(**kwargs):
+        captured_process_kwargs.update(kwargs)
+        return ([], {})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda t: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda t: (t, [])),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: ["openai-tool"]),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: False),
+    )
+
+    # secret_fields with raw_headers containing MCP auth - extract_mcp_headers_from_request
+    # will parse these and pass to _process_mcp_tools_without_openai_transform
+    secret_fields = {
+        "raw_headers": {
+            "x-mcp-linear_config-authorization": "Bearer linear-token",
+        },
+    }
+
+    with patch("litellm.acompletion", mock_acompletion):
+        await acompletion_with_mcp(
+            model="test-model",
+            messages=[],
+            tools=tools,
+            secret_fields=secret_fields,
+        )
+
+    assert "mcp_server_auth_headers" in captured_process_kwargs
+    mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
+    assert mcp_server_auth_headers is not None
+    assert "linear_config" in mcp_server_auth_headers
+    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, ChatCompletionDeltaToolCall, Function
@@ -427,16 +493,14 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     assert len(all_chunks) > 0
 
     # Verify mcp_list_tools is in the first chunk
-    first_chunk = all_chunks[0] if all_chunks else None
-    assert first_chunk is not None, "Should have a first chunk"
-    if hasattr(first_chunk, "choices") and first_chunk.choices:
-        choice = first_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            # mcp_list_tools should be added to the first chunk
-            assert provider_fields is not None, f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
-            assert "mcp_list_tools" in provider_fields, f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
-            assert provider_fields["mcp_list_tools"] == openai_tools
+    first_chunk = all_chunks[0]
+    assert hasattr(first_chunk, "choices") and first_chunk.choices, "First chunk must have choices"
+    choice = first_chunk.choices[0]
+    assert hasattr(choice, "delta") and choice.delta, "First choice must have delta"
+    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+    assert provider_fields is not None, f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
+    assert "mcp_list_tools" in provider_fields, f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
+    assert provider_fields["mcp_list_tools"] == openai_tools
 
 
 @pytest.mark.asyncio
@@ -625,7 +689,7 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             ],
         ),  # Final chunk with tool_calls
     ]
-    
+
     follow_up_chunks = [
         create_chunk("Hello"),
         create_chunk(" world", finish_reason="stop"),
@@ -760,46 +824,46 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             stream=True,
         )
 
-    # Verify result is CustomStreamWrapper
-    assert isinstance(result, CustomStreamWrapper)
+        # Verify result is CustomStreamWrapper
+        assert isinstance(result, CustomStreamWrapper)
 
-    # Consume the stream and verify metadata placement
-    all_chunks = []
-    async for chunk in result:
-        all_chunks.append(chunk)
-    assert len(all_chunks) > 0
+        # Consume the stream and verify metadata placement
+        # NOTE: Stream consumption must be inside the patch context to avoid real API calls
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+        assert len(all_chunks) > 0
 
-    # Find first chunk and final chunk from initial response
-    # mcp_list_tools is added to the first chunk (all_chunks[0])
-    first_chunk = all_chunks[0] if all_chunks else None
-    initial_final_chunk = None
-    
-    for chunk in all_chunks:
-        if hasattr(chunk, "choices") and chunk.choices:
-            choice = chunk.choices[0]
-            if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
-                initial_final_chunk = chunk
+        # Find first chunk and final chunk from initial response
+        # mcp_list_tools is added to the first chunk (all_chunks[0])
+        first_chunk = all_chunks[0] if all_chunks else None
+        initial_final_chunk = None
 
-    assert first_chunk is not None, "Should have a first chunk"
-    assert initial_final_chunk is not None, "Should have a final chunk from initial response"
+        for chunk in all_chunks:
+            if hasattr(chunk, "choices") and chunk.choices:
+                choice = chunk.choices[0]
+                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
+                    initial_final_chunk = chunk
 
-    # print(first_chunk)
-    # Verify mcp_list_tools is in the first chunk
-    if hasattr(first_chunk, "choices") and first_chunk.choices:
-        choice = first_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            assert provider_fields is not None, "First chunk should have provider_specific_fields"
-            assert "mcp_list_tools" in provider_fields, "First chunk should have mcp_list_tools"
+        assert first_chunk is not None, "Should have a first chunk"
+        assert initial_final_chunk is not None, "Should have a final chunk from initial response"
 
-    # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
-    if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
-        choice = initial_final_chunk.choices[0]
-        if hasattr(choice, "delta") and choice.delta:
-            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-            assert provider_fields is not None, "Final chunk should have provider_specific_fields"
-            assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
-            assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
+        # Verify mcp_list_tools is in the first chunk
+        assert hasattr(first_chunk, "choices") and first_chunk.choices, "First chunk must have choices"
+        first_choice = first_chunk.choices[0]
+        assert hasattr(first_choice, "delta") and first_choice.delta, "First choice must have delta"
+        first_provider_fields = getattr(first_choice.delta, "provider_specific_fields", None)
+        assert first_provider_fields is not None, "First chunk should have provider_specific_fields"
+        assert "mcp_list_tools" in first_provider_fields, "First chunk should have mcp_list_tools"
+
+        # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
+        assert hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices, "Final chunk must have choices"
+        final_choice = initial_final_chunk.choices[0]
+        assert hasattr(final_choice, "delta") and final_choice.delta, "Final choice must have delta"
+        final_provider_fields = getattr(final_choice.delta, "provider_specific_fields", None)
+        assert final_provider_fields is not None, "Final chunk should have provider_specific_fields"
+        assert "mcp_tool_calls" in final_provider_fields, "Should have mcp_tool_calls"
+        assert "mcp_call_results" in final_provider_fields, "Should have mcp_call_results"
 
 
 @pytest.mark.asyncio

@@ -75,11 +75,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request, tool_name_mapping = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
-                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
-            )
+        (
+            chat_completion_compatible_request,
+            _tool_name_mapping,
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
 
         structured_messages = chat_completion_compatible_request.get("messages", [])
@@ -124,6 +125,17 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                # Convert tools back from OpenAI format to Anthropic format
+                anthropic_config = AnthropicConfig()
+                anthropic_tools: List[AllAnthropicToolsValues] = []
+                for tool in guardrailed_tools:
+                    converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
+                    if converted_tool is not None:
+                        anthropic_tools.append(converted_tool)
+                    # Note: MCP servers are handled separately in the main transformation
+                data["tools"] = anthropic_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -137,6 +149,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from Anthropic messages request (tools[].name)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("name"):
+                names.append(str(tool["name"]))
+        return names
 
     def _extract_input_text_and_images(
         self,
@@ -194,7 +214,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(List[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools)
+            tools_to_check.extend(openai_tools)  # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -364,10 +384,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                all_chunks=responses_so_far,
-                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                model="",
+            built_response = (
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=responses_so_far,
+                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                    model="",
+                )
             )
 
             # Check if model_response is valid and has choices before accessing
@@ -396,7 +418,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                     logging_obj=litellm_logging_obj,
                 )
             else:
-                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
+                verbose_proxy_logger.debug(
+                    "Skipping output guardrail - model response has no choices"
+                )
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)

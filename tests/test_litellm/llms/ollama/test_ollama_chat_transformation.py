@@ -10,7 +10,8 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+from litellm.llms.ollama.chat.transformation import OllamaChatConfig, OllamaChatCompletionResponseIterator
+
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 
@@ -473,3 +474,130 @@ class TestOllamaToolCalling:
         # finish_reason should be "stop" (default behavior)
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
+
+
+class TestOllamaReasoningContentStreaming:
+    """Test that reasoning_content is properly extracted from all thinking chunks."""
+
+    def test_multiple_thinking_chunks_all_returned_as_reasoning_content(self):
+        """
+        Test that more than 2 consecutive thinking chunks are all returned as reasoning_content.
+        
+        Previously, the code had a bug where finished_reasoning_content was set to True
+        after just 2 chunks with 'thinking', causing subsequent thinking content to be lost.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),  # Not used in chunk_parser
+            sync_stream=True,
+        )
+
+        # Simulate 5 consecutive chunks with 'thinking' content
+        thinking_chunks = [
+            {
+                "model": "deepseek-r1",
+                "message": {"role": "assistant", "thinking": f"Thinking chunk {i}"},
+                "done": False,
+            }
+            for i in range(1, 6)
+        ]
+
+        # Process all thinking chunks
+        reasoning_contents = []
+        for chunk in thinking_chunks:
+            result = iterator.chunk_parser(chunk)
+            rc = result.choices[0].delta.reasoning_content
+            reasoning_contents.append(rc)
+
+        # ALL chunks should have reasoning_content, not just the first 2
+        assert len(reasoning_contents) == 5
+        assert reasoning_contents[0] == "Thinking chunk 1"
+        assert reasoning_contents[1] == "Thinking chunk 2"
+        assert reasoning_contents[2] == "Thinking chunk 3"  # This was previously None
+        assert reasoning_contents[3] == "Thinking chunk 4"  # This was previously None
+        assert reasoning_contents[4] == "Thinking chunk 5"  # This was previously None
+
+        # Verify none of them are None
+        for i, rc in enumerate(reasoning_contents):
+            assert rc is not None, f"Chunk {i+1} reasoning_content should not be None"
+
+    def test_thinking_to_content_transition(self):
+        """
+        Test that transition from thinking to regular content works correctly.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        # First: thinking chunks
+        thinking_chunk = {
+            "model": "deepseek-r1",
+            "message": {"role": "assistant", "thinking": "Let me think about this..."},
+            "done": False,
+        }
+        result1 = iterator.chunk_parser(thinking_chunk)
+        assert result1.choices[0].delta.reasoning_content == "Let me think about this..."
+        assert result1.choices[0].delta.content is None
+
+        # Then: regular content chunk
+        content_chunk = {
+            "model": "deepseek-r1",
+            "message": {"role": "assistant", "content": "Here is my answer."},
+            "done": False,
+        }
+        result2 = iterator.chunk_parser(content_chunk)
+        assert result2.choices[0].delta.content == "Here is my answer."
+        # reasoning_content is not set when there's no thinking in the chunk
+        assert getattr(result2.choices[0].delta, 'reasoning_content', None) is None
+
+    def test_think_tags_in_content(self):
+        """
+        Test that <think> tags embedded in content are properly parsed.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        # Content with <think> tag
+        chunk1 = {
+            "model": "deepseek-r1",
+            "message": {"role": "assistant", "content": "<think>I need to analyze this"},
+            "done": False,
+        }
+        result1 = iterator.chunk_parser(chunk1)
+        assert result1.choices[0].delta.reasoning_content == "I need to analyze this"
+        assert result1.choices[0].delta.content is None
+
+        # Content with </think> tag (end of thinking)
+        chunk2 = {
+            "model": "deepseek-r1",
+            "message": {"role": "assistant", "content": "</think>The answer is 42."},
+            "done": False,
+        }
+        result2 = iterator.chunk_parser(chunk2)
+        assert result2.choices[0].delta.content == "The answer is 42."
+        # reasoning_content is not set when it's regular content
+        assert getattr(result2.choices[0].delta, 'reasoning_content', None) is None
+
+    def test_done_chunk_with_thinking(self):
+        """
+        Test that the final chunk with done=True and thinking content works.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        # Final chunk with thinking
+        done_chunk = {
+            "model": "deepseek-r1",
+            "message": {"role": "assistant", "thinking": "Final thought"},
+            "done": True,
+            "done_reason": "stop",
+        }
+        result = iterator.chunk_parser(done_chunk)
+        assert result.choices[0].delta.reasoning_content == "Final thought"
+        assert result.choices[0].finish_reason == "stop"
+
+

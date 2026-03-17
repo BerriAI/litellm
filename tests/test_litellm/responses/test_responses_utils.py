@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -352,3 +353,66 @@ class TestResponsesAPIProviderSpecificParams:
         # Should not raise any exception
         result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
         assert "temperature" in result
+
+
+def test_responses_extra_body_forwarded_to_completion_transformation_handler():
+    """
+    Regression test: extra_body must be forwarded to response_api_handler
+    when responses_api_provider_config is None (completion transformation path).
+
+    Before the fix, extra_body was a named parameter of responses() but was
+    not passed to litellm_completion_transformation_handler.response_api_handler(),
+    so it was silently dropped.
+    """
+    with patch(
+        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        return_value=None,
+    ), patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+    ) as mock_handler:
+        mock_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/gpt-4o",
+            input="Hello",
+            extra_body={"custom_key": "custom_value"},
+        )
+
+        mock_handler.assert_called_once()
+        call_kwargs = mock_handler.call_args
+        # extra_body can be a positional or keyword arg; check both
+        assert call_kwargs.kwargs.get("extra_body") == {
+            "custom_key": "custom_value"
+        }
+
+
+def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
+    """
+    Test that when reasoning_effort is passed in kwargs (e.g. from proxy litellm_params)
+    and reasoning is None, it is mapped to reasoning before the request.
+
+    Supports per-model reasoning_effort/summary config in proxy for clients like Open WebUI
+    that cannot set extra_body.
+    """
+    with patch(
+        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        return_value=None,
+    ), patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+    ) as mock_handler:
+        mock_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/gpt-4o",
+            input="Hello",
+            reasoning_effort={"effort": "high", "summary": "detailed"},
+        )
+
+        mock_handler.assert_called_once()
+        call_kwargs = mock_handler.call_args
+        responses_api_request = call_kwargs.kwargs.get("responses_api_request", {})
+        assert "reasoning" in responses_api_request
+        assert responses_api_request["reasoning"] == {
+            "effort": "high",
+            "summary": "detailed",
+        }

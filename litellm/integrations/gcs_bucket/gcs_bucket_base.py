@@ -7,7 +7,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
     create_mock_gcs_client,
     mock_vertex_auth_methods,
 )
-        
+
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -28,11 +28,11 @@ IAM_AUTH_KEY = "IAM_AUTH"
 class GCSBucketBase(CustomBatchLogger):
     def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
         self.is_mock_mode = should_use_gcs_mock()
-        
+
         if self.is_mock_mode:
             mock_vertex_auth_methods()
             create_mock_gcs_client()
-        
+
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -85,10 +85,10 @@ class GCSBucketBase(CustomBatchLogger):
         from litellm import vertex_chat_completion
 
         # Get project_id from environment if available, otherwise None
-        # This helps support use of this library to auth to pull secrets 
+        # This helps support use of this library to auth to pull secrets
         # from Secret Manager.
         project_id = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
-        
+
         _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=project_id,
