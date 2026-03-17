@@ -716,6 +716,9 @@ class ModelResponseIterator:
                 logs = str(content)
             tool_input = self._server_tool_inputs.get(call_id, {})
             code = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            log_outputs = (
+                [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
+            )
             results.append(
                 OutputCodeInterpreterCall(
                     type="code_interpreter_call",
@@ -723,7 +726,7 @@ class ModelResponseIterator:
                     code=code,
                     container_id=None,
                     status="completed",
-                    outputs=[OutputCodeInterpreterCallLog(type="logs", logs=logs)],
+                    outputs=log_outputs,
                 )
             )
         return results
