@@ -72,6 +72,15 @@ litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandl
 #################################################
 
 
+def _has_file_search_tool(tools: Optional[Any]) -> bool:
+    """Return True if any tool in the list has type 'file_search'."""
+    if not tools:
+        return False
+    return any(
+        isinstance(t, dict) and t.get("type") == "file_search" for t in tools
+    )
+
+
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
@@ -714,6 +723,50 @@ def responses(
                 local_vars
             )
         )
+
+        if _has_file_search_tool(tools) and (
+            responses_api_provider_config is None
+            or not responses_api_provider_config.supports_native_file_search()
+        ):
+            from litellm.responses.file_search.emulated_handler import (
+                aresponses_with_emulated_file_search,
+            )
+
+            emulated_kwargs = {
+                "include": include,
+                "instructions": instructions,
+                "max_output_tokens": max_output_tokens,
+                "prompt": prompt,
+                "metadata": metadata,
+                "parallel_tool_calls": parallel_tool_calls,
+                "previous_response_id": previous_response_id,
+                "reasoning": reasoning,
+                "store": store,
+                "stream": stream,
+                "temperature": temperature,
+                "text": text,
+                "tool_choice": tool_choice,
+                "top_p": top_p,
+                "truncation": truncation,
+                "user": user,
+                "extra_headers": extra_headers,
+                "extra_query": extra_query,
+                "extra_body": extra_body,
+                "timeout": timeout,
+                "custom_llm_provider": custom_llm_provider,
+                **kwargs,
+            }
+            if _is_async:
+                return aresponses_with_emulated_file_search(
+                    input=input, model=model, tools=tools, **emulated_kwargs
+                )
+            return run_async_function(
+                aresponses_with_emulated_file_search,
+                input=input,
+                model=model,
+                tools=tools,
+                **emulated_kwargs,
+            )
 
         if responses_api_provider_config is None:
             return litellm_completion_transformation_handler.response_api_handler(
