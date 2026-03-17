@@ -397,17 +397,17 @@ export default function UISettings() {
 
           <Divider />
 
-          {/* Disable custom API key values */}
+          {/* Disable custom Virtual key values */}
           <Space align="start" size="middle">
             <Switch
               checked={Boolean(values.disable_custom_api_keys)}
               disabled={isUpdating}
               loading={isUpdating}
               onChange={handleToggleDisableCustomApiKeys}
-              aria-label={disableCustomApiKeysProperty?.description ?? "Disable custom API key values"}
+              aria-label={disableCustomApiKeysProperty?.description ?? "Disable custom Virtual key values"}
             />
             <Space direction="vertical" size={4}>
-              <Typography.Text strong>Disable custom API key values</Typography.Text>
+              <Typography.Text strong>Disable custom Virtual key values</Typography.Text>
               <Typography.Text type="secondary">
                 {disableCustomApiKeysProperty?.description ??
                   "If true, users cannot specify custom API key values. All keys must be auto-generated."}
