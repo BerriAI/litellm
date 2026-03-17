@@ -91,6 +91,7 @@ class OCRHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process OCR output by applying guardrails to extracted page text.
@@ -127,14 +128,22 @@ class OCRHandler(BaseTranslation):
         if model:
             inputs["model"] = model
 
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = {}
+
         # Add user metadata if available
-        if user_api_key_dict is not None:
-            metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-            inputs.update(metadata)  # type: ignore
+        if "litellm_metadata" not in request_data and user_api_key_dict is not None:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
