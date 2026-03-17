@@ -11,48 +11,56 @@ import NavigationCards from '@site/src/components/NavigationCards';
 
 ---
 
-## Model Configuration
+## Core Features
 
 <NavigationCards
 columns={2}
 items={[
-{
-icon: "🎛️",
-title: "Fine-tuned Models",
-description: "Call fine-tuned OpenAI, Azure, and Vertex AI models using LiteLLM with custom model names.",
-to: "/docs/guides/finetuned_models",
-},
+  {
+    icon: "⚡",
+    title: "Completion Basics",
+    description: "Streaming, function calling, JSON mode, vision, audio, and more.",
+    to: "/docs/guides/completion_basics",
+  },
+  {
+    icon: "📥",
+    title: "Documents, Images & Messages",
+    description: "Document understanding, image generation, message trimming, and sanitization.",
+    to: "/docs/guides/input_output_handling",
+  },
+  {
+    icon: "🔄",
+    title: "Prompt Optimization",
+    description: "Prompt caching and prompt formatting for better performance.",
+    to: "/docs/guides/prompt_optimization",
+  },
+  {
+    icon: "🤖",
+    title: "AI Capabilities",
+    description: "Web search, code interpreter, knowledge base, and more.",
+    to: "/docs/guides/ai_capabilities",
+  },
 ]}
 />
 
 ---
 
-## Security & Networking
+## Configuration & Cost
 
 <NavigationCards
 columns={2}
 items={[
-{
-icon: "🔒",
-title: "Security Settings",
-description: "Configure SSL certificates and HTTP proxy settings for secure LiteLLM deployments.",
-to: "/docs/guides/security_settings",
-},
-]}
-/>
-
----
-
-## AI Capabilities
-
-<NavigationCards
-columns={2}
-items={[
-{
-icon: "🖥️",
-title: "Code Interpreter",
-description: "Use OpenAI's Code Interpreter tool to execute Python code in a secure, sandboxed environment.",
-to: "/docs/guides/code_interpreter",
-},
+  {
+    icon: "🎛️",
+    title: "Models & Configuration",
+    description: "Fine-tuned models, security settings, and adapters.",
+    to: "/docs/guides/models_configuration",
+  },
+  {
+    icon: "💰",
+    title: "Budgets & Cost",
+    description: "Set spend limits and track costs across teams and deployments.",
+    to: "/docs/guides/budgets_cost",
+  },
 ]}
 />
