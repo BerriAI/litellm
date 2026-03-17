@@ -340,13 +340,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 redacted_content = delta.get("redactedContent")
                 signature = delta.get("signature")
 
-                # Format 2: {"reasoningContent": {"text": "...", "signature": "..."}} (AgentCore nested)
+                # Format 2: {"reasoningContent": {"text": "...", "signature": "...", "redactedContent": "..."}} (AgentCore nested)
                 reasoning_content_block = delta.get("reasoningContent")
                 if isinstance(reasoning_content_block, dict):
                     if not reasoning_text:
                         reasoning_text = reasoning_content_block.get("text")
                     if not signature:
                         signature = reasoning_content_block.get("signature")
+                    if not redacted_content:
+                        redacted_content = reasoning_content_block.get("redactedContent")
 
                 if reasoning_text:
                     reasoning_block = {"reasoningText": {"text": reasoning_text}}
