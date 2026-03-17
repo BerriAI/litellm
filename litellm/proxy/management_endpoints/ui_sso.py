@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import inspect
+import json
 import os
 import secrets
 from copy import deepcopy
@@ -419,31 +420,49 @@ def generic_response_convertor(
     sso_jwt_handler: Optional[JWTHandler] = None,
     role_mappings: Optional["RoleMappings"] = None,
     team_mappings: Optional["TeamMappings"] = None,
+    attribute_mappings: Optional["AttributeMappings"] = None,
 ) -> CustomOpenID:
-    generic_user_id_attribute_name = os.getenv(
-        "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+    # DB attribute_mappings take precedence over env vars
+    generic_user_id_attribute_name = (
+        attribute_mappings.user_id_attribute
+        if attribute_mappings and attribute_mappings.user_id_attribute
+        else os.getenv("GENERIC_USER_ID_ATTRIBUTE", "preferred_username")
     )
-    generic_user_display_name_attribute_name = os.getenv(
-        "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
+    generic_user_display_name_attribute_name = (
+        attribute_mappings.user_display_name_attribute
+        if attribute_mappings and attribute_mappings.user_display_name_attribute
+        else os.getenv("GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub")
     )
-    generic_user_email_attribute_name = os.getenv(
-        "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+    generic_user_email_attribute_name = (
+        attribute_mappings.user_email_attribute
+        if attribute_mappings and attribute_mappings.user_email_attribute
+        else os.getenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
     )
-
-    generic_user_first_name_attribute_name = os.getenv(
-        "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+    generic_user_first_name_attribute_name = (
+        attribute_mappings.user_first_name_attribute
+        if attribute_mappings and attribute_mappings.user_first_name_attribute
+        else os.getenv("GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name")
     )
-    generic_user_last_name_attribute_name = os.getenv(
-        "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+    generic_user_last_name_attribute_name = (
+        attribute_mappings.user_last_name_attribute
+        if attribute_mappings and attribute_mappings.user_last_name_attribute
+        else os.getenv("GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name")
     )
-
-    generic_provider_attribute_name = os.getenv(
-        "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+    generic_provider_attribute_name = (
+        attribute_mappings.user_provider_attribute
+        if attribute_mappings and attribute_mappings.user_provider_attribute
+        else os.getenv("GENERIC_USER_PROVIDER_ATTRIBUTE", "provider")
     )
-
-    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
-
-    generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+    generic_user_role_attribute_name = (
+        attribute_mappings.user_role_attribute
+        if attribute_mappings and attribute_mappings.user_role_attribute
+        else os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
+    )
+    generic_user_extra_attributes = (
+        attribute_mappings.user_extra_attributes
+        if attribute_mappings and attribute_mappings.user_extra_attributes
+        else os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+    )
 
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
@@ -714,6 +733,46 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     return role_mappings
 
 
+async def _setup_attribute_mappings() -> Optional["AttributeMappings"]:
+    """Setup attribute mappings from SSO database settings."""
+    attribute_mappings: Optional["AttributeMappings"] = None
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            attribute_mappings_data = sso_settings_dict.get("attribute_mappings")
+
+            if attribute_mappings_data:
+                from litellm.types.proxy.management_endpoints.ui_sso import (
+                    AttributeMappings,
+                )
+
+                if isinstance(attribute_mappings_data, dict):
+                    attribute_mappings = AttributeMappings(**attribute_mappings_data)
+                elif isinstance(attribute_mappings_data, AttributeMappings):
+                    attribute_mappings = attribute_mappings_data
+
+                if attribute_mappings:
+                    verbose_proxy_logger.debug(
+                        "Loaded attribute_mappings from database"
+                    )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Could not load attribute_mappings from database: {e}. Continuing with environment variable attribute mapping."
+        )
+
+    return attribute_mappings
+
+
 def _parse_generic_sso_headers() -> dict:
     """Parse comma-separated GENERIC_SSO_HEADERS env var into a dict."""
     raw = os.getenv("GENERIC_SSO_HEADERS", None)
@@ -819,6 +878,7 @@ async def get_generic_sso_response(
 
     role_mappings = await _setup_role_mappings()
     team_mappings = await _setup_team_mappings()
+    attribute_mappings = await _setup_attribute_mappings()
 
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
@@ -829,6 +889,7 @@ async def get_generic_sso_response(
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
             team_mappings=team_mappings,
+            attribute_mappings=attribute_mappings,
         )
 
     SSOProvider = create_provider(
@@ -1121,6 +1182,7 @@ def _build_sso_user_update_data(
     result: Optional[Union["CustomOpenID", OpenID, dict]],
     user_email: Optional[str],
     user_id: Optional[str],
+    existing_metadata: Optional[dict] = None,
 ) -> dict:
     """
     Build the update data dictionary for SSO user upsert.
@@ -1129,6 +1191,7 @@ def _build_sso_user_update_data(
         result: The SSO response containing user information
         user_email: The user's email from SSO
         user_id: The user's ID for logging purposes
+        existing_metadata: The user's existing metadata from DB, used to merge SSO attributes
 
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
@@ -1149,6 +1212,26 @@ def _build_sso_user_update_data(
             verbose_proxy_logger.info(
                 f"Updating user {user_id} role from SSO: {sso_role_str}"
             )
+
+    # Re-sync SSO-provided attributes into metadata.sso_attributes
+    sso_attrs: dict = {}
+    display_name = getattr(result, "display_name", None)
+    if isinstance(display_name, str) and display_name:
+        sso_attrs["display_name"] = display_name
+    first_name = getattr(result, "first_name", None)
+    if isinstance(first_name, str) and first_name:
+        sso_attrs["first_name"] = first_name
+    last_name = getattr(result, "last_name", None)
+    if isinstance(last_name, str) and last_name:
+        sso_attrs["last_name"] = last_name
+    extra_fields = getattr(result, "extra_fields", None)
+    if isinstance(extra_fields, dict) and extra_fields:
+        sso_attrs["extra_fields"] = extra_fields
+
+    if sso_attrs and existing_metadata is not None:
+        merged_metadata = dict(existing_metadata)
+        merged_metadata["sso_attributes"] = sso_attrs
+        update_data["metadata"] = json.dumps(merged_metadata)
 
     return update_data
 
@@ -2083,10 +2166,20 @@ class SSOAuthenticationHandler:
         try:
             if user_info is not None:
                 user_id = user_info.user_id
+                raw_metadata = getattr(user_info, "metadata", None)
+                existing_metadata: Optional[dict] = None
+                if isinstance(raw_metadata, str):
+                    try:
+                        existing_metadata = json.loads(raw_metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        existing_metadata = {}
+                elif isinstance(raw_metadata, dict):
+                    existing_metadata = raw_metadata
                 update_data = _build_sso_user_update_data(
                     result=result,
                     user_email=user_email,
                     user_id=user_id,
+                    existing_metadata=existing_metadata,
                 )
 
                 await prisma_client.db.litellm_usertable.update_many(

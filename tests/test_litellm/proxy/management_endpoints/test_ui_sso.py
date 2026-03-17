@@ -5160,3 +5160,280 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
 
+
+class TestAttributeMappings:
+    """Tests for DB-configurable attribute mappings (AttributeMappings)."""
+
+    def test_attribute_mappings_override_env_vars(self, monkeypatch):
+        """Test that DB AttributeMappings take precedence over env vars."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        # Set env vars that should be overridden by DB mappings
+        monkeypatch.setenv("GENERIC_USER_ID_ATTRIBUTE", "sub")
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
+
+        mock_response = {
+            "sub": "env-var-id",
+            "email": "env@example.com",
+            "custom_uid": "db-mapped-id",
+            "work_email": "db@example.com",
+            "full_name": "DB User",
+            "fname": "DB",
+            "lname": "User",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        attribute_mappings = AttributeMappings(
+            user_id_attribute="custom_uid",
+            user_email_attribute="work_email",
+            user_display_name_attribute="full_name",
+            user_first_name_attribute="fname",
+            user_last_name_attribute="lname",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        # DB mappings should win over env vars
+        assert result.id == "db-mapped-id"
+        assert result.email == "db@example.com"
+        assert result.display_name == "DB User"
+        assert result.first_name == "DB"
+        assert result.last_name == "User"
+
+    def test_attribute_mappings_partial_override(self, monkeypatch):
+        """Test that unset AttributeMappings fields fall back to env vars."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
+
+        mock_response = {
+            "preferred_username": "fallback-id",
+            "email": "fallback@example.com",
+            "custom_name": "Custom Display",
+            "sub": "sub-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        # Only override display_name, leave others as None (env var fallback)
+        attribute_mappings = AttributeMappings(
+            user_display_name_attribute="custom_name",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        # display_name from DB mapping
+        assert result.display_name == "Custom Display"
+        # email from env var fallback
+        assert result.email == "fallback@example.com"
+        # id from default (preferred_username)
+        assert result.id == "fallback-id"
+
+    def test_attribute_mappings_none_backward_compat(self, monkeypatch):
+        """Test that attribute_mappings=None behaves identically to before."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        monkeypatch.setenv("GENERIC_USER_ID_ATTRIBUTE", "uid")
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "mail")
+
+        mock_response = {
+            "uid": "legacy-id",
+            "mail": "legacy@example.com",
+            "sub": "sub-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=None,
+        )
+
+        assert result.id == "legacy-id"
+        assert result.email == "legacy@example.com"
+
+    def test_attribute_mappings_extra_attributes_from_db(self, monkeypatch):
+        """Test that user_extra_attributes from DB overrides GENERIC_USER_EXTRA_ATTRIBUTES env var."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        # Env var would capture "old_field", but DB mapping overrides to "new_field"
+        monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "old_field")
+
+        mock_response = {
+            "preferred_username": "test-id",
+            "email": "test@example.com",
+            "sub": "sub-value",
+            "old_field": "should-not-appear",
+            "new_field": "db-mapped-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        attribute_mappings = AttributeMappings(
+            user_extra_attributes="new_field",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        assert result.extra_fields is not None
+        assert "new_field" in result.extra_fields
+        assert result.extra_fields["new_field"] == "db-mapped-value"
+        assert "old_field" not in result.extra_fields
+
+    def test_build_sso_user_update_data_resyncs_sso_attributes(self):
+        """Test that _build_sso_user_update_data stores SSO name fields in metadata."""
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="Test User",
+            first_name="Test",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+            extra_fields={"department": "Engineering"},
+        )
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata={},
+        )
+
+        assert "metadata" in update_data
+        metadata = json.loads(update_data["metadata"])
+        assert "sso_attributes" in metadata
+        assert metadata["sso_attributes"]["display_name"] == "Test User"
+        assert metadata["sso_attributes"]["first_name"] == "Test"
+        assert metadata["sso_attributes"]["last_name"] == "User"
+        assert metadata["sso_attributes"]["extra_fields"] == {
+            "department": "Engineering"
+        }
+
+    def test_build_sso_user_update_data_merges_existing_metadata(self):
+        """Test that SSO attribute re-sync preserves existing metadata keys."""
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="Updated Name",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+        )
+
+        existing_metadata = {
+            "custom_key": "should_be_preserved",
+            "sso_attributes": {"display_name": "Old Name"},
+        }
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata=existing_metadata,
+        )
+
+        metadata = json.loads(update_data["metadata"])
+        # Existing key preserved
+        assert metadata["custom_key"] == "should_be_preserved"
+        # SSO attributes updated
+        assert metadata["sso_attributes"]["display_name"] == "Updated Name"
+
+    @pytest.mark.asyncio
+    async def test_setup_attribute_mappings_loads_from_db(self):
+        """Test that _setup_attribute_mappings correctly loads from DB."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _setup_attribute_mappings,
+        )
+
+        mock_sso_record = MagicMock()
+        mock_sso_record.sso_settings = {
+            "attribute_mappings": {
+                "user_id_attribute": "custom_uid",
+                "user_email_attribute": "work_email",
+            }
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_record
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ):
+            result = await _setup_attribute_mappings()
+
+        assert result is not None
+        assert result.user_id_attribute == "custom_uid"
+        assert result.user_email_attribute == "work_email"
+        assert result.user_display_name_attribute is None  # not set
+
+    @pytest.mark.asyncio
+    async def test_setup_attribute_mappings_returns_none_when_not_configured(self):
+        """Test that _setup_attribute_mappings returns None when no mappings in DB."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _setup_attribute_mappings,
+        )
+
+        mock_sso_record = MagicMock()
+        mock_sso_record.sso_settings = {"google_client_id": "some-id"}
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_record
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ):
+            result = await _setup_attribute_mappings()
+
+        assert result is None
+
