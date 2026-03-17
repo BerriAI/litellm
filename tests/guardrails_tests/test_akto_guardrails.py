@@ -269,6 +269,24 @@ def test_handle_guardrail_response_missing_result():
     assert allowed is True
 
 
+def test_handle_guardrail_response_data_none():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"data": None}
+    allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
+    assert allowed is True
+    assert reason == ""
+
+
+def test_handle_guardrail_response_guardrails_result_not_dict():
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"data": {"guardrailsResult": "invalid"}}
+    allowed, reason = AktoGuardrail.handle_guardrail_response(mock_resp)
+    assert allowed is True
+    assert reason == ""
+
+
 def test_handle_guardrail_response_non_dict():
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 200
@@ -492,6 +510,11 @@ def test_extract_request_path_fallback():
     assert path == "/v1/chat/completions"
 
 
+def test_extract_request_path_non_dict_metadata():
+    path = AktoGuardrail.extract_request_path({"metadata": "invalid"})
+    assert path == "/v1/chat/completions"
+
+
 def test_resolve_metadata_value():
     assert (
         AktoGuardrail.resolve_metadata_value({"metadata": {"user_api_key_user_id": "u1"}}, "user_api_key_user_id")
@@ -506,6 +529,16 @@ def test_resolve_metadata_value():
     )
     assert AktoGuardrail.resolve_metadata_value({}, "some_key") is None
     assert AktoGuardrail.resolve_metadata_value(None, "some_key") is None
+
+
+def test_resolve_metadata_value_non_dict_containers():
+    assert (
+        AktoGuardrail.resolve_metadata_value(
+            {"metadata": "invalid", "litellm_metadata": ["bad"]},
+            "some_key",
+        )
+        is None
+    )
 
 
 def test_build_tag_metadata(akto_validate, sample_request_data):

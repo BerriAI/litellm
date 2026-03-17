@@ -108,8 +108,8 @@ class AktoGuardrail(CustomGuardrail):
         if request_data is None:
             return None
         for dict_key in ("litellm_metadata", "metadata"):
-            container = request_data.get(dict_key, {})
-            if container:
+            container = request_data.get(dict_key) or {}
+            if isinstance(container, dict) and container:
                 value = container.get(key)
                 if value is not None:
                     return str(value).strip()
@@ -118,7 +118,10 @@ class AktoGuardrail(CustomGuardrail):
     @staticmethod
     def extract_request_path(request_data: dict) -> str:
         """Extract the API route from request metadata, defaulting to /v1/chat/completions."""
-        route = request_data.get("metadata", {}).get("user_api_key_request_route")
+        metadata = request_data.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        route = metadata.get("user_api_key_request_route")
         return route if route else "/v1/chat/completions"
 
     def prepare_headers(self) -> Dict[str, str]:
@@ -143,8 +146,11 @@ class AktoGuardrail(CustomGuardrail):
         """Build the requestHeaders field from proxy request headers."""
         headers: Dict[str, str] = {"content-type": "application/json"}
         proxy_req = request_data.get("proxy_server_request", {})
-        if proxy_req.get("headers") and isinstance(proxy_req["headers"], dict):
-            for key, val in proxy_req["headers"].items():
+        if not isinstance(proxy_req, dict):
+            return headers
+        proxy_req_headers = proxy_req.get("headers")
+        if isinstance(proxy_req_headers, dict):
+            for key, val in proxy_req_headers.items():
                 if key and val:
                     headers[str(key).lower()] = str(val)
         return headers
@@ -312,7 +318,12 @@ class AktoGuardrail(CustomGuardrail):
             ) from e
         if not isinstance(result, dict):
             return True, ""
-        guardrails_result = result.get("data", {}).get("guardrailsResult", {}) or {}
+        data = result.get("data") or {}
+        if not isinstance(data, dict):
+            return True, ""
+        guardrails_result = data.get("guardrailsResult") or {}
+        if not isinstance(guardrails_result, dict):
+            return True, ""
         return (
             bool(guardrails_result.get("Allowed", True)),
             str(guardrails_result.get("Reason", "")),
