@@ -659,6 +659,27 @@ class TestEmulatedFileSearchHandler:
         annotations = _build_file_citation_annotations([r1, r2], "text")
         assert len(annotations) == 1
 
+    def test_H14_include_search_results_dedupes_by_file_id(self):
+        from litellm.responses.file_search.emulated_handler import (
+            _build_search_results_for_include,
+        )
+
+        r1, r2 = MagicMock(), MagicMock()
+        r1.file_id = "file-abc"
+        r1.filename = "doc.pdf"
+        r1.score = 0.9
+        r1.attributes = {}
+        r1.content = [{"type": "text", "text": "first hit"}]
+        r2.file_id = "file-abc"  # same file appears for a second query
+        r2.filename = "doc.pdf"
+        r2.score = 0.85
+        r2.attributes = {}
+        r2.content = [{"type": "text", "text": "second hit"}]
+
+        search_results = _build_search_results_for_include([r1, r2])
+        assert len(search_results) == 1
+        assert search_results[0]["file_id"] == "file-abc"
+
     # --- End-to-end (mocked) ---
 
     @pytest.mark.asyncio
