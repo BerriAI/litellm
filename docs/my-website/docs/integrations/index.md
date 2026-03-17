@@ -20,60 +20,60 @@ items={[
     icon: "🪢",
     title: "Langfuse",
     description: "LLM observability and analytics.",
-    to: "../observability/langfuse_integration",
+    to: "/docs/observability/langfuse_integration",
   },
   {
     icon: "🐶",
     title: "Datadog",
     description: "Metrics, traces, and dashboards.",
-    to: "../observability/datadog",
+    to: "/docs/observability/datadog",
   },
   {
     icon: "📡",
     title: "OpenTelemetry",
     description: "Vendor-neutral tracing.",
-    to: "../observability/opentelemetry_integration",
+    to: "/docs/observability/opentelemetry_integration",
   },
   {
     icon: "🔗",
     title: "LangSmith",
     description: "LLM debugging and evaluation.",
-    to: "../observability/langsmith_integration",
+    to: "/docs/observability/langsmith_integration",
   },
   {
     icon: "🔥",
     title: "Arize / Phoenix",
     description: "ML observability and evaluation.",
-    to: "../observability/arize_integration",
+    to: "/docs/observability/arize_integration",
   },
   {
     icon: "🌀",
     title: "Helicone",
     description: "LLM request logging and analytics.",
-    to: "../observability/helicone_integration",
+    to: "/docs/observability/helicone_integration",
   },
   {
     icon: "📊",
     title: "MLflow",
     description: "Experiment tracking.",
-    to: "../observability/mlflow",
+    to: "/docs/observability/mlflow",
   },
   {
     icon: "🏋️",
     title: "Weights & Biases",
     description: "ML experiment tracking.",
-    to: "../observability/wandb_integration",
+    to: "/docs/observability/wandb_integration",
   },
   {
     icon: "📉",
     title: "PostHog",
     description: "Product analytics.",
-    to: "../observability/posthog_integration",
+    to: "/docs/observability/posthog_integration",
   },
 ]}
 />
 
-[View all observability integrations →](../observability/callbacks.md)
+[View all observability integrations →](/docs/observability_integrations)
 
 ---
 
@@ -124,42 +124,42 @@ items={[
     icon: "🛡️",
     title: "Lakera AI",
     description: "Prompt injection detection.",
-    to: "../proxy/guardrails/lakera_ai",
+    to: "/docs/proxy/guardrails/lakera_ai",
   },
   {
     icon: "☁️",
     title: "Azure Content Safety",
     description: "Content moderation.",
-    to: "../proxy/guardrails/azure_content_guardrail",
+    to: "/docs/proxy/guardrails/azure_content_guardrail",
   },
   {
     icon: "🛏️",
     title: "Bedrock Guardrails",
     description: "AWS Bedrock safety.",
-    to: "../proxy/guardrails/bedrock",
+    to: "/docs/proxy/guardrails/bedrock",
   },
   {
     icon: "🤖",
     title: "OpenAI Moderation",
     description: "OpenAI content policy.",
-    to: "../proxy/guardrails/openai_moderation",
+    to: "/docs/proxy/guardrails/openai_moderation",
   },
   {
     icon: "🔐",
     title: "Secret Detection",
     description: "Prevent credential leaks.",
-    to: "../proxy/guardrails/secret_detection",
+    to: "/docs/proxy/guardrails/secret_detection",
   },
   {
     icon: "🕵️",
     title: "PII Masking",
     description: "Mask sensitive data.",
-    to: "../proxy/guardrails/pii_masking_v2",
+    to: "/docs/proxy/guardrails/pii_masking_v2",
   },
 ]}
 />
 
-[View all guardrail providers →](../proxy/guardrails/quick_start.md)
+[View all guardrail providers →](/docs/guardrail_providers)
 
 ---
 
