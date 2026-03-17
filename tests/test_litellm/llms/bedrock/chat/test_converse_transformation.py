@@ -2645,40 +2645,48 @@ def test_supports_native_structured_outputs():
     Support is driven by the ``supports_native_structured_output`` flag in the
     cost JSON (litellm.model_cost), not a hardcoded model set.
     """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    config = AmazonConverseConfig()
+        # Supported models (have supports_native_structured_output=true in cost JSON)
+        assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-5-20250929-v1:0")
+        assert config._supports_native_structured_outputs("anthropic.claude-haiku-4-5-20251001-v1:0")
+        assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1")
+        # Version suffix (:0) is stripped when looking up models without it in cost JSON
+        assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1:0")
+        # Regional prefix is stripped by get_bedrock_base_model
+        assert config._supports_native_structured_outputs("eu.anthropic.claude-opus-4-5-20251101-v1:0")
+        # Claude 4.6 Sonnet
+        assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-6")
+        assert config._supports_native_structured_outputs("us.anthropic.claude-sonnet-4-6")
+        # Non-Anthropic models
+        assert config._supports_native_structured_outputs("qwen.qwen3-235b-a22b-2507-v1:0")
+        assert config._supports_native_structured_outputs("mistral.mistral-large-3-675b-instruct")
+        assert config._supports_native_structured_outputs("minimax.minimax-m2")
+        assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
+        assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
 
-    # Supported models (have supports_native_structured_output=true in cost JSON)
-    assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-5-20250929-v1:0")
-    assert config._supports_native_structured_outputs("anthropic.claude-haiku-4-5-20251001-v1:0")
-    assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1")
-    # Version suffix (:0) is stripped when looking up models without it in cost JSON
-    assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1:0")
-    # Regional prefix is stripped by get_bedrock_base_model
-    assert config._supports_native_structured_outputs("eu.anthropic.claude-opus-4-5-20251101-v1:0")
-    # Claude 4.6 Sonnet
-    assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-6")
-    assert config._supports_native_structured_outputs("us.anthropic.claude-sonnet-4-6")
-    # Non-Anthropic models
-    assert config._supports_native_structured_outputs("qwen.qwen3-235b-a22b-2507-v1:0")
-    assert config._supports_native_structured_outputs("mistral.mistral-large-3-675b-instruct")
-    assert config._supports_native_structured_outputs("minimax.minimax-m2")
-    assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
-    assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
-
-    # Unsupported models -- should fall back to tool-call approach
-    assert not config._supports_native_structured_outputs("anthropic.claude-3-5-sonnet-20241022-v2:0")
-    assert not config._supports_native_structured_outputs("anthropic.claude-sonnet-4-20250514-v1:0")
-    assert not config._supports_native_structured_outputs("meta.llama3-3-70b-instruct-v1:0")
-    assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
-    # Excluded: broken constrained decoding on Bedrock
-    assert not config._supports_native_structured_outputs("openai.gpt-oss-120b-1:0")
-    assert not config._supports_native_structured_outputs("mistral.magistral-small-2509")
-    # Excluded: ignores schema or broken on Bedrock
-    assert not config._supports_native_structured_outputs("google.gemma-3-27b-it")
-    assert not config._supports_native_structured_outputs("nvidia.nemotron-nano-12b-v2")
+        # Unsupported models -- should fall back to tool-call approach
+        assert not config._supports_native_structured_outputs("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        assert not config._supports_native_structured_outputs("anthropic.claude-sonnet-4-20250514-v1:0")
+        assert not config._supports_native_structured_outputs("meta.llama3-3-70b-instruct-v1:0")
+        assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
+        # Excluded: broken constrained decoding on Bedrock
+        assert not config._supports_native_structured_outputs("openai.gpt-oss-120b-1:0")
+        assert not config._supports_native_structured_outputs("mistral.magistral-small-2509")
+        # Excluded: ignores schema or broken on Bedrock
+        assert not config._supports_native_structured_outputs("google.gemma-3-27b-it")
+        assert not config._supports_native_structured_outputs("nvidia.nemotron-nano-12b-v2")
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_create_output_config_for_response_format():
@@ -2794,45 +2802,53 @@ def test_translate_response_format_fallback_tool_call():
 
 def test_native_structured_output_no_fake_stream():
     """When using native structured outputs with streaming, fake_stream should NOT be set."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    config = AmazonConverseConfig()
-
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "Result",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "answer": {"type": "string"},
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Result",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                    },
                 },
             },
-        },
-    }
+        }
 
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format, "stream": True},
-        is_thinking_enabled=False,
-    )
+        optional_params: dict = {}
+        result = config._translate_response_format_param(
+            value=response_format,
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params={"response_format": response_format, "stream": True},
+            is_thinking_enabled=False,
+        )
 
-    assert "outputConfig" in result
-    assert result["json_mode"] is True
-    # No fake_stream for native approach
-    assert "fake_stream" not in result
+        assert "outputConfig" in result
+        assert result["json_mode"] is True
+        # No fake_stream for native approach
+        assert "fake_stream" not in result
 
-    # Verify the schema content
-    schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
-    assert json.loads(schema_str) == {
-        "type": "object",
-        "properties": {"answer": {"type": "string"}},
-        "additionalProperties": False,
-    }
+        # Verify the schema content
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+        assert json.loads(schema_str) == {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_transform_request_with_output_config():
@@ -3063,26 +3079,34 @@ def test_add_additional_properties_definitions():
 def test_json_object_no_schema_falls_back_to_tool_call():
     """response_format: {type: json_object} with no schema should use tool-call fallback,
     even for models that support native structured outputs."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params: dict = {}
+        non_default_params = {"response_format": {"type": "json_object"}}
 
-    config = AmazonConverseConfig()
-    optional_params: dict = {}
-    non_default_params = {"response_format": {"type": "json_object"}}
+        result = config._translate_response_format_param(
+            value=non_default_params["response_format"],
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params=non_default_params,
+            is_thinking_enabled=False,
+        )
 
-    result = config._translate_response_format_param(
-        value=non_default_params["response_format"],
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params=non_default_params,
-        is_thinking_enabled=False,
-    )
-
-    # Should NOT use native outputConfig (no schema provided)
-    assert "outputConfig" not in result
-    # Should use tool-call fallback
-    assert "tools" in result
-    assert result["json_mode"] is True
+        # Should NOT use native outputConfig (no schema provided)
+        assert "outputConfig" not in result
+        # Should use tool-call fallback
+        assert "tools" in result
+        assert result["json_mode"] is True
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_output_config_applies_additional_properties():
