@@ -3001,6 +3001,16 @@ class ModelResponseIterator:
                             )
                             model_response.choices.append(choice)
 
+                # Also handle the case where the final chunk has empty
+                # content (e.g. text:"") WITH finishReason. In this case
+                # _process_candidates DOES create a choice, but maps
+                # finishReason="STOP" to "stop" because the current chunk
+                # has no tool_calls. Override if we saw tool_calls earlier.
+                if self.has_seen_tool_calls:
+                    for choice in model_response.choices:
+                        if choice.finish_reason == "stop":
+                            choice.finish_reason = "tool_calls"
+
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
