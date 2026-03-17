@@ -15,16 +15,19 @@ except (ImportError, AttributeError):
         __name__, "litellm_core_utils/tokenizers"
     )
 
-# Check if the directory is writable. If not, use /tmp as a fallback.
-# This is especially important for non-root Docker environments where the package directory is read-only.
-is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-if not os.access(filename, os.W_OK) and is_non_root:
-    filename = "/tmp/tiktoken_cache"
-    os.makedirs(filename, exist_ok=True)
+# Always default TIKTOKEN_CACHE_DIR to the bundled tokenizers directory
+# unless the user explicitly overrides it via CUSTOM_TIKTOKEN_CACHE_DIR.
+# This keeps tiktoken fully offline-capable by default (see #1071).
+custom_cache_dir = os.getenv("CUSTOM_TIKTOKEN_CACHE_DIR")
+if custom_cache_dir:
+    # If the user opts into a custom cache dir, ensure it exists.
+    os.makedirs(custom_cache_dir, exist_ok=True)
+    cache_dir = custom_cache_dir
+else:
+    cache_dir = filename
 
-os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
-    "CUSTOM_TIKTOKEN_CACHE_DIR", filename
-)  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+
 import tiktoken
 import time
 import random
@@ -45,3 +48,4 @@ for attempt in range(_max_retries):
         # Exponential backoff with jitter to reduce collision probability
         delay = _retry_delay * (2**attempt) + random.uniform(0, 0.1)
         time.sleep(delay)
+

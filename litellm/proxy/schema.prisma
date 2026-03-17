@@ -267,6 +267,7 @@ model LiteLLM_ObjectPermissionTable {
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
+  models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
@@ -315,6 +316,15 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
+  source_url            String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
+
+  @@index([approval_status])
 }
 
 // Per-user BYOK credentials for MCP servers
