@@ -86,8 +86,10 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
-def _get_content_as_str(content: Union[str, list]) -> str:
-    """Extract text from content that may be a string or a list of content blocks."""
+def _get_content_as_str(content: Union[str, list, None]) -> str:
+    """Extract text from content that may be a string, a list of content blocks, or None."""
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):

@@ -110,6 +110,24 @@ def test_supports_system_message_list_content_last_message():
     assert new_messages[0]["content"] == "Only system"
 
 
+def test_supports_system_message_none_content():
+    """
+    Test map_system_message_pt when next message has content=None (e.g. assistant
+    tool-call messages). Should not produce the literal string 'None'.
+    """
+    messages = [
+        {"role": "system", "content": "Be helpful."},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    # content should start with system text, not contain literal "None"
+    assert "None" not in new_messages[0]["content"]
+    assert "Be helpful." in new_messages[0]["content"]
+
+
 @pytest.mark.parametrize(
     "stop_sequence, expected_count", [("\n", 0), (["\n"], 0), (["finish_reason"], 1)]
 )
