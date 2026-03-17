@@ -876,12 +876,15 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
 @pytest.mark.parametrize(
     "vertex_location, expected_location",
     [
-        # Supported region should be preserved
+        # Supported regions should be preserved
         ("europe-west1", "europe-west1"),
+        ("asia-southeast1", "asia-southeast1"),
+        ("us-east5", "us-east5"),
         # Unsupported region should fall back to us-east5
         ("global", "us-east5"),
         ("us-central1", "us-east5"),
     ],
+)
 )
 async def test_vertex_ai_claude_count_tokens_region_validation(
     vertex_location, expected_location
