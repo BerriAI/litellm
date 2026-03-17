@@ -91,7 +91,7 @@ def _get_content_as_str(content: Union[str, list]) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return convert_content_list_to_str({"content": content})
+        return convert_content_list_to_str({"role": "user", "content": content})
     return str(content)
 
 
