@@ -179,7 +179,7 @@ class TestSupportsNativeFileSearch:
 # ---------------------------------------------------------------------------
 
 class TestFileSearchGuardInResponsesMain:
-    """Tests for _has_file_search_tool helper and the UnsupportedParamsError guard."""
+    """Tests for _has_file_search_tool helper and emulated routing guard."""
 
     def test_has_file_search_tool_true(self):
         from litellm.responses.main import _has_file_search_tool
@@ -210,40 +210,98 @@ class TestFileSearchGuardInResponsesMain:
         assert config.supports_native_file_search()
         # No exception expected — the guard would pass.
 
-    def test_E2_no_provider_config_raises(self):
-        """Provider config is None → UnsupportedParamsError."""
-        from litellm.exceptions import UnsupportedParamsError
-        from litellm.responses.main import _has_file_search_tool
+    def test_E2_no_provider_config_routes_to_emulated_handler(self):
+        """Provider config None + file_search should route to emulated handler."""
+        from litellm.responses.main import responses
 
         tools = [{"type": "file_search", "vector_store_ids": ["vs_abc"]}]
-        assert _has_file_search_tool(tools)
+        logging_obj = MagicMock()
+        expected = {"ok": True}
 
-        with pytest.raises(UnsupportedParamsError):
-            if _has_file_search_tool(tools) and True:  # config is None
-                raise UnsupportedParamsError(
-                    message="Provider does not support file_search",
-                    llm_provider="anthropic",
-                    model="claude-3",
-                )
+        with (
+            patch(
+                "litellm.responses.main.litellm.get_llm_provider",
+                return_value=("claude-sonnet-4-5", "anthropic", None, None),
+            ),
+            patch(
+                "litellm.responses.main.update_responses_input_with_model_file_ids",
+                return_value="hello",
+            ),
+            patch(
+                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+                return_value=tools,
+            ),
+            patch(
+                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+                return_value=None,
+            ),
+            patch(
+                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+                return_value={},
+            ),
+            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
+        ):
+            result = responses(
+                input="hello",
+                model="anthropic/claude-sonnet-4-5",
+                tools=tools,
+                litellm_logging_obj=logging_obj,
+                litellm_call_id="call-123",
+            )
 
-    def test_E3_non_native_provider_config_raises(self):
-        """Provider config.supports_native_file_search() == False → error."""
-        from litellm.exceptions import UnsupportedParamsError
+        assert result == expected
+        assert run_async_mock.called
+        routed_func = run_async_mock.call_args.args[0]
+        assert routed_func.__name__ == "aresponses_with_emulated_file_search"
+
+    def test_E3_non_native_provider_config_routes_to_emulated_handler(self):
+        """Non-native provider config + file_search should route to emulated handler."""
         from litellm.llms.base_llm.responses.transformation import (
             BaseResponsesAPIConfig,
         )
+        from litellm.responses.main import responses
 
+        tools = [{"type": "file_search", "vector_store_ids": ["vs_abc"]}]
+        logging_obj = MagicMock()
+        expected = {"ok": True}
         mock_config = MagicMock(spec=BaseResponsesAPIConfig)
         mock_config.supports_native_file_search.return_value = False
 
-        tools = [{"type": "file_search"}]
-        with pytest.raises(UnsupportedParamsError):
-            if not mock_config.supports_native_file_search():
-                raise UnsupportedParamsError(
-                    message="Provider does not support file_search",
-                    llm_provider="anthropic",
-                    model="claude-3",
-                )
+        with (
+            patch(
+                "litellm.responses.main.litellm.get_llm_provider",
+                return_value=("claude-sonnet-4-5", "anthropic", None, None),
+            ),
+            patch(
+                "litellm.responses.main.update_responses_input_with_model_file_ids",
+                return_value="hello",
+            ),
+            patch(
+                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+                return_value=tools,
+            ),
+            patch(
+                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+                return_value={},
+            ),
+            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
+        ):
+            result = responses(
+                input="hello",
+                model="anthropic/claude-sonnet-4-5",
+                tools=tools,
+                litellm_logging_obj=logging_obj,
+                litellm_call_id="call-123",
+            )
+
+        assert result == expected
+        assert run_async_mock.called
+        routed_func = run_async_mock.call_args.args[0]
+        assert routed_func.__name__ == "aresponses_with_emulated_file_search"
 
     def test_E4_no_file_search_tools_no_error(self):
         """No file_search tool in request → guard never fires."""
@@ -473,9 +531,9 @@ class TestEmulatedFileSearchHandler:
         assert vs_ids == ["vs_abc", "vs_def"]
         assert len(new_tools) == 1
         assert new_tools[0]["type"] == "function"
-        assert new_tools[0]["function"]["name"] == "litellm_file_search"
+        assert new_tools[0]["name"] == "litellm_file_search"
         # Both store IDs appear in the enum
-        enum_ids = new_tools[0]["function"]["parameters"]["properties"]["vector_store_id"]["enum"]
+        enum_ids = new_tools[0]["parameters"]["properties"]["vector_store_id"]["enum"]
         assert "vs_abc" in enum_ids
         assert "vs_def" in enum_ids
 

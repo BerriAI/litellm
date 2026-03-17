@@ -481,18 +481,28 @@ async def aresponses_with_emulated_file_search(
             }
         )
 
-    # 5. Build follow-up input: original messages + assistant's tool call + tool results
+    # 5. Build follow-up input: original messages + all assistant tool calls + tool results
     original_input_items = list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
-    follow_up_input = (
-        original_input_items
-        + [
+    follow_up_function_calls: List[Dict[str, Any]] = []
+    for tc in file_search_calls:
+        if isinstance(tc, dict):
+            tc_call_id = tc.get("call_id") or tc.get("id") or file_search_call_id
+            tc_args = tc.get("arguments") or "{}"
+        else:
+            tc_call_id = getattr(tc, "call_id", None) or getattr(tc, "id", file_search_call_id)
+            tc_args = getattr(tc, "arguments", "{}") or "{}"
+        follow_up_function_calls.append(
             {
                 "type": "function_call",
                 "name": FILE_SEARCH_FUNCTION_NAME,
-                "call_id": file_search_calls[0].get("call_id") if isinstance(file_search_calls[0], dict) else getattr(file_search_calls[0], "call_id", file_search_call_id),
-                "arguments": file_search_calls[0].get("arguments") if isinstance(file_search_calls[0], dict) else getattr(file_search_calls[0], "arguments", "{}"),
+                "call_id": tc_call_id,
+                "arguments": tc_args,
             }
-        ]
+        )
+
+    follow_up_input = (
+        original_input_items
+        + follow_up_function_calls
         + tool_results
     )
 
