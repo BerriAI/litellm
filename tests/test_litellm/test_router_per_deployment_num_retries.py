@@ -188,3 +188,40 @@ class TestPerDeploymentNumRetries:
 
         # Verify num_retries was converted from string to int
         assert exc.num_retries == 6
+
+    @pytest.mark.asyncio
+    async def test_async_function_with_retries_none_num_retries(self):
+        """
+        Test that async_function_with_retries handles None num_retries
+        without raising TypeError.
+        GitHub Issue: #23699
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "test-key",
+                    },
+                },
+            ],
+            num_retries=3,
+        )
+
+        # Simulate the case where num_retries is None in kwargs
+        # (as happens with auto_router/complexity_router + tool results)
+        async def mock_original_function(*args, **kwargs):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        kwargs = {
+            "original_function": mock_original_function,
+            "num_retries": None,
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        # Should not raise TypeError: '>' not supported between
+        # instances of 'NoneType' and 'int'
+        response = await router.async_function_with_retries(**kwargs)
+        assert response is not None
