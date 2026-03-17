@@ -5426,6 +5426,15 @@ class Router:
         mock_timeout = kwargs.pop("mock_timeout", None)
 
         try:
+            # Check if request was rate-limited by pre-call hook (dynamic_rate_limiter_v3)
+            # If so, raise the error immediately to trigger fallback logic
+            rate_limit_error = kwargs.pop("_litellm_rate_limit_error", None)
+            if rate_limit_error is not None:
+                verbose_router_logger.info(
+                    f"Rate limit detected from pre-call hook for {model_group}, triggering fallback"
+                )
+                raise rate_limit_error
+            
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
                 model_group=model_group,
