@@ -152,13 +152,16 @@ class BraintrustLogger(CustomLogger):
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                output = response_obj["choices"][0]["message"].json()
-                choices = response_obj["choices"]
+                _choices = response_obj.get("choices")
+                if _choices:
+                    output = _choices[0]["message"].json()
+                    choices = _choices
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                output = response_obj.choices[0].text
-                choices = response_obj.choices
+                if response_obj.choices:
+                    output = response_obj.choices[0].text
+                    choices = response_obj.choices
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
@@ -289,13 +292,16 @@ class BraintrustLogger(CustomLogger):
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                output = response_obj["choices"][0]["message"].json()
-                choices = response_obj["choices"]
+                _choices = response_obj.get("choices")
+                if _choices:
+                    output = _choices[0]["message"].json()
+                    choices = _choices
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                output = response_obj.choices[0].text
-                choices = response_obj.choices
+                if response_obj.choices:
+                    output = response_obj.choices[0].text
+                    choices = response_obj.choices
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
