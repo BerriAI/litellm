@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined, LoadingOutlined, UserOutlined } from "@ant-design/icons";
+import { DownOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -50,6 +50,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import UsageAIChatPanel from "./UsageAIChatPanel";
 
 interface UsagePageProps {
   teams: Team[];
@@ -142,10 +143,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
+  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [usageView, setUsageView] = useState<UsageOption>("global");
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -174,7 +177,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 
   // Calculate top models from the breakdown data
-  const getTopModels = (limit: number = 5) => {
+  const topModels = useMemo(() => {
     const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
@@ -217,10 +220,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topModelsLimit);
+  }, [userSpendData.results, topModelsLimit]);
 
-  const getTopModelGroups = (limit: number = 5) => {
+  const topModelGroups = useMemo(() => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
@@ -264,16 +267,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topModelsLimit);
+  }, [userSpendData.results, topModelsLimit]);
 
   // Calculate provider spend from the breakdown data
-  const getProviderSpend = () => {
-    const providerSpend: { [key: string]: MetricWithMetadata } = {};
+  const providerSpend = useMemo(() => {
+    const providerSpendMap: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpend[provider]) {
-          providerSpend[provider] = {
+        if (!providerSpendMap[provider]) {
+          providerSpendMap[provider] = {
             metrics: {
               spend: 0,
               prompt_tokens: 0,
@@ -289,19 +292,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        providerSpend[provider].metrics.spend += metrics.metrics.spend;
-        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
+        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpendMap[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
       });
     });
 
-    return Object.entries(providerSpend).map(([provider, metrics]) => ({
+    return Object.entries(providerSpendMap).map(([provider, metrics]) => ({
       provider,
       spend: metrics.metrics.spend,
       requests: metrics.metrics.api_requests,
@@ -309,10 +312,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       failed_requests: metrics.metrics.failed_requests,
       tokens: metrics.metrics.total_tokens,
     }));
-  };
+  }, [userSpendData.results]);
 
   // Calculate top API keys from the breakdown data
-  const getTopKeys = (limit: number = 5) => {
+  const topKeys = useMemo(() => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
@@ -332,7 +335,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             metadata: {
               key_alias: metrics.metadata.key_alias,
               team_id: null,
-              tags: metrics.metadata.tags || [], // This gets key-level tags
+              tags: metrics.metadata.tags || [],
             },
           };
         }
@@ -348,18 +351,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       });
     });
 
-    console.log("debugTags", { keySpend, userSpendData });
-
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
-        tags: metrics.metadata.tags || [], // This will show key-level tags
+        key_alias: metrics.metadata.key_alias || "-",
+        tags: metrics.metadata.tags || [],
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, limit);
-  };
+      .slice(0, topKeysLimit);
+  }, [userSpendData.results, topKeysLimit]);
 
   const fetchUserSpendData = useCallback(async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -397,11 +398,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
-          aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
-          aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
-          aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
-          aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
-          aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
+          aggregatedMetadata.total_spend = (aggregatedMetadata.total_spend || 0) + (pageData.metadata.total_spend || 0);
+          aggregatedMetadata.total_api_requests = (aggregatedMetadata.total_api_requests || 0) + (pageData.metadata.total_api_requests || 0);
+          aggregatedMetadata.total_successful_requests = (aggregatedMetadata.total_successful_requests || 0) + (pageData.metadata.total_successful_requests || 0);
+          aggregatedMetadata.total_failed_requests = (aggregatedMetadata.total_failed_requests || 0) + (pageData.metadata.total_failed_requests || 0);
+          aggregatedMetadata.total_tokens = (aggregatedMetadata.total_tokens || 0) + (pageData.metadata.total_tokens || 0);
+          aggregatedMetadata.total_prompt_tokens = (aggregatedMetadata.total_prompt_tokens || 0) + (pageData.metadata.total_prompt_tokens || 0);
+          aggregatedMetadata.total_completion_tokens = (aggregatedMetadata.total_completion_tokens || 0) + (pageData.metadata.total_completion_tokens || 0);
+          aggregatedMetadata.total_cache_read_input_tokens = (aggregatedMetadata.total_cache_read_input_tokens || 0) + (pageData.metadata.total_cache_read_input_tokens || 0);
+          aggregatedMetadata.total_cache_creation_input_tokens = (aggregatedMetadata.total_cache_creation_input_tokens || 0) + (pageData.metadata.total_cache_creation_input_tokens || 0);
         }
       }
 
@@ -438,9 +443,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => clearTimeout(timeoutId);
   }, [fetchUserSpendData]);
 
-  const modelMetrics = processActivityData(userSpendData, "models", teams);
-  const keyMetrics = processActivityData(userSpendData, "api_keys", teams);
-  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers", teams);
+  const sortedDailyResults = useMemo(
+    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+    [userSpendData.results],
+  );
+  const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
+  const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
+  const mcpServerMetrics = useMemo(() => processActivityData(userSpendData, "mcp_servers", teams), [userSpendData, teams]);
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -496,6 +505,36 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {/* Your Usage Panel */}
           {usageView === "global" && (
             <>
+            {isAdmin && (
+              <div className="mb-4">
+                <Text className="mb-2">Filter by user</Text>
+                <Select
+                  showSearch
+                  allowClear
+                  style={{ width: "100%" }}
+                  placeholder="Select user to filter..."
+                  value={selectedUserId}
+                  onChange={(value) => setSelectedUserId(value ?? null)}
+                  filterOption={false}
+                  onSearch={handleUserSearchChange}
+                  searchValue={userSearchInput}
+                  onPopupScroll={handleUserPopupScroll}
+                  loading={isLoadingUsers}
+                  notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                  options={userOptions}
+                  popupRender={(menu) => (
+                    <>
+                      {menu}
+                      {isFetchingNextUsersPage && (
+                        <div style={{ textAlign: "center", padding: 8 }}>
+                          <LoadingOutlined spin />
+                        </div>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
+            )}
             <TabGroup>
               <div className="flex justify-between items-center">
                 <TabList variant="solid" className="mt-1">
@@ -505,21 +544,33 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Tab>MCP Server Activity</Tab>
                   <Tab>Endpoint Activity</Tab>
                 </TabList>
-                <Button
-                  onClick={() => setIsGlobalExportModalOpen(true)}
-                  icon={() => (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                      />
-                    </svg>
-                  )}
-                >
-                  Export Data
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => setIsAiChatOpen(true)}
+                    icon={() => (
+                      <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
+                      </svg>
+                    )}
+                  >
+                    Ask AI
+                  </Button>
+                  <Button
+                    onClick={() => setIsGlobalExportModalOpen(true)}
+                    icon={() => (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                        />
+                      </svg>
+                    )}
+                  >
+                    Export Data
+                  </Button>
+                </div>
               </div>
               <TabPanels>
                 {/* Cost Panel */}
@@ -546,41 +597,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </>
                           )}
                         </Text>
-                        {isAdmin && (
-                          <div className="flex items-center gap-2">
-                            <UserOutlined style={{ fontSize: "14px", color: "#6b7280" }} />
-                            <Select
-                              showSearch
-                              allowClear
-                              style={{ width: 300 }}
-                              placeholder="All Users (Global View)"
-                              value={selectedUserId}
-                              onChange={(value) => setSelectedUserId(value ?? null)}
-                              filterOption={false}
-                              onSearch={handleUserSearchChange}
-                              searchValue={userSearchInput}
-                              onPopupScroll={handleUserPopupScroll}
-                              loading={isLoadingUsers}
-                              notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
-                              options={userOptions}
-                              popupRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {isFetchingNextUsersPage && (
-                                    <div style={{ textAlign: "center", padding: 8 }}>
-                                      <LoadingOutlined spin />
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            />
-                            {selectedUserId && (
-                              <span className="text-xs text-gray-500">
-                                Filtering by user
-                              </span>
-                            )}
-                          </div>
-                        )}
                       </div>
 
                       <ViewUserSpend
@@ -618,12 +634,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </Text>
                           </Card>
                           <Card>
-                            <Title>Total Tokens</Title>
-                            <Text className="text-2xl font-bold mt-2">
-                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                            </Text>
-                          </Card>
-                          <Card>
                             <Title>Average Cost per Request</Title>
                             <Text className="text-2xl font-bold mt-2">
                               $
@@ -633,7 +643,51 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               )}
                             </Text>
                           </Card>
+                          <Card
+                            className="cursor-pointer hover:bg-gray-50 transition-colors"
+                            onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Title>Total Tokens</Title>
+                              {showTokenBreakdown ? (
+                                <DownOutlined className="text-gray-400 text-xs" />
+                              ) : (
+                                <RightOutlined className="text-gray-400 text-xs" />
+                              )}
+                            </div>
+                            <Text className="text-2xl font-bold mt-2">
+                              {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
+                            </Text>
+                          </Card>
                         </Grid>
+                        {showTokenBreakdown && (
+                          <Grid numItems={4} className="gap-4 mt-4">
+                            <Card>
+                              <Title>Input Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-blue-600">
+                                {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Output Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-cyan-600">
+                                {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Cache Read Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-green-600">
+                                {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                            <Card>
+                              <Title>Cache Write Tokens</Title>
+                              <Text className="text-2xl font-bold mt-2 text-purple-600">
+                                {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
+                              </Text>
+                            </Card>
+                          </Grid>
+                        )}
                       </Card>
                     </Col>
 
@@ -645,9 +699,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
-                            data={[...userSpendData.results].sort(
-                              (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                            )}
+                            data={sortedDailyResults}
                             index="date"
                             categories={["metrics.spend"]}
                             colors={["cyan"]}
@@ -679,7 +731,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Card className="h-full">
                         <Title>Top Virtual Keys</Title>
                         <TopKeyView
-                          topKeys={getTopKeys(topKeysLimit)}
+                          topKeys={topKeys}
                           teams={null}
                           topKeysLimit={topKeysLimit}
                           setTopKeysLimit={setTopKeysLimit}
@@ -730,8 +782,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             {(() => {
                               const modelData =
                                 modelViewType === "groups"
-                                  ? getTopModelGroups(topModelsLimit)
-                                  : getTopModels(topModelsLimit);
+                                  ? topModelGroups
+                                  : topModels;
                               return (
                                 <BarChart
                                   className="mt-4"
@@ -775,7 +827,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <SpendByProvider
                         loading={loading}
                         isDateChanging={isDateChanging}
-                        providerSpend={getProviderSpend()}
+                        providerSpend={providerSpend}
                       />
                     </Col>
 
@@ -898,6 +950,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               dateValue={dateValue}
             />
           )}
+          {/* User Usage Panel */}
+          {usageView === "user" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="user"
+              userID={userID}
+              userRole={userRole}
+              entityList={userOptions.length > 0 ? userOptions : null}
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
             <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
@@ -924,6 +988,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle="Export Usage Data"
+      />
+
+      {/* AI Chat Panel */}
+      <UsageAIChatPanel
+        open={isAiChatOpen}
+        onClose={() => setIsAiChatOpen(false)}
+        accessToken={accessToken}
       />
     </div>
   );

@@ -4,7 +4,6 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
-import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -259,6 +258,12 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
 }
 
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
+  const completionStartTime = logEntry.completionStartTime;
+  const ttftMs =
+    completionStartTime && completionStartTime !== logEntry.endTime
+      ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
+      : null;
+
   const hasCacheActivity =
     logEntry.cache_hit ||
     (metadata?.additional_usage_values?.cache_read_input_tokens &&
@@ -284,7 +289,10 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             />
           </Descriptions.Item>
           <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">{logEntry.duration?.toFixed(3)} s</Descriptions.Item>
+          <Descriptions.Item label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</Descriptions.Item>
+          {ttftMs != null && ttftMs > 0 && (
+            <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
+          )}
 
           {hasCacheActivity && (
             <>

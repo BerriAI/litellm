@@ -35,13 +35,25 @@ def test_proxy_only_error_true_for_llm_route():
     )
 
 
-def test_proxy_only_error_false_for_non_llm_route():
+def test_proxy_only_error_true_for_info_route():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert (
         proxy_logging_obj._is_proxy_only_llm_api_error(
             original_exception=Exception(),
             error_type=ProxyErrorTypes.auth_error,
             route="/key/info",
+        )
+        is True
+    )
+
+
+def test_proxy_only_error_false_for_non_llm_non_info_route():
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    assert (
+        proxy_logging_obj._is_proxy_only_llm_api_error(
+            original_exception=Exception(),
+            error_type=ProxyErrorTypes.auth_error,
+            route="/key/generate",
         )
         is False
     )
@@ -139,7 +151,6 @@ def test_join_paths_nested_path():
 async def test_rewrite_redirect_location_with_forwarded_host():
     """Test that redirect Location headers are rewritten using X-Forwarded-Host"""
     from starlette.testclient import TestClient
-    from starlette.responses import RedirectResponse
     from litellm.proxy.proxy_server import app
 
     # Create a test client that sends X-Forwarded-Host
@@ -153,11 +164,13 @@ async def test_rewrite_redirect_location_with_forwarded_host():
         },
         follow_redirects=False,
     )
-    if response.status_code in (301, 302, 307, 308):
-        location = response.headers.get("location", "")
-        # The Location should use the forwarded host, not an internal IP
-        assert "external.company.com" in location
-        assert location.startswith("https://")
+    assert response.status_code in (301, 302, 307, 308), (
+        f"Expected a redirect from /ui, got {response.status_code}"
+    )
+    location = response.headers.get("location", "")
+    # The Location should use the forwarded host, not an internal IP
+    assert "external.company.com" in location
+    assert location.startswith("https://")
 
 
 @pytest.mark.asyncio
@@ -168,10 +181,12 @@ async def test_rewrite_redirect_location_no_forwarded_host():
 
     client = TestClient(app)
     response = client.get("/ui", follow_redirects=False)
-    if response.status_code in (301, 302, 307, 308):
-        location = response.headers.get("location", "")
-        # Without X-Forwarded-Host, the location should use the original host
-        assert "external.company.com" not in location
+    assert response.status_code in (301, 302, 307, 308), (
+        f"Expected a redirect from /ui, got {response.status_code}"
+    )
+    location = response.headers.get("location", "")
+    # Without X-Forwarded-Host, the location should use the original host
+    assert "external.company.com" not in location
 
 
 def _patch_today(monkeypatch, year, month, day):

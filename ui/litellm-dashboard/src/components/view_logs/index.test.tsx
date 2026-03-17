@@ -13,7 +13,6 @@ vi.mock("./log_filter_logic", () => ({
     filters: {},
     filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
     allTeams: [],
-    allKeyAliases: [],
     handleFilterChange: vi.fn(),
     handleFilterReset: mockHandleFilterResetFromHook,
   })),
@@ -37,7 +36,6 @@ vi.mock("../networking", async (importOriginal) => {
 });
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 
@@ -55,7 +53,7 @@ const baseLogEntry: LogEntry = {
   startTime: "2025-11-14T00:00:00Z",
   endTime: "2025-11-14T00:00:00Z",
   cache_hit: "miss",
-  duration: 1,
+  request_duration_ms: 1000,
   messages: [{ role: "user", content: "hello" }],
   response: { status: "ok" },
   metadata: {

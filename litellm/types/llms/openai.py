@@ -71,7 +71,14 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    PrivateAttr,
+    field_serializer,
+    field_validator,
+)
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -417,6 +424,7 @@ class CreateBatchRequest(TypedDict, total=False):
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
+    output_expires_after: FileExpiresAfter
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
@@ -699,7 +707,15 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[
         Union[
-            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+            str,
+            Iterable[
+                Union[
+                    ChatCompletionTextObject,
+                    ChatCompletionThinkingBlock,
+                    ChatCompletionRedactedThinkingBlock,
+                    ChatCompletionImageObject,
+                ]
+            ],
         ]
     ]
     name: Optional[str]
@@ -786,17 +802,19 @@ ValidUserMessageContentTypes = [
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
-# Assistant message content types (text, thinking, redacted_thinking)
+# Assistant message content types (text, thinking, redacted_thinking, image_url)
 ValidAssistantMessageContentTypesLiteral = Literal[
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 ValidAssistantMessageContentTypes = [
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 # Combined valid content types for chat completion messages
@@ -954,6 +972,10 @@ class Hyperparameters(BaseModel):
     n_epochs: Optional[Union[str, int]] = (
         None  # "The number of epochs to train the model for"
     )
+    
+    model_config = {
+        "extra": "allow"
+    }
 
 
 class FineTuningJobCreate(BaseModel):
@@ -1125,6 +1147,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt: Optional[PromptObject]
     max_tool_calls: Optional[int]
     prompt_cache_key: Optional[str]
+    prompt_cache_retention: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
     partial_images: Optional[
@@ -1175,6 +1198,14 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     cost: Optional[float] = None
     """The cost of the request."""
+
+    @field_validator("cost", mode="before")
+    @classmethod
+    def parse_cost(cls, v: Any) -> Optional[float]:
+        """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
+        if isinstance(v, dict):
+            return v.get("total_cost")
+        return v
 
     model_config = {"extra": "allow"}
 
@@ -1248,6 +1279,36 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         if isinstance(value, dict):
             return ResponseAPIUsage(**value)
         return value
+
+    @field_serializer("output", mode="wrap")
+    @classmethod
+    def _serialize_output_filter_reasoning_nulls(cls, value, handler, _info):
+        """
+        Filter null status/content/encrypted_content from reasoning output items.
+
+        Mirrors the request-side filtering in
+        OpenAIResponsesAPIConfig._handle_reasoning_item() which filters these
+        same fields before sending requests to providers.
+
+        Without this, reasoning items include null fields that cause SDK errors
+        (e.g., the OpenAI C# SDK crashes on status=null).
+
+        Issue: https://github.com/BerriAI/litellm/issues/16824
+        """
+        serialized = handler(value)
+        if not isinstance(serialized, list):
+            return serialized
+        return [
+            {
+                k: v
+                for k, v in item.items()
+                if v is not None
+                or k not in ("status", "content", "encrypted_content")
+            }
+            if isinstance(item, dict) and item.get("type") == "reasoning"
+            else item
+            for item in serialized
+        ]
 
     @property
     def output_text(self) -> str:
@@ -2057,7 +2118,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
+    "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
 
 

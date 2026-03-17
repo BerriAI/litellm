@@ -28,6 +28,7 @@ def cleanup_mcp_global_state():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+
         # Clear before test
         global_mcp_server_manager.registry.clear()
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
@@ -486,7 +487,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -588,7 +589,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1035,7 +1036,7 @@ async def test_list_tools_single_server_unprefixed_names():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1113,7 +1114,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         server1 if server_id == "server1" else server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1364,7 +1365,7 @@ async def test_list_tools_filters_by_key_team_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1471,7 +1472,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1563,7 +1564,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1658,7 +1659,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip = lambda server_ids, client_ip: server_ids
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1786,6 +1787,79 @@ def test_filter_tools_by_allowed_tools():
     assert len(filtered_tools) == 2
     assert filtered_tools[0].name == "my_api_mcp-getpetbyid"
     assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
+
+
+def test_apply_tool_overrides():
+    """Test that apply_tool_overrides applies custom display names and descriptions."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+        tool_name_to_display_name={"getpetbyid": "Get Pet"},
+        tool_name_to_description={"getpetbyid": "Custom description for get pet"},
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-findpetsbystatus",
+            title=None,
+            description="Finds Pets by status",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+
+    # First tool should have overridden name and description
+    assert result[0].name == "Get Pet"
+    assert result[0].description == "Custom description for get pet"
+    # Second tool should be unchanged
+    assert result[1].name == "my_api_mcp-findpetsbystatus"
+    assert result[1].description == "Finds Pets by status"
+
+
+def test_apply_tool_overrides_no_overrides():
+    """Test that apply_tool_overrides returns tools unchanged when no overrides are set."""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        transport=MCPTransport.http,
+    )
+    tools = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Original description",
+            inputSchema={"type": "object", "properties": {}},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    result = apply_tool_overrides(tools, mcp_server)
+    assert result[0].name == "my_api_mcp-getpetbyid"
+    assert result[0].description == "Original description"
 
 
 def _make_db_mcp_server(server_id: str, updated_at: datetime) -> LiteLLM_MCPServerTable:
@@ -2019,3 +2093,83 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     assert spend_meta["tool_count_total"] == 1
     assert spend_meta["allowed_server_count"] == 1
     assert spend_meta["per_server_tool_counts"]["server_a"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
+    """
+    When _get_tools_from_mcp_servers is called for an OAuth2 MCP server and no
+    oauth2_headers are provided in the request (e.g. a /responses API call from a
+    chat UI), the per-user stored token must be fetched from the DB and passed as
+    extra_headers to _get_tools_from_server.
+
+    The implementation pre-fetches all user credentials in a single bulk query
+    (_prefetch_oauth_creds_for_user) to avoid N+1 queries in the gather loop.
+
+    This covers the bug where OAuth2 MCP tools were always empty in the /responses
+    API because the stored credential was never injected.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    STORED_TOKEN = "atlassian-oauth-access-token-xyz"
+    SERVER_ID = "srv-oauth2-id"
+    USER_ID = "user-123"
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id=USER_ID)
+
+    oauth2_server = MagicMock(name="atlassian_server")
+    oauth2_server.name = "atlassian_test"
+    oauth2_server.alias = "atlassian_test"
+    oauth2_server.server_name = "atlassian_test"
+    oauth2_server.server_id = SERVER_ID
+    oauth2_server.auth_type = MCPAuth.oauth2
+    oauth2_server.extra_headers = None
+
+    # Simulate the DB returning a valid credential for this user+server
+    prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
+
+    tool_1 = MagicMock()
+    tool_1.name = "atlassian_test-search"
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        new=AsyncMock(return_value=[oauth2_server]),
+    ), patch(
+        # Patch the bulk prefetch so no real DB connection is needed
+        "litellm.proxy._experimental.mcp_server.server._prefetch_oauth_creds_for_user",
+        new=AsyncMock(return_value=prefetched_creds),
+    ) as mock_prefetch, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+    ) as mock_manager, patch(
+        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+        side_effect=lambda tools, _server: tools,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+        new=AsyncMock(side_effect=lambda tools, **_: tools),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["atlassian_test"],
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,  # No token from request — must fall back to DB
+        )
+
+    # Bulk credential prefetch was called once (not once per server)
+    mock_prefetch.assert_awaited_once_with(user_auth)
+
+    # The stored token was forwarded to the MCP transport layer as extra_headers
+    mock_manager._get_tools_from_server.assert_awaited_once()
+    call_kwargs = mock_manager._get_tools_from_server.await_args.kwargs
+    assert call_kwargs["extra_headers"] == {"Authorization": f"Bearer {STORED_TOKEN}"}
+
+    assert tools == [tool_1]

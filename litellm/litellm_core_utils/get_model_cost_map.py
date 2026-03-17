@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -151,6 +152,92 @@ class GetModelCostMap:
         return response.json()
 
 
+class ModelCostMapSourceInfo:
+    """Tracks the source of the currently loaded model cost map."""
+
+    source: str = "local"  # "local" or "remote"
+    url: Optional[str] = None
+    is_env_forced: bool = False
+    fallback_reason: Optional[str] = None
+
+
+# Module-level singleton tracking the source of the current cost map
+_cost_map_source_info = ModelCostMapSourceInfo()
+
+
+def get_model_cost_map_source_info() -> dict:
+    """
+    Return metadata about where the current model cost map was loaded from.
+
+    Returns a dict with:
+    - source: "local" or "remote"
+    - url: the remote URL attempted (or None for local-only)
+    - is_env_forced: True if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason if remote failed and local was used
+    """
+    return {
+        "source": _cost_map_source_info.source,
+        "url": _cost_map_source_info.url,
+        "is_env_forced": _cost_map_source_info.is_env_forced,
+        "fallback_reason": _cost_map_source_info.fallback_reason,
+    }
+
+
+def _expand_model_aliases(model_cost: dict) -> dict:
+    """
+    Expand ``aliases`` lists in model cost entries into top-level entries.
+
+    Each alias gets a reference to the **same** dict object as the canonical
+    entry (zero memory overhead).  The ``aliases`` key is removed from the
+    entry so downstream code never sees it.
+
+    If an alias collides with an existing canonical entry the alias is
+    skipped and a warning is logged.
+    """
+    aliases_to_add: Dict[str, dict] = {}
+    keys_with_aliases: List[str] = []
+
+    for model_name, model_info in model_cost.items():
+        aliases: Optional[list] = model_info.get("aliases")
+        if aliases is None:
+            continue
+        keys_with_aliases.append(model_name)
+        if not isinstance(aliases, list):
+            verbose_logger.warning(
+                "LiteLLM model alias field for '%s' is not a list (got %s) — skipping.",
+                model_name,
+                type(aliases).__name__,
+            )
+            continue
+        if not aliases:
+            continue
+        for alias in aliases:
+            if alias in model_cost:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "already exists as a canonical entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            if alias in aliases_to_add:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "was already claimed by another entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            aliases_to_add[alias] = model_info  # same dict reference
+
+    # Remove the ``aliases`` key from entries so it doesn't pollute model info
+    for key in keys_with_aliases:
+        model_cost[key].pop("aliases", None)
+
+    model_cost.update(aliases_to_add)
+    return model_cost
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -166,7 +253,14 @@ def get_model_cost_map(url: str) -> dict:
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.url = None
+        _cost_map_source_info.is_env_forced = True
+        _cost_map_source_info.fallback_reason = None
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
+
+    _cost_map_source_info.url = url
+    _cost_map_source_info.is_env_forced = False
 
     try:
         content = GetModelCostMap.fetch_remote_model_cost_map(url)
@@ -177,7 +271,9 @@ def get_model_cost_map(url: str) -> dict:
             url,
             str(e),
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
@@ -189,6 +285,10 @@ def get_model_cost_map(url: str) -> dict:
             "Using local backup instead. url=%s",
             url,
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
-    return content
+    _cost_map_source_info.source = "remote"
+    _cost_map_source_info.fallback_reason = None
+    return _expand_model_aliases(content)

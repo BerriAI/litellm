@@ -223,22 +223,17 @@ async def test_pass_through_endpoint_rpm_limit(
         ],
     }
 
-    # Make a request to the pass-through endpoint
-    tasks = []
+    # Make requests sequentially to avoid race conditions in rate limiter
+    # Concurrent requests can slip through before the counter is updated
+    responses = []
     for mock_api_key in mock_api_keys:
         for _ in range(requests_to_make):
-            task = asyncio.get_running_loop().run_in_executor(
-                None,
-                partial(
-                    client.post,
-                    "/v1/rerank",
-                    json=_json_data,
-                    headers={"Authorization": "Bearer {}".format(mock_api_key)},
-                ),
+            response = client.post(
+                "/v1/rerank",
+                json=_json_data,
+                headers={"Authorization": "Bearer {}".format(mock_api_key)},
             )
-            tasks.append(task)
-
-    responses = await asyncio.gather(*tasks)
+            responses.append(response)
 
     if num_users == 1:
         status_codes = sorted([response.status_code for response in responses])

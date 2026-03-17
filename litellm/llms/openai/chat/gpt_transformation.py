@@ -58,6 +58,7 @@ from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -162,6 +163,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "service_tier",
             "safety_identifier",
             "prompt_cache_key",
+            "prompt_cache_retention",
             "store",
         ]  # works across all models
 
@@ -756,6 +758,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     @staticmethod
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model
+
+    def get_token_counter(self) -> Optional["BaseTokenCounter"]:
+        from litellm.llms.openai.responses.count_tokens.token_counter import (
+            OpenAITokenCounter,
+        )
+
+        return OpenAITokenCounter()
 
     def get_model_response_iterator(
         self,

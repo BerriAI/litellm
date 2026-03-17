@@ -1453,3 +1453,139 @@ def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(fals
     )
     assert result.id == original_id
     assert result.id.startswith("chatcmpl-")
+
+
+def test_convert_to_model_response_object_default_usage_overwritten():
+    """
+    Regression test: convert_to_model_response_object must properly set Usage
+    on a ModelResponse that only has the default Usage from ModelResponse.__init__()
+    (i.e. no extra litellm.Usage() set via setattr beforehand).
+
+    This validates the optimization of removing the redundant
+    `setattr(model_response, "usage", litellm.Usage())` in completion().
+    """
+    mr = ModelResponse()
+    # usage is not set by default (optimization: avoid constructing throwaway Usage)
+    assert not hasattr(mr, "usage")
+
+    response_object = {
+        "id": "chatcmpl-usage-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 7,
+            "total_tokens": 22,
+        },
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 15
+    assert result.usage.completion_tokens == 7
+    assert result.usage.total_tokens == 22
+
+
+def test_convert_to_model_response_object_with_null_top_logprobs():
+    """
+    Test that convert_to_model_response_object handles null top_logprobs
+    without raising a Pydantic validation error.
+
+    Some providers return null for top_logprobs when logprobs=true but
+    top_logprobs is unset/0. The OpenAI spec requires top_logprobs to be
+    an array, so litellm should normalize null to [].
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21932
+    """
+    response_object = {
+        "id": "chatcmpl-a21e454401074fd8814736d84dcbb1e4",
+        "object": "chat.completion",
+        "created": 1771632698,
+        "model": "my-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Silent light above.",
+                },
+                "finish_reason": "stop",
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "Sil",
+                            "bytes": [83, 105, 108],
+                            "logprob": -2.1518118381500244,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": "ent",
+                            "bytes": [101, 110, 116],
+                            "logprob": -0.13957086205482483,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": " light",
+                            "bytes": [32, 108, 105, 103, 104, 116],
+                            "logprob": -1.3923776149749756,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": " above",
+                            "bytes": [32, 97, 98, 111, 118, 101],
+                            "logprob": -1.137486219406128,
+                            "top_logprobs": None,
+                        },
+                        {
+                            "token": ".",
+                            "bytes": [46],
+                            "logprob": -0.1709611415863037,
+                            "top_logprobs": None,
+                        },
+                    ],
+                    "refusal": None,
+                },
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 73,
+            "completion_tokens": 5,
+            "total_tokens": 78,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert len(result.choices) == 1
+
+    choice = result.choices[0]
+    assert choice.logprobs is not None
+    assert len(choice.logprobs.content) == 5
+
+    # Verify all null top_logprobs were normalized to empty lists
+    for token_logprob in choice.logprobs.content:
+        assert token_logprob.top_logprobs == []
+        assert isinstance(token_logprob.top_logprobs, list)
