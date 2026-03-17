@@ -615,6 +615,79 @@ def test_streaming_handler_with_stop_chunk(
     assert returned_chunk is None
 
 
+def test_finish_reason_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444:
+    Preserve upstream non-OpenAI attributes on final finish_reason chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        created=1742093326,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
+def test_finish_reason_with_holding_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444 holding-chunk path:
+    preserve custom attributes when _is_delta_empty is False after flushing
+    holding_chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.holding_chunk = "filtered text"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test-2",
+        created=1742093327,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert returned_chunk.choices[0].delta.content == "filtered text"
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
 def test_set_response_id_propagation_empty_to_valid(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -1400,3 +1473,94 @@ async def test_custom_stream_wrapper_aclose_none_stream():
 
     # Should not raise
     await wrapper.aclose()
+
+
+def test_content_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: Vertex AI Claude streaming truncation.
+
+    When content_block_delta and message_delta arrive in rapid succession,
+    received_finish_reason can be set BEFORE the last content chunk is
+    processed. The old code raised StopIteration unconditionally, dropping
+    content. The fix checks for text/tool_use content before stopping.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    content_chunk = {
+        "text": "world!",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — content was dropped (issue #22098)"
+    )
+    assert result.choices[0].delta.content == "world!"
+
+
+def test_empty_chunk_still_stops_after_finish_reason_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion test for #22098: an empty GenericStreamingChunk must still
+    raise StopIteration when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    empty_chunk = {
+        "text": "",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
+
+
+def test_tool_use_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: tool_use-only chunks must not be dropped
+    when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    tool_chunk = {
+        "text": "",
+        "tool_use": {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — tool_use data was dropped"
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) > 0, (
+        "tool_calls should contain at least one tool call"
+    )
+    assert tool_calls[0].id == "call_1"
+    assert tool_calls[0].function.name == "get_weather"

@@ -39,7 +39,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.9.0 --no-cache-dir
+RUN pip install PyJWT==2.12.0 --no-cache-dir
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -49,7 +49,7 @@ USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
     # SEPARATE global package, it does NOT replace npm's internal copies.
@@ -70,7 +70,15 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
     done && \
-    npm cache clean --force
+    # SECURITY FIX: patch npm's own package.json metadata so scanners see the
+    # actual installed versions instead of the stale declared dependencies.
+    find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
+        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
+    npm cache clean --force && \
+    # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
+    # no longer visible to image scanners.  The globally installed npm@latest
+    # at /usr/local/lib/node_modules/npm/ remains fully functional.
+    { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -96,6 +104,7 @@ RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
 # Patch every copy of tar, glob, and brace-expansion inside that tree.
 RUN GLOBAL="$(npm root -g)" && \
+    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
     find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
     done && \

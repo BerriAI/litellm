@@ -54,7 +54,9 @@ def setup_local_model_cost():
     litellm.model_cost = original_model_cost
  
 def test_reasoning_tokens_no_price_set():
-    model = "o1-mini"
+    # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
+    # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)
+    model = "o1"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -530,7 +532,8 @@ def test_image_tokens_fallback_to_base_cost():
 
 
 def test_generic_cost_per_token_above_200k_tokens():
-    model = "gemini-2.5-pro-exp-03-25"
+    # gemini-2.5-pro-exp-03-25 was removed; gemini-2.5-pro has same above-200k pricing
+    model = "gemini-2.5-pro"
     custom_llm_provider = "vertex_ai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -557,6 +560,32 @@ def test_generic_cost_per_token_above_200k_tokens():
         * usage.completion_tokens,
         10,
     )
+
+
+def test_generic_cost_per_token_gpt54_above_272k_tokens():
+    """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
+    model = "gpt-5.4"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    prompt_tokens = 273000  # Above 272K threshold
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    expected_prompt = model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
+    expected_completion = model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    assert round(prompt_cost, 10) == round(expected_prompt, 10)
+    assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching():
@@ -592,7 +621,7 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
-    model = "claude-3-5-haiku-20241022"
+    model = "claude-haiku-4-5-20251001"
     usage = Usage(
         completion_tokens=90,
         prompt_tokens=28436,
@@ -617,7 +646,7 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
     )
 
     print(f"prompt_cost: {prompt_cost}")
-    assert round(prompt_cost, 3) == 0.023
+    assert round(prompt_cost, 3) == 0.029
 
 
 def test_string_cost_values():

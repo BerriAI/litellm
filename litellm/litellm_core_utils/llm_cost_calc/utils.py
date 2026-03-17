@@ -19,13 +19,15 @@ from litellm.types.utils import (
 from litellm.utils import get_model_info
 
 # Pre-resolved CallTypes enum values for fast membership checks
-_IMAGE_RESPONSE_CALL_TYPES = frozenset({
-    CallTypes.image_generation.value,
-    CallTypes.aimage_generation.value,
-    PassthroughCallTypes.passthrough_image_generation.value,
-    CallTypes.image_edit.value,
-    CallTypes.aimage_edit.value,
-})
+_IMAGE_RESPONSE_CALL_TYPES = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        PassthroughCallTypes.passthrough_image_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -245,7 +247,10 @@ def _get_token_base_cost(
                         else key
                     )
                     prompt_base_cost = cast(
-                        float, _get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost)
+                        float,
+                        _get_cost_per_unit(
+                            model_info, tiered_input_key, prompt_base_cost
+                        ),
                     )
                     tiered_output_key = (
                         _get_service_tier_cost_key(
@@ -268,9 +273,7 @@ def _get_token_base_cost(
                     cache_creation_tiered_key = (
                         f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
                     )
-                    cache_creation_1hr_tiered_key = (
-                        f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
-                    )
+                    cache_creation_1hr_tiered_key = f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
                     cache_read_tiered_key = (
                         f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
@@ -576,7 +579,10 @@ def _calculate_input_cost(
         )
 
     ### CACHE WRITING COST - Now uses tiered pricing
-    if prompt_tokens_details["cache_creation_tokens"] or prompt_tokens_details["cache_creation_token_details"] is not None:
+    if (
+        prompt_tokens_details["cache_creation_tokens"]
+        or prompt_tokens_details["cache_creation_token_details"] is not None
+    ):
         prompt_cost += calculate_cache_writing_cost(
             cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
             cache_creation_token_details=prompt_tokens_details[
@@ -589,7 +595,9 @@ def _calculate_input_cost(
     ### CHARACTER COST
     if prompt_tokens_details["character_count"]:
         prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_character", prompt_tokens_details["character_count"]
+            model_info,
+            "input_cost_per_character",
+            prompt_tokens_details["character_count"],
         )
 
     ### IMAGE COUNT COST
