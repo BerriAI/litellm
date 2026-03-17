@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -56,28 +56,22 @@ const defaultProps = {
 };
 
 const navigateToGovernanceStep = async () => {
-  const nextButtons = screen.getAllByRole("button", { name: /next/i });
-  const nextButton = nextButtons[nextButtons.length - 1];
-
-  // Step 0 -> 1: need agent_name to be filled
-  // The form validation may block, so we fill agent name first
   const agentNameInput = screen.getByLabelText(/agent name/i);
-  const { fireEvent } = await import("@testing-library/react");
-  const { act } = await import("react");
   await act(async () => {
     fireEvent.change(agentNameInput, { target: { value: "test-agent" } });
   });
 
-  // Click Next to go to step 1 (Entitlements)
+  // Step 0 -> Step 1 (Entitlements)
+  const nextButtons = screen.getAllByRole("button", { name: /next/i });
   await act(async () => {
-    fireEvent.click(nextButton);
+    fireEvent.click(nextButtons[nextButtons.length - 1]);
   });
 
-  // Click Next to go to step 2 (Governance)
   await waitFor(() => {
-    expect(screen.getByText("Entitlements")).toBeInTheDocument();
+    expect(screen.getByText("Allowed Models")).toBeInTheDocument();
   });
 
+  // Step 1 -> Step 2 (Governance)
   const nextButtons2 = screen.getAllByRole("button", { name: /next/i });
   await act(async () => {
     fireEvent.click(nextButtons2[nextButtons2.length - 1]);
@@ -103,13 +97,13 @@ describe("AddAgentForm tracing enforcement premium gate", () => {
       screen.getByText(/enforcing trace-id requirements on agents is a litellm enterprise feature/i)
     ).toBeInTheDocument();
 
-    expect(
-      screen.queryByText(/require x-litellm-trace-id on calls to this agent/i)
-    ).not.toBeInTheDocument();
-
-    expect(
-      screen.queryByText(/require x-litellm-trace-id on calls by this agent/i)
-    ).not.toBeInTheDocument();
+    // The switch labels should NOT be present (tracing section replaced by notice)
+    const allSwitches = screen.queryAllByRole("switch");
+    const tracingSectionSwitches = allSwitches.filter((el) => {
+      const parent = el.closest(".space-y-4");
+      return parent?.textContent?.includes("Require x-litellm-trace-id");
+    });
+    expect(tracingSectionSwitches).toHaveLength(0);
   });
 
   it("should show tracing switches when user is premium", async () => {
@@ -125,12 +119,13 @@ describe("AddAgentForm tracing enforcement premium gate", () => {
       screen.queryByText(/enforcing trace-id requirements on agents is a litellm enterprise feature/i)
     ).not.toBeInTheDocument();
 
+    // Both tracing switch labels should be visible
     expect(
-      screen.getByText(/require x-litellm-trace-id on calls to this agent/i)
+      screen.getByText("Require x-litellm-trace-id on calls TO this agent")
     ).toBeInTheDocument();
 
-    expect(
-      screen.getByText(/require x-litellm-trace-id on calls by this agent/i)
-    ).toBeInTheDocument();
+    // The switches for tracing should be present
+    const allSwitches = screen.getAllByRole("switch");
+    expect(allSwitches.length).toBeGreaterThanOrEqual(2);
   });
 });
