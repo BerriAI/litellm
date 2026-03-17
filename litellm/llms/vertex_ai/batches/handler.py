@@ -388,8 +388,6 @@ class VertexAIBatchPrediction(VertexLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
-        sync_handler = _get_httpx_client()
-
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -434,6 +432,7 @@ class VertexAIBatchPrediction(VertexLLM):
                 headers=headers,
             )
 
+        sync_handler = _get_httpx_client()
         response = sync_handler.post(
             url=api_base,
             headers=headers,

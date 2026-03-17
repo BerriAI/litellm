@@ -899,6 +899,7 @@ async def cancel_batch(
             custom_llm_provider = (
                 provider
                 or get_custom_llm_provider_from_request_headers(request=request)
+                or get_custom_llm_provider_from_request_query(request=request)
                 or data.pop("custom_llm_provider", None)
                 or "openai"
             )
