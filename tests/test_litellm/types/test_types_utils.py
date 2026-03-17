@@ -323,9 +323,15 @@ def test_usage_openrouter_cache_tokens_from_prompt_tokens_details():
         ),
     )
 
-    # Private Anthropic-style fields must be populated from prompt_tokens_details
+    # Private Anthropic-style fields (streaming adapter / Langfuse path)
     assert usage._cache_read_input_tokens == 17000
     assert usage._cache_creation_input_tokens == 400
+
+    # Public prompt_tokens_details fields (cost-calculator path).
+    # _parse_prompt_tokens_details in llm_cost_calc/utils.py reads
+    # prompt_tokens_details.cache_creation_tokens — it must be populated too.
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_tokens == 400  # cost-calc path
 
     # When Anthropic native params are provided they must take precedence over
     # prompt_tokens_details so existing callers are not broken.
@@ -353,3 +359,5 @@ def test_usage_openrouter_cache_tokens_from_prompt_tokens_details():
     dumped = usage_no_writes.model_dump()
     ptd = dumped.get("prompt_tokens_details", {})
     assert "cache_write_tokens" not in ptd
+    # cache_creation_tokens should also be absent when no writes were reported
+    assert "cache_creation_tokens" not in ptd

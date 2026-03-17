@@ -1662,10 +1662,13 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ## OPENROUTER / OPENAI FORMAT MAPPING ##
         # OpenRouter (and other OpenAI-compatible providers) return cache token counts
         # in prompt_tokens_details rather than as top-level Anthropic fields.
-        # Populate the private Anthropic-style fields from prompt_tokens_details when
-        # the explicit Anthropic params (cache_creation_input_tokens,
-        # cache_read_input_tokens) were not provided, so that downstream consumers
-        # (cost calculators, streaming adapters, logging hooks) see the correct values.
+        # Populate both the private Anthropic-style fields AND the public
+        # prompt_tokens_details fields from prompt_tokens_details when the explicit
+        # Anthropic params (cache_creation_input_tokens, cache_read_input_tokens)
+        # were not provided, so that ALL downstream consumers see the correct values:
+        #   - streaming adapter / Langfuse: reads _cache_*_input_tokens (private)
+        #   - cost calculator (_parse_prompt_tokens_details): reads
+        #       prompt_tokens_details.cache_creation_tokens (public field on wrapper)
         _ptd = getattr(self, "prompt_tokens_details", None)
         if _ptd is not None:
             if not self._cache_read_input_tokens:
@@ -1676,6 +1679,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
                 _writes = getattr(_ptd, "cache_write_tokens", 0) or 0
                 if _writes > 0:
                     self._cache_creation_input_tokens = _writes
+                    # Also populate the public field that the cost calculator reads
+                    # (_parse_prompt_tokens_details reads cache_creation_tokens, not
+                    # the private _cache_creation_input_tokens attribute)
+                    _ptd.cache_creation_tokens = _writes
 
         for k, v in params.items():
             setattr(self, k, v)
