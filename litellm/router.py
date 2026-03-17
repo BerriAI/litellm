@@ -846,11 +846,29 @@ class Router:
                         litellm.input_callback = [
                             cb
                             for cb in litellm.input_callback
-                            if not isinstance(cb, StickyLeastBusyLoggingHandler)
+                            if not isinstance(
+                                cb,
+                                (
+                                    StickyLeastBusyLoggingHandler,
+                                    StickyLeastBusyRedisLoggingHandler,
+                                ),
+                            )
                         ]
                         litellm.input_callback.append(selector)  # type: ignore
                     else:
                         litellm.input_callback = [selector]  # type: ignore
+                    if isinstance(litellm.callbacks, list):
+                        litellm.callbacks = [
+                            cb
+                            for cb in litellm.callbacks
+                            if not isinstance(
+                                cb,
+                                (
+                                    StickyLeastBusyLoggingHandler,
+                                    StickyLeastBusyRedisLoggingHandler,
+                                ),
+                            )
+                        ]
             case RoutingStrategy.STICKY_LEAST_BUSY_REDIS.value:
                 sticky_redis_args = routing_strategy_args or {}
                 selector = StickyLeastBusyRedisLoggingHandler(
@@ -864,11 +882,29 @@ class Router:
                         litellm.input_callback = [
                             cb
                             for cb in litellm.input_callback
-                            if not isinstance(cb, StickyLeastBusyRedisLoggingHandler)
+                            if not isinstance(
+                                cb,
+                                (
+                                    StickyLeastBusyLoggingHandler,
+                                    StickyLeastBusyRedisLoggingHandler,
+                                ),
+                            )
                         ]
                         litellm.input_callback.append(selector)  # type: ignore
                     else:
                         litellm.input_callback = [selector]  # type: ignore
+                    if isinstance(litellm.callbacks, list):
+                        litellm.callbacks = [
+                            cb
+                            for cb in litellm.callbacks
+                            if not isinstance(
+                                cb,
+                                (
+                                    StickyLeastBusyLoggingHandler,
+                                    StickyLeastBusyRedisLoggingHandler,
+                                ),
+                            )
+                        ]
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
                 selector = LowestTPMLoggingHandler(
                     router_cache=self.cache,
