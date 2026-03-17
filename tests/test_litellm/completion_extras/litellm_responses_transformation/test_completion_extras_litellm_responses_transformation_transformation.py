@@ -1390,6 +1390,8 @@ def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
     but the bridge silently dropped it (or raised an error), while the
     native litellm.responses() path worked correctly.
     """
+    pytest.importorskip("openai.types.responses.response_apply_patch_tool_call")
+
     import json
     from unittest.mock import Mock
 

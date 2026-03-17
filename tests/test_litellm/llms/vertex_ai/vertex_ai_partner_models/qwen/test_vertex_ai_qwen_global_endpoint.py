@@ -141,11 +141,6 @@ async def test_vertex_ai_qwen_global_endpoint_url():
     """
     Test that Qwen models use the global endpoint URL.
     """
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
     # Mock response
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -168,35 +163,33 @@ async def test_vertex_ai_qwen_global_endpoint_url():
         "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
     }
 
-    client = AsyncHTTPHandler()
-
-    async def mock_post_func(*args, **kwargs):
-        return mock_response
-
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
 
-    with patch.dict("sys.modules", {"vertexai": mock_vertexai}), patch.object(
-        client, "post", side_effect=mock_post_func
-    ) as mock_post, patch.object(
-        VertexLLM, "_ensure_access_token", return_value=("fake-token", "test-project")
-    ), patch.dict(
-        litellm.model_cost,
-        {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
-        clear=False,
-    ):
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
+         patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+         ), \
+         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
+         patch.dict(
+            litellm.model_cost,
+            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            clear=False,
+         ):
+        mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+
         response = await litellm.acompletion(
             model="vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas",
             messages=[{"role": "user", "content": "Hello"}],
             vertex_ai_project="test-project",
-            client=client,
         )
 
         # Verify the mock was called
-        mock_post.assert_called_once()
+        mock_http_handler.return_value.post.assert_called_once()
 
         # Get the call arguments
-        call_args = mock_post.call_args
+        call_args = mock_http_handler.return_value.post.call_args
         called_url = call_args.kwargs["url"]
 
         # Verify the URL uses global endpoint (no region prefix)

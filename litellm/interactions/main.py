@@ -34,16 +34,7 @@ Usage:
 import asyncio
 import contextvars
 from functools import partial
-from typing import (
-    Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
-)
+from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
 
 import httpx
 
@@ -306,7 +297,8 @@ def create(
                 **kwargs,
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=dict(optional_params),
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -416,7 +408,8 @@ def get(
                 f"Interactions API not supported for: {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"interaction_id": interaction_id},
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -519,7 +512,8 @@ def delete(
                 f"Interactions API not supported for: {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"interaction_id": interaction_id},
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -622,7 +616,8 @@ def cancel(
                 f"Interactions API not supported for: {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"interaction_id": interaction_id},
             litellm_params={"litellm_call_id": litellm_call_id},

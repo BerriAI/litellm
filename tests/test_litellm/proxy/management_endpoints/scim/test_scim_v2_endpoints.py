@@ -202,7 +202,6 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
     await _update_litellm_setting(
         settings=settings,
         settings_key="default_internal_user_params",
-        in_memory_var=litellm.default_internal_user_params,
         success_message="ok",
     )
 

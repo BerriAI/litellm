@@ -11,6 +11,7 @@ from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.videos.main import CharacterObject as _CharacterObject
     from litellm.types.videos.main import VideoObject as _VideoObject
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
@@ -18,10 +19,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
     VideoObject = _VideoObject
+    CharacterObject = _CharacterObject
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     VideoObject = Any
+    CharacterObject = Any
 
 
 class BaseVideoConfig(ABC):
@@ -264,6 +267,118 @@ class BaseVideoConfig(ABC):
         custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
+
+    def transform_video_create_character_request(
+        self,
+        name: str,
+        video: Any,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, list]:
+        """
+        Transform the video create character request into a URL and files list (multipart).
+
+        Returns:
+            Tuple[str, list]: (url, files_list) for the multipart POST request
+        """
+        raise NotImplementedError(
+            "video create character is not supported for this provider"
+        )
+
+    def transform_video_create_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
+        raise NotImplementedError(
+            "video create character is not supported for this provider"
+        )
+
+    def transform_video_get_character_request(
+        self,
+        character_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video get character request into a URL and params.
+
+        Returns:
+            Tuple[str, Dict]: (url, params) for the GET request
+        """
+        raise NotImplementedError(
+            "video get character is not supported for this provider"
+        )
+
+    def transform_video_get_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
+        raise NotImplementedError(
+            "video get character is not supported for this provider"
+        )
+
+    def transform_video_edit_request(
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video edit request into a URL and JSON data.
+
+        Returns:
+            Tuple[str, Dict]: (url, data) for the POST request
+        """
+        raise NotImplementedError(
+            "video edit is not supported for this provider"
+        )
+
+    def transform_video_edit_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+    ) -> VideoObject:
+        raise NotImplementedError(
+            "video edit is not supported for this provider"
+        )
+
+    def transform_video_extension_request(
+        self,
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video extension request into a URL and JSON data.
+
+        Returns:
+            Tuple[str, Dict]: (url, data) for the POST request
+        """
+        raise NotImplementedError(
+            "video extension is not supported for this provider"
+        )
+
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+    ) -> VideoObject:
+        raise NotImplementedError(
+            "video extension is not supported for this provider"
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
