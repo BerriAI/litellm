@@ -215,7 +215,15 @@ async def _resolve_team_allowed_mcp_servers(
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
     if isinstance(raw_tool_perms, str):
-        raw_tool_perms = json.loads(raw_tool_perms)
+        try:
+            raw_tool_perms = json.loads(raw_tool_perms)
+        except json.JSONDecodeError:
+            verbose_proxy_logger.warning(
+                "Failed to deserialize mcp_tool_permissions as JSON; treating as empty. "
+                "Value: %r",
+                raw_tool_perms,
+            )
+            raw_tool_perms = {}
     tool_perm_servers: List[str] = list(raw_tool_perms.keys())
     return set(direct_servers + access_group_servers + tool_perm_servers)
 

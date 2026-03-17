@@ -739,6 +739,11 @@ if MCP_AVAILABLE:
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
+                if team_obj is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Team not found: {sanitized_team_id}",
+                    )
                 user_in_team = any(
                     m.user_id is not None and m.user_id == user_api_key_dict.user_id
                     for m in team_obj.members_with_roles
