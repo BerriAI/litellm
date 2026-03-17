@@ -274,17 +274,11 @@ class BaseSkillsAPITest(ABC):
         print(f"Deleted skill response: {response}")
 
 
-class TestAnthropicSkillsAPI(BaseSkillsAPITest):
-    """
-    Test Anthropic Skills API implementation.
-    """
-
-    def get_custom_llm_provider(self) -> str:
-        return "anthropic"
-
-    def get_api_key(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_KEY")
-
-    def get_api_base(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_BASE")
+# Live integration tests for the Anthropic Skills API are not run in CI because
+# the Skills API requires beta access (anthropic-beta: skills-2025-10-02) that
+# is not available on the standard API key used in CI.
+#
+# Transformation logic (URL construction, headers, request/response parsing) is
+# covered by unit tests in:
+#   tests/test_litellm/test_anthropic_skills_transformation.py
 

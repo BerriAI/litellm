@@ -145,9 +145,7 @@ def _safe_header_value(value: str) -> str:
 def _sanitize_user_agent_token(value: str) -> str:
     if not value:
         return ""
-    return "".join(
-        ch if (ch.isalnum() or ch in "-_./") else "_" for ch in value
-    )
+    return "".join(ch if (ch.isalnum() or ch in "-_./") else "_" for ch in value)
 
 
 def _terminal_user_agent() -> str:
@@ -159,9 +157,7 @@ def _terminal_user_agent() -> str:
 
     wezterm_version = os.getenv("WEZTERM_VERSION")
     if wezterm_version is not None:
-        token = (
-            f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
-        )
+        token = f"WezTerm/{wezterm_version}" if wezterm_version else "WezTerm"
         return _sanitize_user_agent_token(token) or "WezTerm"
 
     if (
@@ -182,9 +178,7 @@ def _terminal_user_agent() -> str:
 
     konsole_version = os.getenv("KONSOLE_VERSION")
     if konsole_version is not None:
-        token = (
-            f"Konsole/{konsole_version}" if konsole_version else "Konsole"
-        )
+        token = f"Konsole/{konsole_version}" if konsole_version else "Konsole"
         return _sanitize_user_agent_token(token) or "Konsole"
 
     if os.getenv("GNOME_TERMINAL_SCREEN"):

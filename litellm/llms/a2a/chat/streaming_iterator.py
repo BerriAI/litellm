@@ -12,10 +12,10 @@ from ..common_utils import extract_text_from_a2a_response
 class A2AModelResponseIterator(BaseModelResponseIterator):
     """
     Iterator for parsing A2A streaming responses.
-    
+
     Converts A2A JSON-RPC streaming chunks to OpenAI-compatible format.
     """
-    
+
     def __init__(
         self,
         streaming_response,
@@ -29,11 +29,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
-    
-    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
+
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         """
         Parse A2A streaming chunk to OpenAI format.
-        
+
         A2A chunk format:
         {
             "jsonrpc": "2.0",
@@ -44,7 +46,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 }
             }
         }
-        
+
         Or for tasks:
         {
             "jsonrpc": "2.0",
@@ -58,10 +60,10 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         try:
             # Extract text from A2A response
             text = extract_text_from_a2a_response(chunk)
-            
+
             # Determine finish reason
             finish_reason = self._get_finish_reason(chunk)
-            
+
             # Return generic streaming chunk
             return GenericStreamingChunk(
                 text=text,
@@ -81,11 +83,11 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 index=0,
                 tool_use=None,
             )
-    
+
     def _get_finish_reason(self, chunk: dict) -> Optional[str]:
         """Extract finish reason from A2A chunk"""
         result = chunk.get("result", {})
-        
+
         # Check for task completion
         if isinstance(result, dict):
             status = result.get("status", {})
@@ -95,9 +97,9 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                     return "stop"
                 elif state == "failed":
                     return "stop"  # Map failed state to 'stop' (valid finish_reason)
-        
+
         # Check for [DONE] marker
         if chunk.get("done") is True:
             return "stop"
-        
+
         return None
