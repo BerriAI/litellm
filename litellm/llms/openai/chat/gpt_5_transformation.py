@@ -200,14 +200,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if effective_effort is not None and effective_effort == "xhigh":
-            if not self._supports_reasoning_effort_level(model, "xhigh"):
+        if effective_effort is not None and effective_effort == "xhigh" or effective_effort == "minimal":
+            if not self._supports_reasoning_effort_level(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max, gpt-5.2, and gpt-5.4+ models."
+                            f"reasoning_effort={effective_effort} is not supported for this model."
                         ),
                         status_code=400,
                     )
