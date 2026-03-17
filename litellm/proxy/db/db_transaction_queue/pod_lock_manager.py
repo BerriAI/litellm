@@ -139,11 +139,10 @@ class PodLockManager:
                         )
                     else:
                         verbose_proxy_logger.warning(
-                            "Spend tracking - pod %s failed to release Redis lock for cronjob_id=%s. "
-                            "Lock will expire after TTL=%ds.",
+                            "Pod %s failed to release Redis lock for cronjob_id=%s. "
+                            "Lock will expire after its TTL.",
                             self.pod_id,
                             cronjob_id,
-                            DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
                         )
                 else:
                     verbose_proxy_logger.debug(

@@ -308,7 +308,8 @@ class TestKeyRotationErrorResilience:
             side_effect=Exception("Deprecated table doesn't exist")
         )
 
-        # This should raise within process_rotations, but lock should still be released
+        # process_rotations catches the exception internally (try/except),
+        # but the lock must still be released in the finally block.
         await manager.process_rotations()
 
         # Lock should still be released in finally block
