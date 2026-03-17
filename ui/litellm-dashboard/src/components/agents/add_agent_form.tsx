@@ -43,7 +43,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   onSuccess,
   teams,
 }) => {
-  const { userId, userRole } = useAuthorized();
+  const { userId, userRole, premiumUser } = useAuthorized();
   const [form] = Form.useForm();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -437,43 +437,55 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     <div className="space-y-6">
       <div>
         <h4 className="text-sm font-medium text-gray-700 mb-3">Tracing</h4>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-gray-700">
-                Require x-litellm-trace-id on calls TO this agent
-              </span>
-              <p className="text-xs text-gray-500 mt-1">
-                Only accept this agent being invoked with a trace-id (e.g. when used as a sub-agent).
-              </p>
-            </div>
-            <Switch
-              checked={requireTraceIdInbound}
-              onChange={setRequireTraceIdInbound}
-            />
+        {!premiumUser ? (
+          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p className="text-sm text-yellow-800">
+              Enforcing trace-id requirements on agents is a LiteLLM Enterprise feature. Get a trial key{" "}
+              <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
+                here
+              </a>
+              .
+            </p>
           </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-gray-700">
+                  Require x-litellm-trace-id on calls TO this agent
+                </span>
+                <p className="text-xs text-gray-500 mt-1">
+                  Only accept this agent being invoked with a trace-id (e.g. when used as a sub-agent).
+                </p>
+              </div>
+              <Switch
+                checked={requireTraceIdInbound}
+                onChange={setRequireTraceIdInbound}
+              />
+            </div>
 
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-gray-700">
-                Require x-litellm-trace-id on calls BY this agent
-              </span>
-              <p className="text-xs text-gray-500 mt-1">
-                Requires LLM/MCP calls made by this agent to include x-litellm-trace-id for session tracking.
-              </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-gray-700">
+                  Require x-litellm-trace-id on calls BY this agent
+                </span>
+                <p className="text-xs text-gray-500 mt-1">
+                  Requires LLM/MCP calls made by this agent to include x-litellm-trace-id for session tracking.
+                </p>
+              </div>
+              <Switch
+                checked={requireTraceIdOutbound}
+                onChange={(checked) => {
+                  setRequireTraceIdOutbound(checked);
+                  if (!checked) {
+                    setMaxIterations(null);
+                    setMaxBudgetPerSession(null);
+                  }
+                }}
+              />
             </div>
-            <Switch
-              checked={requireTraceIdOutbound}
-              onChange={(checked) => {
-                setRequireTraceIdOutbound(checked);
-                if (!checked) {
-                  setMaxIterations(null);
-                  setMaxBudgetPerSession(null);
-                }
-              }}
-            />
           </div>
-        </div>
+        )}
       </div>
 
       <Divider className="my-0" />
