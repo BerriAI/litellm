@@ -1,6 +1,6 @@
 import importlib
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -378,9 +378,7 @@ if MCP_AVAILABLE:
         # Resolve a server name to its UUID if needed
         _name_resolved = None
         if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
-                server_id
-            )
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
             if _name_resolved is not None and _name_resolved.server_id in set(
                 allowed_server_ids
             ):
@@ -442,9 +440,7 @@ if MCP_AVAILABLE:
                 extra_headers=user_oauth_extra_headers,
             )
         except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from {server.name}: {e}"
-            )
+            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
                 "tools": [],
                 "error": "server_error",
@@ -473,7 +469,9 @@ if MCP_AVAILABLE:
         _name_resolved = None
         if server_id not in allowed_server_ids:
             _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-            if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
+            if _name_resolved is not None and _name_resolved.server_id in set(
+                allowed_server_ids
+            ):
                 server_id = _name_resolved.server_id
 
         if server_id not in allowed_server_ids:
@@ -518,7 +516,9 @@ if MCP_AVAILABLE:
         server_auth_header = _get_server_auth_header(
             server, mcp_server_auth_headers, mcp_auth_header
         )
-        user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
+        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+            server, user_api_key_dict
+        )
 
         try:
             list_tools_result = await _get_tools_for_single_server(
@@ -529,9 +529,7 @@ if MCP_AVAILABLE:
                 extra_headers=user_oauth_extra_headers,
             )
         except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from {server.name}: {e}"
-            )
+            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
                 "tools": [],
                 "error": "server_error",
@@ -905,6 +903,18 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
+            _oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = (
+                request.oauth2_flow or (
+                    "client_credentials"
+                    if client_id and client_secret and request.token_url
+                    else None
+                )
+            )
+            # client_credentials requires token_url to fetch a token; without it the
+            # incoming auth header would be dropped with nothing to replace it.
+            if _oauth2_flow == "client_credentials" and not request.token_url:
+                _oauth2_flow = None
+
             server_model = MCPServer(
                 server_id=request.server_id or "",
                 name=request.alias or request.server_name or "",
@@ -922,6 +932,7 @@ if MCP_AVAILABLE:
                 scopes=scopes,
                 authorization_url=request.authorization_url,
                 registration_url=request.registration_url,
+                oauth2_flow=_oauth2_flow,
             )
 
             stdio_env = global_mcp_server_manager._build_stdio_env(

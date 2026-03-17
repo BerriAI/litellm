@@ -252,6 +252,28 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_tpm_limit", None)
 
 
+def _get_default_team_param(field: str) -> Any:
+    """
+    Returns a default value for the given field from litellm.default_team_params config.
+    Returns None if no default is configured.
+
+    For list fields containing enums (e.g. team_member_permissions), converts enum values to strings.
+    """
+    default_params = litellm.default_team_params
+    if default_params is None:
+        return None
+    if isinstance(default_params, dict):
+        value = default_params.get(field)
+    else:
+        value = getattr(default_params, field, None)
+    if value is None:
+        return None
+    # Convert enum values in lists to strings
+    if isinstance(value, list):
+        return [v.value if hasattr(v, "value") else v for v in value]
+    return value
+
+
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
     if litellm.default_internal_user_params is None:
         return False
@@ -833,16 +855,23 @@ async def new_team(  # noqa: PLR0915
                 prisma_client=prisma_client,
             )
 
-        # If max_budget is not explicitly provided in the request,
-        # check for a default value in the proxy configuration.
+        # Apply defaults from litellm.default_team_params for any fields
+        # not explicitly provided in the request.
+        for field in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "team_member_permissions"):
+            if getattr(data, field, None) is None:
+                default_value = _get_default_team_param(field)
+                if default_value is not None:
+                    setattr(data, field, default_value)
+
+        # Legacy fallback: apply max_budget from default_team_settings (YAML config)
+        # if still not set after checking default_team_params.
         if data.max_budget is None:
             if (
                 isinstance(litellm.default_team_settings, list)
                 and len(litellm.default_team_settings) > 0
                 and isinstance(litellm.default_team_settings[0], dict)
             ):
-                default_settings = litellm.default_team_settings[0]
-                default_budget = default_settings.get("max_budget")
+                default_budget = litellm.default_team_settings[0].get("max_budget")
                 if default_budget is not None:
                     data.max_budget = default_budget
 

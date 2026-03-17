@@ -200,6 +200,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
+    # tag-based routing
+    tags: Optional[List[str]] = None
+    # regex patterns matched against request headers for tag routing
+    tag_regex: Optional[List[str]] = None
+
     # auto-router params
     auto_router_config_path: Optional[str] = None
     auto_router_config: Optional[str] = None
@@ -336,6 +341,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # routing params
     # use this for tag-based routing
     tags: Optional[List[str]]
+    # regex patterns matched against request headers (e.g. "^User-Agent:\\s*claude-code\\/")
+    tag_regex: Optional[List[str]]
 
     # deployment budgets
     max_budget: Optional[float]

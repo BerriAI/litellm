@@ -99,6 +99,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -934,6 +935,8 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    tools: Optional[List[Any]] = None,
+    reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -949,6 +952,17 @@ def responses_api_bridge_check(
             model_info["mode"] = mode
 
         if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
+
+        # OpenAI gpt-5.4+ chat-completions calls with both tools + reasoning_effort
+        # must be bridged to Responses API.
+        if (
+            custom_llm_provider == "openai"
+            and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+            and tools
+            and reasoning_effort is not None
+        ):
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
     except Exception as e:
@@ -1356,6 +1370,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
+        ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        responses_api_model_info, model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
+        )
+
         if not _should_allow_input_examples(
             custom_llm_provider=custom_llm_provider, model=model
         ):
@@ -1592,14 +1613,25 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
+        # Only run the second bridge check if the first one didn't already
+        # detect responses mode (e.g. via the "responses/" prefix).  The second
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
+        # the first (early) check doesn't cover.
+        if responses_api_model_info.get("mode") != "responses":
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+            )
 
-        if model_info.get("mode") == "responses":
+        if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
+
+            if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
+                optional_params = dict(optional_params)
+                optional_params["reasoning_effort"] = reasoning_effort
 
             return responses_api_bridge.completion(
                 model=model,
@@ -3692,8 +3724,10 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "sagemaker_chat":
+        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
+            # sagemaker_chat: HF Messages API endpoints
+            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
             model_response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3703,7 +3737,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="sagemaker_chat",
+                custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
                 encoding=_get_encoding(),
@@ -5102,6 +5136,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if isinstance(input, str):
@@ -7493,8 +7528,15 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(annotation_chunks) > 0:
-            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
-            response["choices"][0]["message"]["annotations"] = annotations
+            # Merge annotations from ALL chunks — providers may spread
+            # them across multiple streaming chunks or send them only in
+            # the final chunk.
+            all_annotations: list = []
+            for ac in annotation_chunks:
+                all_annotations.extend(
+                    ac["choices"][0]["delta"]["annotations"]
+                )
+            response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [
             chunk
@@ -7700,7 +7742,7 @@ async def acount_tokens(
     local_count = litellm.token_counter(
         model=model,
         messages=fallback_messages,
-        tools=tools,
+        tools=tools,  # type: ignore[arg-type]
     )
 
     return TokenCountResponse(

@@ -40,6 +40,9 @@ from litellm.utils import exception_type, get_litellm_params
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 
+# BFL handlers
+from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
+from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -49,10 +52,6 @@ from litellm.main import (
     openai_chat_completions,
     openai_image_variations,
 )
-
-# BFL handlers
-from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
-from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str
@@ -297,7 +296,8 @@ def image_generation(  # noqa: PLR0915
         litellm_params_dict = get_litellm_params(**kwargs)
 
         logging: Logging = litellm_logging_obj
-        logging.update_environment_variables(
+        logging.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=optional_params,
@@ -308,7 +308,6 @@ def image_generation(  # noqa: PLR0915
                 "logger_fn": logger_fn,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
             },
@@ -894,7 +893,8 @@ def image_edit(  # noqa: PLR0915
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(image_edit_request_params),
@@ -902,7 +902,6 @@ def image_edit(  # noqa: PLR0915
                 **image_edit_request_params,
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
-                "metadata": metadata,
             },
             custom_llm_provider=custom_llm_provider,
         )
