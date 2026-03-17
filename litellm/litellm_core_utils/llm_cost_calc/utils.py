@@ -676,14 +676,18 @@ def generic_cost_per_token(  # noqa: PLR0915
     # video_length_seconds) that account for prompt_tokens without being included
     # in the per-token detail fields. When these are active, a gap between
     # accounted_tokens and prompt_tokens is expected and must NOT be filled.
-    has_alternative_billing = (
-        prompt_tokens_details["image_count"] > 0
-        or prompt_tokens_details["character_count"] > 0
+    has_image_count_billing = prompt_tokens_details["image_count"] > 0
+    has_non_token_alternative_billing = (
+        prompt_tokens_details["character_count"] > 0
         or prompt_tokens_details["video_length_seconds"] > 0
+    )
+    has_alternative_billing = (
+        has_image_count_billing or has_non_token_alternative_billing
     )
     should_fill_unaccounted_tokens = (
         accounted_tokens < usage.prompt_tokens
-        and not (accounted_tokens == 0 and has_alternative_billing)
+        and not has_non_token_alternative_billing
+        and not (accounted_tokens == 0 and has_image_count_billing)
     )
  
     if has_double_counting:
@@ -698,13 +702,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif text_tokens == 0 and not has_alternative_billing:
-        # text_tokens not set by provider; no alternative billing dimensions active.
-        # NOTE: This branch was formerly `text_tokens == 0 and image_count == 0`,
-        # which unintentionally filled text_tokens even for character- or
-        # video-billed models. The broader `not has_alternative_billing` guard
-        # correctly prevents that over-billing, but it is a silent behaviour
-        # change for providers that previously relied on the fill.
+    elif (text_tokens == 0 and not has_alternative_billing):
         # text_tokens not set by provider and no alternative billing dimensions:
         # calculate text_tokens as the remainder of prompt_tokens
         text_tokens = max(
@@ -721,11 +719,13 @@ def generic_cost_per_token(  # noqa: PLR0915
         # in prompt_tokens by the provider but not broken out into any detail field.
         # Add the gap to text_tokens so they are costed at input_cost_per_token.
         #
-        # The guard above only skips when there is ZERO token-level accounting
-        # AND alternative billing is active (e.g. Bedrock Nova image-only
-        # embeddings where prompt_tokens are entirely explained by image_count).
-        # Mixed requests (PDF + image_count) where the provider reports
-        # text_tokens > 0 still have their gap filled correctly.
+        # The guard above skips filling when non-token alternative pricing
+        # dimensions are present (character_count / video_length_seconds),
+        # since converting that gap to text_tokens can over-bill.
+        #
+        # For image_count pricing, we only skip when there is ZERO token-level
+        # accounting (e.g. Bedrock Nova image-only embeddings). Mixed requests
+        # (PDF + image_count) where text_tokens > 0 still get their gap filled.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
  
@@ -749,7 +749,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
     )
-
+    
     ## CALCULATE OUTPUT COST
     text_tokens = 0
     audio_tokens = 0
