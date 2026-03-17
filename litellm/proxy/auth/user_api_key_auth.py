@@ -830,6 +830,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         )
                         if _jwt_project_obj is not None:
                             valid_token.project_metadata = _jwt_project_obj.metadata
+                            valid_token.project_alias = _jwt_project_obj.project_alias
 
                     # run through common checks
                     _ = await common_checks(
@@ -1420,6 +1421,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 if _project_obj is not None:
                     valid_token.project_metadata = _project_obj.metadata
+                    valid_token.project_alias = _project_obj.project_alias
 
             global_proxy_spend = None
             if (
@@ -1873,6 +1875,7 @@ async def _run_post_custom_auth_checks(
         )
         if _project_obj is not None:
             valid_token.project_metadata = _project_obj.metadata
+            valid_token.project_alias = _project_obj.project_alias
 
     if general_settings.get("custom_auth_run_common_checks", False):
         _ = await common_checks(

@@ -952,12 +952,52 @@ def _apply_cost_margin(
     return base_cost, margin_percent, margin_fixed_amount, margin_total_amount
 
 
+def _calculate_reasoning_tokens_cost(
+    usage: Optional["Usage"],
+    model: str,
+    custom_llm_provider: str,
+) -> float:
+    """
+    Calculate the cost of reasoning tokens separately.
+
+    This mirrors the logic in generic_cost_per_token() but returns the
+    reasoning cost as a standalone value (it is already included in
+    output_cost / completion_tokens_cost).
+    """
+    if usage is None:
+        return 0.0
+
+    completion_tokens_details = getattr(usage, "completion_tokens_details", None)
+    if completion_tokens_details is None:
+        return 0.0
+
+    reasoning_tokens = getattr(completion_tokens_details, "reasoning_tokens", None) or 0
+    if reasoning_tokens <= 0:
+        return 0.0
+
+    try:
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        return 0.0
+
+    output_cost_per_reasoning_token = model_info.get(
+        "output_cost_per_reasoning_token", None
+    )
+    if output_cost_per_reasoning_token is None:
+        output_cost_per_reasoning_token = model_info.get("output_cost_per_token", 0.0)
+
+    return float(reasoning_tokens) * float(output_cost_per_reasoning_token)
+
+
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: Optional[LitellmLoggingObject],
     prompt_tokens_cost_usd_dollar: float,
     completion_tokens_cost_usd_dollar: float,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
+    reasoning_tokens_cost_usd_dollar: float = 0.0,
     additional_costs: Optional[dict] = None,
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
@@ -993,6 +1033,7 @@ def _store_cost_breakdown_in_logging_obj(
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
             cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+            reasoning_tokens_cost=reasoning_tokens_cost_usd_dollar,
             additional_costs=additional_costs,
             original_cost=original_cost,
             discount_percent=discount_percent,
@@ -1583,6 +1624,13 @@ def completion_cost(  # noqa: PLR0915
                     margin_fixed_amount = 0.0
                     margin_total_amount = 0.0
 
+                # Calculate reasoning tokens cost separately
+                reasoning_tokens_cost = _calculate_reasoning_tokens_cost(
+                    usage=cost_per_token_usage_object,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
+
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
                     _store_cost_breakdown_in_logging_obj(
@@ -1591,6 +1639,7 @@ def completion_cost(  # noqa: PLR0915
                         completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
                         cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
                         total_cost_usd_dollar=_final_cost,
+                        reasoning_tokens_cost_usd_dollar=reasoning_tokens_cost,
                         original_cost=original_cost,
                         additional_costs=additional_costs,
                         discount_percent=discount_percent,
