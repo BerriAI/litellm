@@ -161,7 +161,6 @@ async def test_add_shared_session_concurrent_recreation_uses_lock():
         call_count += 1
         # Simulate some async work
         await asyncio.sleep(0.01)
-        proxy_server_module.shared_aiohttp_session = new_session
         return new_session
 
     with patch.object(
