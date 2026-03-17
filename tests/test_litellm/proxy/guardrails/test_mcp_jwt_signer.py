@@ -201,12 +201,13 @@ def test_build_claims_scope_with_tool():
 
     scopes = set(claims["scope"].split())
     assert "mcp:tools/call" in scopes
-    assert "mcp:tools/list" in scopes
     assert "mcp:tools/search_web:call" in scopes
+    # Tool-call JWTs must NOT carry mcp:tools/list — least-privilege
+    assert "mcp:tools/list" not in scopes
 
 
 def test_build_claims_scope_without_tool():
-    """_build_claims() omits per-tool scope when mcp_tool_name is not set."""
+    """_build_claims() includes mcp:tools/list when no specific tool is called."""
     signer = _make_signer()
     user_dict = _make_user_api_key_dict()
     data: Dict[str, Any] = {}
@@ -216,9 +217,8 @@ def test_build_claims_scope_without_tool():
     scopes = set(claims["scope"].split())
     assert "mcp:tools/call" in scopes
     assert "mcp:tools/list" in scopes
-    # No per-tool scope
-    for scope in scopes:
-        assert ":" not in scope.replace("mcp:", "") or scope.endswith(":call") is False or scope == "mcp:tools/call"
+    # No per-tool call scope when no tool name was given
+    assert not any(s.endswith(":call") and s != "mcp:tools/call" for s in scopes)
 
 
 def test_build_claims_act_fallback_to_litellm_proxy():

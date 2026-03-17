@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .mcp_jwt_signer import MCPJWTSigner, _mcp_jwt_signer_instance, get_mcp_jwt_signer
+from .mcp_jwt_signer import MCPJWTSigner, get_mcp_jwt_signer
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -51,6 +51,5 @@ guardrail_class_registry = {
 __all__ = [
     "MCPJWTSigner",
     "initialize_guardrail",
-    "_mcp_jwt_signer_instance",
     "get_mcp_jwt_signer",
 ]

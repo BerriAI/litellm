@@ -6,7 +6,7 @@ Validates that:
 2. pre_call_tool_check returns hook-provided extra_headers AND modified arguments
 3. call_tool flows hook headers and modified arguments downstream
 4. Hook-provided headers take highest priority (merge after static_headers)
-5. OpenAPI-backed servers raise HTTPException when hook headers are present
+5. OpenAPI-backed servers log a warning and continue (skip injection) when hook headers are present
 6. JWT claims are propagated in both standard and virtual-key fast paths
 7. Backward compatibility: hooks without extra_headers continue to work
 """

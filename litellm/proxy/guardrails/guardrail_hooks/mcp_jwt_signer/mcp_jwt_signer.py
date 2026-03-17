@@ -27,6 +27,7 @@ your own RSA keypair. If unset, an RSA-2048 keypair is auto-generated at startup
 import base64
 import hashlib
 import os
+import re
 import time
 from typing import Any, Dict, Optional, Union
 
@@ -169,6 +170,12 @@ class MCPJWTSigner(CustomGuardrail):
 
         # Register singleton so the JWKS endpoint can access it.
         global _mcp_jwt_signer_instance
+        if _mcp_jwt_signer_instance is not None:
+            verbose_proxy_logger.warning(
+                "MCPJWTSigner: replacing existing singleton — previously issued tokens "
+                "signed with the old key will fail JWKS verification. "
+                "Avoid configuring multiple mcp_jwt_signer guardrails."
+            )
         _mcp_jwt_signer_instance = self
 
         verbose_proxy_logger.info(
@@ -265,11 +272,19 @@ class MCPJWTSigner(CustomGuardrail):
         if end_user_id:
             claims["end_user_id"] = end_user_id
 
-        # scope: tool-level access
-        tool_name: str = data.get("mcp_tool_name", "")
-        scopes = ["mcp:tools/call", "mcp:tools/list"]
+        # scope: minimal tool-level access.
+        # Only grant mcp:tools/list when no specific tool is being called —
+        # tool call JWTs should not carry enumeration permissions.
+        # Tool names are sanitized (alphanumeric + _ and -) before embedding
+        # so path-traversal or malformed scope values cannot be injected.
+        import re
+
+        raw_tool_name: str = data.get("mcp_tool_name", "")
+        tool_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
         if tool_name:
-            scopes.append(f"mcp:tools/{tool_name}:call")
+            scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
+        else:
+            scopes = ["mcp:tools/call", "mcp:tools/list"]
         claims["scope"] = " ".join(scopes)
 
         return claims
@@ -301,9 +316,11 @@ class MCPJWTSigner(CustomGuardrail):
             algorithm=self.ALGORITHM,
         )
 
-        data["extra_headers"] = {
-            "Authorization": f"Bearer {signed_token}",
-        }
+        # Merge into existing extra_headers rather than replacing — a prior guardrail
+        # in the chain may have already injected headers (e.g. tracing, correlation IDs).
+        # MCPJWTSigner sets Authorization last so its JWT takes precedence.
+        existing_headers: Dict[str, str] = data.get("extra_headers") or {}
+        data["extra_headers"] = {**existing_headers, "Authorization": f"Bearer {signed_token}"}
 
         verbose_proxy_logger.debug(
             "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d",

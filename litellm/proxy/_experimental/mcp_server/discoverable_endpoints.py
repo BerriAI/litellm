@@ -691,8 +691,11 @@ async def openid_configuration(request: Request):
         if signer is not None:
             request_base_url = get_request_base_url(request)
             if isinstance(response, dict):
-                response["jwks_uri"] = f"{request_base_url}/.well-known/jwks.json"
-                response["id_token_signing_alg_values_supported"] = ["RS256"]
+                response = {
+                    **response,
+                    "jwks_uri": f"{request_base_url}/.well-known/jwks.json",
+                    "id_token_signing_alg_values_supported": ["RS256"],
+                }
     except ImportError:
         pass
 

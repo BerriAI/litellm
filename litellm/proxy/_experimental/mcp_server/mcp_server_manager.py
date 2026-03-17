@@ -2135,6 +2135,12 @@ class MCPServerManager:
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
+            if "Authorization" in extra_headers and "Authorization" in hook_extra_headers:
+                verbose_logger.warning(
+                    "MCPServerManager: hook_extra_headers contains 'Authorization' which will "
+                    "overwrite the existing Authorization header set by static_headers or server "
+                    "authentication. The hook JWT will take precedence."
+                )
             extra_headers.update(hook_extra_headers)
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
