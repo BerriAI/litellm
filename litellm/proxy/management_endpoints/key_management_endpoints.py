@@ -72,6 +72,9 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+    get_ui_settings_cached,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -94,6 +97,24 @@ from litellm.types.utils import (
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
+
+
+async def _check_custom_key_allowed(custom_key_value: Optional[str]) -> None:
+    """Raise 403 if custom API keys are disabled and a custom key was provided."""
+    if custom_key_value is None:
+        return
+
+    ui_settings = await get_ui_settings_cached()
+    if ui_settings.get("disable_custom_api_keys", False) is True:
+        verbose_proxy_logger.warning(
+            "Custom API key rejected: disable_custom_api_keys is enabled"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Custom API key values are disabled by your administrator. Keys must be auto-generated."
+            },
+        )
 
 
 def _is_team_key(data: Union[GenerateKeyRequest, LiteLLM_VerificationToken]):
@@ -670,6 +691,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Reject custom key values if disabled by admin
+    await _check_custom_key_allowed(data.key)
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
@@ -3479,8 +3503,10 @@ async def _rotate_master_key(  # noqa: PLR0915
         )
 
 
-def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
+async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
+        # Reject custom key values if disabled by admin
+        await _check_custom_key_allowed(data.new_key)
         new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
@@ -3572,7 +3598,7 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
 
-    new_token = get_new_token(data=data)
+    new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
     new_token_key_name = f"sk-...{new_token[-4:]}"
     update_data = {"token": new_token_hash, "key_name": new_token_key_name}
