@@ -18,6 +18,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.user_api_key_auth import (
     _is_pass_through_endpoint_auth_disabled,
     get_api_key,
@@ -808,11 +809,13 @@ class TestPassThroughAuthDisabledE2E:
         ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
             "litellm.proxy.proxy_server.prisma_client", None
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(ProxyException) as exc_info:
                 await user_api_key_auth(
                     request=mock_request,
                     api_key=None,
                 )
+            assert "Authentication Error" in exc_info.value.message
+            assert exc_info.value.code == str(401)
 
     @pytest.mark.asyncio
     async def test_should_skip_auth_when_auth_false_with_jwt_enabled(self):
@@ -877,3 +880,47 @@ class TestPassThroughAuthDisabledE2E:
                 api_key="Bearer sk-some-key",
             )
             assert isinstance(result, UserAPIKeyAuth)
+
+    @pytest.mark.asyncio
+    async def test_should_still_run_enterprise_custom_auth_when_auth_false(self):
+        """Enterprise custom auth should still execute even when auth: false.
+
+        If enterprise_custom_auth returns a UserAPIKeyAuth, that takes precedence.
+        """
+        pass_through_endpoints = [
+            {
+                "path": "/v1/cuopt/request",
+                "target": "https://example.com/cuopt/request",
+                "auth": False,
+            }
+        ]
+        general_settings = {
+            "pass_through_endpoints": pass_through_endpoints,
+        }
+
+        custom_auth_response = UserAPIKeyAuth(
+            api_key="custom-key",
+            user_id="enterprise-user",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/cuopt/request"
+        mock_request.headers = {}
+        mock_request.query_params = {}
+
+        mock_enterprise_auth = AsyncMock(return_value=custom_auth_response)
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.master_key", "sk-master"), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
+            mock_enterprise_auth,
+        ):
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=None,
+            )
+            mock_enterprise_auth.assert_called_once()
+            assert result.user_id == "enterprise-user"

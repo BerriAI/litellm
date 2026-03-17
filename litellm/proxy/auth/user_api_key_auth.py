@@ -583,10 +583,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             route=route,
             request=request,
         )
-
-        if _is_pass_through_endpoint_auth_disabled(pass_through_endpoints, route):
-            return UserAPIKeyAuth()
-
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
@@ -632,6 +628,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 parent_otel_span=parent_otel_span,
             )
             return validated
+
+        if _is_pass_through_endpoint_auth_disabled(pass_through_endpoints, route):
+            return UserAPIKeyAuth(parent_otel_span=parent_otel_span)
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
         #### IF JWT ####
