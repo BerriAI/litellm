@@ -78,6 +78,7 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    RUBRIK = "rubrik"
 
 
 class Role(Enum):

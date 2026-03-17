@@ -1,0 +1,41 @@
+{
+  "content": [
+    {
+      "text": "I'll get the current weather for both Portland, Oregon and San Francisco, California for you.",
+      "type": "text"
+    },
+    {
+      "id": "toolu_01Djsx6NnYkk8QyhAfQ5qMzU",
+      "input": {
+        "location": "Portland, OR"
+      },
+      "name": "get_weather",
+      "type": "tool_use"
+    },
+    {
+      "id": "toolu_01SK6GcjsEFFPSaHjdaqMY4m",
+      "input": {
+        "location": "San Francisco, CA"
+      },
+      "name": "get_weather",
+      "type": "tool_use"
+    }
+  ],
+  "id": "msg_01BYiJkkxpHfVE8m84gFEp3x",
+  "model": "claude-sonnet-4-20250514",
+  "role": "assistant",
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 410,
+    "output_tokens": 118,
+    "service_tier": "standard"
+  }
+}
