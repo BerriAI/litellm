@@ -1775,7 +1775,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             parts.append(content["stdout"])
                         if content.get("stderr"):
                             parts.append(f"STDERR: {content['stderr']}")
-                        logs = "".join(parts) if parts else str(content)
+                        logs = "".join(parts)
                     else:
                         logs = str(content)
                     code_interpreter_results.append(
