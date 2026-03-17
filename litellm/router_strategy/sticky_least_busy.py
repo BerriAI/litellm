@@ -6,12 +6,14 @@ on vLLM/SGLang nodes), but rebalances to the least-busy deployment when the stic
 target is overloaded.
 
 How this works:
-  1. Hash the conversation identity (system prompt + first user message) to compute
+  1. Hash the conversation identity (first user message + user ID) to compute
      a sticky key that is constant across all turns.
   2. Map sticky key to a preferred deployment via consistent hashing.
-  3. If preferred deployment's in-flight count < threshold * avg_load, use it (sticky).
-  4. If overloaded, route to the deployment with the fewest in-flight requests (rebalance).
-  5. Track in-flight requests via Redis (atomic increment/decrement) with dedup
+  3. Compute a reference load using the avg+min blend: (avg_load + min_load) / 2.
+     This catches skewed distributions where avg alone is pulled up by outliers.
+  4. If preferred deployment's in-flight count < threshold * reference_load, use it (sticky).
+  5. If overloaded, route to the deployment with the fewest in-flight requests (rebalance).
+  6. Track in-flight requests via Redis (atomic increment/decrement) with dedup
      to avoid the streaming bug where log_pre_api_call fires per SSE chunk.
 """
 
@@ -59,7 +61,7 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
             verbose_router_logger.info(
                 f"[StickyLeastBusy REUSE] Reusing existing handler "
                 f"(seen_call_ids={len(cls._instance._seen_call_ids)}, "
-                f"ring_nodes={len(cls._instance._hash_ring)})"
+                f"rings={len(cls._instance._rings)})"
             )
             return cls._instance
         instance = super().__new__(cls)
@@ -76,7 +78,8 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         """
         Args:
             router_cache: DualCache instance for Redis + in-memory caching.
-            imbalance_threshold: If sticky node load > threshold * avg_load, rebalance.
+            imbalance_threshold: If sticky node load > threshold * reference_load, rebalance.
+                reference_load = (avg_load + min_load) / 2 to catch skewed distributions.
             virtual_nodes: Number of virtual nodes per deployment on the consistent hash ring.
             cache_ttl: TTL in seconds for request count cache keys.
         """
@@ -97,9 +100,11 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         self._seen_call_ids: Dict[str, bool] = {}
         self._seen_call_ids_max_size: int = 10000
 
-        # Consistent hash ring (rebuilt when deployments change)
-        self._hash_ring: List[Tuple[int, str]] = []
-        self._ring_deployment_ids: frozenset = frozenset()
+        # Per-model-group consistent hash rings.
+        # Each model group (e.g., "llama-70b", "kimi-k2-5-dev") may have different
+        # deployments, so each needs its own ring. Keyed by model_group name.
+        # Value: (frozenset_of_deployment_ids, sorted_ring_list)
+        self._rings: Dict[str, Tuple[frozenset, List[Tuple[int, str]]]] = {}
 
         verbose_router_logger.info(
             f"[StickyLeastBusy INIT] Initialized with "
@@ -115,27 +120,28 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
     @staticmethod
     def compute_sticky_key(
         messages: Optional[List[Dict[str, str]]],
+        user_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Compute a deterministic hash that identifies the conversation.
+        Compute a deterministic hash that identifies the conversation per user.
 
         The key must be STABLE across all turns of the same conversation so that
         consecutive messages route to the same node (KV cache reuse). We achieve
-        this by hashing the conversation's "identity" — the system prompt (if any)
-        plus the first user message — which never changes as the conversation grows.
+        this by hashing the conversation's "identity" — the first user message
+        plus a user identifier — which never changes as the conversation grows.
 
         Algorithm:
         - None/empty messages -> None (no stickiness, degrades to least-busy).
-        - Extract up to the first 2 messages: [system_prompt, first_user_msg].
-          If no system message, just [first_user_msg].
-        - Hash this fixed identity with SHA-256 of canonical JSON.
+        - Extract the first user message content (O(1) scan, stops at first user msg).
+        - Combine with user_id (API key or user ID) for per-user differentiation.
+        - Hash with SHA-256.
 
         This ensures:
         - Same conversation always produces the same hash on every turn.
         - Different conversations (different first user question) get different hashes.
-        - The hash is deterministic across pods (canonical JSON + SHA-256).
-        - Different users with the same system prompt but different first questions
-          get different hashes (no hotspot).
+        - The hash is deterministic across pods (SHA-256).
+        - Different users with the same system prompt AND same first question
+          get different hashes (per-user stickiness, no hotspot).
         """
         if not messages:
             verbose_router_logger.debug(
@@ -143,42 +149,36 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
             )
             return None
 
-        # Extract the conversation identity: system prompt (if any) + first user message.
-        # This is constant across all turns of the same conversation.
-        identity: List[Dict[str, str]] = []
+        # Extract the first user message content.
+        # O(1) scan — stops at first user message, doesn't touch the rest.
+        first_user_content: Optional[str] = None
         for msg in messages:
             role = msg.get("role", "")
-            identity.append(msg)
             if role == "user":
-                # Found first user message — we have enough to identify the conversation
+                first_user_content = msg.get("content", "")
                 break
             elif role in ("system", "developer"):
-                # System/developer prompt — include it but keep looking for first user message
                 continue
             else:
-                # assistant or other role before first user message — stop here
                 break
 
-        if not identity:
+        if first_user_content is None:
             verbose_router_logger.debug(
-                "[StickyLeastBusy STICKY-KEY] No identity messages found, sticky_key=None"
+                "[StickyLeastBusy STICKY-KEY] No user message found, sticky_key=None"
             )
             return None
 
-        try:
-            canonical = json.dumps(
-                identity, sort_keys=True, ensure_ascii=True, separators=(",", ":")
-            )
-        except (TypeError, ValueError):
-            canonical = str(identity)
+        # Combine first user message + user identifier for per-user stickiness.
+        # If user_id is not available, fall back to message-only hashing.
+        hash_input = first_user_content
+        if user_id:
+            hash_input = f"{user_id}:{first_user_content}"
 
-        sticky_key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        identity_roles = [m.get("role", "?") for m in identity]
+        sticky_key = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
         verbose_router_logger.debug(
             f"[StickyLeastBusy STICKY-KEY] "
             f"total_messages={len(messages)}, "
-            f"identity_messages={len(identity)}, "
-            f"identity_roles={identity_roles}, "
+            f"has_user_id={user_id is not None}, "
             f"sticky_key={sticky_key[:16]}..."
         )
         return sticky_key
@@ -187,18 +187,22 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
     # Consistent Hashing
     # =========================================================================
 
-    def _build_hash_ring(self, deployment_ids: List[str]) -> None:
+    def _build_hash_ring(self, model_group: str, deployment_ids: List[str]) -> None:
         """
         Build a consistent hash ring from deployment IDs using virtual nodes.
-        Only rebuilds if the set of IDs has changed.
+        Rings are cached per model_group — only rebuilds if the set of IDs
+        for that model group has changed.
         """
         new_ids = frozenset(deployment_ids)
-        if new_ids == self._ring_deployment_ids:
+        cached = self._rings.get(model_group)
+        if cached and cached[0] == new_ids:
             return
 
+        prev_count = len(cached[0]) if cached else 0
         verbose_router_logger.info(
-            f"[StickyLeastBusy RING-BUILD] Rebuilding hash ring: "
-            f"prev_deployments={len(self._ring_deployment_ids)}, "
+            f"[StickyLeastBusy RING-BUILD] Rebuilding hash ring for "
+            f"model_group={model_group}: "
+            f"prev_deployments={prev_count}, "
             f"new_deployments={len(new_ids)}, "
             f"ids={list(new_ids)}"
         )
@@ -211,31 +215,36 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
                 ring.append((h, dep_id))
 
         ring.sort(key=lambda x: x[0])
-        self._hash_ring = ring
-        self._ring_deployment_ids = new_ids
+        self._rings[model_group] = (new_ids, ring)
 
         verbose_router_logger.info(
-            f"[StickyLeastBusy RING-BUILD] Ring built with "
+            f"[StickyLeastBusy RING-BUILD] Ring for {model_group} built with "
             f"{len(ring)} virtual nodes "
             f"({self.virtual_nodes} per deployment)"
         )
 
-    def _get_deployment_for_key(self, sticky_key: str) -> Optional[str]:
+    def _get_deployment_for_key(
+        self, model_group: str, sticky_key: str
+    ) -> Optional[str]:
         """Map a sticky key to a deployment ID via the consistent hash ring."""
-        if not self._hash_ring:
+        cached = self._rings.get(model_group)
+        if not cached or not cached[1]:
             verbose_router_logger.debug(
-                "[StickyLeastBusy RING-LOOKUP] Hash ring is empty, returning None"
+                f"[StickyLeastBusy RING-LOOKUP] Hash ring for "
+                f"{model_group} is empty, returning None"
             )
             return None
 
+        ring = cached[1]
         h = int(hashlib.md5(sticky_key.encode("utf-8")).hexdigest(), 16)
-        idx = bisect_right(self._hash_ring, (h,))
-        if idx >= len(self._hash_ring):
+        idx = bisect_right(ring, (h,))
+        if idx >= len(ring):
             idx = 0
 
-        result = self._hash_ring[idx][1]
+        result = ring[idx][1]
         verbose_router_logger.debug(
             f"[StickyLeastBusy RING-LOOKUP] "
+            f"model_group={model_group}, "
             f"sticky_key={sticky_key[:16]}... -> deployment_id={result}"
         )
         return result
@@ -536,6 +545,27 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
     # Deployment Selection Core
     # =========================================================================
 
+    @staticmethod
+    def _extract_user_id(request_kwargs: Optional[Dict]) -> Optional[str]:
+        """
+        Extract a user identifier from request kwargs for per-user sticky routing.
+
+        Looks for (in order of preference):
+        1. metadata.user_api_key - the API key used for the request
+        2. metadata.user_api_key_user_id - the user ID associated with the API key
+        3. user - top-level user field
+
+        Returns None if no identifier is found (falls back to message-only hashing).
+        """
+        if not request_kwargs:
+            return None
+        metadata = request_kwargs.get("metadata") or {}
+        return (
+            metadata.get("user_api_key")
+            or metadata.get("user_api_key_user_id")
+            or request_kwargs.get("user")
+        )
+
     def _get_deployment_info(self, deployment: dict) -> str:
         """Helper to extract key deployment info for logging."""
         try:
@@ -550,6 +580,7 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
 
     def _select_deployment(
         self,
+        model_group: str,
         healthy_deployments: list,
         request_counts: Dict[str, int],
         sticky_key: Optional[str],
@@ -570,10 +601,18 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
             dep_ids.append(dep_id)
             dep_id_to_deployment[dep_id] = d
 
-        self._build_hash_ring(dep_ids)
+        self._build_hash_ring(model_group, dep_ids)
 
         total_load = sum(request_counts.get(did, 0) for did in dep_ids)
         avg_load = total_load / len(dep_ids) if dep_ids else 0
+        min_load = min(
+            (request_counts.get(did, 0) for did in dep_ids), default=0
+        )
+
+        # Avg+min blend: catches skewed distributions where avg alone is pulled
+        # up by outliers. E.g. loads [50,25,20,7,5] → avg=21.4 but min=5,
+        # reference=(21.4+5)/2=13.2, so a node at 25 correctly triggers rebalance.
+        reference_load = (avg_load + min_load) / 2
 
         # --- Log node status overview ---
         node_summary = ", ".join(
@@ -584,24 +623,27 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
             f"healthy_nodes={len(dep_ids)}, "
             f"total_in_flight={total_load}, "
             f"avg_load={avg_load:.2f}, "
+            f"min_load={min_load}, "
+            f"reference_load={reference_load:.2f}, "
             f"threshold={self.imbalance_threshold}, "
             f"loads=[{node_summary}]"
         )
 
         # Try sticky routing
         if sticky_key:
-            preferred_id = self._get_deployment_for_key(sticky_key)
+            preferred_id = self._get_deployment_for_key(model_group, sticky_key)
             if preferred_id and preferred_id in dep_id_to_deployment:
                 preferred_load = request_counts.get(preferred_id, 0)
-                effective_avg = max(avg_load, 1.0)
-                threshold_value = self.imbalance_threshold * effective_avg
+                effective_reference = max(reference_load, 1.0)
+                threshold_value = self.imbalance_threshold * effective_reference
 
                 verbose_router_logger.debug(
                     f"[StickyLeastBusy STICKY-CHECK] "
                     f"preferred_node={preferred_id}, "
                     f"preferred_load={preferred_load}, "
                     f"threshold_value={threshold_value:.2f} "
-                    f"(= {self.imbalance_threshold} * max({avg_load:.2f}, 1.0))"
+                    f"(= {self.imbalance_threshold} * "
+                    f"max(({avg_load:.2f}+{min_load})/2, 1.0))"
                 )
 
                 if preferred_load < threshold_value:
@@ -634,12 +676,7 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
             )
 
         # Least-busy fallback with random tie-breaking
-        min_load = float("inf")
-        for did in dep_ids:
-            load = request_counts.get(did, 0)
-            if load < min_load:
-                min_load = load
-
+        # (min_load already computed above for reference_load)
         min_deployments = [
             dep_id_to_deployment[did]
             for did in dep_ids
@@ -672,15 +709,17 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
+        request_kwargs: Optional[Dict] = None,
     ) -> dict:
         verbose_router_logger.debug(
             f"[StickyLeastBusy] get_available_deployments called "
             f"(SYNC) for model_group={model_group}"
         )
         request_counts = self._get_request_counts(model_group, healthy_deployments)
-        sticky_key = self.compute_sticky_key(messages)
+        user_id = self._extract_user_id(request_kwargs)
+        sticky_key = self.compute_sticky_key(messages, user_id=user_id)
         return self._select_deployment(
-            healthy_deployments, request_counts, sticky_key
+            model_group, healthy_deployments, request_counts, sticky_key
         )
 
     async def async_get_available_deployments(
@@ -688,6 +727,7 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
+        request_kwargs: Optional[Dict] = None,
     ) -> dict:
         verbose_router_logger.debug(
             f"[StickyLeastBusy] async_get_available_deployments called "
@@ -696,7 +736,8 @@ class StickyLeastBusyLoggingHandler(CustomLogger):
         request_counts = await self._async_get_request_counts(
             model_group, healthy_deployments
         )
-        sticky_key = self.compute_sticky_key(messages)
+        user_id = self._extract_user_id(request_kwargs)
+        sticky_key = self.compute_sticky_key(messages, user_id=user_id)
         return self._select_deployment(
-            healthy_deployments, request_counts, sticky_key
+            model_group, healthy_deployments, request_counts, sticky_key
         )
