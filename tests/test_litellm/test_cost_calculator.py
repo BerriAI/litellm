@@ -67,6 +67,155 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+def test_custom_pricing_skips_provider_response_cost():
+    """
+    When custom_pricing=True and provider response cost exists in hidden_params,
+    response_cost_calculator should ignore the provider cost and use custom pricing
+    via completion_cost() instead.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register custom pricing in model_cost
+    custom_input_cost = 0.00015  # KRW per token
+    custom_output_cost = 0.0006  # KRW per token
+    litellm.register_model(
+        {
+            "openrouter/openai/gpt-4.1-nano": {
+                "input_cost_per_token": custom_input_cost,
+                "output_cost_per_token": custom_output_cost,
+                "litellm_provider": "openrouter",
+            }
+        }
+    )
+
+    prompt_tokens = 12
+    completion_tokens = 3
+    provider_usd_cost = 0.0000024  # USD cost from OpenRouter
+
+    response = ModelResponse(
+        id="test-id",
+        model="openrouter/openai/gpt-4.1-nano",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+    # Simulate OpenRouter setting provider response cost in hidden_params
+    response._hidden_params["additional_headers"] = {
+        "llm_provider-x-litellm-response-cost": provider_usd_cost
+    }
+
+    result = response_cost_calculator(
+        response_object=response,
+        model="openrouter/openai/gpt-4.1-nano",
+        custom_llm_provider="openrouter",
+        call_type="acompletion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+        custom_pricing=True,
+    )
+
+    expected_custom_cost = (
+        prompt_tokens * custom_input_cost + completion_tokens * custom_output_cost
+    )
+
+    # Must use custom pricing, NOT provider response cost
+    assert result != provider_usd_cost, (
+        f"Should not use provider response cost ({provider_usd_cost})"
+    )
+    assert result == pytest.approx(expected_custom_cost), (
+        f"Got {result}, expected {expected_custom_cost} from custom pricing"
+    )
+
+
+def test_provider_response_cost_used_when_no_custom_pricing():
+    """
+    When custom_pricing is False/None and provider response cost exists,
+    response_cost_calculator should return the provider cost (existing behavior).
+    """
+
+    class MockResponse(BaseModel):
+        _hidden_params = {
+            "additional_headers": {
+                "llm_provider-x-litellm-response-cost": 0.0000024
+            }
+        }
+
+    result = response_cost_calculator(
+        response_object=MockResponse(),
+        model="openrouter/openai/gpt-4.1-nano",
+        custom_llm_provider="openrouter",
+        call_type="acompletion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+        custom_pricing=False,
+    )
+
+    assert result == 0.0000024, (
+        f"Should use provider response cost, got {result}"
+    )
+
+
+def test_custom_pricing_without_provider_response_cost():
+    """
+    When custom_pricing=True and no provider response cost exists,
+    response_cost_calculator should use custom pricing via completion_cost().
+    This verifies existing behavior is preserved.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    custom_input_cost = 0.001
+    custom_output_cost = 0.002
+    litellm.register_model(
+        {
+            "deepinfra/meta-llama/Llama-3.2-3B-Instruct": {
+                "input_cost_per_token": custom_input_cost,
+                "output_cost_per_token": custom_output_cost,
+                "litellm_provider": "deepinfra",
+            }
+        }
+    )
+
+    prompt_tokens = 10
+    completion_tokens = 5
+
+    response = ModelResponse(
+        id="test-id",
+        model="deepinfra/meta-llama/Llama-3.2-3B-Instruct",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+    # No provider response cost in hidden_params
+
+    result = response_cost_calculator(
+        response_object=response,
+        model="deepinfra/meta-llama/Llama-3.2-3B-Instruct",
+        custom_llm_provider="deepinfra",
+        call_type="acompletion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+        custom_pricing=True,
+    )
+
+    expected_cost = (
+        prompt_tokens * custom_input_cost + completion_tokens * custom_output_cost
+    )
+    assert result == pytest.approx(expected_cost), (
+        f"Got {result}, expected {expected_cost} from custom pricing"
+    )
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
