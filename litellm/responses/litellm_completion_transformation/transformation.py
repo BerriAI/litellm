@@ -898,14 +898,15 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            return [
-                GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
-                )
-            ]
+            msg = GenericChatCompletionMessage(
+                role=input_item.get("role") or "user",
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            if input_item.get("cache_control"):
+                msg["cache_control"] = input_item.get("cache_control")
+            return [msg]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -1022,6 +1023,8 @@ class LiteLLMCompletionResponsesConfig:
             ),
             tool_call_id=str(call_id),
         )
+        if tool_call_output.get("cache_control"):
+            tool_output_message["cache_control"] = tool_call_output.get("cache_control")
 
         _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
             key=tool_call_output.get("call_id") or "",
@@ -1112,6 +1115,8 @@ class LiteLLMCompletionResponsesConfig:
             role="assistant",
             content=None,  # Function calls don't have content
         )
+        if function_call.get("cache_control"):
+            chat_completion_response_message["cache_control"] = function_call.get("cache_control")
 
         return [chat_completion_response_message]
 

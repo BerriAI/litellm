@@ -1774,3 +1774,135 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+
+class TestCacheControlPreservation:
+    """Tests that cache_control is preserved when transforming Responses API input items
+    to Chat Completion messages. This is critical for providers like Bedrock/Anthropic
+    that use cache_control for prompt caching."""
+
+    def test_cache_control_on_user_message(self):
+        """cache_control on a user message should be passed through to GenericChatCompletionMessage"""
+        input_item = {
+            "role": "user",
+            "content": "Hello, world!",
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg["role"] == "user"
+        assert msg.get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_on_assistant_message(self):
+        """cache_control on an assistant message should be passed through"""
+        input_item = {
+            "role": "assistant",
+            "content": "I can help with that.",
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg["role"] == "assistant"
+        assert msg.get("cache_control") == {"type": "ephemeral"}
+
+    def test_no_cache_control_when_absent(self):
+        """Messages without cache_control should not have the field set"""
+        input_item = {
+            "role": "user",
+            "content": "Hello",
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert "cache_control" not in msg
+
+    def test_cache_control_on_function_call_output(self):
+        """cache_control on a function_call_output should be passed through to tool message"""
+        TOOL_CALLS_CACHE.set_cache(
+            key="call_123",
+            value={
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+            },
+        )
+
+        input_item = {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": '{"temp": 72}',
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        # Should have assistant message + tool message
+        assert len(result) == 2
+        tool_msg = result[1]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg.get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_on_function_call(self):
+        """cache_control on a function_call input should be passed through to assistant message"""
+        input_item = {
+            "type": "function_call",
+            "call_id": "call_456",
+            "name": "get_weather",
+            "arguments": '{"city": "NYC"}',
+            "cache_control": {"type": "ephemeral"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=input_item
+        )
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg["role"] == "assistant"
+        assert msg.get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_in_full_input_transform(self):
+        """cache_control should survive the full transform_responses_api_input_to_messages path"""
+        input_items = [
+            {
+                "role": "user",
+                "content": "What is the weather?",
+            },
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "role": "user",
+                "content": "Thanks!",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        # 3 messages, no system
+        assert len(result) == 3
+        assert "cache_control" not in result[0]
+        assert result[1].get("cache_control") == {"type": "ephemeral"}
+        assert result[2].get("cache_control") == {"type": "ephemeral"}

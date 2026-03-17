@@ -751,6 +751,7 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
 class GenericChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[Union[str, List]]
+    cache_control: ChatCompletionCachedContent
 
 
 ValidUserMessageContentTypes = [
