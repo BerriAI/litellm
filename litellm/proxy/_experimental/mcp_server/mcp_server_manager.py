@@ -1913,6 +1913,7 @@ class MCPServerManager:
         Run pre-call checks and guardrail hooks for an MCP tool call.
 
         Returns a dict that may contain:
+        - "arguments": hook-modified tool arguments (only if changed)
         - "extra_headers": headers injected by pre_mcp_call guardrail hooks
         """
         ## check if the tool is allowed or banned for the given server
@@ -1991,7 +1992,7 @@ class MCPServerManager:
                     )
                 )
                 if modified_kwargs.get("arguments") != arguments:
-                    arguments = modified_kwargs["arguments"]
+                    hook_result["arguments"] = modified_kwargs["arguments"]
                 if modified_kwargs.get("extra_headers"):
                     hook_result["extra_headers"] = modified_kwargs["extra_headers"]
 
@@ -2073,6 +2074,9 @@ class MCPServerManager:
             oauth2_headers: Optional OAuth2 headers
             raw_headers: Optional raw headers from the request
             proxy_logging_obj: Optional ProxyLogging object for hook integration
+            host_progress_callback: Optional callback for progress updates
+            hook_extra_headers: Optional headers injected by pre_mcp_call guardrail
+                hooks. Merged last (highest priority) into outbound request headers.
 
         Returns:
             CallToolResult from the MCP server
@@ -2228,6 +2232,8 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
             )
+            if "arguments" in hook_result:
+                arguments = hook_result["arguments"]
 
         # Prepare tasks for during hooks
         tasks = []
@@ -2247,6 +2253,14 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Calling OpenAPI tool {name} directly via HTTP handler"
             )
+            if hook_result.get("extra_headers"):
+                verbose_logger.warning(
+                    "pre_mcp_call hook returned extra_headers, but OpenAPI-backed "
+                    "MCP servers do not support hook header injection. "
+                    f"Headers will be dropped for tool '{name}' on server "
+                    f"'{server_name}'. Use a regular MCP server (SSE/HTTP transport) "
+                    "for hook header support."
+                )
             tasks.append(
                 asyncio.create_task(
                     self._call_openapi_tool_handler(mcp_server, name, arguments)

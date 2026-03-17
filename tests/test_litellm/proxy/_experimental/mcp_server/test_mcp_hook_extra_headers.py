@@ -3,13 +3,16 @@ Tests for pre_mcp_call guardrail hook header mutation support.
 
 Validates that:
 1. _convert_mcp_hook_response_to_kwargs extracts extra_headers from hook response
-2. pre_call_tool_check returns hook-provided extra_headers
-3. call_tool flows hook headers into _call_regular_mcp_tool
+2. pre_call_tool_check returns hook-provided extra_headers AND modified arguments
+3. call_tool flows hook headers and modified arguments downstream
 4. Hook-provided headers take highest priority (merge after static_headers)
-5. Backward compatibility: hooks without extra_headers continue to work
+5. OpenAPI-backed servers emit a warning when hook headers are present
+6. JWT claims are propagated in both standard and virtual-key fast paths
+7. Backward compatibility: hooks without extra_headers continue to work
 """
 
 import asyncio
+import logging
 import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -212,6 +215,87 @@ class TestPreCallToolCheckReturnsHeaders:
 
         assert result == {}
 
+    @pytest.mark.asyncio
+    async def test_returns_modified_arguments_from_hook(self):
+        """Modified arguments from the hook must be returned so the caller can use them."""
+        manager = MCPServerManager()
+        server = self._make_server()
+
+        original_args = {"key": "original"}
+        modified_args = {"key": "modified", "extra": "added"}
+
+        proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value=MagicMock()
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(
+            return_value={"model": "fake"}
+        )
+        proxy_logging.pre_call_hook = AsyncMock(
+            return_value={"modified_arguments": modified_args}
+        )
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
+            return_value={"arguments": modified_args}
+        )
+
+        with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
+            with patch.object(
+                manager,
+                "check_tool_permission_for_key_team",
+                new_callable=AsyncMock,
+            ):
+                with patch.object(manager, "validate_allowed_params"):
+                    result = await manager.pre_call_tool_check(
+                        name="test_tool",
+                        arguments=original_args,
+                        server_name="test_server",
+                        user_api_key_auth=None,
+                        proxy_logging_obj=proxy_logging,
+                        server=server,
+                    )
+
+        assert result["arguments"] == modified_args
+
+    @pytest.mark.asyncio
+    async def test_returns_both_modified_arguments_and_headers(self):
+        """Hook can modify both arguments and inject headers simultaneously."""
+        manager = MCPServerManager()
+        server = self._make_server()
+
+        modified_args = {"key": "modified"}
+        hook_headers = {"Authorization": "Bearer jwt"}
+
+        proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value=MagicMock()
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(
+            return_value={"model": "fake"}
+        )
+        proxy_logging.pre_call_hook = AsyncMock(return_value={"dummy": True})
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
+            return_value={"arguments": modified_args, "extra_headers": hook_headers}
+        )
+
+        with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
+            with patch.object(
+                manager,
+                "check_tool_permission_for_key_team",
+                new_callable=AsyncMock,
+            ):
+                with patch.object(manager, "validate_allowed_params"):
+                    result = await manager.pre_call_tool_check(
+                        name="test_tool",
+                        arguments={"key": "original"},
+                        server_name="test_server",
+                        user_api_key_auth=None,
+                        proxy_logging_obj=proxy_logging,
+                        server=server,
+                    )
+
+        assert result["arguments"] == modified_args
+        assert result["extra_headers"] == hook_headers
+
 
 class TestCallToolFlowsHookHeaders:
     """Tests that call_tool passes hook_extra_headers to _call_regular_mcp_tool."""
@@ -296,6 +380,147 @@ class TestCallToolFlowsHookHeaders:
                 mock_call.assert_called_once()
                 call_kwargs = mock_call.call_args
                 assert call_kwargs.kwargs.get("hook_extra_headers") is None
+
+    @pytest.mark.asyncio
+    async def test_modified_arguments_passed_to_downstream(self):
+        """Hook-modified arguments must be used for the actual tool call."""
+        manager = MCPServerManager()
+        server = self._make_server()
+
+        modified_args = {"key": "modified_by_hook"}
+
+        with patch.object(
+            manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=server,
+        ):
+            with patch.object(
+                manager,
+                "pre_call_tool_check",
+                new_callable=AsyncMock,
+                return_value={"arguments": modified_args},
+            ):
+                with patch.object(
+                    manager,
+                    "_create_during_hook_task",
+                    return_value=asyncio.create_task(asyncio.sleep(0)),
+                ):
+                    with patch.object(
+                        manager,
+                        "_call_regular_mcp_tool",
+                        new_callable=AsyncMock,
+                        return_value=MagicMock(),
+                    ) as mock_call:
+                        proxy_logging = MagicMock(spec=ProxyLogging)
+
+                        await manager.call_tool(
+                            server_name="test_server",
+                            name="test_tool",
+                            arguments={"key": "original"},
+                            proxy_logging_obj=proxy_logging,
+                        )
+
+                        mock_call.assert_called_once()
+                        call_kwargs = mock_call.call_args
+                        assert call_kwargs.kwargs.get("arguments") == modified_args
+
+    @pytest.mark.asyncio
+    async def test_openapi_server_warns_on_hook_headers(self, caplog):
+        """OpenAPI-backed servers should log a warning when hook injects headers."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="openapi_server",
+            server_name="openapi_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="/path/to/spec.yaml",
+        )
+
+        with patch.object(
+            manager, "_get_mcp_server_from_tool_name", return_value=server
+        ):
+            with patch.object(
+                manager,
+                "pre_call_tool_check",
+                new_callable=AsyncMock,
+                return_value={"extra_headers": {"Authorization": "Bearer jwt"}},
+            ):
+                with patch.object(
+                    manager,
+                    "_create_during_hook_task",
+                    return_value=asyncio.create_task(asyncio.sleep(0)),
+                ):
+                    with patch.object(
+                        manager,
+                        "_call_openapi_tool_handler",
+                        new_callable=AsyncMock,
+                        return_value=MagicMock(),
+                    ):
+                        proxy_logging = MagicMock(spec=ProxyLogging)
+
+                        with caplog.at_level(logging.WARNING):
+                            await manager.call_tool(
+                                server_name="openapi_server",
+                                name="test_tool",
+                                arguments={},
+                                proxy_logging_obj=proxy_logging,
+                            )
+
+                        assert any(
+                            "do not support hook header injection" in record.message
+                            for record in caplog.records
+                        )
+
+    @pytest.mark.asyncio
+    async def test_openapi_server_no_warning_without_hook_headers(self, caplog):
+        """No warning when OpenAPI server has no hook-injected headers."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="openapi_server",
+            server_name="openapi_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="/path/to/spec.yaml",
+        )
+
+        with patch.object(
+            manager, "_get_mcp_server_from_tool_name", return_value=server
+        ):
+            with patch.object(
+                manager,
+                "pre_call_tool_check",
+                new_callable=AsyncMock,
+                return_value={},
+            ):
+                with patch.object(
+                    manager,
+                    "_create_during_hook_task",
+                    return_value=asyncio.create_task(asyncio.sleep(0)),
+                ):
+                    with patch.object(
+                        manager,
+                        "_call_openapi_tool_handler",
+                        new_callable=AsyncMock,
+                        return_value=MagicMock(),
+                    ):
+                        proxy_logging = MagicMock(spec=ProxyLogging)
+
+                        with caplog.at_level(logging.WARNING):
+                            await manager.call_tool(
+                                server_name="openapi_server",
+                                name="test_tool",
+                                arguments={},
+                                proxy_logging_obj=proxy_logging,
+                            )
+
+                        assert not any(
+                            "do not support hook header injection" in record.message
+                            for record in caplog.records
+                        )
 
 
 class TestHookHeaderMergePriority:
@@ -479,3 +704,13 @@ class TestUserAPIKeyAuthJwtClaims:
         )
         assert auth.jwt_claims is None
         assert auth.user_id == "user-1"
+
+    def test_jwt_claims_set_after_construction(self):
+        """Virtual-key fast path sets jwt_claims after the object is created."""
+        auth = UserAPIKeyAuth(api_key="test-key")
+        assert auth.jwt_claims is None
+
+        claims = {"sub": "user-456", "iss": "okta", "groups": ["admin"]}
+        auth.jwt_claims = claims
+        assert auth.jwt_claims == claims
+        assert auth.jwt_claims["groups"] == ["admin"]
