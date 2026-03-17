@@ -703,6 +703,8 @@ class ModelResponseIterator:
         """
         results = []
         for tr in self.tool_results:
+            if tr.get("type") != "bash_code_execution_tool_result":
+                continue
             call_id = tr.get("tool_use_id", "")
             content = tr.get("content", {})
             if isinstance(content, dict):
