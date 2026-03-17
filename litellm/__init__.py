@@ -81,7 +81,7 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-# register_async_client_cleanup is lazy-loaded and called on first access
+# register_async_client_cleanup is called eagerly at module import time
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 
