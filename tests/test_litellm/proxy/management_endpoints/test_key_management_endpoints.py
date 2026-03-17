@@ -960,22 +960,34 @@ async def test_key_info_returns_object_permission(monkeypatch):
     )
 
 
-def test_get_new_token_with_valid_key():
+@pytest.mark.asyncio
+async def test_get_new_token_with_valid_key(monkeypatch):
     """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
+    from unittest.mock import AsyncMock
+
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         get_new_token,
     )
 
+    # Mock get_ui_settings_cached to return setting disabled (custom keys allowed)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
     # Test with valid new_key
     data = RegenerateKeyRequest(new_key="sk-test123456789")
-    result = get_new_token(data)
+    result = await get_new_token(data)
 
     assert result == "sk-test123456789"
 
 
-def test_get_new_token_with_invalid_key():
+@pytest.mark.asyncio
+async def test_get_new_token_with_invalid_key(monkeypatch):
     """Test get_new_token function when provided with an invalid key that doesn't start with 'sk-'"""
+    from unittest.mock import AsyncMock
+
     from fastapi import HTTPException
 
     from litellm.proxy._types import RegenerateKeyRequest
@@ -983,14 +995,143 @@ def test_get_new_token_with_invalid_key():
         get_new_token,
     )
 
+    # Mock get_ui_settings_cached to return setting disabled (custom keys allowed)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
     # Test with invalid new_key (doesn't start with 'sk-')
     data = RegenerateKeyRequest(new_key="invalid-key-123")
 
     with pytest.raises(HTTPException) as exc_info:
-        get_new_token(data)
+        await get_new_token(data)
 
     assert exc_info.value.status_code == 400
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_when_disabled(monkeypatch):
+    """_check_custom_key_allowed raises 403 when disable_custom_api_keys is true."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"disable_custom_api_keys": True}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_custom_key_allowed("sk-custom-key-123")
+
+    assert exc_info.value.status_code == 403
+    assert "disabled" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_when_enabled(monkeypatch):
+    """_check_custom_key_allowed does nothing when disable_custom_api_keys is false."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"disable_custom_api_keys": False}),
+    )
+
+    # Should not raise
+    await _check_custom_key_allowed("sk-custom-key-123")
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_when_unset(monkeypatch):
+    """_check_custom_key_allowed does nothing when setting is not present."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={}),
+    )
+
+    # Should not raise
+    await _check_custom_key_allowed("sk-custom-key-123")
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
+    """_check_custom_key_allowed does nothing when key is None, even if setting is on."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"disable_custom_api_keys": True}),
+    )
+
+    # Should not raise — None means auto-generate
+    await _check_custom_key_allowed(None)
+
+
+@pytest.mark.asyncio
+async def test_get_new_token_rejected_when_custom_keys_disabled(monkeypatch):
+    """get_new_token raises 403 when new_key is set and disable_custom_api_keys is true."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"disable_custom_api_keys": True}),
+    )
+
+    data = RegenerateKeyRequest(new_key="sk-custom-regen-key")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_new_token(data)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_new_token_auto_generates_when_custom_keys_disabled(monkeypatch):
+    """get_new_token auto-generates a key when new_key is None, even if setting is on."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
+        AsyncMock(return_value={"disable_custom_api_keys": True}),
+    )
+
+    data = RegenerateKeyRequest()  # no new_key
+    result = await get_new_token(data)
+
+    assert result.startswith("sk-")
 
 
 @pytest.mark.asyncio

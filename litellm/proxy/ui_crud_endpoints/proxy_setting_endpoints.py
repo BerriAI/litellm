@@ -149,6 +149,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "scope_user_search_to_org",
+    "disable_custom_api_keys",
 }
 
 # Flags that must be synced from the persisted UISettings into
