@@ -7,7 +7,35 @@ import NavigationCards from '@site/src/components/NavigationCards';
 
 **Tutorials** are step-by-step walkthroughs for integrating LiteLLM with external tools, frameworks, and services — or building complete end-to-end workflows.
 
-> Need help with a specific LiteLLM SDK feature or proxy config? See [Guides →](/docs/guides)
+> Need help choosing the right path before you start? See [Learn →](/docs/learn)
+
+---
+
+## Start Here
+
+<NavigationCards
+columns={3}
+items={[
+  {
+    icon: "🐍",
+    title: "SDK Quickstart",
+    description: "Use this if you want to make your first LiteLLM call before following integration tutorials.",
+    to: "/docs/learn/sdk_quickstart",
+  },
+  {
+    icon: "🖥️",
+    title: "Gateway Quickstart",
+    description: "Use this if your tutorial depends on the LiteLLM proxy or shared infrastructure.",
+    to: "/docs/learn/gateway_quickstart",
+  },
+  {
+    icon: "📚",
+    title: "Need Feature References?",
+    description: "Use Guides when you know the capability you need and just want the doc for it.",
+    to: "/docs/guides",
+  },
+]}
+/>
 
 ---
 
