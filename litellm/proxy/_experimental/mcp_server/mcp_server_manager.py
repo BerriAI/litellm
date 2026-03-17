@@ -2251,15 +2251,19 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                f"Calling OpenAPI tool {name} directly via HTTP handler"
+                "Calling OpenAPI tool %s directly via HTTP handler", name
             )
             if hook_result.get("extra_headers"):
-                verbose_logger.warning(
-                    "pre_mcp_call hook returned extra_headers, but OpenAPI-backed "
-                    "MCP servers do not support hook header injection. "
-                    f"Headers will be dropped for tool '{name}' on server "
-                    f"'{server_name}'. Use a regular MCP server (SSE/HTTP transport) "
-                    "for hook header support."
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": (
+                            "pre_mcp_call hook returned extra_headers for an "
+                            "OpenAPI-backed MCP server, which does not support "
+                            "hook header injection. Use a regular MCP server "
+                            "(SSE/HTTP transport) for hook header support."
+                        )
+                    },
                 )
             tasks.append(
                 asyncio.create_task(

@@ -6,15 +6,12 @@ Validates that:
 2. pre_call_tool_check returns hook-provided extra_headers AND modified arguments
 3. call_tool flows hook headers and modified arguments downstream
 4. Hook-provided headers take highest priority (merge after static_headers)
-5. OpenAPI-backed servers emit a warning when hook headers are present
+5. OpenAPI-backed servers raise HTTPException when hook headers are present
 6. JWT claims are propagated in both standard and virtual-key fast paths
 7. Backward compatibility: hooks without extra_headers continue to work
 """
 
 import asyncio
-import logging
-import sys
-from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -425,8 +422,8 @@ class TestCallToolFlowsHookHeaders:
                         assert call_kwargs.kwargs.get("arguments") == modified_args
 
     @pytest.mark.asyncio
-    async def test_openapi_server_warns_on_hook_headers(self, caplog):
-        """OpenAPI-backed servers should log a warning when hook injects headers."""
+    async def test_openapi_server_raises_on_hook_headers(self):
+        """OpenAPI-backed servers should raise HTTPException when hook injects headers."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="test-id",
@@ -452,30 +449,24 @@ class TestCallToolFlowsHookHeaders:
                     "_create_during_hook_task",
                     return_value=asyncio.create_task(asyncio.sleep(0)),
                 ):
-                    with patch.object(
-                        manager,
-                        "_call_openapi_tool_handler",
-                        new_callable=AsyncMock,
-                        return_value=MagicMock(),
-                    ):
-                        proxy_logging = MagicMock(spec=ProxyLogging)
+                    proxy_logging = MagicMock(spec=ProxyLogging)
 
-                        with caplog.at_level(logging.WARNING):
-                            await manager.call_tool(
-                                server_name="openapi_server",
-                                name="test_tool",
-                                arguments={},
-                                proxy_logging_obj=proxy_logging,
-                            )
-
-                        assert any(
-                            "do not support hook header injection" in record.message
-                            for record in caplog.records
+                    with pytest.raises(HTTPException) as exc_info:
+                        await manager.call_tool(
+                            server_name="openapi_server",
+                            name="test_tool",
+                            arguments={},
+                            proxy_logging_obj=proxy_logging,
                         )
 
+                    assert exc_info.value.status_code == 500
+                    assert "does not support hook header injection" in str(
+                        exc_info.value.detail
+                    )
+
     @pytest.mark.asyncio
-    async def test_openapi_server_no_warning_without_hook_headers(self, caplog):
-        """No warning when OpenAPI server has no hook-injected headers."""
+    async def test_openapi_server_no_error_without_hook_headers(self):
+        """No exception when OpenAPI server has no hook-injected headers."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="test-id",
@@ -509,17 +500,11 @@ class TestCallToolFlowsHookHeaders:
                     ):
                         proxy_logging = MagicMock(spec=ProxyLogging)
 
-                        with caplog.at_level(logging.WARNING):
-                            await manager.call_tool(
-                                server_name="openapi_server",
-                                name="test_tool",
-                                arguments={},
-                                proxy_logging_obj=proxy_logging,
-                            )
-
-                        assert not any(
-                            "do not support hook header injection" in record.message
-                            for record in caplog.records
+                        await manager.call_tool(
+                            server_name="openapi_server",
+                            name="test_tool",
+                            arguments={},
+                            proxy_logging_obj=proxy_logging,
                         )
 
 
