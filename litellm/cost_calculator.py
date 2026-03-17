@@ -660,7 +660,14 @@ def _select_model_name_for_cost_calc(
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
-            return_model = router_model_id
+            entry = litellm.model_cost[router_model_id]
+            if (
+                entry.get("input_cost_per_token") is not None
+                or entry.get("input_cost_per_second") is not None
+            ):
+                return_model = router_model_id
+            else:
+                return_model = model
         else:
             return_model = model
 

@@ -340,9 +340,16 @@ class ProxyInitializationHelpers:
             return
 
         # Check if prometheus is in any callback list
+        # Each setting can be a list or a single string; normalize to list
         callbacks = litellm_settings.get("callbacks") or []
         success_callbacks = litellm_settings.get("success_callback") or []
         failure_callbacks = litellm_settings.get("failure_callback") or []
+        if isinstance(callbacks, str):
+            callbacks = [callbacks]
+        if isinstance(success_callbacks, str):
+            success_callbacks = [success_callbacks]
+        if isinstance(failure_callbacks, str):
+            failure_callbacks = [failure_callbacks]
         all_callbacks = callbacks + success_callbacks + failure_callbacks
         if "prometheus" not in all_callbacks:
             return
