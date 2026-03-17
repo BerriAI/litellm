@@ -25,7 +25,6 @@ sys.path.insert(
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
-from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -95,9 +94,6 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mock_config = MagicMock()
-    mock_config.worker_registry = []
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
     monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
     monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
 
@@ -108,10 +104,10 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "redirect_url": "http://testserver/ui/?login=success",
-    }
-    assert "token" not in response.json()
+    assert (
+        response.json()
+        == {"redirect_url": "http://testserver/ui/?login=success"}
+    )
     assert response.cookies.get("token") == "signed-token"
 
     mock_authenticate_user.assert_awaited_once_with(
@@ -130,43 +126,6 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         "test-master-key",
         algorithm="HS256",
     )
-
-
-def test_login_v2_includes_token_in_body_when_control_plane(monkeypatch):
-    """Token should appear in the response body when workers are configured."""
-    mock_prisma_client = MagicMock()
-    monkeypatch.setattr(
-        "litellm.proxy.auth.login_utils.authenticate_user",
-        AsyncMock(return_value={"user_id": "test-user"}),
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.auth.login_utils.create_ui_token_object",
-        MagicMock(return_value={"user_id": "test-user"}),
-    )
-    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mock_config = MagicMock()
-    mock_config.worker_registry = [
-        WorkerRegistryEntry(
-            worker_id="team-a", name="Team A", url="https://worker-1:4001"
-        ),
-    ]
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
-    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
-    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
-
-    client = TestClient(app)
-    response = client.post(
-        "/v2/login",
-        json={"username": "alice", "password": "secret"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["token"] == "signed-token"
-    assert response.cookies.get("token") == "signed-token"
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
