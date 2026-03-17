@@ -10,9 +10,9 @@ End-to-End tutorial for LiteLLM Proxy to:
 - Generate a virtual key
 - Set RPM limit on virtual key
 
-## Quick Install (Recommended)
+## Quick Install (Recommended for local / beginners)
 
-The fastest way to get started — one command installs LiteLLM and launches an interactive setup wizard.
+New to LiteLLM? This is the easiest way to get started locally. One command installs LiteLLM and walks you through setup interactively — no config files to write by hand.
 
 ### 1. Install
 
