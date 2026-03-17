@@ -711,7 +711,7 @@ class ModelResponseIterator:
                     parts.append(content["stdout"])
                 if content.get("stderr"):
                     parts.append(f"STDERR: {content['stderr']}")
-                logs = "".join(parts) if parts else str(content)
+                logs = "".join(parts)
             else:
                 logs = str(content)
             tool_input = self._server_tool_inputs.get(call_id, {})
