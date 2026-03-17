@@ -885,25 +885,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
         thinking_budget = thinking_param.get("budget_tokens")
+        # thinking_level is a LiteLLM extension (not in AnthropicThinkingParam)
+        thinking_level = thinking_param.get("thinking_level")  # type: ignore[misc]
 
         params: GeminiThinkingConfig = {}
 
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
             if thinking_enabled:
-                if thinking_budget is None or thinking_budget == 0:
+                if thinking_level is not None:
+                    # thinking_level explicitly provided — use it directly
+                    return VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                        thinking_level, model
+                    )
+                elif thinking_budget is not None and thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
+                    # thinking is enabled with no budget/level — enable thinking
                     params["includeThoughts"] = True
-                    if thinking_budget >= 10000:
-                        is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
-                        )
-                        params["thinkingLevel"] = (
-                            "minimal" if is_gemini3flash else "low"
-                        )
-                    else:
+                    if thinking_budget is not None:
                         is_gemini3flash = (
                             "gemini-3-flash-preview" in model.lower()
                             or "gemini-3-flash" in model.lower()

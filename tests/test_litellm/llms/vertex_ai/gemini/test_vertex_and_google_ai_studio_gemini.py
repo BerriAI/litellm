@@ -877,6 +877,34 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     }
 
 
+def test_vertex_ai_map_thinking_param_with_thinking_level_gemini3():
+    """
+    Regression test: when thinking param has thinking_level (e.g. from model config),
+    _map_thinking_param must honour it and set includeThoughts=True instead of False.
+    Previously budget_tokens=None triggered includeThoughts=False, ignoring thinking_level.
+    """
+    v = VertexGeminiConfig()
+    # thinking_level provided — should map to thinkingLevel + includeThoughts=True
+    result = v._map_thinking_param(
+        thinking_param={"type": "enabled", "thinking_level": "high"},  # type: ignore[arg-type]
+        model="gemini-3.1-pro-preview",
+    )
+    assert result == {"thinkingLevel": "high", "includeThoughts": True}
+
+    result_medium = v._map_thinking_param(
+        thinking_param={"type": "enabled", "thinking_level": "medium"},  # type: ignore[arg-type]
+        model="gemini-3.1-pro-preview",
+    )
+    assert result_medium == {"thinkingLevel": "medium", "includeThoughts": True}
+
+    # thinking enabled with no budget/level — should still enable thinking
+    result_no_budget = v._map_thinking_param(
+        thinking_param={"type": "enabled"},  # type: ignore[arg-type]
+        model="gemini-3.1-pro-preview",
+    )
+    assert result_no_budget.get("includeThoughts") is True
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
