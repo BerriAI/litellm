@@ -95,6 +95,36 @@ async def test_add_shared_session_handles_recreation_failure():
 
 
 @pytest.mark.asyncio
+async def test_add_shared_session_handles_recreation_exception():
+    """When _initialize_shared_aiohttp_session raises, data should not contain shared_session."""
+    import litellm.proxy.route_llm_request as route_module
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.route_llm_request import add_shared_session_to_data
+
+    # Reset the module-level lock so each test uses the current event loop
+    route_module._shared_session_lock = None
+
+    closed_session = MagicMock()
+    closed_session.closed = True
+
+    with patch.object(
+        proxy_server_module,
+        "shared_aiohttp_session",
+        closed_session,
+    ):
+        with patch.object(
+            proxy_server_module,
+            "_initialize_shared_aiohttp_session",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connection pool exhausted"),
+        ):
+            data = {}
+            await add_shared_session_to_data(data)
+            # Should gracefully handle exception — no shared_session attached
+            assert "shared_session" not in data
+
+
+@pytest.mark.asyncio
 async def test_add_shared_session_no_session_available():
     """When no session was ever created, data should not contain shared_session."""
     from litellm.proxy.route_llm_request import add_shared_session_to_data
