@@ -1307,6 +1307,9 @@ LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
 LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
     "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
 )  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
+LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
+)  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1330,6 +1333,7 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
+KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))

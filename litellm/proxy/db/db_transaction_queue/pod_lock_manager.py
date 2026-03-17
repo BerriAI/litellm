@@ -32,22 +32,28 @@ class PodLockManager:
     async def acquire_lock(
         self,
         cronjob_id: str,
+        ttl: Optional[int] = None,
     ) -> Optional[bool]:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
         Uses the SET command with NX and EX options to ensure atomicity.
-        
+
         Args:
             cronjob_id: The ID of the cron job to lock
+            ttl: Optional custom TTL in seconds. Defaults to DEFAULT_CRON_JOB_LOCK_TTL_SECONDS.
+                 Use a longer TTL for jobs that may take longer than the default 60s
+                 (e.g. key rotation with many keys).
         """
         if self.redis_cache is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             return None
         try:
+            lock_ttl = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
             verbose_proxy_logger.debug(
-                "Pod %s attempting to acquire Redis lock for cronjob_id=%s",
+                "Pod %s attempting to acquire Redis lock for cronjob_id=%s (ttl=%ds)",
                 self.pod_id,
                 cronjob_id,
+                lock_ttl,
             )
             # Try to set the lock key with the pod_id as its value, only if it doesn't exist (NX)
             # and with an expiration (EX) to avoid deadlocks.
@@ -56,7 +62,7 @@ class PodLockManager:
                 lock_key,
                 self.pod_id,
                 nx=True,
-                ttl=DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
+                ttl=lock_ttl,
             )
             if acquired:
                 verbose_proxy_logger.info(
@@ -133,11 +139,10 @@ class PodLockManager:
                         )
                     else:
                         verbose_proxy_logger.warning(
-                            "Spend tracking - pod %s failed to release Redis lock for cronjob_id=%s. "
-                            "Lock will expire after TTL=%ds.",
+                            "Pod %s failed to release Redis lock for cronjob_id=%s. "
+                            "Lock will expire after its TTL.",
                             self.pod_id,
                             cronjob_id,
-                            DEFAULT_CRON_JOB_LOCK_TTL_SECONDS,
                         )
                 else:
                     verbose_proxy_logger.debug(
