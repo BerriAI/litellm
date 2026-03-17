@@ -1410,10 +1410,10 @@ def test_streaming_code_execution_input_assembled_from_deltas():
             "type": "content_block_start",
             "index": 1,
             "content_block": {
-                "type": "code_execution_tool_result",
+                "type": "bash_code_execution_tool_result",
                 "tool_use_id": "srvtoolu_01AAA",
                 "content": {
-                    "type": "code_execution_result",
+                    "type": "bash_code_execution_result",
                     "stdout": "hello\n",
                     "stderr": "",
                     "return_code": 0,
@@ -1445,3 +1445,71 @@ def test_streaming_code_execution_input_assembled_from_deltas():
     assert code_results[0].id == "srvtoolu_01AAA"
     assert code_results[0].code == "echo hello"
     assert code_results[0].outputs[0].logs == "hello\n"
+
+
+def test_empty_output_produces_null_outputs():
+    """
+    When both stdout and stderr are empty, outputs should be None
+    (matching OpenAI's native behavior) rather than [{logs: ""}].
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "bash_code_execution",
+                "input": {"command": "true"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert (
+        code_results[0].outputs is None
+    ), f"Expected outputs=None for empty execution, got {code_results[0].outputs}"

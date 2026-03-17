@@ -1778,6 +1778,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         logs = "".join(parts)
                     else:
                         logs = str(content)
+                    log_outputs = (
+                        [OutputCodeInterpreterCallLog(type="logs", logs=logs)]
+                        if logs
+                        else None
+                    )
                     code_interpreter_results.append(
                         OutputCodeInterpreterCall(
                             type="code_interpreter_call",
@@ -1785,9 +1790,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             code=code_by_id.get(call_id, ""),
                             container_id=container_id,
                             status="completed",
-                            outputs=[
-                                OutputCodeInterpreterCallLog(type="logs", logs=logs)
-                            ],
+                            outputs=log_outputs,
                         )
                     )
                 provider_specific_fields["code_interpreter_results"] = (
