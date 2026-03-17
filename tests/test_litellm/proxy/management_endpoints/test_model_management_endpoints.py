@@ -1,12 +1,13 @@
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -21,9 +22,15 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     clear_cache,
+    update_db_model,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    updateDeployment,
+    updateLiteLLMParams,
+)
 
 
 class MockPrismaClient:
@@ -399,7 +406,9 @@ class TestClearCache:
         """
         Test that clear_cache clears DB models and preserves config models.
         """
-        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
 
         # Create mock router with mixed DB and config models
         mock_router = MagicMock()
@@ -466,8 +475,8 @@ class TestUpdatePublicModelGroups:
         """
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_public_model_groups,
             UpdatePublicModelGroupsRequest,
+            update_public_model_groups,
         )
 
         old_db_models = ["db-model-1", "db-model-2"]
@@ -688,8 +697,9 @@ class TestModelInfoEndpoint:
     @pytest.mark.asyncio
     async def test_model_info_inaccessible_model_returns_404(self):
         """Test model_info returns 404 for inaccessible models"""
-        from litellm.proxy.proxy_server import model_info
         from fastapi import HTTPException
+
+        from litellm.proxy.proxy_server import model_info
 
         # Mock user with limited access
         user_api_key_dict = UserAPIKeyAuth(
@@ -725,7 +735,7 @@ class TestModelInfoEndpoint:
     async def test_model_info_team_model_access(self):
         """Test model_info works with team model access"""
         from litellm.proxy.proxy_server import model_info
-        
+
         # Mock user with team access
         user_api_key_dict = UserAPIKeyAuth(
             user_id="test_user",
@@ -756,5 +766,89 @@ class TestModelInfoEndpoint:
             )
 
             assert result["id"] == "team-model-1"
-            assert result["object"] == "model" 
+            assert result["object"] == "model"
             assert result["owned_by"] == "custom"
+
+
+class TestUpdateDbModel:
+    """Tests for the update_db_model function."""
+
+    @pytest.fixture(autouse=True)
+    def mock_encrypt(self):
+        """Skip encryption in unit tests."""
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+            side_effect=lambda v: v,
+        ):
+            yield
+
+    def test_update_db_model_removes_deleted_keys(self):
+        """
+        When a key is removed from litellm_params by the caller,
+        it should not persist in the merged output.
+        """
+        db_model = Deployment(
+            model_name="my-model",
+            litellm_params=LiteLLM_Params(
+                model="gpt-4",
+                api_base="https://old-api.example.com",
+                custom_llm_provider="openai",
+            ),
+        )
+
+        # Update removes api_base and custom_llm_provider (not sent)
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                model="gpt-4",
+            ),
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        litellm_params = json.loads(result["litellm_params"])
+        assert litellm_params["model"] == "gpt-4"
+        assert "api_base" not in litellm_params
+        assert "custom_llm_provider" not in litellm_params
+
+    def test_update_db_model_adds_new_keys(self):
+        """New keys in the patch should be added."""
+        db_model = Deployment(
+            model_name="my-model",
+            litellm_params=LiteLLM_Params(
+                model="gpt-4",
+            ),
+        )
+
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                model="gpt-4",
+                api_base="https://new-api.example.com",
+            ),
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        litellm_params = json.loads(result["litellm_params"])
+        assert litellm_params["model"] == "gpt-4"
+        assert litellm_params["api_base"] == "https://new-api.example.com"
+
+    def test_update_db_model_no_litellm_params_preserves_existing(self):
+        """When litellm_params is not in the patch, existing params are preserved."""
+        db_model = Deployment(
+            model_name="my-model",
+            litellm_params=LiteLLM_Params(
+                model="gpt-4",
+                api_base="https://old-api.example.com",
+            ),
+        )
+
+        patch = updateDeployment(
+            model_name="new-name",
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        litellm_params = json.loads(result["litellm_params"])
+        assert litellm_params["model"] == "gpt-4"
+        assert litellm_params["api_base"] == "https://old-api.example.com"
+        assert result["model_name"] == "new-name"

@@ -13,13 +13,13 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -109,7 +109,9 @@ def update_db_model(
             ).items()
         }
 
-        merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
+        # Replace litellm_params entirely instead of merging, so that
+        # keys removed by the caller are actually deleted.
+        merged_deployment_dict["litellm_params"] = LiteLLMParamsTypedDict(**encrypted_params)  # type: ignore
 
     # update model info
     if updated_patch.model_info:
