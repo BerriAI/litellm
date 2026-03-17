@@ -873,6 +873,7 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "vertex_location, expected_location",
     [
@@ -883,6 +884,8 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         # Unsupported region should fall back to us-east5
         ("global", "us-east5"),
         ("us-central1", "us-east5"),
+        # No region configured should fall back to us-east5
+        (None, "us-east5"),
     ],
 )
 async def test_vertex_ai_claude_count_tokens_region_validation(
