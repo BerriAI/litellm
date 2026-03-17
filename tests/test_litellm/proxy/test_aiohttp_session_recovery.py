@@ -33,8 +33,12 @@ async def test_add_shared_session_attaches_open_session():
 @pytest.mark.asyncio
 async def test_add_shared_session_recreates_closed_session():
     """When the shared session is closed, it should be recreated."""
+    import litellm.proxy.route_llm_request as route_module
     from litellm.proxy import proxy_server as proxy_server_module
     from litellm.proxy.route_llm_request import add_shared_session_to_data
+
+    # Reset the module-level lock so each test uses the current event loop
+    route_module._shared_session_lock = None
 
     closed_session = MagicMock()
     closed_session.closed = True
@@ -64,8 +68,12 @@ async def test_add_shared_session_recreates_closed_session():
 @pytest.mark.asyncio
 async def test_add_shared_session_handles_recreation_failure():
     """When recreation fails, data should not contain shared_session."""
+    import litellm.proxy.route_llm_request as route_module
     from litellm.proxy import proxy_server as proxy_server_module
     from litellm.proxy.route_llm_request import add_shared_session_to_data
+
+    # Reset the module-level lock so each test uses the current event loop
+    route_module._shared_session_lock = None
 
     closed_session = MagicMock()
     closed_session.closed = True
