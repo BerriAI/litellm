@@ -111,7 +111,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "AI Tools (OpenWebUI, Claude Code, etc.)",
+      label: "AI Tools",
       link: {
         type: "generated-index",
         title: "AI Tools",
@@ -1089,9 +1089,7 @@ const sidebars = {
             "projects/Quivr",
             "projects/Langstream",
             "projects/Otter",
-            "projects/GPT Migrate",
             "projects/YiVal",
-            "projects/LiteLLM Proxy",
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",

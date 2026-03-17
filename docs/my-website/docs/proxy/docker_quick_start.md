@@ -40,7 +40,7 @@ $ pip install 'litellm[proxy]'
 
 ### Step 1 — Pull the LiteLLM database image
 
-LiteLLM provides a pre-built image with Postgres bundled in. Pull it before starting.
+LiteLLM provides a dedicated `litellm-database` image for proxy deployments that connect to Postgres. Pull it before starting Docker Compose.
 
 ```bash
 docker pull ghcr.io/berriai/litellm-database:main-latest
@@ -50,29 +50,9 @@ See all available tags on the [GitHub Container Registry](https://github.com/Ber
 
 ---
 
-### Step 2 — Set up your config.yaml (do this before starting the server)
+### Step 2 — Set up a database
 
-Create a `litellm_config.yaml` file. You **must** add your model and database settings here before starting the proxy.
-
-```yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: azure/my_azure_deployment
-      api_base: os.environ/AZURE_API_BASE
-      api_key: os.environ/AZURE_API_KEY
-      api_version: "2025-01-01-preview"
-
-general_settings:
-  master_key: sk-1234   # 🔑 your proxy admin key (must start with sk-)
-  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"  # 👈 required for virtual keys
-```
-
-:::tip
-`database_url` is required for virtual keys, spend tracking, and the UI. Use [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) for a free managed Postgres instance.
-:::
-
-Get the docker compose file and create your `.env`:
+Get the docker compose file and create your `.env` first:
 
 ```bash
 # Get the docker compose file
@@ -85,11 +65,39 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 # Used to encrypt/decrypt your LLM API key credentials
 # Generate a strong random value: https://1password.com/password-generator/
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
+
+# Add your model credentials
+echo 'AZURE_API_BASE="https://openai-***********/"' >> .env
+echo 'AZURE_API_KEY="your-azure-api-key"' >> .env
 ```
+
+Then finish your `config.yaml` before starting the proxy server. If you use the default `docker-compose.yml`, the Postgres container is available at `db:5432`.
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/my_azure_deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2025-01-01-preview"
+
+general_settings:
+  master_key: sk-1234   # 🔑 your proxy admin key (must start with sk-)
+  database_url: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+```
+
+:::tip
+`database_url` is required for virtual keys, spend tracking, and the UI. If you want a managed database instead, replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string.
+:::
+
+Save this file as `config.yaml`.
 
 ---
 
 ### Step 3 — Start the proxy server and test it
+
+After `config.yaml` and `.env` are complete, start the proxy:
 
 ```bash
 docker compose up
@@ -318,11 +326,11 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 - [Other/Non-Chat Completion Endpoints](../embedding/supported_embedding.md)
 - [Pass-through for VertexAI, Bedrock, etc.](../pass_through/vertex_ai.md)
 
-## 3. Generate a virtual key
+## Optional: Generate a virtual key
 
-Track Spend, and control model access via virtual keys for the proxy
+Track spend and control model access via virtual keys for the proxy.
 
-### 3.1 Set up a Database 
+### Prerequisite — Set up a database
 
 **Requirements**
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
@@ -342,7 +350,9 @@ general_settings:
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
 ```
 
-Save config.yaml as `litellm_config.yaml` (used in 3.2).
+Save config.yaml as `litellm_config.yaml` before continuing.
+
+You must finish this setup before starting the proxy server.
 
 ---
 
@@ -368,7 +378,7 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
         `database_url: "postgresql://..."`
      - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 
-### 3.2 Start Proxy 
+### Start Proxy
 
 ```bash
 docker run \
@@ -376,12 +386,12 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    docker.litellm.ai/berriai/litellm:main-latest \
+    ghcr.io/berriai/litellm-database:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 
 
-### 3.3 Create Key w/ RPM Limit
+### Create Key w/ RPM Limit
 
 Create a key with `rpm_limit: 1`. This will only allow 1 request per minute for calls to proxy with this key.
 
@@ -404,9 +414,9 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 }
 ```
 
-### 3.4 Test it! 
+### Test it!
 
-**Use your virtual key from step 3.3**
+**Use the virtual key you just created.**
 
 1st call - Expect to work! 
 
@@ -719,5 +729,3 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
-
-
