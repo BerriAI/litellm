@@ -6501,8 +6501,9 @@ class ProxyStartupEvent:
                     KeyRotationManager,
                 )
 
-                # Get prisma_client from global scope
+                # Get prisma_client and proxy_logging_obj from global scope
                 global prisma_client
+                global proxy_logging_obj
                 if prisma_client is not None:
                     key_rotation_manager = KeyRotationManager(prisma_client)
                     verbose_proxy_logger.debug(
