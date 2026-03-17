@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import unittest.mock
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1231,20 +1232,19 @@ class TestMCPServerManager:
         async def fake_discovery(server_url: str):
             return discovered_metadata
 
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
-        config = {
-            "github": {
-                "url": "https://github.example.com/mcp",
-                "transport": MCPTransport.http,
-                "auth_type": MCPAuth.oauth2,
-                "client_id": "my-client-id",
-                "client_secret": "my-client-secret",
-                # Intentionally no token_url — signals 3LO (user-authorised) flow
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "github": {
+                    "url": "https://github.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    # Intentionally no token_url — signals 3LO (user-authorised) flow
+                }
             }
-        }
 
-        await manager.load_servers_from_config(config)
+            await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
         # token_url must NOT be populated from discovery when PKCE creds are present
@@ -1277,20 +1277,19 @@ class TestMCPServerManager:
         async def fake_discovery(server_url: str):
             return discovered_metadata
 
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
-        config = {
-            "github": {
-                "url": "https://github.example.com/mcp",
-                "transport": MCPTransport.http,
-                "auth_type": MCPAuth.oauth2,
-                "client_id": "my-client-id",
-                "client_secret": "my-client-secret",
-                "token_url": "https://explicit.example.com/token",  # 2LO intent
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "github": {
+                    "url": "https://github.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    "token_url": "https://explicit.example.com/token",  # 2LO intent
+                }
             }
-        }
 
-        await manager.load_servers_from_config(config)
+            await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
         # Explicit token_url must be preserved, not overridden by discovery
