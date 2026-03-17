@@ -19,6 +19,13 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("MCPJWTSigner guardrail requires a guardrail_name")
 
+    mode = litellm_params.mode
+    if mode != "pre_mcp_call":
+        raise ValueError(
+            f"MCPJWTSigner guardrail '{guardrail_name}' has mode='{mode}' but must use "
+            "mode='pre_mcp_call'. JWT injection only fires for MCP tool calls."
+        )
+
     optional_params = getattr(litellm_params, "optional_params", None)
 
     def _get(key):  # type: ignore[no-untyped-def]

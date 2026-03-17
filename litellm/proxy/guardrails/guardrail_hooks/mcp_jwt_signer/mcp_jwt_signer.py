@@ -277,8 +277,6 @@ class MCPJWTSigner(CustomGuardrail):
         # tool call JWTs should not carry enumeration permissions.
         # Tool names are sanitized (alphanumeric + _ and -) before embedding
         # so path-traversal or malformed scope values cannot be injected.
-        import re
-
         raw_tool_name: str = data.get("mcp_tool_name", "")
         tool_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
         if tool_name:

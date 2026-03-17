@@ -2471,6 +2471,9 @@ class UserAPIKeyAuth(
         Any
     ] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # TODO: jwt_claims carries decoded upstream IdP claims (groups, roles, etc.) so
+    # guardrails can forward them into outbound tokens (e.g. MCPJWTSigner). Currently
+    # populated but not yet consumed — forward-compat hook for a follow-up PR.
     jwt_claims: Optional[Dict] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
