@@ -160,6 +160,11 @@ async def patch_model(
     Only updates the fields specified in the request while preserving other existing values.
     Follows proper PATCH semantics by only modifying provided fields.
 
+    Note: When `litellm_params` is provided, it **replaces** the stored params entirely
+    (rather than merging). The caller must send the full desired litellm_params object.
+    Keys omitted from the payload will be removed. This allows the UI to delete keys
+    that the user has cleared.
+
     Args:
         model_id: The ID of the model to update
         patch_data: The fields to update and their new values

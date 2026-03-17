@@ -797,13 +797,13 @@ class TestUpdateDbModel:
         )
 
         # Update removes api_base and custom_llm_provider (not sent)
-        patch = updateDeployment(
+        update_patch = updateDeployment(
             litellm_params=updateLiteLLMParams(
                 model="gpt-4",
             ),
         )
 
-        result = update_db_model(db_model=db_model, updated_patch=patch)
+        result = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         litellm_params = json.loads(result["litellm_params"])
         assert litellm_params["model"] == "gpt-4"
@@ -819,14 +819,14 @@ class TestUpdateDbModel:
             ),
         )
 
-        patch = updateDeployment(
+        update_patch = updateDeployment(
             litellm_params=updateLiteLLMParams(
                 model="gpt-4",
                 api_base="https://new-api.example.com",
             ),
         )
 
-        result = update_db_model(db_model=db_model, updated_patch=patch)
+        result = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         litellm_params = json.loads(result["litellm_params"])
         assert litellm_params["model"] == "gpt-4"
@@ -842,11 +842,11 @@ class TestUpdateDbModel:
             ),
         )
 
-        patch = updateDeployment(
+        update_patch = updateDeployment(
             model_name="new-name",
         )
 
-        result = update_db_model(db_model=db_model, updated_patch=patch)
+        result = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         litellm_params = json.loads(result["litellm_params"])
         assert litellm_params["model"] == "gpt-4"
