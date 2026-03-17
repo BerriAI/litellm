@@ -131,7 +131,7 @@ class UISettings(BaseModel):
 
     disable_custom_api_keys: bool = Field(
         default=False,
-        description="If true, users cannot specify custom API key values. All keys must be auto-generated.",
+        description="If true, users cannot specify custom key values. All keys must be auto-generated.",
     )
 
 
