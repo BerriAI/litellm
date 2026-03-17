@@ -133,7 +133,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self.anthropic_adapter = LiteLLMAnthropicMessagesAdapter()
         self.anthropic_config = AnthropicConfig()
 
-        self.key = os.getenv("RUBRIK_API_KEY")
+        self.key = kwargs.get("api_key") or os.getenv("RUBRIK_API_KEY")
         _batch_size = os.getenv("RUBRIK_BATCH_SIZE", None)
 
         if _batch_size:
@@ -146,10 +146,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             except ValueError:
                 verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
 
-        _webhook_url = os.getenv("RUBRIK_WEBHOOK_URL")
+        _webhook_url = kwargs.get("api_base") or os.getenv("RUBRIK_WEBHOOK_URL")
 
         if _webhook_url is None:
-            raise ValueError("environment variable RUBRIK_WEBHOOK_URL not set")
+            raise ValueError(
+                "Rubrik webhook URL not configured. Set api_base in guardrail config "
+                "or the RUBRIK_WEBHOOK_URL environment variable."
+            )
 
         _webhook_url = _webhook_url.rstrip("/").removesuffix("/v1")
         self.tool_blocking_endpoint = f"{_webhook_url}{_WEBHOOK_PATH_TOOL_BLOCKING}"
@@ -489,6 +492,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Subsequent deltas append to the function arguments.
         """
         delta_index = delta.index
+        if delta_index is None:
+            verbose_logger.warning("Tool call delta missing index field — skipping accumulation")
+            return
 
         if delta_index not in accumulated_tool_calls:
             accumulated_tool_calls[delta_index] = delta.model_copy(deep=True)

@@ -175,7 +175,7 @@ class TestInitialization:
     def test_init_without_url(self):
         """Test initialization fails without RUBRIK_WEBHOOK_URL."""
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="RUBRIK_WEBHOOK_URL not set"):
+            with pytest.raises(ValueError, match="Rubrik webhook URL not configured"):
                 RubrikLogger()
 
     def test_init_without_api_key(self):
