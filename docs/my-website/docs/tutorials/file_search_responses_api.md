@@ -3,13 +3,134 @@ import TabItem from '@theme/TabItem';
 
 # File Search in the Responses API — E2E Testing Guide
 
-This tutorial walks you through end-to-end testing of the `file_search` tool in LiteLLM's Responses API.
+LiteLLM now supports `file_search` in the Responses API across both:
+- providers that support it natively (like OpenAI / Azure), and
+- providers that do not (like Anthropic, Bedrock, and other non-native providers) via emulation.
+
+This page is both a quick blog-style overview and an end-to-end implementation guide.
+
+## What this is
+
+`file_search` lets models retrieve grounded context from your vector stores and answer with citations.
+LiteLLM keeps one OpenAI-compatible output shape while routing requests through either native passthrough or an emulated fallback.
+
 Two paths are covered:
 
 | Path | When it runs | What LiteLLM does |
 |---|---|---|
 | **Native passthrough** | Provider natively supports `file_search` (OpenAI, Azure) | Decodes unified vector store ID → forwards to provider as-is |
 | **Emulated fallback** | Provider doesn't support `file_search` (Anthropic, Bedrock, etc.) | Converts to a function tool → intercepts tool call → runs vector search → synthesizes OpenAI-format output |
+
+---
+
+## Usage
+
+<Tabs>
+<TabItem value="proxy" label="LiteLLM Proxy" default>
+
+### 1. Setup `config.yaml`
+
+```yaml title="config.yaml"
+model_list:
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+### 2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+### 3. Call Responses API with `file_search`
+
+```python title="Proxy call"
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:4000", api_key="sk-your-proxy-key")
+
+response = client.responses.create(
+    model="claude-sonnet",  # swap to "gpt-4.1" for native path
+    input="What does LiteLLM support?",
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["vs_abc123"]
+    }],
+    include=["file_search_call.results"],
+)
+
+print(response.output)
+```
+
+</TabItem>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+### 1. Install + set keys
+
+```bash
+pip install litellm
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+### 2. Call Responses API with `file_search`
+
+```python title="SDK call"
+import litellm
+
+response = litellm.responses(
+    model="anthropic/claude-sonnet-4-5",  # swap to openai/gpt-4.1 for native path
+    input="What does LiteLLM support?",
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["vs_abc123"]
+    }],
+    include=["file_search_call.results"],
+)
+
+print(response.output)
+```
+
+</TabItem>
+</Tabs>
+
+### Behavior Matrix
+
+| Path | SDK model | Proxy model | Behavior |
+|---|---|---|---|
+| Native passthrough | `openai/gpt-4.1` | `gpt-4.1` | Provider executes native `file_search` |
+| Emulated fallback | `anthropic/claude-sonnet-4-5` | `claude-sonnet` | LiteLLM converts to function tool and synthesizes OpenAI-format output |
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    A[Client SDK or Proxy Caller] --> B[LiteLLM Responses API]
+    B --> C{Provider supports native file_search?}
+
+    C -->|Yes| D[Native passthrough path]
+    D --> D1[Decode unified vector_store_id if needed]
+    D1 --> D2[Forward request to provider unchanged]
+    D2 --> D3[Provider performs file_search]
+    D3 --> Z[OpenAI-compatible output]
+
+    C -->|No| E[Emulated fallback path]
+    E --> E1[Convert file_search to litellm_file_search function tool]
+    E1 --> E2[First model call returns tool call with one or more queries]
+    E2 --> E3[LiteLLM executes vector search for each query]
+    E3 --> E4[Second model call with tool_result context]
+    E4 --> E5[Synthesize file_search_call + message + citations]
+    E5 --> Z[OpenAI-compatible output]
+```
 
 ---
 
@@ -23,200 +144,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."  # for emulated path
 
 ---
 
-## Path 1: Native Passthrough (OpenAI)
-
-OpenAI natively handles `file_search`. LiteLLM decodes any unified vector store ID and forwards the request unchanged.
-
-### Step 1 — Create a vector store and upload a file
-
-```python
-from openai import OpenAI
-
-client = OpenAI()  # direct OpenAI call to set up test data
-
-# Upload a file
-with open("knowledge.txt", "w") as f:
-    f.write("LiteLLM is a unified interface for 100+ LLM providers. "
-            "It supports chat completions, responses API, embeddings, and more.")
-
-file = client.files.create(file=open("knowledge.txt", "rb"), purpose="assistants")
-print("file_id:", file.id)
-
-# Create a vector store and attach the file
-vs = client.vector_stores.create(name="litellm-test-store")
-client.vector_stores.files.create(vector_store_id=vs.id, file_id=file.id)
-print("vector_store_id:", vs.id)
-```
-
-### Step 2 — Run file search via LiteLLM Python SDK
-
-```python showLineNumbers title="Native file_search via LiteLLM SDK"
-import litellm
-
-response = litellm.responses(
-    model="openai/gpt-4.1",
-    input="What does LiteLLM support?",
-    tools=[{
-        "type": "file_search",
-        "vector_store_ids": ["vs_abc123"]  # replace with your vector_store_id
-    }],
-)
-
-for item in response.output:
-    if item.type == "file_search_call":
-        print("Queries run:", item.queries)
-        print("Status:", item.status)
-    elif item.type == "message":
-        for block in item.content:
-            print("\nAnswer:", block.text)
-            for ann in block.annotations:
-                print(f"  ↳ Citation: {ann.filename} (file_id={ann.file_id})")
-```
-
-**Expected output:**
-```
-Queries run: ['What does LiteLLM support?']
-Status: completed
-
-Answer: LiteLLM is a unified interface for 100+ LLM providers...
-  ↳ Citation: knowledge.txt (file_id=file-xxxx)
-```
-
-### Step 3 — Run via LiteLLM Proxy
-
-Start the proxy:
-
-```bash title="config.yaml"
-# config.yaml
-model_list:
-  - model_name: gpt-4.1
-    litellm_params:
-      model: openai/gpt-4.1
-      api_key: os.environ/OPENAI_API_KEY
-```
-
-```bash
-litellm --config config.yaml
-```
-
-Call the proxy:
-
-```python showLineNumbers title="Native file_search via LiteLLM Proxy"
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:4000", api_key="any")
-
-response = client.responses.create(
-    model="gpt-4.1",
-    input="What does LiteLLM support?",
-    tools=[{"type": "file_search", "vector_store_ids": ["vs_abc123"]}],
-)
-
-for item in response.output:
-    print(item.type, getattr(item, "queries", getattr(item, "content", "")))
-```
-
----
-
-## Path 2: Emulated Fallback (Anthropic / any non-native provider)
-
-When you use a provider that doesn't natively support `file_search`, LiteLLM:
-1. Converts the `file_search` tool to a function tool (`litellm_file_search`).
-2. Lets the provider call the function with a natural-language query.
-3. Runs your vector store search internally.
-4. Feeds results back and makes a follow-up call.
-5. Returns the final answer in OpenAI's `file_search_call` + `message` format.
-
-### Step 1 — Register a LiteLLM-managed vector store
-
-LiteLLM's vector store registry lets you configure any supported vector store backend (OpenAI, Pinecone, Milvus, Qdrant, etc.):
-
-```python showLineNumbers title="Register vector store via LiteLLM Proxy API"
-import requests
-
-# Register the vector store with LiteLLM Proxy
-resp = requests.post(
-    "http://localhost:4000/v1/vector_stores/new",
-    headers={"Authorization": "Bearer sk-your-proxy-key"},
-    json={
-        "vector_store_id": "my-openai-vs",        # your logical name
-        "custom_llm_provider": "openai",
-        "vector_store_name": "litellm-test-store",
-        "litellm_params": {
-            "api_key": "sk-..."  # provider API key (or use credentials in config.yaml)
-        },
-    },
-)
-print(resp.json())
-# Returns: {"vector_store_id": "bGl0ZWxsbV9wcm94eToB..."}  ← LiteLLM unified ID
-```
-
-:::tip
-Save the returned `vector_store_id` — this is the **LiteLLM-managed unified ID** that encodes the provider routing. Pass this in `vector_store_ids` and LiteLLM will decode it automatically.
-:::
-
-### Step 2 — Run file search via LiteLLM SDK (emulated)
-
-```python showLineNumbers title="Emulated file_search with Anthropic"
-import litellm
-
-# Use the unified vector_store_id returned by /v1/vector_stores/new
-UNIFIED_VS_ID = "bGl0ZWxsbV9wcm94eToB..."
-
-response = litellm.responses(
-    model="anthropic/claude-sonnet-4-5",
-    input="What does LiteLLM support?",
-    tools=[{
-        "type": "file_search",
-        "vector_store_ids": [UNIFIED_VS_ID]
-    }],
-)
-
-for item in response.output:
-    if item.type == "file_search_call":
-        print("Queries run:", item.queries)
-    elif item.type == "message":
-        for block in item.content:
-            print("\nAnswer:", block.text)
-            for ann in block.annotations:
-                print(f"  ↳ Citation: {ann.filename}")
-```
-
-LiteLLM automatically detects that Anthropic doesn't support `file_search` natively and routes through the emulated handler.
-
-### Step 3 — Run via LiteLLM Proxy (emulated)
-
-```bash title="config.yaml"
-model_list:
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
-```
-
-```python showLineNumbers title="Emulated file_search via LiteLLM Proxy"
-from openai import OpenAI
-
-client = OpenAI(base_url="http://localhost:4000", api_key="sk-your-proxy-key")
-
-response = client.responses.create(
-    model="claude-sonnet",
-    input="What does LiteLLM support?",
-    tools=[{
-        "type": "file_search",
-        "vector_store_ids": ["bGl0ZWxsbV9wcm94eToB..."]  # unified ID
-    }],
-)
-
-for item in response.output:
-    if hasattr(item, "type"):
-        if item.type == "file_search_call":
-            print("Queries:", item.queries)
-        elif item.type == "message":
-            print("Answer:", item.content[0].text)
-```
-
----
+## Example response shape
 
 ## Validating the Output Format
 
@@ -292,29 +220,32 @@ validate_file_search_response(response)
 
 ---
 
-## Troubleshooting
+## Q&A
 
-### `UnsupportedParamsError` is raised
+### Q: Why do I see `UnsupportedParamsError`?
 
-This means `file_search` was passed to a provider that doesn't support it natively, but the emulated fallback couldn't route either. Check:
-- The model string is correct (e.g. `anthropic/claude-sonnet-4-5`, not just `claude-sonnet-4-5`)
-- The `custom_llm_provider` is resolved — LiteLLM needs it to look up the provider config
+A: This usually means `file_search` was passed to a provider that does not support it natively and emulation could not route correctly.
+Check:
+- The model string is valid (for example, `anthropic/claude-sonnet-4-5`).
+- `custom_llm_provider` resolves correctly so LiteLLM can load the provider config.
 
-### Vector store search returns no results
+### Q: Why does vector search return no results?
 
-- Confirm the vector store ID exists and has files attached
-- For LiteLLM-managed stores, ensure the file has finished processing (`status: completed`)
-- Try a broader query string
+A: Common causes:
+- The vector store ID is wrong or has no files attached.
+- In LiteLLM-managed stores, file ingestion is not complete (`status != completed`).
+- The query is too narrow; try a broader query.
 
-### `403 Access denied` on vector store
+### Q: Why am I getting `403 Access denied` on vector store calls?
 
-The calling team doesn't have access to the vector store. Either:
-- The vector store was created by a different team
-- Use a proxy admin key to bypass team-scoped access control
+A: The caller does not have access to that vector store.
+- The store may belong to another team.
+- Use an admin/proxy key if your setup requires cross-team access.
 
-### Empty `annotations` in emulated mode
+### Q: Why are `annotations` empty in emulated mode?
 
-The emulated path adds `file_citation` annotations only when the vector store search result includes a `file_id`. If your vector store provider doesn't return file-level metadata in search results, annotations will be empty — the answer text will still be populated.
+A: `file_citation` annotations require `file_id` metadata in search results.
+If your vector backend does not return file-level metadata, the answer text is still generated but citations can be empty.
 
 ---
 
