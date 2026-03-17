@@ -1777,7 +1777,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             parts.append(f"STDERR: {content['stderr']}")
                         logs = "".join(parts)
                     else:
-                        logs = str(content)
+                        logs = ""
                     log_outputs = (
                         [OutputCodeInterpreterCallLog(type="logs", logs=logs)]
                         if logs
