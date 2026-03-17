@@ -1,4 +1,4 @@
-import { Team } from "@/components/networking";
+import { Member, Team } from "@/components/networking";
 
 // Define admin roles and permissions
 export const old_admin_roles = ["Admin", "Admin Viewer"];
@@ -22,12 +22,41 @@ export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string):
   if (teams == null) {
     return false;
   }
-  return teams.some((team) => isUserTeamAdminForSingleTeam(team, userID));
+  return teams.some((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID));
 };
 
-export const isUserTeamAdminForSingleTeam = (team: Team | null, userID: string): boolean => {
-  if (team == null || team.members_with_roles == null) {
+export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | null, userID: string): boolean => {
+  if (teamMemberWithRoles == null) {
     return false;
   }
-  return team.members_with_roles.some((member) => member.user_id === userID && member.role === "admin");
+  return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
+};
+
+export const formatUserRole = (userRole: string): string => {
+  if (!userRole) {
+    return "Undefined Role";
+  }
+  switch (userRole.toLowerCase()) {
+    case "app_owner":
+      return "App Owner";
+    case "demo_app_owner":
+      return "App Owner";
+    case "app_admin":
+      return "Admin";
+    case "proxy_admin":
+      return "Admin";
+    case "proxy_admin_viewer":
+      return "Admin Viewer";
+    case "org_admin":
+      return "Org Admin";
+    case "internal_user":
+      return "Internal User";
+    case "internal_user_viewer":
+    case "internal_viewer": // TODO:remove if deprecated
+      return "Internal Viewer";
+    case "app_user":
+      return "App User";
+    default:
+      return "Unknown Role";
+  }
 };

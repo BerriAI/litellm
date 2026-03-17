@@ -317,6 +317,7 @@ class CloudZeroLogger(CustomLogger):
         )
         cbf_table.add_column("team_id", style="cyan", no_wrap=False)
         cbf_table.add_column("team_alias", style="cyan", no_wrap=False)
+        cbf_table.add_column("user_email", style="cyan", no_wrap=False)
         cbf_table.add_column("api_key_alias", style="yellow", no_wrap=False)
         cbf_table.add_column(
             "usage/amount", style="yellow", justify="right", no_wrap=False
@@ -339,6 +340,7 @@ class CloudZeroLogger(CustomLogger):
             entity_id = str(record.get("entity_id", "N/A"))
             team_id = str(record.get("resource/tag:team_id", "N/A"))
             team_alias = str(record.get("resource/tag:team_alias", "N/A"))
+            user_email = str(record.get("resource/tag:user_email", "N/A"))
             api_key_alias = str(record.get("resource/tag:api_key_alias", "N/A"))
 
             cbf_table.add_row(
@@ -348,6 +350,7 @@ class CloudZeroLogger(CustomLogger):
                 entity_id,
                 team_id,
                 team_alias,
+                user_email,
                 api_key_alias,
                 usage_amount,
                 resource_id,

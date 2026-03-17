@@ -4,6 +4,7 @@ import { Select } from "antd";
 import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
+import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
@@ -16,8 +17,10 @@ interface UsageExportHeaderProps {
   selectedFilters?: string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
+  filterMode?: "multiple" | "single";
   customTitle?: string;
   compactLayout?: boolean;
+  teams?: Team[];
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -30,8 +33,10 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   selectedFilters = [],
   onFiltersChange,
   filterOptions = [],
+  filterMode = "multiple",
   customTitle,
   compactLayout = false,
+  teams = [],
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -56,11 +61,17 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
             <div>
               {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
               <Select
-                mode="multiple"
+                mode={filterMode === "single" ? undefined : "multiple"}
                 style={{ width: "100%" }}
                 placeholder={filterPlaceholder}
-                value={selectedFilters}
-                onChange={onFiltersChange}
+                value={filterMode === "single" ? (selectedFilters[0] ?? undefined) : selectedFilters}
+                onChange={(value: any) => {
+                  if (filterMode === "single") {
+                    onFiltersChange?.(value ? [value] : []);
+                  } else {
+                    onFiltersChange?.(value);
+                  }
+                }}
                 options={filterOptions}
                 allowClear
               />
@@ -95,6 +106,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         dateRange={dateValue}
         selectedFilters={selectedFilters}
         customTitle={customTitle}
+        teams={teams}
       />
     </>
   );

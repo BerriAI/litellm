@@ -20,6 +20,14 @@ def get_datadog_hostname() -> str:
     return os.getenv("HOSTNAME", "")
 
 
+def get_datadog_base_url_from_env() -> Optional[str]:
+    """
+    Get base URL override from common DD_BASE_URL env var.
+    This is useful for testing or custom endpoints.
+    """
+    return os.getenv("DD_BASE_URL")
+
+
 def get_datadog_env() -> str:
     return os.getenv("DD_ENV", "unknown")
 
@@ -46,5 +54,16 @@ def get_datadog_tags(
     if standard_logging_object:
         request_tags = standard_logging_object.get("request_tags", []) or []
         tags.extend(f"request_tag:{tag}" for tag in request_tags)
+
+        # Add Team Tag
+        metadata = standard_logging_object.get("metadata", {}) or {}
+        team_tag = (
+            metadata.get("user_api_key_team_alias")
+            or metadata.get("team_alias")
+            or metadata.get("user_api_key_team_id")
+            or metadata.get("team_id")
+        )
+        if team_tag:
+            tags.append(f"team:{team_tag}")
 
     return ",".join(tags)

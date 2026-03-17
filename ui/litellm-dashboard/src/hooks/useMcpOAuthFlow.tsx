@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   buildMcpOAuthAuthorizeUrl,
@@ -10,6 +10,7 @@ import {
   registerMcpOAuthClient,
   serverRootPath,
 } from "@/components/networking";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -61,6 +62,7 @@ export const useMcpOAuthFlow = ({
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [tokenResponse, setTokenResponse] = useState<Record<string, any> | null>(null);
+  const processingRef = useRef(false);
 
   const FLOW_STATE_KEY = "litellm-mcp-oauth-flow-state";
   const RESULT_KEY = "litellm-mcp-oauth-result";
@@ -75,6 +77,29 @@ export const useMcpOAuthFlow = ({
     redirectUri: string;
   };
 
+  const setStorageItem = (key: string, value: string) => {
+    if (typeof window === "undefined") return;
+    try {
+      // Use sessionStorage only — the flow state may contain client credentials;
+      // writing them to localStorage would persist across browser sessions and
+      // make them readable by any injected script (XSS).
+      window.sessionStorage.setItem(key, value);
+    } catch (err) {
+      console.warn(`Failed to set storage item ${key}`, err);
+    }
+  };
+
+  const getStorageItem = (key: string): string | null => {
+    if (typeof window === "undefined") return null;
+    try {
+      // Try sessionStorage first, fall back to localStorage
+      return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+    } catch (err) {
+      console.warn(`Failed to get storage item ${key}`, err);
+      return null;
+    }
+  };
+
   const clearStoredFlow = () => {
     if (typeof window === "undefined") {
       return;
@@ -83,6 +108,9 @@ export const useMcpOAuthFlow = ({
       window.sessionStorage.removeItem(FLOW_STATE_KEY);
       window.sessionStorage.removeItem(RESULT_KEY);
       window.sessionStorage.removeItem(RETURN_URL_KEY);
+      window.localStorage.removeItem(FLOW_STATE_KEY);
+      window.localStorage.removeItem(RESULT_KEY);
+      window.localStorage.removeItem(RETURN_URL_KEY);
     } catch (err) {
       console.warn("Failed to clear OAuth storage", err);
     }
@@ -136,7 +164,7 @@ export const useMcpOAuthFlow = ({
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
           client_name: temporaryPayload.alias || temporaryPayload.server_name || serverId,
-          grant_types: ["authorization_code"],
+          grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
@@ -187,10 +215,9 @@ export const useMcpOAuthFlow = ({
       }
 
       try {
-        window.sessionStorage.setItem(FLOW_STATE_KEY, JSON.stringify(flowState));
-        window.sessionStorage.setItem(RETURN_URL_KEY, window.location.href);
+        setStorageItem(FLOW_STATE_KEY, JSON.stringify(flowState));
+        setStorageItem(RETURN_URL_KEY, window.location.href);
       } catch (storageErr) {
-        console.error("Unable to persist OAuth state", storageErr);
         throw new Error("Unable to access browser storage for OAuth. Please enable storage and retry.");
       }
 
@@ -198,7 +225,7 @@ export const useMcpOAuthFlow = ({
     } catch (err) {
       console.error("Failed to start OAuth flow", err);
       setStatus("error");
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       setError(message);
       NotificationsManager.error(message);
     }
@@ -209,19 +236,28 @@ export const useMcpOAuthFlow = ({
       return;
     }
 
+    // Prevent duplicate processing
+    if (processingRef.current) {
+      return;
+    }
+
     let payload: Record<string, any> | null = null;
     let flowState: StoredFlowState | null = null;
 
     try {
-      const storedPayload = window.sessionStorage.getItem(RESULT_KEY);
+      const storedPayload = getStorageItem(RESULT_KEY);
       if (!storedPayload) {
         return;
       }
+      
+      // Mark as processing
+      processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      flowState = JSON.parse(window.sessionStorage.getItem(FLOW_STATE_KEY) || "null");
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
     } catch (err) {
-      console.error("Failed to read OAuth session state", err);
       clearStoredFlow();
+      processingRef.current = false;
       setError("Failed to resume OAuth flow. Please retry.");
       setStatus("error");
       NotificationsManager.error("Failed to resume OAuth flow. Please retry.");
@@ -229,14 +265,26 @@ export const useMcpOAuthFlow = ({
     }
 
     if (!payload) {
+      processingRef.current = false;
       return;
     }
 
-    window.sessionStorage.removeItem(RESULT_KEY);
+    // Clear the result key after reading it
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.removeItem(RESULT_KEY);
+        window.localStorage.removeItem(RESULT_KEY);
+      } catch (err) {
+        // Silently ignore storage errors
+      }
+    }
 
     try {
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
-        throw new Error("Missing OAuth session state. Please retry.");
+        throw new Error(
+          "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
+          "Please try again and ensure cookies/storage is enabled."
+        );
       }
       if (!payload.state || payload.state !== flowState.state) {
         throw new Error("OAuth state mismatch. Please retry.");
@@ -264,31 +312,21 @@ export const useMcpOAuthFlow = ({
       setError(null);
       NotificationsManager.success("OAuth token retrieved successfully");
     } catch (err) {
-      console.error("OAuth flow failed", err);
-      const message = err instanceof Error ? err.message : String(err);
+      const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
       NotificationsManager.error(message);
     } finally {
       clearStoredFlow();
+      // Reset processing flag after a delay to allow UI updates
+      setTimeout(() => {
+        processingRef.current = false;
+      }, 1000);
     }
   }, [onTokenReceived]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const maybeResume = async () => {
-      if (cancelled) {
-        return;
-      }
-      await resumeOAuthFlow();
-    };
-
-    maybeResume();
-
-    return () => {
-      cancelled = true;
-    };
+    resumeOAuthFlow();
   }, [resumeOAuthFlow]);
 
   return {

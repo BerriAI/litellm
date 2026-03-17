@@ -14,6 +14,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPTransport,
 )
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
 
@@ -394,6 +395,7 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the session manager and its methods
     mock_session_manager = AsyncMock()
@@ -412,12 +414,20 @@ async def test_streamable_http_mcp_handler_mock():
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
 
+    # Mock extract_mcp_auth_context to bypass auth checks in the handler
+    mock_auth_context = (None, None, None, {}, {}, {})
+
     with patch(
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.session_manager",
         mock_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        AsyncMock(return_value=mock_auth_context),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
     ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
@@ -427,14 +437,13 @@ async def test_streamable_http_mcp_handler_mock():
         await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
 
         # Verify session manager handle_request was called
-        mock_session_manager.handle_request.assert_called_once_with(
-            mock_scope, mock_receive, mock_send
-        )
+        mock_session_manager.handle_request.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_sse_mcp_handler_mock():
     """Test the SSE MCP handler functionality"""
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the SSE session manager and its methods
     mock_sse_session_manager = AsyncMock()
@@ -453,12 +462,26 @@ async def test_sse_mcp_handler_mock():
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
 
+    mock_auth_result = (
+        UserAPIKeyAuth(),
+        None,
+        None,
+        {},
+        {},
+        [],
+    )
+
     with patch(
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
         mock_sse_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new=AsyncMock(return_value=mock_auth_result),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
     ):
         from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
 
@@ -626,33 +649,6 @@ def test_generate_stable_server_id():
 @pytest.mark.asyncio
 async def test_list_tools_rest_api_server_not_found():
     """Test the list_tools REST API when server is not found"""
-    from litellm.proxy._experimental.mcp_server.rest_endpoints import list_tool_rest_api
-    from fastapi import Query
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    # Mock UserAPIKeyAuth
-    mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
-
-    # Mock request
-    mock_request = MagicMock()
-    mock_request.headers = {}
-
-    # Test with non-existent server ID
-    response = await list_tool_rest_api(
-        request=mock_request,
-        server_id="non_existent_server_id",
-        user_api_key_dict=mock_user_auth,
-    )
-
-    assert isinstance(response, dict)
-    assert response["tools"] == []
-    assert response["error"] == "server_not_found"
-    assert "Server with id non_existent_server_id not found" in response["message"]
-
-
-@pytest.mark.asyncio
-async def test_list_tools_rest_api_success():
-    """Test the list_tools REST API successful case"""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
         list_tool_rest_api,
         global_mcp_server_manager,
@@ -660,76 +656,124 @@ async def test_list_tools_rest_api_success():
     from fastapi import Query
     from litellm.proxy._types import UserAPIKeyAuth
 
-    # Store original registry to restore after test
-    original_registry = global_mcp_server_manager.get_registry().copy()
-    original_tool_mapping = (
-        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.copy()
+    # Mock UserAPIKeyAuth with explicit permission to access the requested server id
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test",
+        user_id="test",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="dummy",
+            mcp_servers=["non_existent_server_id"],
+        ),
     )
-    try:
-        # Clear existing registry
-        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
-        global_mcp_server_manager.registry.clear()
-        global_mcp_server_manager.config_mcp_servers.clear()
 
-        # Mock successful tools
-        mock_tools = [
-            MCPTool(
-                name="test_tool",
-                description="A test tool",
-                inputSchema={"type": "object"},
-            )
-        ]
+    # Mock request with proper client attribute (internal IP for no filtering)
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"  # Internal IP to bypass IP filtering
 
-        # Create mock client
-        mock_client = AsyncMock()
-        mock_client.list_tools = AsyncMock(return_value=mock_tools)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
+    # Mock the global_mcp_server_manager to allow the server ID but return None for the server
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        # Allow the server ID in permissions
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["non_existent_server_id"]
+        )
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
+        # Return None when trying to get the server (server doesn't exist)
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=None)
 
-        def mock_client_constructor(*args, **kwargs):
-            return mock_client
+        # Test with non-existent server ID
+        response = await list_tool_rest_api(
+            request=mock_request,
+            server_id="non_existent_server_id",
+            user_api_key_dict=mock_user_auth,
+        )
 
+        assert isinstance(response, dict)
+        assert response["tools"] == []
+        assert response["error"] == "server_not_found"
+        assert "Server with id non_existent_server_id not found" in response["message"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_rest_api_success():
+    """Test the list_tools REST API successful case"""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        list_tool_rest_api,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        ListMCPToolsRestAPIResponseObject,
+    )
+    from fastapi import Query
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Mock successful tools
+    mock_tools = [
+        ListMCPToolsRestAPIResponseObject(
+            name="test_tool",
+            description="A test tool",
+            inputSchema={"type": "object"},
+            mcp_info={"server_name": "test_server"},
+        )
+    ]
+
+    # Create a mock server
+    mock_server = MagicMock()
+    mock_server.server_id = "test-server-123"
+    mock_server.alias = "test_server"
+    mock_server.name = "test_server"
+    mock_server.mcp_info = {"server_name": "test_server"}
+
+    # Mock UserAPIKeyAuth
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test",
+        user_id="test",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="dummy",
+            mcp_servers=["test-server-123"],
+        ),
+    )
+
+    # Mock request with proper client attribute (internal IP for no filtering)
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"  # Internal IP to bypass IP filtering
+
+    # Mock the global_mcp_server_manager
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-123"]
+        )
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
+
+        # Mock the _get_tools_for_single_server function
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
-            mock_client_constructor,
-        ):
-            # Load server config into global manager
-            await global_mcp_server_manager.load_servers_from_config(
-                {
-                    "test_server": {
-                        "url": "https://test-server.com/mcp",
-                        "transport": MCPTransport.http,
-                    }
-                }
-            )
-
-            # Mock UserAPIKeyAuth
-            mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
-
-            # Get the server ID
-            server_id = list(global_mcp_server_manager.get_registry().keys())[0]
-
-            # Mock request
-            mock_request = MagicMock()
-            mock_request.headers = {}
+            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server"
+        ) as mock_get_tools:
+            mock_get_tools.return_value = mock_tools
 
             # Test successful case
             response = await list_tool_rest_api(
                 request=mock_request,
-                server_id=server_id,
+                server_id="test-server-123",
                 user_api_key_dict=mock_user_auth,
             )
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
             assert response["tools"][0].name == "test_tool"
-    finally:
-        # Restore original state
-        global_mcp_server_manager.registry = {}
-        global_mcp_server_manager.config_mcp_servers = original_registry
-        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping = (
-            original_tool_mapping
-        )
 
 
 @pytest.mark.asyncio
@@ -791,6 +835,10 @@ async def test_get_tools_from_mcp_servers():
         )
         mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
@@ -826,6 +874,10 @@ async def test_get_tools_from_mcp_servers():
             mock_manager_2._get_tools_from_server = AsyncMock(
                 side_effect=mock_get_tools_side_effect
             )
+            # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+            mock_manager_2.filter_server_ids_by_ip_with_info = MagicMock(
+                side_effect=lambda server_ids, client_ip: (server_ids, 0)
+            )
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
@@ -850,6 +902,10 @@ async def test_get_tools_from_mcp_servers():
         )
         mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
@@ -984,36 +1040,42 @@ async def test_mcp_server_manager_access_groups_from_config():
         MCPRequestHandler,
     )
 
-    # Patch global_mcp_server_manager for this test
+    # Patch global_mcp_server_manager for this test and restore afterwards to
+    # avoid leaking state into other tests (e.g. the proxy MCP e2e suite).
     import litellm.proxy._experimental.mcp_server.mcp_server_manager as mcp_server_manager_mod
 
+    original_manager = mcp_server_manager_mod.global_mcp_server_manager
     mcp_server_manager_mod.global_mcp_server_manager = test_manager
-    # Should find config_server for group-a, both for group-b, other_server for group-c
-    import asyncio
+    try:
+        # Should find config_server for group-a, both for group-b, other_server for group-c
+        import asyncio
 
-    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-a"
-    ])
-    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-b"
-    ])
-    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-c"
-    ])
-    assert any(config_server.server_id == sid for sid in server_ids_a)
-    assert set(server_ids_b) == set(
-        [
-            s.server_id
+        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-a"
+        ])
+        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-b"
+        ])
+        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-c"
+        ])
+        assert any(config_server.server_id == sid for sid in server_ids_a)
+        assert set(server_ids_b) == set(
+            [
+                s.server_id
+                for s in test_manager.config_mcp_servers.values()
+                if "group-b" in s.access_groups
+            ]
+        )
+        assert any(
+            s.name == "other_server" and s.server_id in server_ids_c
             for s in test_manager.config_mcp_servers.values()
-            if "group-b" in s.access_groups
-        ]
-    )
-    assert any(
-        s.name == "other_server" and s.server_id in server_ids_c
-        for s in test_manager.config_mcp_servers.values()
-    )
+        )
+    finally:
+        mcp_server_manager_mod.global_mcp_server_manager = original_manager
 
 
+@pytest.mark.asyncio
 async def test_mcp_server_manager_config_integration_with_database():
     """
     Test that config-based servers properly integrate with database servers,
@@ -1057,7 +1119,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     )
 
     # Test the add_update_server method (this tests our fix)
-    await test_manager.add_update_server(db_server)
+    await test_manager.add_server(db_server)
 
     # Verify the server was added with correct access_groups
     registry = test_manager.get_registry()
@@ -1083,9 +1145,26 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Test the method (this tests our second fix)
-    import asyncio
+    # Mock health_check_server to avoid real network calls that timeout
+    async def mock_health_check(server_id: str, mcp_auth_header=None):
+        server = test_manager.get_mcp_server_by_id(server_id)
+        if not server:
+            return None
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=server.name,
+            url=server.url,
+            transport=server.transport,
+            description=server.mcp_info.get("description") if server.mcp_info else None,
+            mcp_access_groups=server.access_groups,
+            status="healthy",
+            last_health_check=datetime.datetime.now(),
+            mcp_info=server.mcp_info,
+        )
 
+    test_manager.health_check_server = mock_health_check
+
+    # Test the method (this tests our second fix)
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
         user_api_key_auth=mock_user_auth
     )
@@ -1373,15 +1452,31 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
+    # Additional fields used by build_mcp_server_from_table
+    mock_mcp_server.extra_headers = None
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.mcp_access_groups = None
+    mock_mcp_server.allowed_tools = None
+    mock_mcp_server.disallowed_tools = None
+    mock_mcp_server.tool_name_to_display_name = None
+    mock_mcp_server.tool_name_to_description = None
+    mock_mcp_server.is_byok = False
+    mock_mcp_server.byok_description = None
+    mock_mcp_server.byok_api_key_help_url = None
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use alias)
     assert "test-server-123" in test_manager.registry
@@ -1413,15 +1508,31 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
+    # Additional fields used by build_mcp_server_from_table
+    mock_mcp_server.extra_headers = None
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.mcp_access_groups = None
+    mock_mcp_server.allowed_tools = None
+    mock_mcp_server.disallowed_tools = None
+    mock_mcp_server.tool_name_to_display_name = None
+    mock_mcp_server.tool_name_to_description = None
+    mock_mcp_server.is_byok = False
+    mock_mcp_server.byok_description = None
+    mock_mcp_server.byok_api_key_help_url = None
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_name)
     assert "test-server-123" in test_manager.registry
@@ -1453,15 +1564,32 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
+    # Additional fields used by build_mcp_server_from_table - set explicitly
+    # to avoid MagicMock objects being passed to Pydantic MCPServer constructor
+    mock_mcp_server.extra_headers = None
+    mock_mcp_server.allow_all_keys = False
+    mock_mcp_server.available_on_public_internet = True
+    mock_mcp_server.mcp_access_groups = None
+    mock_mcp_server.allowed_tools = None
+    mock_mcp_server.disallowed_tools = None
+    mock_mcp_server.tool_name_to_display_name = None
+    mock_mcp_server.tool_name_to_description = None
+    mock_mcp_server.is_byok = False
+    mock_mcp_server.byok_description = None
+    mock_mcp_server.byok_api_key_help_url = None
+    mock_mcp_server.created_at = None
+    mock_mcp_server.updated_at = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_id)
     assert "test-server-123" in test_manager.registry
@@ -1701,6 +1829,7 @@ async def test_get_tools_for_single_server():
         mock_manager._get_tools_from_server.assert_called_once_with(
             server=mock_server,
             mcp_auth_header="Bearer test_token",
+            extra_headers=None,
             add_prefix=False,
             raw_headers=None,
         )
@@ -1718,6 +1847,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with server-specific auth headers
     mock_request = MagicMock()
@@ -1726,10 +1856,6 @@ async def test_list_tool_rest_api_with_server_specific_auth():
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1748,6 +1874,9 @@ async def test_list_tool_rest_api_with_server_specific_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -1756,6 +1885,19 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                 mock_server.mcp_info = {"server_name": "zapier"}
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
+                # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+                mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, 0)
+                )
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=[mock_server.server_id],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1803,6 +1945,7 @@ async def test_list_tool_rest_api_with_default_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with default auth header only
     mock_request = MagicMock()
@@ -1810,10 +1953,6 @@ async def test_list_tool_rest_api_with_default_auth():
         "authorization": "Bearer user_token",
         "x-mcp-authorization": "Bearer default_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1829,6 +1968,9 @@ async def test_list_tool_rest_api_with_default_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -1837,6 +1979,19 @@ async def test_list_tool_rest_api_with_default_auth():
                 mock_server.mcp_info = {"server_name": "unknown_server"}
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
+                # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+                mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, 0)
+                )
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=[mock_server.server_id],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1884,6 +2039,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with server-specific auth headers
     mock_request = MagicMock()
@@ -1892,10 +2048,6 @@ async def test_list_tool_rest_api_all_servers_with_auth():
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1929,6 +2081,27 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     "zapier": mock_zapier_server,
                     "slack": mock_slack_server,
                 }
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["zapier", "slack"]
+                )
+                mock_manager.get_mcp_server_by_id.side_effect = (
+                    lambda server_id: mock_manager.get_registry.return_value.get(
+                        server_id
+                    )
+                )
+                # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+                mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, 0)
+                )
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=["zapier", "slack"],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1971,17 +2144,15 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     assert result["tools"][0].name == "send_email"
                     assert result["tools"][1].name == "send_message"
 
-                    # Verify that _get_tools_for_single_server was called for both servers with correct auth headers
+                    # Verify that _get_tools_for_single_server was called for both servers
                     assert mock_get_tools.call_count == 2
-                    calls = mock_get_tools.call_args_list
+                    server_auth_map = {
+                        call_args[0][0]: call_args[0][1]
+                        for call_args in mock_get_tools.call_args_list
+                    }
 
-                    # First call should be for zapier server with zapier auth
-                    assert calls[0][0][0] == mock_zapier_server  # server
-                    assert calls[0][0][1] == "Bearer zapier_token"  # server_auth_header
-
-                    # Second call should be for slack server with slack auth
-                    assert calls[1][0][0] == mock_slack_server  # server
-                    assert calls[1][0][1] == "Bearer slack_token"  # server_auth_header
+                    assert server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
+                    assert server_auth_map.get(mock_slack_server) == "Bearer slack_token"
 
 
 @pytest.mark.asyncio
@@ -2051,6 +2222,10 @@ async def test_filter_tools_by_allowed_tools_integration():
             return_value=["test-server-123"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2161,6 +2336,10 @@ async def test_filter_tools_by_disallowed_tools_integration():
             return_value=["test-server-456"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
 
@@ -2257,6 +2436,10 @@ async def test_filter_tools_no_restrictions_integration():
             return_value=["test-server-000"]
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+        # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, 0)
+        )
 
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)

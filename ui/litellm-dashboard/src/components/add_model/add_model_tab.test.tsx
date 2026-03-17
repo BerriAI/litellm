@@ -62,6 +62,14 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
   }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn().mockReturnValue({
+    accessToken: "test-access-token",
+    userRole: "Admin",
+    premiumUser: true,
+  }),
+}));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -137,7 +145,6 @@ const createTestProps = () => {
     uploadProps,
     accessToken: "test-access-token",
     userRole: "Admin",
-    premiumUser: true,
   };
 };
 
@@ -163,7 +170,6 @@ describe("Add Model Tab", () => {
           credentials={props.credentials}
           accessToken={props.accessToken}
           userRole={props.userRole}
-          premiumUser={props.premiumUser}
         />
       </QueryClientProvider>,
     );
@@ -192,7 +198,6 @@ describe("Add Model Tab", () => {
           credentials={props.credentials}
           accessToken={props.accessToken}
           userRole={props.userRole}
-          premiumUser={props.premiumUser}
         />
       </QueryClientProvider>,
     );
@@ -222,7 +227,6 @@ describe("Add Model Tab", () => {
           credentials={props.credentials}
           accessToken={props.accessToken}
           userRole={props.userRole}
-          premiumUser={props.premiumUser}
         />
       </QueryClientProvider>,
     );
@@ -251,7 +255,6 @@ describe("Add Model Tab", () => {
           credentials={props.credentials}
           accessToken={props.accessToken}
           userRole={props.userRole}
-          premiumUser={props.premiumUser}
         />
       </QueryClientProvider>,
     );
@@ -289,7 +292,6 @@ describe("Add Model Tab", () => {
           credentials={props.credentials}
           accessToken={props.accessToken}
           userRole={props.userRole}
-          premiumUser={props.premiumUser}
         />
       </QueryClientProvider>,
     );

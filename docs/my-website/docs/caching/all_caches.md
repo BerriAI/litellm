@@ -105,6 +105,14 @@ Then simply initialize:
 litellm.cache = Cache(type="redis")
 ```
 
+:::info
+Use `REDIS_*` environment variables as the primary mechanism for configuring all Redis client library parameters. This approach automatically maps environment variables to Redis client kwargs and is the suggested way to toggle Redis settings.
+:::
+
+:::warning
+If you need to pass non-string Redis parameters (integers, booleans, complex objects), avoid `REDIS_*` environment variables as they may fail during Redis client initialization. Instead, pass them directly as kwargs to the `Cache()` constructor.
+:::
+
 </TabItem>
 
 <TabItem value="gcs" label="gcs-cache">
@@ -289,6 +297,7 @@ litellm.cache = Cache(
     similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+    qdrant_semantic_cache_vector_size=1536, # vector size for the embedding model, must match the dimensionality of the embedding model used
 )
 
 response1 = completion(
@@ -627,6 +636,7 @@ def __init__(
     qdrant_quantization_config: Optional[str] = None,
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
 
+    qdrant_semantic_cache_vector_size: Optional[int] = None,
     **kwargs
 ):
 ```

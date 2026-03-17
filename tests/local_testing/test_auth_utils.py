@@ -268,7 +268,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header():
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
     ]
     result = get_customer_user_header_from_mapping(mappings)
-    assert result == "X-OpenWebUI-User-Email"
+    assert result == ["x-openwebui-user-email"]
 
 
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():
@@ -355,6 +355,25 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
             {},
             "/openai/deployments/my-deployment/chat/completions",
             "my-deployment"
+        ),
+        # Custom model_name with slashes (e.g., gcp/google/gemini-2.5-flash)
+        # This is the NVIDIA P0 bug fix - regex should capture full model name including slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent",
+            "gcp/google/gemini-2.5-flash"
+        ),
+        # Another custom model_name with slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:generateContent",
+            "gcp/google/gemini-3-flash-preview"
+        ),
+        # Model name with single slash
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/custom/model:generateContent",
+            "custom/model"
         ),
     ],
 )

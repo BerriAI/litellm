@@ -28,6 +28,9 @@
     <a href="https://www.litellm.ai/support">
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Slack&color=black&logo=Slack&style=flat-square" alt="Slack">
     </a>
+    <a href="https://codspeed.io/BerriAI/litellm?utm_source=badge">
+        <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"/>
+    </a>
 </h4>
 
 <img width="2688" height="1600" alt="Group 7154 (1)" src="https://github.com/user-attachments/assets/c5ee0412-6fb5-4fb6-ab5b-bafae4209ca6" />
@@ -203,7 +206,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "http://localhost:4000/mcp",
+      "url": "http://localhost:4000/mcp/",
       "headers": {
         "x-litellm-api-key": "Bearer sk-1234"
       }
@@ -258,10 +261,24 @@ LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https:
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
+## OSS Adopters 
+
+<table>
+  <tr>
+    <td><img height="60" alt="Stripe" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" /></td>
+    <td><img height="60" alt="Google ADK" src="https://github.com/user-attachments/assets/caf270a2-5aee-45c4-8222-41a2070c4f19" /></td>
+    <td><img height="60" alt="Greptile" src="https://github.com/user-attachments/assets/0be4bd8a-7cfa-48d3-9090-f415fe948280" /></td>
+    <td><img height="60" alt="OpenHands" src="https://github.com/user-attachments/assets/a6150c4c-149e-4cae-888b-8b92be6e003f" /></td>
+    <td><h2>Netflix</h2></td>
+    <td><img height="60" alt="OpenAI Agents SDK" src="https://github.com/user-attachments/assets/c02f7be0-8c2e-4d27-aea7-7c024bfaebc0" /></td>
+  </tr>
+</table>
+
 ## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
 |-------------------------------------------------------------------------------------|---------------------|-------------|--------------|---------------|----------------------|-------------------------|-----------------|----------------|-----------|-----------|
+| [Abliteration (`abliteration`)](https://docs.litellm.ai/docs/providers/abliteration) | ✅ |  |  |  |  |  |  |  |  |  |
 | [AI/ML API (`aiml`)](https://docs.litellm.ai/docs/providers/aiml) | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |
 | [AI21 (`ai21`)](https://docs.litellm.ai/docs/providers/ai21) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [AI21 Chat (`ai21_chat`)](https://docs.litellm.ai/docs/providers/ai21) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -295,7 +312,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 | [Deepgram (`deepgram`)](https://docs.litellm.ai/docs/providers/deepgram) | ✅ | ✅ | ✅ |  |  | ✅ |  |  |  |  |
 | [DeepInfra (`deepinfra`)](https://docs.litellm.ai/docs/providers/deepinfra) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Deepseek (`deepseek`)](https://docs.litellm.ai/docs/providers/deepseek) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
-| [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs) | ✅ | ✅ | ✅ |  |  |  | ✅ |  |  |  |
+| [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ |  |  |  |
 | [Empower (`empower`)](https://docs.litellm.ai/docs/providers/empower) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Fal AI (`fal_ai`)](https://docs.litellm.ai/docs/providers/fal_ai) | ✅ | ✅ | ✅ |  | ✅ |  |  |  |  |  |
 | [Featherless AI (`featherless_ai`)](https://docs.litellm.ai/docs/providers/featherless_ai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -373,7 +390,9 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `pip install -e ".[all]"`
-4. Start proxy backend `python litellm/proxy_cli.py`
+4. `pip install prisma`
+5. `prisma generate`
+6. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
 ### Frontend
 1. Navigate to `ui/litellm-dashboard`
@@ -383,7 +402,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 # Enterprise
 For companies that need better security, user management and professional support
 
-[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Talk to founders](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 This covers:
 - ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
@@ -454,5 +473,4 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
-
 

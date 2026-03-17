@@ -52,7 +52,13 @@ class BaseInteractionsTest(ABC):
         if response.usage:
             # Usage is a dict in InteractionsAPIResponse
             if isinstance(response.usage, dict):
-                assert response.usage.get("input_tokens") is not None or response.usage.get("output_tokens") is not None
+                # Check for both possible key formats: input_tokens/output_tokens or total_input_tokens/total_output_tokens
+                assert (
+                    response.usage.get("input_tokens") is not None 
+                    or response.usage.get("output_tokens") is not None
+                    or response.usage.get("total_input_tokens") is not None
+                    or response.usage.get("total_output_tokens") is not None
+                )
             else:
                 # If it's an object, check attributes
                 assert hasattr(response.usage, "input_tokens") or hasattr(response.usage, "output_tokens")

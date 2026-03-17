@@ -1,11 +1,16 @@
-from typing import Any, Optional, Tuple, cast, List
+from typing import List, Optional, Tuple
+
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
-from ..common_utils import GetAPIKeyError, GITHUB_COPILOT_API_BASE
+from ..common_utils import (
+    GITHUB_COPILOT_API_BASE,
+    GetAPIKeyError,
+    get_copilot_default_headers,
+)
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -25,9 +30,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = (
-            self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -45,14 +48,24 @@ class GithubCopilotConfig(OpenAIConfig):
     ):
         import litellm
 
-        disable_copilot_system_to_assistant = (
-            litellm.disable_copilot_system_to_assistant
-        )
-        if not disable_copilot_system_to_assistant:
-            for message in messages:
-                if "role" in message and message["role"] == "system":
-                    cast(Any, message)["role"] = "assistant"
-        return messages
+        # Check if system-to-assistant conversion is disabled
+        if litellm.disable_copilot_system_to_assistant:
+            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
+            # No conversion needed - just return messages as-is
+            return messages
+
+        # Default behavior: convert system messages to assistant for compatibility
+        transformed_messages = []
+        for message in messages:
+            if message.get("role") == "system":
+                # Convert system message to assistant message
+                transformed_message = message.copy()
+                transformed_message["role"] = "assistant"
+                transformed_messages.append(transformed_message)
+            else:
+                transformed_messages.append(message)
+
+        return transformed_messages
 
     def validate_environment(
         self,
@@ -68,6 +81,14 @@ class GithubCopilotConfig(OpenAIConfig):
         validated_headers = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
+
+        # Add Copilot-specific headers (editor-version, user-agent, etc.)
+        try:
+            copilot_api_key = self.authenticator.get_api_key()
+            copilot_headers = get_copilot_default_headers(copilot_api_key)
+            validated_headers = {**copilot_headers, **validated_headers}
+        except GetAPIKeyError:
+            pass  # Will be handled later in the request flow
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)
@@ -87,7 +108,7 @@ class GithubCopilotConfig(OpenAIConfig):
         For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
         """
         from litellm.utils import supports_reasoning
-        
+
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
 
@@ -118,7 +139,7 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
-        
+
         Checks for:
         - image_url content type (OpenAI format)
         - Content items with type 'image_url'

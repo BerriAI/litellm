@@ -12,8 +12,40 @@ sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory 
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
+    AiohttpTransport,
     LiteLLMAiohttpTransport,
 )
+
+
+@pytest.mark.asyncio
+async def test_aclose_does_not_close_shared_session():
+    """Test that aclose() does not close a session it does not own (shared session)."""
+    session = aiohttp.ClientSession()
+    try:
+        transport = LiteLLMAiohttpTransport(client=session, owns_session=False)
+        await transport.aclose()
+        assert not session.closed, "Shared session should not be closed by transport"
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_session():
+    """Test that aclose() closes a session it owns."""
+    session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=session, owns_session=True)
+    await transport.aclose()
+    assert session.closed, "Owned session should be closed by transport"
+
+
+@pytest.mark.asyncio
+async def test_owns_session_defaults_to_true():
+    """Test that owns_session defaults to True for backwards compatibility."""
+    session = aiohttp.ClientSession()
+    transport = AiohttpTransport(client=session)
+    assert transport._owns_session is True
+    await transport.aclose()
+    assert session.closed
 
 
 class MockAiohttpResponse:
@@ -333,15 +365,18 @@ def _make_mock_response(should_fail=False, fail_count={"count": 0}):
 
 
 @pytest.mark.asyncio
-async def test_handle_async_request_total_timeout_triggers():
+async def test_handle_async_request_sock_read_timeout_triggers():
     """
     Ensure that LiteLLMAiohttpTransport raises httpx.TimeoutException
-    when the total timeout duration elapses.
+    when the sock_read timeout duration elapses (individual read operation timeout).
+    This is the correct behavior for stream_timeout - it should timeout on slow reads,
+    not on the total duration of the stream.
     """
     import asyncio
     from aiohttp import web
 
     async def slow_handler(request):
+        # Sleep longer than the sock_read timeout
         await asyncio.sleep(0.3)
         return web.Response(text="ok")
 
@@ -361,16 +396,88 @@ async def test_handle_async_request_total_timeout_triggers():
 
     request = httpx.Request("GET", f"http://127.0.0.1:{port}/")
 
+    # Set a short sock_read timeout - this should trigger
+    # Note: total timeout is NOT set, allowing long-running streams
     request.extensions["timeout"] = {
-        "connect": 0.1,
-        "read": 0.1,
-        "pool": 0.1,
-        "total": 0.1,
+        "connect": 5.0,
+        "read": 0.1,  # Short timeout for individual reads
+        "pool": 5.0,
     }
 
     try:
         with pytest.raises(httpx.TimeoutException):
             await transport.handle_async_request(request)
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_streaming_does_not_timeout_on_total_duration():
+    """
+    Ensure that LiteLLMAiohttpTransport does NOT timeout on long-running
+    streaming responses as long as individual chunks arrive within the sock_read timeout.
+    This is the fix for issue #19184 - stream_timeout should only control the timeout
+    for individual chunks, not the total stream duration.
+    """
+    import asyncio
+    from aiohttp import web
+
+    async def streaming_handler(request):
+        # Simulate a streaming response that takes longer than a single timeout
+        # but each chunk arrives quickly
+        response = web.StreamResponse()
+        await response.prepare(request)
+        
+        # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
+        for i in range(5):
+            await asyncio.sleep(0.05)  # Less than sock_read timeout
+            await response.write(f"chunk{i}\n".encode())
+        
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_get("/stream", streaming_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+
+    port = site._server.sockets[0].getsockname()[1]
+
+    def factory():
+        return aiohttp.ClientSession()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+
+    request = httpx.Request("GET", f"http://127.0.0.1:{port}/stream")
+
+    # Set sock_read timeout that's longer than individual chunk delays
+    # but shorter than total stream duration
+    # Total duration: ~0.25s, sock_read timeout: 0.15s per chunk
+    # This should NOT timeout because each chunk arrives within 0.15s
+    request.extensions["timeout"] = {
+        "connect": 5.0,
+        "read": 0.15,  # Timeout for individual reads
+        "pool": 5.0,
+        # Note: total is NOT set - this is the fix!
+    }
+
+    try:
+        # This should succeed without timing out
+        response = await transport.handle_async_request(request)
+        assert response.status_code == 200
+        
+        # Read the streaming response
+        chunks = []
+        async for chunk in response.aiter_bytes():
+            chunks.append(chunk)
+        
+        # Verify we got all chunks
+        full_response = b"".join(chunks).decode()
+        assert "chunk0" in full_response
+        assert "chunk4" in full_response
     finally:
         await transport.aclose()
         await runner.cleanup()

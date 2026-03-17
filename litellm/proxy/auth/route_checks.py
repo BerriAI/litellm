@@ -94,7 +94,7 @@ class RouteChecks:
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
         )
 
     @staticmethod
@@ -164,9 +164,8 @@ class RouteChecks:
 
         if RouteChecks.is_llm_api_route(route=route):
             pass
-        elif (
-            route in LiteLLMRoutes.info_routes.value
-        ):  # check if user allowed to call an info route
+        elif RouteChecks.is_info_route(route=route):
+            # check if user allowed to call an info route
             if route == "/key/info":
                 # handled by function itself
                 pass
@@ -184,6 +183,9 @@ class RouteChecks:
                             user_id, valid_token.user_id
                         ),
                     )
+            elif route == "/v2/user/info":
+                # handled by the endpoint itself (full RBAC in handler)
+                pass
             elif route == "/model/info":
                 # /model/info just shows models user has access to
                 pass
@@ -293,7 +295,7 @@ class RouteChecks:
 
         if route in LiteLLMRoutes.anthropic_routes.value:
             return True
-        
+
         if route in LiteLLMRoutes.google_routes.value:
             return True
 
@@ -301,19 +303,28 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
-        
+
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
         ):
             return True
 
+        if route in LiteLLMRoutes.litellm_native_routes.value:
+            return True
+
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
-        # Check for routes with placeholders
+        # Check for routes with placeholders or wildcard patterns
         for openai_route in LiteLLMRoutes.openai_routes.value:
             # Replace placeholders with regex pattern
             # placeholders are written as "/threads/{thread_id}"
             if "{" in openai_route:
                 if RouteChecks._route_matches_pattern(
+                    route=route, pattern=openai_route
+                ):
+                    return True
+            # Check for wildcard patterns like "/containers/*"
+            if RouteChecks._is_wildcard_pattern(pattern=openai_route):
+                if RouteChecks._route_matches_wildcard_pattern(
                     route=route, pattern=openai_route
                 ):
                     return True
@@ -348,6 +359,13 @@ class RouteChecks:
         Check if route is a management route
         """
         return route in LiteLLMRoutes.management_routes.value
+
+    @staticmethod
+    def is_info_route(route: str) -> bool:
+        """
+        Check if route is an info route
+        """
+        return route in LiteLLMRoutes.info_routes.value
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
@@ -386,7 +404,15 @@ class RouteChecks:
         # Ensure route is a string before attempting regex matching
         if not isinstance(route, str):
             return False
-        pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
+
+        def _placeholder_to_regex(match: re.Match) -> str:
+            placeholder = match.group(0).strip("{}")
+            if placeholder.endswith(":path"):
+                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
+                return r"[^:]+"
+            return r"[^/]+"
+
+        pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
         if re.match(pattern, route):

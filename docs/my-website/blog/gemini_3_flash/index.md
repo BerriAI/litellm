@@ -15,6 +15,7 @@ authors:
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+description: "Guide to using Gemini 3 Flash on LiteLLM Proxy and SDK with day 0 support."
 tags: [gemini, day 0 support, llms]
 hide_table_of_contents: false
 ---

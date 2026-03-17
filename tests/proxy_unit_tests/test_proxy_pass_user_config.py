@@ -53,6 +53,10 @@ def client_no_auth():
     return TestClient(app)
 
 
+@pytest.mark.skipif(
+    os.environ.get("AZURE_API_KEY") is None or os.environ.get("OPENAI_API_KEY") is None,
+    reason="AZURE_API_KEY or OPENAI_API_KEY not set - skipping integration test"
+)
 def test_chat_completion(client_no_auth):
     global headers
 

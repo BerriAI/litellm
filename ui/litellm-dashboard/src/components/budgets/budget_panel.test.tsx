@@ -1,5 +1,6 @@
 import * as networking from "../networking";
 import { fireEvent, render, waitFor, screen } from "@testing-library/react";
+import { act } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BudgetPanel from "./budget_panel";
 
@@ -24,11 +25,11 @@ describe("Budget Panel", () => {
       },
     ]);
 
-    const { getByText } = render(<BudgetPanel accessToken="token-123" />);
+    render(<BudgetPanel accessToken="token-123" />);
 
     await waitFor(() => {
-      expect(getByText("Create a budget to assign to customers.")).toBeInTheDocument();
-      expect(getByText("budget-1")).toBeInTheDocument();
+      expect(screen.getByText("Create a budget to assign to customers.")).toBeInTheDocument();
+      expect(screen.getByText("budget-1")).toBeInTheDocument();
     });
   });
 
@@ -43,23 +44,102 @@ describe("Budget Panel", () => {
       },
     ]);
 
-    const { getByText, container } = render(<BudgetPanel accessToken="token-123" />);
+    render(<BudgetPanel accessToken="token-123" />);
 
     await waitFor(() => {
-      expect(getByText("budget-to-delete")).toBeInTheDocument();
+      expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
     });
 
-    // Find the first table row in tbody and click the second icon (trash/delete)
-    const bodyRows = container.querySelectorAll("tbody tr");
-    expect(bodyRows.length).toBeGreaterThan(0);
-    const firstRow = bodyRows[0];
-    const rowClickableIcons = firstRow.querySelectorAll(".cursor-pointer");
-    expect(rowClickableIcons.length).toBeGreaterThan(1);
+    const deleteButton = screen.getByTestId("delete-budget-button");
 
-    fireEvent.click(rowClickableIcons[1]);
+    act(() => {
+      fireEvent.click(deleteButton);
+    });
 
     await waitFor(() => {
       expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
     });
+  });
+
+  it("should successfully delete a budget", async () => {
+    vi.mocked(networking.getBudgetList).mockResolvedValue([
+      {
+        budget_id: "budget-to-delete",
+        max_budget: "200",
+        rpm_limit: 20,
+        tpm_limit: 2000,
+        updated_at: "2024-01-02T00:00:00Z",
+      },
+    ]);
+    vi.mocked(networking.budgetDeleteCall).mockResolvedValue(undefined);
+
+    render(<BudgetPanel accessToken="token-123" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
+    });
+
+    // Open delete modal
+    const deleteButton = screen.getByTestId("delete-budget-button");
+    act(() => {
+      fireEvent.click(deleteButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
+    });
+
+    // Confirm delete
+    const confirmButton = screen.getByRole("button", { name: /delete/i });
+    act(() => {
+      fireEvent.click(confirmButton);
+    });
+
+    await waitFor(() => {
+      expect(networking.budgetDeleteCall).toHaveBeenCalledWith("token-123", "budget-to-delete");
+      expect(networking.getBudgetList).toHaveBeenCalledTimes(2); // Initial load + refresh after delete
+    });
+  });
+
+  it("should handle delete error", async () => {
+    vi.mocked(networking.getBudgetList).mockResolvedValue([
+      {
+        budget_id: "budget-to-delete",
+        max_budget: "200",
+        rpm_limit: 20,
+        tpm_limit: 2000,
+        updated_at: "2024-01-02T00:00:00Z",
+      },
+    ]);
+    vi.mocked(networking.budgetDeleteCall).mockRejectedValue(new Error("Delete failed"));
+
+    render(<BudgetPanel accessToken="token-123" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("budget-to-delete")).toBeInTheDocument();
+    });
+
+    // Open delete modal
+    const deleteButton = screen.getByTestId("delete-budget-button");
+    act(() => {
+      fireEvent.click(deleteButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
+    });
+
+    // Confirm delete
+    const confirmButton = screen.getByRole("button", { name: /delete/i });
+    act(() => {
+      fireEvent.click(confirmButton);
+    });
+
+    await waitFor(() => {
+      expect(networking.budgetDeleteCall).toHaveBeenCalledWith("token-123", "budget-to-delete");
+    });
+
+    // Modal should still be open (error handling)
+    expect(screen.getByText("Delete Budget?")).toBeInTheDocument();
   });
 });

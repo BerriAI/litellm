@@ -26,6 +26,10 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "scaleway": {
+    "base_url": "https://api.scaleway.ai/v1",
+    "api_key_env": "SCW_SECRET_KEY"
+  },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
     "api_key_env": "SYNTHETIC_API_KEY",
@@ -57,6 +61,43 @@
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
     "api_key_env": "CHUTES_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "abliteration": {
+    "base_url": "https://api.abliteration.ai/v1",
+    "api_key_env": "ABLITERATION_API_KEY"
+  },
+  "llamagate": {
+    "base_url": "https://api.llamagate.dev/v1",
+    "api_key_env": "LLAMAGATE_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "gmi": {
+    "base_url": "https://api.gmi-serving.com/v1",
+    "api_key_env": "GMI_API_KEY"
+  },
+  "sarvam": {
+    "base_url": "https://api.sarvam.ai/v1",
+    "api_key_env": "SARVAM_API_KEY",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "headers": {
+      "api-subscription-key": "{api_key}"
+    }
+  },
+  "assemblyai": {
+    "base_url": "https://llm-gateway.assemblyai.com/v1",
+    "api_key_env": "ASSEMBLYAI_API_KEY"
+  },
+  "charity_engine": {
+    "base_url": "https://api.charityengine.services/remotejobs/v2/inference",
+    "api_key_env": "CHARITY_ENGINE_API_KEY",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
