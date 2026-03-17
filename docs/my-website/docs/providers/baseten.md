@@ -10,12 +10,12 @@ LiteLLM supports both Baseten Model APIs and dedicated deployments with automati
 ### Model API (Default)
 - **URL**: `https://inference.baseten.co/v1`
 - **Format**: `baseten/<model-name>` (e.g., `baseten/openai/gpt-oss-120b`)
-- **Best for**: Quick access to popular models
+- **Best for**: Quick access to popular models available on Baseten Model APIs: https://docs.baseten.co/development/model-apis/overview#supported-models
 
 ### Dedicated Deployments
 - **URL**: `https://model-{id}.api.baseten.co/environments/production/sync/v1`
-- **Format**: `baseten/{8-digit-alphanumeric-code}` (e.g., `baseten/abcd1234`)
-- **Best for**: Custom models, latency SLAs
+- **Format**: `baseten/{8-digit-baseten-model-id}` (e.g., `baseten/abcd1234`)
+- **Best for**: Custom models, enterprise SLAs
 
 :::tip
 **Automatic Routing**: LiteLLM detects the type based on model format:
@@ -93,9 +93,20 @@ model_list:
       api_key: your-baseten-api-key
 ```
 
+2. **Request**:
+```python
+import openai
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.chat.completions.create(
+    model="baseten-model",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
 ### Dedicated Deployment
 
-If your dedicated deployment uses a `served_model_name` in your Baseten `config.yaml`, you must supply `served_model_name` to specify the model name sent in the request body, and supply the model id under the `model` field.
+If your dedicated deployment uses a `served_model_name` in your Baseten `config.yaml`, you must supply `served_model_name` to specify the model name sent in the request body, and supply the Baseten model id under the `model` field.
 
 1. **Config**:
 ```yaml
@@ -107,8 +118,19 @@ model_list:
       api_key: os.environ/BASETEN_API_KEY
 ```
 
+2. **Request**:
+```python
+import openai
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.chat.completions.create(
+    model="baseten-model",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
 - `model: baseten/1234abcd` — the 8-digit deployment ID, used to route to `https://model-1234abcd.api.baseten.co/environments/production/sync/v1`
-- `served_model_name` — sent as the `model` field in the request body, matching your deployment's configured model name
+- `served_model_name` — sent as the `model` field in the request body, matching your deployment's configured model name.
 
 :::note
 `served_model_name` is optional. If your deployment's model name is empty, you can omit it and just use `model: baseten/{deployment_id}`.
