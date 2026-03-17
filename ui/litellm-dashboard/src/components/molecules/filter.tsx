@@ -29,6 +29,8 @@ interface FilterComponentProps {
   initialValues?: FilterValues;
   buttonLabel?: string;
   onResetFilters: () => void;
+  initialShowFilters?: boolean;
+  onShowFiltersChange?: (show: boolean) => void;
 }
 
 const FilterComponent: React.FC<FilterComponentProps> = ({
@@ -37,9 +39,26 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   onResetFilters,
   initialValues = {},
   buttonLabel = "Filters",
+  initialShowFilters = false,
+  onShowFiltersChange,
 }) => {
-  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [internalShowFilters, setInternalShowFilters] = useState<boolean>(initialShowFilters);
+  const isShowFiltersControlled = onShowFiltersChange !== undefined;
+  const showFilters = isShowFiltersControlled ? initialShowFilters : internalShowFilters;
+  const setShowFilters = (value: boolean) => {
+    if (isShowFiltersControlled) {
+      onShowFiltersChange(value);
+    } else {
+      setInternalShowFilters(value);
+    }
+  };
   const [tempValues, setTempValues] = useState<FilterValues>(initialValues);
+
+  // Sync tempValues when initialValues changes (e.g., when parent remounts component with new key)
+  useEffect(() => {
+    setTempValues(initialValues);
+  }, [initialValues]);
+
   const [searchOptionsMap, setSearchOptionsMap] = useState<{
     [key: string]: Array<{ label: string; value: string }>;
   }>({});

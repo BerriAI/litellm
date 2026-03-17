@@ -631,6 +631,9 @@ export default function SpendLogsTable({
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                  initialValues={filters}
+                  initialShowFilters={showFilters}
+                  onShowFiltersChange={setShowFilters}
                 />
                 <SpendLogsSettingsModal
                   isVisible={isSpendLogsSettingsModalVisible}
