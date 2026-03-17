@@ -426,6 +426,17 @@ class TestExtractUsage:
         usage = self.logger._extract_usage(response)
         assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    def test_explicit_none_token_fields_return_zeros(self):
+        response = {
+            "usage": {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+        }
+        usage = self.logger._extract_usage(response)
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
 
 class TestGetFinishReason:
     def setup_method(self):
