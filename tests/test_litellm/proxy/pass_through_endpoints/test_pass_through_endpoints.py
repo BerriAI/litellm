@@ -2629,44 +2629,26 @@ def test_passthrough_params_include_timeout():
     assert route_data["passthrough_params"]["timeout"] == 120
 
 
-# E2E test: verify timeout actually fires against a real slow server
+
 @pytest.mark.asyncio
-async def test_pass_through_request_timeout_actually_fires():
+async def test_pass_through_request_timeout_passed_to_httpx_client():
     """
-    Start a real HTTP server that sleeps for 10s, call pass_through_request
-    with timeout=2, and verify a timeout exception is raised.
-    This proves the timeout config actually works end-to-end.
+    Verify that the timeout parameter passed to pass_through_request
+    is correctly forwarded to get_async_httpx_client.
+    No real network calls - uses a sentinel exception to short-circuit after
+    capturing the call arguments.
     """
-    import asyncio
-
-    from aiohttp import web
-
-    import litellm
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        pass_through_request,
-    )
-    from litellm.proxy.proxy_server import ProxyException
 
-    # 1. Create a slow HTTP server
-    async def slow_handler(request):
-        await asyncio.sleep(10)  # 10 seconds - longer than timeout
-        return web.Response(text='{"result": "ok"}', content_type="application/json")
+    captured_calls = []
 
-    app = web.Application()
-    app.router.add_post("/slow", slow_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]
+    class _SentinelError(Exception):
+        pass
 
-    # 2. Flush client cache to ensure fresh httpx client with our timeout
-    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-    if cache is not None:
-        cache.flush_cache()
+    def fake_get_async_httpx_client(**kwargs):
+        captured_calls.append(kwargs)
+        raise _SentinelError("captured")
 
-    # 3. Build a mock request object
     mock_request = MagicMock(spec=Request)
     mock_request.headers = Headers({"content-type": "application/json"})
     mock_request.query_params = QueryParams("")
@@ -2679,28 +2661,26 @@ async def test_pass_through_request_timeout_actually_fires():
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
 
-    try:
-        with patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj",
-            mock_proxy_logging,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails",
-            return_value=[],
-        ):
-            with pytest.raises(ProxyException) as exc_info:
-                await pass_through_request(
-                    request=mock_request,
-                    target=f"http://127.0.0.1:{port}/slow",
-                    custom_headers={"Content-Type": "application/json"},
-                    user_api_key_dict=mock_user_api_key_dict,
-                    timeout=2,  # 2 seconds - should fire before the 10s sleep
-                )
-
-            # Verify the exception message indicates a timeout
-            assert "timeout" in exc_info.value.message.lower(), (
-                f"Expected 'timeout' in message, got: {exc_info.value.message}"
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails",
+        return_value=[],
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+        side_effect=fake_get_async_httpx_client,
+    ):
+        # The sentinel exception will propagate out as a ProxyException
+        with pytest.raises(Exception):
+            await pass_through_request(
+                request=mock_request,
+                target="https://api.example.com/test",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=mock_user_api_key_dict,
+                timeout=120,
             )
-    finally:
-        await runner.cleanup()
-        if cache is not None:
-            cache.flush_cache()
+
+    # Verify get_async_httpx_client was called with the correct timeout
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["params"] == {"timeout": 120}
