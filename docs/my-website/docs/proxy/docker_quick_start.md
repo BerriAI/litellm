@@ -5,11 +5,76 @@ import TabItem from '@theme/TabItem';
 # Getting Started Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
-- Add an Azure OpenAI model 
-- Make a successful /chat/completion call 
-- Generate a virtual key 
-- Set RPM limit on virtual key 
+- Add an Azure OpenAI model
+- Make a successful /chat/completion call
+- Generate a virtual key
+- Set RPM limit on virtual key
 
+## Quick Install (Recommended for local / beginners)
+
+New to LiteLLM? This is the easiest way to get started locally. One command installs LiteLLM and walks you through setup interactively — no config files to write by hand.
+
+### 1. Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+```
+
+This detects your OS, installs `litellm[proxy]`, and drops you straight into the setup wizard.
+
+### 2. Follow the wizard
+
+```
+$ litellm --setup
+
+  Welcome to LiteLLM
+
+  Choose your LLM providers
+  ○ 1. OpenAI        GPT-4o, GPT-4o-mini, o1
+  ○ 2. Anthropic     Claude Opus, Sonnet, Haiku
+  ○ 3. Azure OpenAI  GPT-4o via Azure
+  ○ 4. Google Gemini Gemini 2.0 Flash, 1.5 Pro
+  ○ 5. AWS Bedrock   Claude, Llama via AWS
+  ○ 6. Ollama        Local models
+
+  ❯ Provider(s): 1,2
+
+  ❯ OpenAI API key: sk-...
+  ❯ Anthropic API key: sk-ant-...
+
+  ❯ Port [4000]:
+  ❯ Master key [auto-generate]:
+
+  ✔ Config saved → ./litellm_config.yaml
+
+  ❯ Start the proxy now? (Y/n):
+```
+
+The wizard walks you through:
+1. Pick your LLM providers (OpenAI, Anthropic, Azure, Bedrock, Gemini, Ollama)
+2. Enter API keys for each provider
+3. Set a port and master key (or accept the defaults)
+4. Config is saved to `./litellm_config.yaml` and the proxy starts immediately
+
+### 3. Make a call
+
+Your proxy is running on `http://0.0.0.0:4000`. Test it:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <your-master-key>' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+}'
+```
+
+:::tip Already have pip installed?
+You can skip the curl install and run `litellm --setup` directly after `pip install 'litellm[proxy]'`.
+:::
+
+---
 
 ## Pre-Requisites 
 
