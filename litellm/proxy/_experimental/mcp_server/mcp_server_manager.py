@@ -1908,6 +1908,7 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -1939,6 +1940,14 @@ class MCPServerManager:
             server=server,
         )
 
+        # Extract incoming Bearer token from raw request headers so
+        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
+        normalized_raw = {k.lower(): v for k, v in (raw_headers or {}).items()}
+        incoming_bearer_token: Optional[str] = None
+        auth_hdr = normalized_raw.get("authorization", "")
+        if auth_hdr.lower().startswith("bearer "):
+            incoming_bearer_token = auth_hdr[len("bearer "):]
+
         pre_hook_kwargs = {
             "name": name,
             "arguments": arguments,
@@ -1964,6 +1973,7 @@ class MCPServerManager:
                 if user_api_key_auth
                 else None
             ),
+            "incoming_bearer_token": incoming_bearer_token,
         }
 
         # Create MCP request object for processing
@@ -2135,12 +2145,26 @@ class MCPServerManager:
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
-            if "Authorization" in extra_headers and "Authorization" in hook_extra_headers:
-                verbose_logger.warning(
-                    "MCPServerManager: hook_extra_headers contains 'Authorization' which will "
-                    "overwrite the existing Authorization header set by static_headers or server "
-                    "authentication. The hook JWT will take precedence."
-                )
+            if "Authorization" in hook_extra_headers:
+                if "Authorization" in extra_headers:
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
+                        "the existing Authorization header from static_headers. "
+                        "The hook JWT will take precedence."
+                    )
+                elif server_auth_header is not None:
+                    # server_auth_header is passed separately to _create_mcp_client as
+                    # auth_value.  Both will reach the upstream server — warn so admins
+                    # know two Authorization credentials are being sent.
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
+                        "server '%s' already has a configured authentication_token. "
+                        "Both credentials will be sent; the hook header is in extra_headers "
+                        "and the server token is in auth_value — the upstream server decides "
+                        "which one wins.  Consider unsetting authentication_token if you want "
+                        "the hook JWT to be the sole credential.",
+                        mcp_server.server_name or mcp_server.name,
+                    )
             extra_headers.update(hook_extra_headers)
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
@@ -2237,6 +2261,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
+                raw_headers=raw_headers,
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]

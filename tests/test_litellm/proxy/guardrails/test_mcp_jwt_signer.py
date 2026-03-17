@@ -36,6 +36,10 @@ def _make_user_api_key_dict(
     mock.user_email = user_email
     mock.end_user_id = end_user_id
     mock.org_id = None
+    mock.token = None
+    mock.api_key = None
+    # Explicit None so MagicMock doesn't auto-create a truthy proxy attribute
+    mock.jwt_claims = None
     return mock
 
 
@@ -388,3 +392,358 @@ def test_get_mcp_jwt_signer_returns_instance_after_init():
 
     signer = _make_signer()
     assert get_mcp_jwt_signer() is signer
+
+
+# ---------------------------------------------------------------------------
+# FR-10: Configurable scopes
+# ---------------------------------------------------------------------------
+
+
+def test_allowed_scopes_replaces_auto_generation():
+    """When allowed_scopes is set it is used verbatim instead of auto-generating."""
+    signer = _make_signer(allowed_scopes=["mcp:admin", "mcp:tools/call"])
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "some_tool"}
+
+    claims = signer._build_claims(user_dict, data)
+
+    assert claims["scope"] == "mcp:admin mcp:tools/call"
+
+
+def test_tool_call_scope_no_list_permission():
+    """Tool-call JWTs must NOT carry mcp:tools/list (least-privilege)."""
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "my_tool"}
+
+    claims = signer._build_claims(user_dict, data)
+
+    scopes = set(claims["scope"].split())
+    assert "mcp:tools/list" not in scopes
+    assert "mcp:tools/call" in scopes
+    assert "mcp:tools/my_tool:call" in scopes
+
+
+# ---------------------------------------------------------------------------
+# FR-12: End-user identity mapping
+# ---------------------------------------------------------------------------
+
+
+def test_end_user_claim_sources_token_sub():
+    """end_user_claim_sources resolves sub from incoming JWT claims."""
+    signer = _make_signer(end_user_claim_sources=["token:sub", "litellm:user_id"])
+    user_dict = _make_user_api_key_dict(user_id="litellm-user")
+    jwt_claims = {"sub": "idp-user-123", "email": "idp@example.com"}
+
+    claims = signer._build_claims(user_dict, {}, jwt_claims=jwt_claims)
+
+    assert claims["sub"] == "idp-user-123"
+
+
+def test_end_user_claim_sources_falls_back_to_litellm_user_id():
+    """Falls back to litellm:user_id when token:sub is absent."""
+    signer = _make_signer(end_user_claim_sources=["token:sub", "litellm:user_id"])
+    user_dict = _make_user_api_key_dict(user_id="litellm-user")
+    jwt_claims: Dict[str, Any] = {}  # no sub
+
+    claims = signer._build_claims(user_dict, {}, jwt_claims=jwt_claims)
+
+    assert claims["sub"] == "litellm-user"
+
+
+def test_end_user_claim_sources_email_source():
+    """token:email resolves correctly."""
+    signer = _make_signer(end_user_claim_sources=["token:email"])
+    user_dict = _make_user_api_key_dict(user_id="")
+    user_dict.user_id = None
+    jwt_claims = {"email": "alice@corp.com"}
+
+    claims = signer._build_claims(user_dict, {}, jwt_claims=jwt_claims)
+
+    assert claims["sub"] == "alice@corp.com"
+
+
+def test_end_user_claim_sources_litellm_email():
+    """litellm:email resolves from UserAPIKeyAuth.user_email."""
+    signer = _make_signer(end_user_claim_sources=["litellm:email"])
+    user_dict = _make_user_api_key_dict(user_email="proxy-user@example.com")
+    user_dict.user_id = None
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert claims["sub"] == "proxy-user@example.com"
+
+
+# ---------------------------------------------------------------------------
+# FR-13: Claim operations
+# ---------------------------------------------------------------------------
+
+
+def test_add_claims_inserts_when_absent():
+    """add_claims inserts key when it is not already in the JWT."""
+    signer = _make_signer(add_claims={"deployment_id": "prod-001"})
+    user_dict = _make_user_api_key_dict()
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert claims["deployment_id"] == "prod-001"
+
+
+def test_add_claims_does_not_overwrite_existing():
+    """add_claims does NOT overwrite an existing claim (use set_claims for that)."""
+    signer = _make_signer(add_claims={"iss": "should-not-win"})
+    user_dict = _make_user_api_key_dict()
+
+    claims = signer._build_claims(user_dict, {})
+
+    # iss should be the configured issuer, not overwritten
+    assert claims["iss"] != "should-not-win"
+
+
+def test_set_claims_always_overrides():
+    """set_claims always overrides computed claims."""
+    signer = _make_signer(set_claims={"iss": "override-issuer", "custom": "x"})
+    user_dict = _make_user_api_key_dict()
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert claims["iss"] == "override-issuer"
+    assert claims["custom"] == "x"
+
+
+def test_remove_claims_deletes_keys():
+    """remove_claims deletes specified keys from the final JWT."""
+    signer = _make_signer(remove_claims=["nbf", "email"])
+    user_dict = _make_user_api_key_dict()
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert "nbf" not in claims
+    assert "email" not in claims
+
+
+def test_claim_operations_order_add_then_set_then_remove():
+    """add → set → remove is applied in order: set wins over add, remove beats both."""
+    signer = _make_signer(
+        add_claims={"x": "from-add"},
+        set_claims={"x": "from-set"},
+        remove_claims=["x"],
+    )
+    user_dict = _make_user_api_key_dict()
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert "x" not in claims  # remove wins
+
+
+# ---------------------------------------------------------------------------
+# FR-14: Two-token model
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_channel_token_injected_when_configured():
+    """When channel_token_audience is set, x-mcp-channel-token header is injected."""
+    signer = _make_signer(
+        channel_token_audience="bedrock-gateway",
+        channel_token_ttl=60,
+    )
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "list_tables"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    assert "x-mcp-channel-token" in result["extra_headers"]
+    channel_token = result["extra_headers"]["x-mcp-channel-token"].removeprefix("Bearer ")
+    channel_payload = _decode_unverified(channel_token)
+    assert channel_payload["aud"] == "bedrock-gateway"
+
+
+@pytest.mark.asyncio
+async def test_channel_token_absent_when_not_configured():
+    """x-mcp-channel-token is not injected when channel_token_audience is unset."""
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "tool"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    assert "x-mcp-channel-token" not in result["extra_headers"]
+
+
+# ---------------------------------------------------------------------------
+# FR-15: Incoming claim validation
+# ---------------------------------------------------------------------------
+
+
+def test_required_claims_pass_when_present():
+    """_validate_required_claims() passes when all required claims are present."""
+    signer = _make_signer(required_claims=["sub", "email"])
+    # Should not raise
+    signer._validate_required_claims({"sub": "user", "email": "u@example.com"})
+
+
+def test_required_claims_raise_403_when_missing():
+    """_validate_required_claims() raises HTTP 403 when a required claim is missing."""
+    from fastapi import HTTPException
+
+    signer = _make_signer(required_claims=["sub", "email"])
+    with pytest.raises(HTTPException) as exc_info:
+        signer._validate_required_claims({"sub": "user"})  # email missing
+
+    assert exc_info.value.status_code == 403
+    assert "email" in str(exc_info.value.detail)
+
+
+def test_required_claims_raise_when_no_jwt_claims():
+    """_validate_required_claims() raises when jwt_claims is None and claims are required."""
+    from fastapi import HTTPException
+
+    signer = _make_signer(required_claims=["sub"])
+    with pytest.raises(HTTPException):
+        signer._validate_required_claims(None)
+
+
+def test_optional_claims_passed_through():
+    """optional_claims are forwarded from incoming jwt_claims into the outbound JWT."""
+    signer = _make_signer(optional_claims=["groups", "roles"])
+    user_dict = _make_user_api_key_dict()
+    jwt_claims = {"sub": "u", "groups": ["admin"], "roles": ["editor"]}
+
+    claims = signer._build_claims(user_dict, {}, jwt_claims=jwt_claims)
+
+    assert claims["groups"] == ["admin"]
+    assert claims["roles"] == ["editor"]
+
+
+def test_optional_claims_not_injected_if_absent():
+    """optional_claims are silently skipped when absent in incoming jwt_claims."""
+    signer = _make_signer(optional_claims=["groups"])
+    user_dict = _make_user_api_key_dict()
+    jwt_claims: Dict[str, Any] = {"sub": "u"}  # no groups
+
+    claims = signer._build_claims(user_dict, {}, jwt_claims=jwt_claims)
+
+    assert "groups" not in claims
+
+
+# ---------------------------------------------------------------------------
+# FR-9: Debug headers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_debug_header_injected_when_enabled():
+    """x-litellm-mcp-debug header is injected when debug_headers=True."""
+    signer = _make_signer(debug_headers=True)
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "my_tool"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    assert "x-litellm-mcp-debug" in result["extra_headers"]
+    debug_val = result["extra_headers"]["x-litellm-mcp-debug"]
+    assert "v=1" in debug_val
+    assert "kid=" in debug_val
+    assert "sub=" in debug_val
+
+
+@pytest.mark.asyncio
+async def test_debug_header_absent_when_disabled():
+    """x-litellm-mcp-debug is NOT injected when debug_headers=False (default)."""
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict()
+    data = {"mcp_tool_name": "tool"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    assert "x-litellm-mcp-debug" not in result["extra_headers"]
+
+
+# ---------------------------------------------------------------------------
+# P1 fix: extra_headers merging (multi-guardrail chains)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extra_headers_are_merged_not_replaced():
+    """
+    Existing extra_headers from a prior guardrail are preserved — only
+    Authorization is added/overwritten, other keys survive.
+    """
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict()
+    # Simulate a prior guardrail having injected a tracing header
+    data = {
+        "mcp_tool_name": "list",
+        "extra_headers": {"x-trace-id": "abc123", "x-correlation-id": "xyz"},
+    }
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    headers = result["extra_headers"]
+    # Prior headers preserved
+    assert headers.get("x-trace-id") == "abc123"
+    assert headers.get("x-correlation-id") == "xyz"
+    # Authorization injected
+    assert "Authorization" in headers
+
+
+# ---------------------------------------------------------------------------
+# FR-5: Verify + re-sign — jwt_claims fallback from UserAPIKeyAuth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sub_resolved_from_user_api_key_dict_jwt_claims():
+    """
+    When no raw token is present but UserAPIKeyAuth.jwt_claims has a sub,
+    the guardrail resolves sub from jwt_claims (LiteLLM-decoded JWT path).
+    """
+    signer = _make_signer(end_user_claim_sources=["token:sub", "litellm:user_id"])
+    user_dict = _make_user_api_key_dict(user_id="litellm-fallback")
+    # jwt_claims populated by LiteLLM's JWT auth machinery
+    user_dict.jwt_claims = {"sub": "idp-alice", "email": "alice@idp.com"}
+    data = {"mcp_tool_name": "query"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(result, dict)
+    token = result["extra_headers"]["Authorization"].removeprefix("Bearer ")
+    payload = _decode_unverified(token)
+    assert payload["sub"] == "idp-alice"
