@@ -376,3 +376,116 @@ class VertexAIBatchPrediction(VertexLLM):
             response=_json_response
         )
         return vertex_batch_response
+
+    def cancel_batch(
+        self,
+        _is_async: bool,
+        batch_id: str,
+        api_base: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        sync_handler = _get_httpx_client()
+
+        access_token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+
+        default_api_base = self.create_vertex_batch_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+        )
+
+        default_api_base = f"{default_api_base}/{batch_id}:cancel"
+
+        if len(default_api_base.split(":")) > 1:
+            endpoint = default_api_base.split(":")[-1]
+        else:
+            endpoint = ""
+
+        _, api_base = self._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=endpoint,
+            stream=None,
+            auth_header=None,
+            url=default_api_base,
+            model=None,
+            vertex_project=vertex_project or project_id,
+            vertex_location=vertex_location or "us-central1",
+            vertex_api_version="v1",
+        )
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        if _is_async is True:
+            return self._async_cancel_batch(
+                api_base=api_base,
+                retrieve_api_base=api_base.rsplit(":cancel", 1)[0],
+                headers=headers,
+            )
+
+        response = sync_handler.post(
+            url=api_base,
+            headers=headers,
+            data=json.dumps({}),
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        retrieve_response = sync_handler.get(
+            url=api_base.rsplit(":cancel", 1)[0],
+            headers=headers,
+        )
+        if retrieve_response.status_code != 200:
+            raise Exception(
+                f"Error: {retrieve_response.status_code} {retrieve_response.text}"
+            )
+
+        _json_response = retrieve_response.json()
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+            response=_json_response
+        )
+        return vertex_batch_response
+
+    async def _async_cancel_batch(
+        self,
+        api_base: str,
+        retrieve_api_base: str,
+        headers: Dict[str, str],
+    ) -> LiteLLMBatch:
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI,
+        )
+        response = await client.post(
+            url=api_base,
+            headers=headers,
+            data=json.dumps({}),
+        )
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        retrieve_response = await client.get(
+            url=retrieve_api_base,
+            headers=headers,
+        )
+        if retrieve_response.status_code != 200:
+            raise Exception(
+                f"Error: {retrieve_response.status_code} {retrieve_response.text}"
+            )
+
+        _json_response = retrieve_response.json()
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+            response=_json_response
+        )
+        return vertex_batch_response
