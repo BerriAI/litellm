@@ -134,12 +134,17 @@ class OCRHandler(BaseTranslation):
             request_data = {}
 
         # Add user metadata if available
-        if "litellm_metadata" not in request_data and user_api_key_dict is not None:
+        if user_api_key_dict is not None:
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                # Preserve original behavior: inject metadata into inputs for
+                # third-party guardrail providers that read it from there
+                inputs.update(user_metadata)  # type: ignore
+                # Also store in request_data for the logging pipeline
+                if "litellm_metadata" not in request_data:
+                    request_data["litellm_metadata"] = user_metadata
 
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,

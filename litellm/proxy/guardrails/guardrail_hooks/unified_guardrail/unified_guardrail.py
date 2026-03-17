@@ -459,6 +459,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     guardrail_to_apply=guardrail_to_apply,
                     litellm_logging_obj=request_data.get("litellm_logging_obj"),
                     user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
                 )
             except HTTPException as e:
                 if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
