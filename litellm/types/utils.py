@@ -1467,6 +1467,9 @@ class PromptTokensDetailsWrapper(
     image_count: Optional[int] = None
     """Number of images sent to the model. Used for Vertex AI multimodal embeddings."""
 
+    cache_write_tokens: Optional[int] = None
+    """Tokens written to the prompt cache in this request (OpenRouter extension for Anthropic models)."""
+
     video_length_seconds: Optional[float] = None
     """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -1653,6 +1656,24 @@ class Usage(SafeAttributeModel, CompletionUsage):
             params["prompt_cache_hit_tokens"], int
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+
+        ## OPENROUTER / OPENAI FORMAT MAPPING ##
+        # OpenRouter (and other OpenAI-compatible providers) return cache token counts
+        # in prompt_tokens_details rather than as top-level Anthropic fields.
+        # Populate the private Anthropic-style fields from prompt_tokens_details when
+        # the explicit Anthropic params (cache_creation_input_tokens,
+        # cache_read_input_tokens) were not provided, so that downstream consumers
+        # (cost calculators, streaming adapters, logging hooks) see the correct values.
+        _ptd = getattr(self, "prompt_tokens_details", None)
+        if _ptd is not None:
+            if not self._cache_read_input_tokens:
+                _cached = getattr(_ptd, "cached_tokens", 0) or 0
+                if _cached > 0:
+                    self._cache_read_input_tokens = _cached
+            if not self._cache_creation_input_tokens:
+                _writes = getattr(_ptd, "cache_write_tokens", 0) or 0
+                if _writes > 0:
+                    self._cache_creation_input_tokens = _writes
 
         for k, v in params.items():
             setattr(self, k, v)
