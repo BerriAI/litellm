@@ -454,8 +454,6 @@ class ProxyLogging:
 
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
-            import inspect
-
             expected_args = inspect.getfullargspec(proxy_hook).args
             passed_in_args: Dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
@@ -559,6 +557,10 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Raw Bearer token from the original HTTP request — allows guardrails
+            # (e.g. MCPJWTSigner) to independently verify the caller's identity
+            # before re-signing an outbound token (FR-5 verify+re-sign).
+            "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
         }
 
         return synthetic_data
@@ -838,7 +840,12 @@ class ProxyLogging:
             modified_kwargs["arguments"] = response_data["modified_arguments"]
 
         if response_data.get("extra_headers"):
-            modified_kwargs["extra_headers"] = response_data["extra_headers"]
+            # Merge rather than replace — a prior guardrail in the chain may have
+            # already injected headers (e.g. tracing IDs).  Later guardrails win on
+            # key collisions so that the most-specific guardrail (e.g. JWT signer)
+            # takes precedence over earlier ones.
+            existing = modified_kwargs.get("extra_headers") or {}
+            modified_kwargs["extra_headers"] = {**existing, **response_data["extra_headers"]}
 
         return modified_kwargs
 
