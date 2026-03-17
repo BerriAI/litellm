@@ -700,6 +700,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     if valid_token is not None:
                         api_key = valid_token.token or ""
+                        valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
 
