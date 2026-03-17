@@ -324,6 +324,91 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+def test_gpt5_4_allows_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4 supports reasoning_effort='minimal'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_4_pro_allows_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-pro supports reasoning_effort='minimal'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_4_mini_rejects_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-mini does not support reasoning_effort='minimal'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="gpt-5.4-mini",
+            drop_params=False,
+        )
+
+
+def test_gpt5_4_nano_rejects_reasoning_effort_minimal(config: OpenAIConfig):
+    """gpt-5.4-nano does not support reasoning_effort='minimal'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="gpt-5.4-nano",
+            drop_params=False,
+        )
+
+
+def test_gpt5_drops_reasoning_effort_minimal_when_requested(config: OpenAIConfig):
+    """reasoning_effort='minimal' is dropped for unsupported models when drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_gpt5_minimal_dict_triggers_validation(config: OpenAIConfig):
+    """Dict with effort='minimal' triggers minimal model-support validation."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "minimal", "summary": "detailed"}},
+            optional_params={},
+            model="gpt-5.4-mini",
+            drop_params=False,
+        )
+
+
+def test_gpt5_minimal_dict_accepted_for_supported_model(config: OpenAIConfig):
+    """Dict with effort='minimal' passes through for gpt-5.4+."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "minimal", "summary": "detailed"}},
+        optional_params={},
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_gpt5_supports_reasoning_effort_level_minimal(gpt5_config: OpenAIGPT5Config):
+    """Test that _supports_reasoning_effort_level correctly identifies minimal support."""
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4", "minimal")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4-pro", "minimal")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-mini", "minimal")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-nano", "minimal")
+
+
 def test_gpt5_normalizes_reasoning_effort_dict_with_summary(config: OpenAIConfig):
     """Dict with summary/generate_summary is normalized for chat completions."""
     params = config.map_openai_params(
