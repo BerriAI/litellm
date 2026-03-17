@@ -94,6 +94,18 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
+  // Timestamp for forcing FilterComponent remount during live tail
+  const [liveTailTimestamp, setLiveTailTimestamp] = useState<number>(Date.now());
+
+  useEffect(() => {
+    if (isLiveTail && !isCustomDate) {
+      const interval = setInterval(() => {
+        setLiveTailTimestamp(Date.now());
+      }, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isLiveTail, isCustomDate]);
+
   useEffect(() => {
     const fetchKeyInfo = async () => {
       if (selectedKeyIdInfoView && accessToken) {
@@ -365,6 +377,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             ) : (
               <>
                 <FilterComponent
+                  key={`${startTime}-${endTime}-${isLiveTail && !isCustomDate ? liveTailTimestamp : "static"}`}
                   options={getLogFilterOptions(accessToken)}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
