@@ -1245,9 +1245,9 @@ def test_streaming_code_execution_produces_code_interpreter_results():
 
 def test_streaming_multiple_code_executions_no_duplicates():
     """
-    Test that multiple code executions in a single streaming response produce
-    exactly one code_interpreter_result per execution — no duplicates from
-    _build_code_interpreter_results rebuilding the full list.
+    Test that multiple code executions in a single streaming response emit
+    cumulative code_interpreter_results on each chunk (matching stream_chunk_builder's
+    "last value wins" contract).  The final emission must contain ALL results.
     """
     chunks = [
         {
@@ -1323,24 +1323,125 @@ def test_streaming_multiple_code_executions_no_duplicates():
 
     iterator = ModelResponseIterator(None, sync_stream=True)
 
-    # Collect ALL code_interpreter_results emitted across all chunks
-    all_results = []
+    # Collect each emission of code_interpreter_results
+    emissions = []
     for chunk in chunks:
         parsed = iterator.chunk_parser(chunk)
         psf = None
         if parsed.choices and parsed.choices[0].delta:
             psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
         if psf and "code_interpreter_results" in psf:
-            all_results.extend(psf["code_interpreter_results"])
+            emissions.append(psf["code_interpreter_results"])
 
-    # Should have exactly 2 results, one per execution — no duplicates
-    assert len(all_results) == 2, (
-        f"Expected 2 code_interpreter_results, got {len(all_results)}. "
-        f"IDs: {[r.id for r in all_results]}"
+    # Should have 2 emissions (one per tool_result block)
+    assert len(emissions) == 2, f"Expected 2 emissions, got {len(emissions)}"
+
+    # First emission: cumulative list with 1 result
+    assert len(emissions[0]) == 1
+    assert emissions[0][0].id == "srvtoolu_01AAA"
+    assert emissions[0][0].code == "echo first"
+    assert emissions[0][0].outputs[0].logs == "first\n"
+
+    # Second (final) emission: cumulative list with BOTH results
+    # This is what stream_chunk_builder will pick as "last value wins"
+    assert len(emissions[1]) == 2, (
+        f"Expected final emission to have 2 results, got {len(emissions[1])}. "
+        f"IDs: {[r.id for r in emissions[1]]}"
     )
-    assert all_results[0].id == "srvtoolu_01AAA"
-    assert all_results[0].code == "echo first"
-    assert all_results[0].outputs[0].logs == "first\n"
-    assert all_results[1].id == "srvtoolu_01BBB"
-    assert all_results[1].code == "echo second"
-    assert all_results[1].outputs[0].logs == "second\n"
+    assert emissions[1][0].id == "srvtoolu_01AAA"
+    assert emissions[1][0].code == "echo first"
+    assert emissions[1][0].outputs[0].logs == "first\n"
+    assert emissions[1][1].id == "srvtoolu_01BBB"
+    assert emissions[1][1].code == "echo second"
+    assert emissions[1][1].outputs[0].logs == "second\n"
+
+
+def test_streaming_code_execution_input_assembled_from_deltas():
+    """
+    In real Anthropic streaming, content_block_start for server_tool_use has
+    input: {}.  The actual input arrives via input_json_delta deltas and must
+    be assembled at content_block_stop so the code field is populated.
+
+    This test uses realistic chunk shapes (empty input in start, partial JSON
+    in deltas) to exercise the input assembly path.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        # server_tool_use with empty input (real streaming behaviour)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "code_execution",
+                "input": {},
+            },
+        },
+        # Input arrives via deltas, split across two chunks
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"comma',
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": 'nd": "echo hello"}',
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # Tool result
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # The code field must contain the assembled input, not be empty
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert code_results[0].code == "echo hello"
+    assert code_results[0].outputs[0].logs == "hello\n"
