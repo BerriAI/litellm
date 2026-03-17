@@ -2441,11 +2441,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
                         elif m.get("type", "") == "file":
-                            user_content.append(
-                                anthropic_process_openai_file_message(
-                                    cast(ChatCompletionFileObject, m)
-                                )
+                            _anthropic_file_content = anthropic_process_openai_file_message(
+                                cast(ChatCompletionFileObject, m)
                             )
+                            _content_element = add_cache_control_to_content(
+                                anthropic_content_element=dict(_anthropic_file_content),
+                                original_content_element=dict(m),
+                            )
+                            if "cache_control" in _content_element:
+                                _anthropic_file_content["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
+                            user_content.append(_anthropic_file_content)
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
