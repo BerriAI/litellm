@@ -1844,6 +1844,7 @@ class BaseLLMHTTPHandler:
 
         # Prepare headers
         kwargs = kwargs or {}
+        timeout: Optional[Union[float, httpx.Timeout]] = kwargs.get("timeout", None)
         provider_specific_header = cast(
             Optional[litellm.types.utils.ProviderSpecificHeader],
             kwargs.get("provider_specific_header", None),
@@ -1961,6 +1962,7 @@ class BaseLLMHTTPHandler:
                 data=signed_json_body or json.dumps(request_body),
                 stream=stream or False,
                 logging_obj=logging_obj,
+                timeout=timeout,
             )
             response.raise_for_status()
         except Exception as e:
