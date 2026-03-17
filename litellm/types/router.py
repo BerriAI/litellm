@@ -193,6 +193,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
+    ## BASETEN ##
+    served_model_name: Optional[str] = None  # override model name in request body (e.g. Baseten dedicated deployments)
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -345,6 +347,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # deployment budgets
     max_budget: Optional[float]
     budget_duration: Optional[str]
+    ## BASETEN ##
+    served_model_name: Optional[str]  # override model name in request body (e.g. Baseten dedicated deployments)
 
 
 class DeploymentTypedDict(TypedDict, total=False):
