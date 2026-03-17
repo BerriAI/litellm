@@ -1259,6 +1259,50 @@ class TestMCPServerManager:
         assert server.needs_user_oauth_token is True
 
     @pytest.mark.asyncio
+    async def test_explicit_token_url_with_client_creds_routes_2lo(self):
+        """
+        Regression test: explicit token_url + client_id + client_secret must route to
+        2LO (client_credentials) even when discovery is active.
+
+        Discovery should NOT override an explicitly configured token_url.
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        config = {
+            "github": {
+                "url": "https://github.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "client_id": "my-client-id",
+                "client_secret": "my-client-secret",
+                "token_url": "https://explicit.example.com/token",  # 2LO intent
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # Explicit token_url must be preserved, not overridden by discovery
+        assert server.token_url == "https://explicit.example.com/token", (
+            "Explicit token_url should be used as-is when provided in config"
+        )
+        assert server.has_client_credentials is True, (
+            "has_client_credentials must be True when explicit token_url + client creds are set"
+        )
+        assert server.needs_user_oauth_token is False
+
+    @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_passthrough_auth(self):
         """Test that requires_per_user_auth returns True for passthrough auth (auth_type=none + Authorization header)"""
         # Passthrough auth with Authorization header
