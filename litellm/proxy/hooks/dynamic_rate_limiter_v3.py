@@ -6,8 +6,6 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-from fastapi import HTTPException
-
 import litellm
 from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
@@ -433,7 +431,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             data: Request data dictionary
 
         Raises:
-            HTTPException: If any limit is exceeded
+            litellm.RateLimitError: If any limit is exceeded
         """
         import json
 
@@ -479,19 +477,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
                     # Model-wide limit exceeded (ALWAYS enforce)
                     if descriptor_key == "model_saturation_check":
-                        raise HTTPException(
-                            status_code=429,
-                            detail={
-                                "error": f"Model capacity reached for {model}. "
-                                f"Priority: {priority}, "
-                                f"Rate limit type: {status['rate_limit_type']}, "
-                                f"Remaining: {status['limit_remaining']}"
-                            },
-                            headers={
-                                "retry-after": str(self.v3_limiter.window_size),
-                                "rate_limit_type": str(status["rate_limit_type"]),
-                                "x-litellm-priority": priority or "default",
-                            },
+                        raise litellm.RateLimitError(
+                            message=f"Model capacity reached for {model}. "
+                            f"Priority: {priority}, "
+                            f"Rate limit type: {status['rate_limit_type']}, "
+                            f"Remaining: {status['limit_remaining']}",
+                            llm_provider="",
+                            model=model,
                         )
 
                     # Priority limit exceeded (ONLY enforce when saturated)
@@ -500,21 +492,14 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             f"Enforcing priority limits for {model}, saturation: {saturation:.1%}, "
                             f"priority: {priority}"
                         )
-                        raise HTTPException(
-                            status_code=429,
-                            detail={
-                                "error": f"Priority-based rate limit exceeded. "
-                                f"Priority: {priority}, "
-                                f"Rate limit type: {status['rate_limit_type']}, "
-                                f"Remaining: {status['limit_remaining']}, "
-                                f"Model saturation: {saturation:.1%}"
-                            },
-                            headers={
-                                "retry-after": str(self.v3_limiter.window_size),
-                                "rate_limit_type": str(status["rate_limit_type"]),
-                                "x-litellm-priority": priority or "default",
-                                "x-litellm-saturation": f"{saturation:.2%}",
-                            },
+                        raise litellm.RateLimitError(
+                            message=f"Priority-based rate limit exceeded. "
+                            f"Priority: {priority}, "
+                            f"Rate limit type: {status['rate_limit_type']}, "
+                            f"Remaining: {status['limit_remaining']}, "
+                            f"Model saturation: {saturation:.1%}",
+                            llm_provider="",
+                            model=model,
                         )
 
         # PHASE 3: Increment counters separately to avoid early-exit issues
@@ -631,7 +616,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 data=data,
             )
 
-        except HTTPException:
+        except litellm.RateLimitError:
             raise
         except Exception as e:
             verbose_proxy_logger.error(
