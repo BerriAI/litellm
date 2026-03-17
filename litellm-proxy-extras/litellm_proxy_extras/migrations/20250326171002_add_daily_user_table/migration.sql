@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyUserSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyUserSpend" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "date" TEXT NOT NULL,
@@ -17,17 +17,17 @@ CREATE TABLE "LiteLLM_DailyUserSpend" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyUserSpend_date_idx" ON "LiteLLM_DailyUserSpend"("date");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyUserSpend_date_idx" ON "LiteLLM_DailyUserSpend"("date");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyUserSpend_user_id_idx" ON "LiteLLM_DailyUserSpend"("user_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyUserSpend_user_id_idx" ON "LiteLLM_DailyUserSpend"("user_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyUserSpend_api_key_idx" ON "LiteLLM_DailyUserSpend"("api_key");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyUserSpend_api_key_idx" ON "LiteLLM_DailyUserSpend"("api_key");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyUserSpend_model_idx" ON "LiteLLM_DailyUserSpend"("model");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyUserSpend_model_idx" ON "LiteLLM_DailyUserSpend"("model");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_DailyUserSpend_user_id_date_api_key_model_custom_ll_key" ON "LiteLLM_DailyUserSpend"("user_id", "date", "api_key", "model", "custom_llm_provider");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_DailyUserSpend_user_id_date_api_key_model_custom_ll_key" ON "LiteLLM_DailyUserSpend"("user_id", "date", "api_key", "model", "custom_llm_provider");
 

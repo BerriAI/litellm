@@ -1,12 +1,12 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "byok_api_key_help_url" TEXT,
-ADD COLUMN     "byok_description" TEXT[] DEFAULT ARRAY[]::TEXT[],
-ADD COLUMN     "is_byok" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "tool_name_to_description" JSONB DEFAULT '{}',
-ADD COLUMN     "tool_name_to_display_name" JSONB DEFAULT '{}';
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "byok_api_key_help_url" TEXT,
+ADD COLUMN IF NOT EXISTS "byok_description" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN IF NOT EXISTS "is_byok" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "tool_name_to_description" JSONB DEFAULT '{}',
+ADD COLUMN IF NOT EXISTS "tool_name_to_display_name" JSONB DEFAULT '{}';
 
 -- CreateTable
-CREATE TABLE "LiteLLM_MCPUserCredentials" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_MCPUserCredentials" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "server_id" TEXT NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE "LiteLLM_MCPUserCredentials" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_JWTKeyMapping" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_JWTKeyMapping" (
     "id" TEXT NOT NULL,
     "jwt_claim_name" TEXT NOT NULL,
     "jwt_claim_value" TEXT NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE "LiteLLM_JWTKeyMapping" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ConfigOverrides" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ConfigOverrides" (
     "config_type" TEXT NOT NULL,
     "config_value" JSONB NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -44,14 +44,19 @@ CREATE TABLE "LiteLLM_ConfigOverrides" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_MCPUserCredentials_user_id_server_id_key" ON "LiteLLM_MCPUserCredentials"("user_id", "server_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MCPUserCredentials_user_id_server_id_key" ON "LiteLLM_MCPUserCredentials"("user_id", "server_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_is_act_idx" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value", "is_active");
+CREATE INDEX IF NOT EXISTS "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_is_act_idx" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value", "is_active");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_key" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_key" ON "LiteLLM_JWTKeyMapping"("jwt_claim_name", "jwt_claim_value");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_JWTKeyMapping" ADD CONSTRAINT "LiteLLM_JWTKeyMapping_token_fkey" FOREIGN KEY ("token") REFERENCES "LiteLLM_VerificationToken"("token") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_JWTKeyMapping_token_fkey') THEN
+        ALTER TABLE "LiteLLM_JWTKeyMapping" ADD CONSTRAINT "LiteLLM_JWTKeyMapping_token_fkey" FOREIGN KEY ("token") REFERENCES "LiteLLM_VerificationToken"("token") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 

@@ -484,6 +484,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/list",
         "/team/available",
         "/user/info",
+        "/v2/user/info",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -684,6 +685,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity",
         "/tag/daily/activity",
         "/tag/list",
+        "/audit",
+        "/audit/{id}",
     ] + info_routes
 
     # All routes accesible by an Org Admin
@@ -855,6 +858,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
+    models: Optional[List[str]] = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1003,6 +1007,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    organization_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -1087,6 +1092,12 @@ class SpecialMCPServerName(str, enum.Enum):
     all_proxy_servers = "all-proxy-mcpservers"
 
 
+class MCPApprovalStatus(str, enum.Enum):
+    pending_review = "pending_review"
+    active = "active"
+    rejected = "rejected"
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1117,6 +1128,21 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields — set by the endpoint, not by the caller.
+    # Any caller-provided values are silently overridden before persistence.
+    approval_status: Optional[str] = Field(
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
+    )
+    submitted_by: Optional[str] = Field(
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
+    )
+    submitted_at: Optional[datetime] = Field(
+        None,
+        description="Server-managed: set by the endpoint; caller values are overridden.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1176,6 +1202,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1239,6 +1266,16 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    source_url: Optional[str] = None
+    # BYOM submission fields
+    approval_status: Optional[str] = Field(
+        default="active",
+        description="Approval status: 'pending_review', 'active', 'rejected'",
+    )
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -1253,6 +1290,49 @@ class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):
 class MCPUserCredentialResponse(LiteLLMPydanticObjectBase):
     server_id: str
     has_credential: bool
+
+
+class MCPOAuthUserCredentialRequest(LiteLLMPydanticObjectBase):
+    """Stores a user's OAuth2 token for an OpenAPI MCP server."""
+
+    access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None  # seconds until expiry
+    scopes: Optional[List[str]] = None
+
+
+class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
+    """Describes whether the calling user has a stored OAuth credential."""
+
+    server_id: str
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601
+    is_expired: bool = False
+    connected_at: Optional[str] = None  # ISO-8601
+
+
+class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
+    """One entry in the /user-credentials list."""
+
+    server_id: str
+    server_name: Optional[str] = None
+    alias: Optional[str] = None
+    credential_type: str  # "oauth2" or "byok"
+    has_credential: bool
+    expires_at: Optional[str] = None  # ISO-8601; None means non-expiring
+    connected_at: Optional[str] = None  # ISO-8601
+
+
+class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
+    review_notes: Optional[str] = None
+
+
+class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
+    total: int
+    pending_review: int
+    active: int
+    rejected: int
+    items: List["LiteLLM_MCPServerTable"]
 
 
 ######## Skills API Types ########
@@ -2203,6 +2283,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    mcp_required_fields: Optional[List[str]] = Field(
+        None,
+        description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2382,6 +2466,9 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
+    created_by_user: Optional[
+        Any
+    ] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -2474,6 +2561,30 @@ class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_info: Optional[Union[dict, BaseModel]]
     keys: List
     teams: List
+
+
+class UserInfoV2Response(LiteLLMPydanticObjectBase):
+    """
+    Response model for GET /v2/user/info
+
+    Returns ONLY the user object - no keys, no teams objects.
+    This is a lightweight alternative to UserInfoResponse.
+    """
+
+    user_id: str
+    user_email: Optional[str] = None
+    user_alias: Optional[str] = None
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    max_budget: Optional[float] = None
+    models: List[str] = []
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    sso_user_id: Optional[str] = None
+    teams: List[str] = []  # Just team IDs, not full team objects
 
 
 class LiteLLM_Config(LiteLLMPydanticObjectBase):
