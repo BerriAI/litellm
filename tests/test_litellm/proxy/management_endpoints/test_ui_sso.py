@@ -5473,3 +5473,62 @@ class TestAttributeMappings:
         assert metadata["sso_attributes"]["first_name"] == "New"
         assert metadata["sso_attributes"]["last_name"] == "User"
 
+    @pytest.mark.asyncio
+    async def test_insert_sso_user_stores_sso_attributes_on_first_login(self):
+        """Test that insert_sso_user persists SSO attributes in metadata on first login.
+
+        Ensures JIT-provisioned users get display_name, first_name, last_name,
+        and extra_fields stored from the very first login, not just on subsequent logins.
+        """
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+        sso_result = CustomOpenID(
+            id="new-jit-user",
+            email="jit@example.com",
+            display_name="JIT User",
+            first_name="JIT",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+            extra_fields={"department": "Engineering"},
+        )
+
+        user_defined_values = {
+            "user_id": "new-jit-user",
+            "user_email": "jit@example.com",
+            "user_role": "internal_user",
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        # Mock new_user endpoint
+        mock_response = MagicMock()
+        mock_response.user_id = "new-jit-user"
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_new_user:
+            await insert_sso_user(
+                result_openid=sso_result,
+                user_defined_values=user_defined_values,
+            )
+
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            assert new_user_request.metadata is not None
+            assert new_user_request.metadata["auth_provider"] == "generic"
+            assert "sso_attributes" in new_user_request.metadata
+            assert new_user_request.metadata["sso_attributes"]["display_name"] == "JIT User"
+            assert new_user_request.metadata["sso_attributes"]["first_name"] == "JIT"
+            assert new_user_request.metadata["sso_attributes"]["last_name"] == "User"
+            assert new_user_request.metadata["sso_attributes"]["extra_fields"] == {
+                "department": "Engineering"
+            }
+

@@ -1716,10 +1716,30 @@ async def insert_sso_user(
         auto_create_key=False,
     )
 
-    if result_openid and hasattr(result_openid, "provider"):
-        new_user_request.metadata = {
-            "auth_provider": getattr(result_openid, "provider")
-        }
+    if result_openid:
+        metadata: dict = {}
+        if hasattr(result_openid, "provider"):
+            metadata["auth_provider"] = getattr(result_openid, "provider")
+
+        # Persist SSO attributes on first login (JIT provisioning)
+        sso_attrs: dict = {}
+        display_name = getattr(result_openid, "display_name", None)
+        if isinstance(display_name, str) and display_name:
+            sso_attrs["display_name"] = display_name
+        first_name = getattr(result_openid, "first_name", None)
+        if isinstance(first_name, str) and first_name:
+            sso_attrs["first_name"] = first_name
+        last_name = getattr(result_openid, "last_name", None)
+        if isinstance(last_name, str) and last_name:
+            sso_attrs["last_name"] = last_name
+        extra_fields = getattr(result_openid, "extra_fields", None)
+        if isinstance(extra_fields, dict) and extra_fields:
+            sso_attrs["extra_fields"] = extra_fields
+        if sso_attrs:
+            metadata["sso_attributes"] = sso_attrs
+
+        if metadata:
+            new_user_request.metadata = metadata
 
     response = await new_user(
         data=new_user_request,
