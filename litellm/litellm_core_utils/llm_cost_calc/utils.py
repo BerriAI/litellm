@@ -659,7 +659,7 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
-    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
+    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens.
     ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
     cache_hit = prompt_tokens_details["cache_hit_tokens"]
