@@ -454,8 +454,6 @@ class ProxyLogging:
 
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
-            import inspect
-
             expected_args = inspect.getfullargspec(proxy_hook).args
             passed_in_args: Dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
@@ -559,6 +557,11 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Raw inbound headers from the client request. Passed through so that
+            # guardrail hooks (e.g. MCPJWTSigner) can read request headers such as
+            # X-Channel-Token for the two-token model (FR-14). May be None when
+            # called from contexts that don't have raw headers available.
+            "mcp_raw_headers": kwargs.get("raw_headers"),
         }
 
         return synthetic_data
@@ -824,16 +827,21 @@ class ProxyLogging:
     ) -> dict:
         """
         Helper function to convert pre_call_hook response back to kwargs for MCP usage.
+
+        Supports:
+        - modified_arguments: Override tool call arguments
+        - extra_headers: Inject custom headers into the outbound MCP request
         """
         if not response_data:
             return original_kwargs
 
-        # Apply any argument modifications from the hook response
         modified_kwargs = original_kwargs.copy()
 
-        # If the response contains modified arguments, apply them
         if response_data.get("modified_arguments"):
             modified_kwargs["arguments"] = response_data["modified_arguments"]
+
+        if response_data.get("extra_headers"):
+            modified_kwargs["extra_headers"] = response_data["extra_headers"]
 
         return modified_kwargs
 

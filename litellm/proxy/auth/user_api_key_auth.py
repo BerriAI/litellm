@@ -700,6 +700,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     if valid_token is not None:
                         api_key = valid_token.token or ""
+                        valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
 
@@ -729,6 +730,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     team_membership: Optional[LiteLLM_TeamMembership] = result.get(
                         "team_membership", None
                     )
+                    jwt_claims: Optional[dict] = result.get("jwt_claims", None)
 
                     global_proxy_spend = await get_global_proxy_spend(
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -757,6 +759,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
+                            jwt_claims=jwt_claims,
                         )
 
                     valid_token = UserAPIKeyAuth(
@@ -803,6 +806,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_metadata=(
                             team_object.metadata if team_object is not None else None
                         ),
+                        jwt_claims=jwt_claims,
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks

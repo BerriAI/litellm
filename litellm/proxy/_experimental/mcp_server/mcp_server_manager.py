@@ -1908,7 +1908,21 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
-    ):
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run pre-call checks and guardrail hooks for an MCP tool call.
+
+        Returns a dict that may contain:
+        - "arguments": hook-modified tool arguments (only if changed)
+        - "extra_headers": headers injected by pre_mcp_call guardrail hooks
+
+        Args:
+            raw_headers: Raw inbound HTTP headers from the client request.
+                Passed through to guardrail hooks via mcp_raw_headers so that
+                hooks (e.g. MCPJWTSigner) can read headers like X-Channel-Token
+                for the two-token model (FR-14).
+        """
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -1957,6 +1971,10 @@ class MCPServerManager:
                 if user_api_key_auth
                 else None
             ),
+            # Raw inbound headers — passed through to guardrail hooks so that
+            # hook implementations (e.g. MCPJWTSigner) can read request headers
+            # such as X-Channel-Token for the two-token model (FR-14).
+            "raw_headers": raw_headers,
         }
 
         # Create MCP request object for processing
@@ -1969,6 +1987,7 @@ class MCPServerManager:
             mcp_request_obj, pre_hook_kwargs
         )
 
+        hook_result: Dict[str, Any] = {}
         try:
             # Use standard pre_call_hook
             modified_data = await proxy_logging_obj.pre_call_hook(
@@ -1984,7 +2003,9 @@ class MCPServerManager:
                     )
                 )
                 if modified_kwargs.get("arguments") != arguments:
-                    arguments = modified_kwargs["arguments"]
+                    hook_result["arguments"] = modified_kwargs["arguments"]
+                if modified_kwargs.get("extra_headers"):
+                    hook_result["extra_headers"] = modified_kwargs["extra_headers"]
 
         except (
             BlockedPiiEntityError,
@@ -1994,6 +2015,8 @@ class MCPServerManager:
             # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
+
+        return hook_result
 
     def _create_during_hook_task(
         self,
@@ -2047,6 +2070,7 @@ class MCPServerManager:
         raw_headers: Optional[Dict[str, str]],
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
+        hook_extra_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2061,6 +2085,9 @@ class MCPServerManager:
             oauth2_headers: Optional OAuth2 headers
             raw_headers: Optional raw headers from the request
             proxy_logging_obj: Optional ProxyLogging object for hook integration
+            host_progress_callback: Optional callback for progress updates
+            hook_extra_headers: Optional headers injected by pre_mcp_call guardrail
+                hooks. Merged last (highest priority) into outbound request headers.
 
         Returns:
             CallToolResult from the MCP server
@@ -2115,6 +2142,17 @@ class MCPServerManager:
             if extra_headers is None:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
+
+        if hook_extra_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            if "Authorization" in extra_headers and "Authorization" in hook_extra_headers:
+                verbose_logger.warning(
+                    "MCPServerManager: hook_extra_headers contains 'Authorization' which will "
+                    "overwrite the existing Authorization header set by static_headers or server "
+                    "authentication. The hook JWT will take precedence."
+                )
+            extra_headers.update(hook_extra_headers)
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
@@ -2201,15 +2239,19 @@ class MCPServerManager:
         # Allow validation and modification of tool calls before execution
         # Using standard pre_call_hook
         #########################################################
+        hook_result: Dict[str, Any] = {}
         if proxy_logging_obj:
-            await self.pre_call_tool_check(
+            hook_result = await self.pre_call_tool_check(
                 name=name,
                 arguments=arguments,
                 server_name=server_name,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
+                raw_headers=raw_headers,
             )
+            if "arguments" in hook_result:
+                arguments = hook_result["arguments"]
 
         # Prepare tasks for during hooks
         tasks = []
@@ -2227,8 +2269,16 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                f"Calling OpenAPI tool {name} directly via HTTP handler"
+                "Calling OpenAPI tool %s directly via HTTP handler", name
             )
+            if hook_result.get("extra_headers"):
+                verbose_logger.warning(
+                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
+                    "MCP server '%s' — header injection is not supported for "
+                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
+                    "transport to enable hook header injection.",
+                    server_name,
+                )
             tasks.append(
                 asyncio.create_task(
                     self._call_openapi_tool_handler(mcp_server, name, arguments)
@@ -2247,6 +2297,7 @@ class MCPServerManager:
                 raw_headers=raw_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
+                hook_extra_headers=hook_result.get("extra_headers"),
             )
 
         # For OpenAPI tools, await outside the client context
