@@ -3,7 +3,7 @@ name: Read Version from pyproject.toml
 on:
   push:
     branches:
-      - main # Change this to the default branch of your repository
+      # - main  # Change this to the default branch of your repository
 
 permissions:
   contents: read

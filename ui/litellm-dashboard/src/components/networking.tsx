@@ -2614,6 +2614,54 @@ export const allEndUsersCall = async (accessToken: string) => {
   }
 };
 
+export const spendLogsModelsCall = async (
+  accessToken: string,
+  start_date?: string,
+  end_date?: string
+): Promise<string[]> => {
+  /**
+   * Get distinct models from spend logs within a time range.
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/models` : `/spend/logs/models`;
+    const params = new URLSearchParams();
+
+    if (start_date) {
+      params.append("start_date", start_date);
+    }
+    if (end_date) {
+      params.append("end_date", end_date);
+    }
+
+    if (params.toString()) {
+      url += `?${params.toString()}`;
+    }
+
+    console.log("in spendLogsModelsCall:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("spendLogsModelsCall response:", data);
+    return data.models || [];
+  } catch (error) {
+    console.error("Failed to fetch spend logs models:", error);
+    throw error;
+  }
+};
+
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
     const base = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;

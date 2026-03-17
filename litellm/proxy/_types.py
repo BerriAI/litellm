@@ -693,6 +693,7 @@ class LiteLLMRoutes(enum.Enum):
         "/tag/list",
         "/audit",
         "/audit/{id}",
+        "/key/aliases",
     ] + info_routes
 
     # All routes accesible by an Org Admin

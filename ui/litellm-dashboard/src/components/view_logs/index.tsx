@@ -115,6 +115,18 @@ export default function SpendLogsTable({
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
+  // Timestamp for forcing FilterComponent remount during live tail
+  const [liveTailTimestamp, setLiveTailTimestamp] = useState<number>(Date.now());
+
+  useEffect(() => {
+    if (isLiveTail && !isCustomDate) {
+      const interval = setInterval(() => {
+        setLiveTailTimestamp(Date.now());
+      }, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [isLiveTail, isCustomDate]);
+
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
     value: 24,
     unit: "hours",
@@ -615,6 +627,7 @@ export default function SpendLogsTable({
             ) : (
               <>
                 <FilterComponent
+                  key={`${startTime}-${endTime}-${isLiveTail && !isCustomDate ? liveTailTimestamp : "static"}`}
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}

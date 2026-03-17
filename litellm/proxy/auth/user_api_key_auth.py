@@ -1828,7 +1828,20 @@ async def _enforce_key_and_fallback_model_access(
             request_data.get("fallbacks", None),
         )
 
-        if model is not None:
+        # Skip model access check for read-only spend logs endpoints
+        # These endpoints only filter logs, they don't call the model
+        _skip_model_check_for_routes = [
+            "/spend/logs/ui",
+            "/spend/logs/v2",
+            "/spend/logs/error_stats",
+            "/spend/logs/failure_logs_analytics_paginated",
+            "/spend/logs/models",
+        ]
+        should_check_model = model is not None and not any(
+            route.startswith(r) for r in _skip_model_check_for_routes
+        )
+
+        if should_check_model:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
