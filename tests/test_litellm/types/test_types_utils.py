@@ -361,3 +361,42 @@ def test_usage_openrouter_cache_tokens_from_prompt_tokens_details():
     assert "cache_write_tokens" not in ptd
     # cache_creation_tokens should also be absent when no writes were reported
     assert "cache_creation_tokens" not in ptd
+
+    # If cache_creation_tokens is already set on the wrapper (e.g. from a prior
+    # Anthropic-native mapping pass), the OpenRouter block must not overwrite it.
+    usage_no_overwrite = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=999,  # pre-existing value
+            cache_write_tokens=400,     # OpenRouter field — must NOT win
+        ),
+    )
+    assert usage_no_overwrite.prompt_tokens_details.cache_creation_tokens == 999
+
+
+def test_usage_openrouter_cache_tokens_dict_path():
+    """In production, prompt_tokens_details arrives as a plain dict (parsed from JSON).
+    The dict branch (isinstance(..., dict) → PromptTokensDetailsWrapper(**d)) must also
+    populate both the private fields and cache_creation_tokens for cost calculation."""
+    from litellm.types.utils import Usage
+
+    # Plain dict — the real code path from JSON-parsed API responses
+    usage = Usage(
+        prompt_tokens=18500,
+        completion_tokens=120,
+        total_tokens=18620,
+        prompt_tokens_details={
+            "cached_tokens": 17000,
+            "cache_write_tokens": 400,
+        },
+    )
+
+    # Both the streaming-adapter path (private fields) …
+    assert usage._cache_read_input_tokens == 17000
+    assert usage._cache_creation_input_tokens == 400
+
+    # … and the cost-calculator path (public wrapper field) must be populated.
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_tokens == 400

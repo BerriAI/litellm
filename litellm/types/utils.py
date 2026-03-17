@@ -1681,8 +1681,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
                     self._cache_creation_input_tokens = _writes
                     # Also populate the public field that the cost calculator reads
                     # (_parse_prompt_tokens_details reads cache_creation_tokens, not
-                    # the private _cache_creation_input_tokens attribute)
-                    _ptd.cache_creation_tokens = _writes
+                    # the private _cache_creation_input_tokens attribute).
+                    # Guard against overwriting a value already set by a prior
+                    # Anthropic-native mapping pass.
+                    if not getattr(_ptd, "cache_creation_tokens", None):
+                        _ptd.cache_creation_tokens = _writes
 
         for k, v in params.items():
             setattr(self, k, v)
