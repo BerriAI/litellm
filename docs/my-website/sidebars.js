@@ -52,6 +52,7 @@ const sidebars = {
           label: "Providers",
           items: [
             ...[
+              "proxy/guardrails/akto",
               "proxy/guardrails/qualifire",
               "proxy/guardrails/aim_security",
               "proxy/guardrails/onyx_security",
