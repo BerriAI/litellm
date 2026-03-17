@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
 
@@ -65,10 +65,12 @@ async def test_default_auth_required_when_auth_not_set():
     """
     When auth is not set (None), pass-through routes default to requiring auth.
     Backward compatibility: previously Depends(user_api_key_auth) was always applied.
+    With no valid key supplied, auth must raise (proves we did not bypass).
     """
     request = MagicMock()
     request.url = MagicMock()
     request.url.path = "/v1/custom/endpoint"
+    request.headers = {}
 
     with patch(
         "litellm.proxy.auth.user_api_key_auth.get_request_route",
@@ -87,18 +89,19 @@ async def test_default_auth_required_when_auth_not_set():
                 }
             ],
         },
+    ), patch(
+        "litellm.proxy.proxy_server.master_key",
+        "sk-test-master-key",
     ):
-        # Should NOT early-exit; will proceed to auth flow (may fail with 401 if no key)
-        result = await _user_api_key_auth_builder(
-            request=request,
-            api_key="",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={},
-        )
-        # Without valid key, we get an error or UserAPIKeyAuth - the key is that we did NOT
-        # early-return UserAPIKeyAuth() (which would mean auth was bypassed).
-        # If we got here without exception, the route required auth (no early exit).
-        assert result is not None
+        # Auth required but no valid key: must raise (proves auth was not bypassed)
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+        assert "Malformed API Key" in exc_info.value.message or "Authentication Error" in exc_info.value.message

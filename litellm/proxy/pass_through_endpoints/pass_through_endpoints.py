@@ -2269,7 +2269,9 @@ async def initialize_pass_through_endpoints(
                     )
                 )
             _dependencies = [Depends(user_api_key_auth)]
-            LiteLLMRoutes.openai_routes.value.append(_path)
+            # Only add to openai_routes when auth is explicitly true (preserve original scope)
+            if _auth is not None and str(_auth).lower() == "true":
+                LiteLLMRoutes.openai_routes.value.append(_path)
 
         if _target is None:
             continue
