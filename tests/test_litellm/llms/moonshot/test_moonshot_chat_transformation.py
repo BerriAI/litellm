@@ -551,3 +551,71 @@ class TestMoonshotConfig:
         # reasoning_content must not have been injected
         for msg in result["messages"]:
             assert "reasoning_content" not in msg
+
+    def test_reasoning_content_preserved_on_pydantic_message_object(self):
+        """reasoning_content on Pydantic Message objects is preserved (not overwritten with placeholder).
+
+        Regression test for: https://github.com/BerriAI/litellm/issues/23765
+        The issue was that 'reasoning_content' in msg doesn't work for Pydantic models
+        because they don't support the 'in' operator the same way as dicts.
+        """
+        from litellm.types.utils import Message
+
+        config = MoonshotChatConfig()
+
+        # Create a Pydantic Message object with reasoning_content (as would come from API response)
+        message_with_reasoning = Message(
+            role="assistant",
+            content=None,
+            reasoning_content="<thinking>User wants weather</thinking>",
+            tool_calls=[
+                {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+            ],
+        )
+
+        messages = [message_with_reasoning]
+
+        result = config.fill_reasoning_content(messages)
+
+        # reasoning_content should be preserved, not replaced with placeholder
+        assert result[0].get("reasoning_content") == "<thinking>User wants weather</thinking>"
+
+    def test_reasoning_content_preserved_in_multi_turn_flow(self):
+        """reasoning_content is preserved through multi-turn conversation flow.
+
+        This tests the complete flow: API response -> Message object -> dict -> fill_reasoning_content
+        """
+        from litellm.types.utils import Message
+        from litellm.utils import convert_to_dict
+
+        config = MoonshotChatConfig()
+
+        # Simulate API response with reasoning_content
+        api_response = {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "<thinking>Planning to call weather tool</thinking>",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{}'}}
+            ],
+        }
+
+        # Convert to Message object (as LiteLLM does)
+        message_obj = Message(**api_response)
+
+        # Convert back to dict (when building next request)
+        message_dict = convert_to_dict(message_obj)
+
+        # Build multi-turn conversation
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            message_dict,
+            {"role": "tool", "tool_call_id": "call_1", "content": '{"temp": 72}'},
+            {"role": "user", "content": "Thanks!"},
+        ]
+
+        # Apply fill_reasoning_content
+        result = config.fill_reasoning_content(messages)
+
+        # reasoning_content should be preserved in the assistant message
+        assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
