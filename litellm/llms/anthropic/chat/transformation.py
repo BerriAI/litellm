@@ -1767,6 +1767,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         pass
                 code_interpreter_results = []
                 for tr in tool_results:
+                    if tr.get("type") != "bash_code_execution_tool_result":
+                        continue
                     call_id = tr.get("tool_use_id", "")
                     content = tr.get("content", {})
                     if isinstance(content, dict):
