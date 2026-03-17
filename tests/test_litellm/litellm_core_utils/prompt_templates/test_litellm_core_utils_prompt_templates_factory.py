@@ -2027,3 +2027,56 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         )
     finally:
         litellm.modify_params = original
+
+
+def test_anthropic_messages_pt_file_block_preserves_cache_control():
+    """
+    Test that cache_control is preserved on file-type content blocks
+    when translated to Anthropic document params.
+    Regression test for https://github.com/BerriAI/litellm/issues/23873
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "doc.pdf",
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize this document.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-20250514", llm_provider="anthropic"
+    )
+
+    content_blocks = result[0]["content"]
+    assert len(content_blocks) == 2
+
+    # Document block (from file) should preserve cache_control
+    doc_block = content_blocks[0]
+    assert doc_block["type"] == "document"
+    assert "cache_control" in doc_block, (
+        "cache_control was dropped from file/document block"
+    )
+    assert doc_block["cache_control"]["type"] == "ephemeral"
+
+    # Text block should also preserve cache_control
+    text_block = content_blocks[1]
+    assert text_block["type"] == "text"
+    assert "cache_control" in text_block
+    assert text_block["cache_control"]["type"] == "ephemeral"
