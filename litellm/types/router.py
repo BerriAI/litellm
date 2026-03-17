@@ -704,6 +704,7 @@ VALID_LITELLM_ENVIRONMENTS = [
 class RoutingStrategy(enum.Enum):
     LEAST_BUSY = "least-busy"
     STICKY_LEAST_BUSY = "sticky-least-busy"
+    STICKY_LEAST_BUSY_REDIS = "sticky-least-busy-redis"
     LATENCY_BASED = "latency-based-routing"
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"

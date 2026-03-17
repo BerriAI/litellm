@@ -79,6 +79,7 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.sticky_least_busy import StickyLeastBusyLoggingHandler
+from litellm.router_strategy.sticky_least_busy_redis import StickyLeastBusyRedisLoggingHandler
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -295,6 +296,7 @@ class Router:
             "simple-shuffle",
             "least-busy",
             "sticky-least-busy",
+            "sticky-least-busy-redis",
             "usage-based-routing",
             "latency-based-routing",
             "cost-based-routing",
@@ -864,6 +866,30 @@ class Router:
             # add_litellm_callback already deduplicates by class, safe to call repeatedly
             if isinstance(litellm.callbacks, list):
                 litellm.logging_callback_manager.add_litellm_callback(self.sticky_leastbusy_logger)  # type: ignore
+        elif (
+            routing_strategy == RoutingStrategy.STICKY_LEAST_BUSY_REDIS.value
+            or routing_strategy == RoutingStrategy.STICKY_LEAST_BUSY_REDIS
+        ):
+            sticky_redis_args = routing_strategy_args or {}
+            self.sticky_leastbusy_redis_logger = StickyLeastBusyRedisLoggingHandler(
+                router_cache=self.cache,
+                imbalance_threshold=sticky_redis_args.get("imbalance_threshold", 1.5),
+                cache_ttl=sticky_redis_args.get("cache_ttl", 600),
+                sticky_ttl=sticky_redis_args.get("sticky_ttl", 900),
+            )
+
+            # Clean stale references from input_callback, then re-add the
+            # singleton. This prevents duplicate handlers while preserving state.
+            if isinstance(litellm.input_callback, list):
+                litellm.input_callback = [
+                    cb for cb in litellm.input_callback
+                    if not isinstance(cb, StickyLeastBusyRedisLoggingHandler)
+                ]
+                litellm.input_callback.append(self.sticky_leastbusy_redis_logger)  # type: ignore
+            else:
+                litellm.input_callback = [self.sticky_leastbusy_redis_logger]  # type: ignore
+            if isinstance(litellm.callbacks, list):
+                litellm.logging_callback_manager.add_litellm_callback(self.sticky_leastbusy_redis_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
@@ -9318,6 +9344,7 @@ class Router:
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
             and self.routing_strategy != "sticky-least-busy"
+            and self.routing_strategy != "sticky-least-busy-redis"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -9421,13 +9448,48 @@ class Router:
                 self.routing_strategy == "sticky-least-busy"
                 and self.sticky_leastbusy_logger is not None
             ):
-                deployment = (
-                    await self.sticky_leastbusy_logger.async_get_available_deployments(
-                        model_group=model,
-                        healthy_deployments=healthy_deployments,  # type: ignore
-                        messages=messages,
+                try:
+                    deployment = (
+                        await self.sticky_leastbusy_logger.async_get_available_deployments(
+                            model_group=model,
+                            healthy_deployments=healthy_deployments,  # type: ignore
+                            messages=messages,
+                            request_kwargs=request_kwargs,
+                        )
                     )
-                )
+                except Exception as e:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusy async_get_available_deployments failed: {e}, "
+                        f"falling back to simple_shuffle"
+                    )
+                    return simple_shuffle(
+                        llm_router_instance=self,
+                        healthy_deployments=healthy_deployments,
+                        model=model,
+                    )
+            elif (
+                self.routing_strategy == "sticky-least-busy-redis"
+                and self.sticky_leastbusy_redis_logger is not None
+            ):
+                try:
+                    deployment = (
+                        await self.sticky_leastbusy_redis_logger.async_get_available_deployments(
+                            model_group=model,
+                            healthy_deployments=healthy_deployments,  # type: ignore
+                            messages=messages,
+                            request_kwargs=request_kwargs,
+                        )
+                    )
+                except Exception as e:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusyRedis async_get_available_deployments failed: {e}, "
+                        f"falling back to simple_shuffle"
+                    )
+                    return simple_shuffle(
+                        llm_router_instance=self,
+                        healthy_deployments=healthy_deployments,
+                        model=model,
+                    )
             else:
                 deployment = None
             if deployment is None:
@@ -9582,13 +9644,48 @@ class Router:
                 self.routing_strategy == "sticky-least-busy"
                 and self.sticky_leastbusy_logger is not None
             ):
-                deployment = (
-                    await self.sticky_leastbusy_logger.async_get_available_deployments(
-                        model_group=model,
-                        healthy_deployments=pass_through_deployments,  # type: ignore
-                        messages=messages,
+                try:
+                    deployment = (
+                        await self.sticky_leastbusy_logger.async_get_available_deployments(
+                            model_group=model,
+                            healthy_deployments=pass_through_deployments,  # type: ignore
+                            messages=messages,
+                            request_kwargs=request_kwargs,
+                        )
                     )
-                )
+                except Exception as e:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusy async_get_available_deployments failed: {e}, "
+                        f"falling back to simple_shuffle"
+                    )
+                    return simple_shuffle(
+                        llm_router_instance=self,
+                        healthy_deployments=pass_through_deployments,
+                        model=model,
+                    )
+            elif (
+                self.routing_strategy == "sticky-least-busy-redis"
+                and self.sticky_leastbusy_redis_logger is not None
+            ):
+                try:
+                    deployment = (
+                        await self.sticky_leastbusy_redis_logger.async_get_available_deployments(
+                            model_group=model,
+                            healthy_deployments=pass_through_deployments,  # type: ignore
+                            messages=messages,
+                            request_kwargs=request_kwargs,
+                        )
+                    )
+                except Exception as e:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusyRedis async_get_available_deployments failed: {e}, "
+                        f"falling back to simple_shuffle"
+                    )
+                    return simple_shuffle(
+                        llm_router_instance=self,
+                        healthy_deployments=pass_through_deployments,
+                        model=model,
+                    )
             else:
                 deployment = None
 
@@ -9758,11 +9855,41 @@ class Router:
                 model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
         elif self.routing_strategy == "sticky-least-busy" and self.sticky_leastbusy_logger is not None:
-            deployment = self.sticky_leastbusy_logger.get_available_deployments(
-                model_group=model,
-                healthy_deployments=healthy_deployments,  # type: ignore
-                messages=messages,
-            )
+            try:
+                deployment = self.sticky_leastbusy_logger.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,  # type: ignore
+                    messages=messages,
+                    request_kwargs=request_kwargs,
+                )
+            except Exception as e:
+                verbose_router_logger.error(
+                    f"StickyLeastBusy get_available_deployments failed: {e}, "
+                    f"falling back to simple_shuffle"
+                )
+                return simple_shuffle(
+                    llm_router_instance=self,
+                    healthy_deployments=healthy_deployments,
+                    model=model,
+                )
+        elif self.routing_strategy == "sticky-least-busy-redis" and self.sticky_leastbusy_redis_logger is not None:
+            try:
+                deployment = self.sticky_leastbusy_redis_logger.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,  # type: ignore
+                    messages=messages,
+                    request_kwargs=request_kwargs,
+                )
+            except Exception as e:
+                verbose_router_logger.error(
+                    f"StickyLeastBusyRedis get_available_deployments failed: {e}, "
+                    f"falling back to simple_shuffle"
+                )
+                return simple_shuffle(
+                    llm_router_instance=self,
+                    healthy_deployments=healthy_deployments,
+                    model=model,
+                )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
@@ -9932,11 +10059,41 @@ class Router:
                 model_group=model, healthy_deployments=pass_through_deployments  # type: ignore
             )
         elif self.routing_strategy == "sticky-least-busy" and self.sticky_leastbusy_logger is not None:
-            deployment = self.sticky_leastbusy_logger.get_available_deployments(
-                model_group=model,
-                healthy_deployments=pass_through_deployments,  # type: ignore
-                messages=messages,
-            )
+            try:
+                deployment = self.sticky_leastbusy_logger.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=pass_through_deployments,  # type: ignore
+                    messages=messages,
+                    request_kwargs=request_kwargs,
+                )
+            except Exception as e:
+                verbose_router_logger.error(
+                    f"StickyLeastBusy get_available_deployments failed: {e}, "
+                    f"falling back to simple_shuffle"
+                )
+                return simple_shuffle(
+                    llm_router_instance=self,
+                    healthy_deployments=pass_through_deployments,
+                    model=model,
+                )
+        elif self.routing_strategy == "sticky-least-busy-redis" and self.sticky_leastbusy_redis_logger is not None:
+            try:
+                deployment = self.sticky_leastbusy_redis_logger.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=pass_through_deployments,  # type: ignore
+                    messages=messages,
+                    request_kwargs=request_kwargs,
+                )
+            except Exception as e:
+                verbose_router_logger.error(
+                    f"StickyLeastBusyRedis get_available_deployments failed: {e}, "
+                    f"falling back to simple_shuffle"
+                )
+                return simple_shuffle(
+                    llm_router_instance=self,
+                    healthy_deployments=pass_through_deployments,
+                    model=model,
+                )
         elif self.routing_strategy == "simple-shuffle":
             return simple_shuffle(
                 llm_router_instance=self,
