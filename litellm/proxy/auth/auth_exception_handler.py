@@ -112,6 +112,30 @@ class UserAPIKeyAuthExceptionHandler:
             user_api_key_dict.request_route = route
             user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
 
+            # Best-effort metadata enrichment for failures that happen after the
+            # key was cached but before `resolved_identity` was returned.
+            try:
+                from litellm.proxy.proxy_server import user_api_key_cache
+
+                cached_key = await user_api_key_cache.async_get_cache(key=api_key)
+                if cached_key is not None:
+                    if isinstance(cached_key, dict):
+                        cached_key = UserAPIKeyAuth(**cached_key)
+                    if isinstance(cached_key, UserAPIKeyAuth):
+                        for attr in (
+                            "key_alias",
+                            "team_id",
+                            "team_alias",
+                            "user_id",
+                            "org_id",
+                            "spend",
+                            "max_budget",
+                        ):
+                            if getattr(user_api_key_dict, attr, None) is None:
+                                setattr(user_api_key_dict, attr, getattr(cached_key, attr, None))
+            except Exception:
+                pass
+
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
             # without this the failed trace would carry no team/key attributes.
