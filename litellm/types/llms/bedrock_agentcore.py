@@ -148,4 +148,3 @@ class AgentCoreParsedResponse(TypedDict):
     usage: Optional[AgentCoreUsage]
     final_message: Optional[AgentCoreMessage]
     reasoning_content_blocks: Optional[List[AgentCoreReasoningContentBlock]]
-

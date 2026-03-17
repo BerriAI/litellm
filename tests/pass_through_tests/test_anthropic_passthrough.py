@@ -337,41 +337,46 @@ async def test_anthropic_messages_streaming_cost_injection():
     
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            "http://0.0.0.0:4000/v1/messages", 
-            json=payload, 
-            headers=headers
+            "http://0.0.0.0:4000/v1/messages",
+            json=payload,
+            headers=headers,
         ) as response:
             assert response.status == 200
-            
-            # Collect all SSE events
+
+            # Collect all SSE events.
+            # Split each chunk by newlines to handle both:
+            # - Anthropic direct path: chunks arrive as individual lines
+            # - OpenAI/Responses API path: chunks are full multi-line SSE events
             events = []
-            async for line in response.content:
-                line_str = line.decode('utf-8').strip()
-                if line_str.startswith('data: '):
-                    try:
-                        data = json.loads(line_str[6:])  # Remove 'data: ' prefix
-                        events.append(data)
-                    except json.JSONDecodeError:
-                        continue
-            
+            async for chunk in response.content:
+                chunk_str = chunk.decode("utf-8")
+                for line in chunk_str.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])  # Remove 'data: ' prefix
+                            events.append(data)
+                        except json.JSONDecodeError:
+                            continue
+
             # Find message_delta event with usage
             message_delta_events = [
-                event for event in events 
-                if event.get('type') == 'message_delta' and 'usage' in event
+                event for event in events
+                if event.get("type") == "message_delta" and "usage" in event
             ]
-            
+
             assert len(message_delta_events) > 0, "No message_delta events with usage found"
-            
+
             # Check that cost is included in usage
             for event in message_delta_events:
-                usage = event.get('usage', {})
-                assert 'cost' in usage, f"Cost not found in usage: {usage}"
-                assert isinstance(usage['cost'], (int, float)), f"Cost should be numeric: {usage['cost']}"
-                assert usage['cost'] >= 0, f"Cost should be non-negative: {usage['cost']}"
-                
-                print(f"✅ Found message_delta with cost: {usage}")
-            
-            print(f"✅ Test passed: Found {len(message_delta_events)} message_delta events with cost")
+                usage = event.get("usage", {})
+                assert "cost" in usage, f"Cost not found in usage: {usage}"
+                assert isinstance(usage["cost"], (int, float)), f"Cost should be numeric: {usage['cost']}"
+                assert usage["cost"] >= 0, f"Cost should be non-negative: {usage['cost']}"
+
+                print(f"Found message_delta with cost: {usage}")
+
+            print(f"Test passed: Found {len(message_delta_events)} message_delta events with cost")
 
 
 @pytest.mark.asyncio
@@ -381,54 +386,61 @@ async def test_anthropic_messages_openai_model_streaming_cost_injection():
     Test that cost is injected into message_delta usage for OpenAI model via Anthropic Messages API
     """
     print("Testing cost injection in Anthropic Messages API with OpenAI model")
-    
+
     headers = {
         "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
     }
-    
+
     payload = {
         "model": "openai/gpt-4o",
-        "max_tokens": 10,
+        "max_tokens": 20,
         "stream": True,
         "messages": [{"role": "user", "content": "Say 'Hi'"}],
     }
-    
+
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            "http://0.0.0.0:4000/v1/messages", 
-            json=payload, 
-            headers=headers
+            "http://0.0.0.0:4000/v1/messages",
+            json=payload,
+            headers=headers,
         ) as response:
             assert response.status == 200
-            
-            # Collect all SSE events
+
+            # Collect all SSE events.
+            # Split each chunk by newlines to handle both:
+            # - Direct API paths: chunks arrive as individual lines
+            # - OpenAI/Responses API path: AnthropicResponsesStreamWrapper yields
+            #   full multi-line SSE events as single bytes objects, so a naive
+            #   startswith('data: ') check on the whole chunk misses them.
             events = []
-            async for line in response.content:
-                line_str = line.decode('utf-8').strip()
-                if line_str.startswith('data: '):
-                    try:
-                        data = json.loads(line_str[6:])  # Remove 'data: ' prefix
-                        events.append(data)
-                    except json.JSONDecodeError:
-                        continue
-            
+            async for chunk in response.content:
+                chunk_str = chunk.decode("utf-8")
+                for line in chunk_str.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])  # Remove 'data: ' prefix
+                            events.append(data)
+                        except json.JSONDecodeError:
+                            continue
+
             # Find message_delta event with usage
             message_delta_events = [
-                event for event in events 
-                if event.get('type') == 'message_delta' and 'usage' in event
+                event for event in events
+                if event.get("type") == "message_delta" and "usage" in event
             ]
-            
+
             assert len(message_delta_events) > 0, "No message_delta events with usage found"
-            
+
             # Check that cost is included in usage
             for event in message_delta_events:
-                usage = event.get('usage', {})
-                assert 'cost' in usage, f"Cost not found in usage: {usage}"
-                assert isinstance(usage['cost'], (int, float)), f"Cost should be numeric: {usage['cost']}"
-                assert usage['cost'] >= 0, f"Cost should be non-negative: {usage['cost']}"
-                
-                print(f"✅ Found message_delta with cost: {usage}")
-            
-            print(f"✅ Test passed: Found {len(message_delta_events)} message_delta events with cost")
+                usage = event.get("usage", {})
+                assert "cost" in usage, f"Cost not found in usage: {usage}"
+                assert isinstance(usage["cost"], (int, float)), f"Cost should be numeric: {usage['cost']}"
+                assert usage["cost"] >= 0, f"Cost should be non-negative: {usage['cost']}"
+
+                print(f"Found message_delta with cost: {usage}")
+
+            print(f"Test passed: Found {len(message_delta_events)} message_delta events with cost")

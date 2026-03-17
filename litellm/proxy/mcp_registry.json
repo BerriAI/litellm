@@ -33,8 +33,8 @@
       "icon_url": "https://cdn.simpleicons.org/atlassian",
       "category": "Developer Tools",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
-      "transport": "sse",
-      "url": "https://mcp.atlassian.com/v1/sse",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp",
       "env_vars": []
     },
     {

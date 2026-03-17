@@ -23,6 +23,7 @@ export default function UISettings() {
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
   const disableVectorStoresProperty = schema?.properties?.disable_vector_stores_for_internal_users;
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
+  const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -156,6 +157,20 @@ export default function UISettings() {
   const handleToggleAllowVectorStoresTeamAdmins = (checked: boolean) => {
     updateSettings(
       { allow_vector_stores_for_team_admins: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleScopeUserSearch = (checked: boolean) => {
+    updateSettings(
+      { scope_user_search_to_org: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -342,6 +357,26 @@ export default function UISettings() {
               {allowVectorStoresTeamAdminsProperty?.description && (
                 <Typography.Text type="secondary">{allowVectorStoresTeamAdminsProperty.description}</Typography.Text>
               )}
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Scope user search to organization */}
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.scope_user_search_to_org)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleScopeUserSearch}
+              aria-label={scopeUserSearchProperty?.description ?? "Scope user search to organization"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Scope user search to organization</Typography.Text>
+              <Typography.Text type="secondary">
+                {scopeUserSearchProperty?.description ??
+                  "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users."}
+              </Typography.Text>
             </Space>
           </Space>
 

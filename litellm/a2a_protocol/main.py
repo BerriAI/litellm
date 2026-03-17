@@ -120,9 +120,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-            custom_llm_provider
-        )
+        litellm_logging_obj.model_call_details[
+            "custom_llm_provider"
+        ] = custom_llm_provider
 
     return agent_name
 
@@ -212,6 +212,7 @@ async def asend_message(
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -293,9 +294,12 @@ async def asend_message(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
         trace_id = trace_id or str(uuid.uuid4())
-        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
+        extra_headers: Dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+        # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
+        if agent_extra_headers:
+            extra_headers.update(agent_extra_headers)
         a2a_client = await create_a2a_client(
             base_url=api_base, extra_headers=extra_headers
         )
@@ -434,7 +438,7 @@ def _build_streaming_logging_obj(
     return logging_obj
 
 
-async def asend_message_streaming(
+async def asend_message_streaming(  # noqa: PLR0915
     a2a_client: Optional["A2AClientType"] = None,
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
@@ -442,6 +446,7 @@ async def asend_message_streaming(
     agent_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     proxy_server_request: Optional[Dict[str, Any]] = None,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -523,7 +528,17 @@ async def asend_message_streaming(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        # Mirror the non-streaming path: always include trace and agent-id headers
+        streaming_extra_headers: Dict[str, str] = {
+            "X-LiteLLM-Trace-Id": str(request.id),
+        }
+        if agent_id:
+            streaming_extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+        if agent_extra_headers:
+            streaming_extra_headers.update(agent_extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=api_base, extra_headers=streaming_extra_headers
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -637,17 +652,28 @@ async def create_a2a_client(
 
     verbose_logger.info(f"Creating A2A client for {base_url}")
 
-    # Use LiteLLM's cached httpx client
-    http_handler = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.A2A,
-        params={"timeout": timeout},
+    # Use get_async_httpx_client with per-agent params so that different agents
+    # (with different extra_headers) get separate cached clients.  The params
+    # dict is hashed into the cache key, keeping agent auth isolated while
+    # still reusing connections within the same agent.
+    #
+    # Only pass params that AsyncHTTPHandler.__init__ accepts (e.g. timeout).
+    # Use "disable_aiohttp_transport" key for cache-key-only data (it's
+    # filtered out before reaching the constructor).
+    _client_params: dict = {"timeout": timeout}
+    if extra_headers:
+        # Encode headers into a cache-key-only param so each unique header
+        # set produces a distinct cache key.
+        _client_params["disable_aiohttp_transport"] = str(sorted(extra_headers.items()))
+    _async_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2AProvider,
+        params=_client_params,
     )
-    httpx_client = http_handler.client
-
+    httpx_client = _async_handler.client
     if extra_headers:
         httpx_client.headers.update(extra_headers)
         verbose_proxy_logger.debug(
-            f"A2A client created with extra_headers={extra_headers}"
+            f"A2A client created with extra_headers={list(extra_headers.keys())}"
         )
 
     # Resolve agent card

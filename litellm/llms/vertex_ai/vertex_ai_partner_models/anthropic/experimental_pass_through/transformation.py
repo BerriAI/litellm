@@ -33,10 +33,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         """
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
-        
+
         project_id: Optional[str] = None
         if "Authorization" not in headers:
-            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
+                litellm_params
+            )
 
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -62,11 +64,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
         headers["content-type"] = "application/json"
-        
+
         # Add beta headers for Vertex AI
         tools = optional_params.get("tools", [])
         beta_values: set[str] = set()
-        
+
         # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
         if existing_beta:
@@ -79,36 +81,42 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             edits = context_management_param.get("edits", [])
             has_compact = False
             has_other = False
-            
+
             for edit in edits:
                 edit_type = edit.get("type", "")
                 if edit_type == "compact_20260112":
                     has_compact = True
                 else:
                     has_other = True
-            
+
             # Add compact header if any compact edits exist
             if has_compact:
                 beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-            
+
             # Add context management header if any other edits exist
             if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
 
         # Check for web search tool
         for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
+            if isinstance(tool, dict) and tool.get("type", "").startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
+            ):
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                )
                 break
-        
+
         # Check for tool search tools - Vertex AI uses different beta header
         anthropic_model_info = AnthropicModelInfo()
         if anthropic_model_info.is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header("vertex_ai"))
-        
+
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
+
         return headers, api_base
 
     def get_complete_url(
@@ -141,6 +149,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        self._remove_scope_from_cache_control(anthropic_messages_request)
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
 

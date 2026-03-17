@@ -22,7 +22,9 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
+import { Alert, Button } from "antd";
+import React, { useMemo, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
@@ -35,6 +37,7 @@ import {
   userDailyActivityCall,
 } from "../../../networking";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
+import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
 import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
 import { valueFormatterSpend } from "../../utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
@@ -87,93 +90,64 @@ interface EntityUsageProps {
   dateValue: DateRangePickerValue;
 }
 
-const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
-  const [spendData, setSpendData] = useState<EntitySpendData>({
-    results: [],
-    metadata: {
-      total_spend: 0,
-      total_api_requests: 0,
-      total_successful_requests: 0,
-      total_failed_requests: 0,
-      total_tokens: 0,
-    },
-  });
-  const { teams } = useTeams();
+const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
+  tag: tagDailyActivityCall,
+  team: teamDailyActivityCall,
+  organization: organizationDailyActivityCall,
+  customer: customerDailyActivityCall,
+  agent: agentDailyActivityCall,
+  user: userDailyActivityCall,
+};
 
-  const modelMetrics = processActivityData(spendData, "models", teams || []);
-  const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
+const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, entityId, entityList, dateValue }) => {
+  const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
 
-  const fetchSpendData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
-    // Create new Date objects to avoid mutating the original dates
-    const startTime = new Date(dateValue.from);
-    const endTime = new Date(dateValue.to);
+  const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
+  const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
 
-    if (entityType === "tag") {
-      const data = await tagDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
-    } else if (entityType === "team") {
-      const data = await teamDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
-    } else if (entityType === "organization") {
-      const data = await organizationDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
-    } else if (entityType === "customer") {
-      const data = await customerDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
-    } else if (entityType === "agent") {
-      const data = await agentDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags : null,
-      );
-      setSpendData(data);
-    } else if (entityType === "user") {
-      const data = await userDailyActivityCall(
-        accessToken,
-        startTime,
-        endTime,
-        1,
-        selectedTags.length > 0 ? selectedTags[0] : null,
-      );
-      setSpendData(data);
-    } else {
-      throw new Error("Invalid entity type");
-    }
-  };
+  const entityFilterArg = useMemo(() => {
+    if (entityType === "user") return selectedTags.length > 0 ? selectedTags[0] : null;
+    return selectedTags.length > 0 ? selectedTags : null;
+  }, [entityType, selectedTags]);
 
-  useEffect(() => {
-    fetchSpendData();
-  }, [accessToken, dateValue, entityId, selectedTags]);
+  const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const enabled = !!accessToken && !!startTime && !!endTime;
+
+  const {
+    data: spendDataRaw,
+    isFetchingMore,
+    progress,
+    cancelled,
+    cancel,
+  } = usePaginatedDailyActivity({
+    fetchFn,
+    args: [accessToken, startTime, endTime, entityFilterArg],
+    enabled,
+  });
+
+  const spendData = spendDataRaw as unknown as EntitySpendData;
+
+  const {
+    data: agentSpendDataRaw,
+    isFetchingMore: agentIsFetchingMore,
+    progress: agentProgress,
+    cancelled: agentCancelled,
+    cancel: agentCancel,
+  } = usePaginatedDailyActivity({
+    fetchFn: agentDailyActivityCall,
+    args: [accessToken, startTime, endTime, null],
+    enabled: enabled && entityType === "team",
+  });
+
+  const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
+
+  const modelMetrics = processActivityData(spendData, "models", teams || []);
+  const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
+  const agentMetrics = entityType === "team" ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
@@ -207,6 +181,37 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, topModelsLimit);
+  };
+
+  const getTopAgents = () => {
+    const agentSpend: { [key: string]: any } = {};
+    agentSpendData.results.forEach((day) => {
+      Object.entries(day.breakdown.entities || {}).forEach(([agentId, data]) => {
+        if (!agentSpend[agentId]) {
+          agentSpend[agentId] = {
+            spend: 0,
+            requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            tokens: 0,
+            agent_name: (data.metadata as any)?.agent_name || agentId,
+          };
+        }
+        agentSpend[agentId].spend += data.metrics.spend;
+        agentSpend[agentId].requests += data.metrics.api_requests;
+        agentSpend[agentId].successful_requests += data.metrics.successful_requests;
+        agentSpend[agentId].failed_requests += data.metrics.failed_requests;
+        agentSpend[agentId].tokens += data.metrics.total_tokens;
+      });
+    });
+
+    return Object.entries(agentSpend)
+      .map(([agentId, metrics]) => ({
+        key: metrics.agent_name,
+        ...metrics,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, topAgentsLimit);
   };
 
   const getTopAPIKeys = () => {
@@ -391,6 +396,78 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   return (
     <div style={{ width: "100%" }} className="relative">
+      {isFetchingMore && (
+        <Alert
+          banner
+          type="warning"
+          className="mb-2"
+          message={
+            <div className="flex items-center justify-between">
+              <span>
+                <LoadingOutlined spin className="mr-2" />
+                Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
+                update periodically as data loads. Moving off of this page will stop and reset this. To continue using
+                the UI in the meantime,{" "}
+                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                  open a new tab <ExportOutlined />
+                </a>
+                .
+              </span>
+              <Button type="primary" danger onClick={cancel}>
+                Stop
+              </Button>
+            </div>
+          }
+        />
+      )}
+      {cancelled && (
+        <Alert
+          banner
+          type="info"
+          className="mb-2"
+          message={
+            <span>
+              Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+            </span>
+          }
+        />
+      )}
+      {agentIsFetchingMore && entityType === "team" && (
+        <Alert
+          banner
+          type="warning"
+          className="mb-2"
+          message={
+            <div className="flex items-center justify-between">
+              <span>
+                <LoadingOutlined spin className="mr-2" />
+                Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
+                Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
+                continue using the UI in the meantime,{" "}
+                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                  open a new tab <ExportOutlined />
+                </a>
+                .
+              </span>
+              <Button type="primary" danger onClick={agentCancel}>
+                Stop
+              </Button>
+            </div>
+          }
+        />
+      )}
+      {agentCancelled && entityType === "team" && (
+        <Alert
+          banner
+          type="info"
+          className="mb-2"
+          message={
+            <span>
+              Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+            </span>
+          }
+        />
+      )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
@@ -408,6 +485,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
           <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
+          {entityType === "team" ? <Tab>Agent Activity</Tab> : <></>}
           <Tab>Key Activity</Tab>
           <Tab>Endpoint Activity</Tab>
         </TabList>
@@ -621,6 +699,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 </Card>
               </Col>
 
+              {/* Top Agents - only for team entity type */}
+              {entityType === "team" && (
+                <Col numColSpan={2}>
+                  <Card>
+                    <Title>Top Agents Driving Spend</Title>
+                    <TopModelView
+                      topModels={getTopAgents()}
+                      topModelsLimit={topAgentsLimit}
+                      setTopModelsLimit={setTopAgentsLimit}
+                    />
+                  </Card>
+                </Col>
+              )}
+
               {/* Spend by Provider */}
               <Col numColSpan={2}>
                 <Card>
@@ -696,6 +788,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           <TabPanel>
             <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
+          {entityType === "team" ? (
+            <TabPanel>
+              <ActivityMetrics modelMetrics={agentMetrics} />
+            </TabPanel>
+          ) : (
+            <></>
+          )}
           <TabPanel>
             <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>

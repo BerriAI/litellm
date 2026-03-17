@@ -175,6 +175,46 @@ def test_ui_discovery_endpoints_both_routes_return_same_data():
         assert response1.json() == response2.json()
 
 
+def test_ui_discovery_endpoints_with_auto_redirect_via_general_settings():
+    """When auto_redirect_ui_login_to_sso is set in general_settings (config.yaml), it should be honored."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch("litellm.proxy.proxy_server.general_settings", {"auto_redirect_ui_login_to_sso": True}), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+        os.environ.pop("AUTO_REDIRECT_UI_LOGIN_TO_SSO", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["auto_redirect_to_sso"] is True
+        assert data["sso_configured"] is True
+
+
+def test_ui_discovery_endpoints_with_auto_redirect_env_var_overrides_general_settings():
+    """Env var and general_settings should both work — either being true enables the feature."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch("litellm.proxy.proxy_server.general_settings", {"auto_redirect_ui_login_to_sso": False}), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"}, clear=False):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["auto_redirect_to_sso"] is True
+
+
 def test_ui_discovery_endpoints_with_admin_ui_disabled():
     app = FastAPI()
     app.include_router(router)
