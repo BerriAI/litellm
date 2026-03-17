@@ -358,6 +358,7 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
         )
 
     await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
     assert exc_info.value.status_code == 403
 
@@ -369,7 +370,7 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
     second_call_params = akto_validate.async_handler.post.call_args_list[1].kwargs["params"]
     assert second_call_params.get("ingest_data") == "true"
     assert "guardrails" not in second_call_params
-    second_payload = akto_validate.async_handler.post.call_args_list[1].kwargs["json"]
+    second_payload = json.loads(akto_validate.async_handler.post.call_args_list[1].kwargs["data"])
     assert second_payload["statusCode"] == "403"
     resp_body = json.loads(second_payload["responsePayload"])
     inner = json.loads(resp_body["body"])
@@ -411,6 +412,7 @@ async def test_post_call_combined(akto_ingest, sample_inputs, sample_request_dat
         input_type="response",
     )
 
+    await asyncio.sleep(0)
     await asyncio.sleep(0)
 
     assert result == sample_inputs

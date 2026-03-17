@@ -288,7 +288,7 @@ class AktoGuardrail(CustomGuardrail):
         headers = self.prepare_headers()
         return await self.async_handler.post(
             url=endpoint,
-            json=payload,
+            data=json.dumps(payload),
             params=params,
             headers=headers,
             timeout=self.guardrail_timeout,
@@ -314,7 +314,7 @@ class AktoGuardrail(CustomGuardrail):
             )
             raise httpx.RequestError(
                 "Akto returned non-JSON body",
-                request=getattr(response, "request", None),
+                request=response.request,
             ) from e
         if not isinstance(result, dict):
             return True, ""
