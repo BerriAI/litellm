@@ -2669,6 +2669,8 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("minimax.minimax-m2")
         assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
         assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
+        # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
+        assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
 
         # Unsupported models -- should fall back to tool-call approach
         assert not config._supports_native_structured_outputs("anthropic.claude-3-5-sonnet-20241022-v2:0")
