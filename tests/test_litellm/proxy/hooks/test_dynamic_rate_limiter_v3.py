@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from starlette.exceptions import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
