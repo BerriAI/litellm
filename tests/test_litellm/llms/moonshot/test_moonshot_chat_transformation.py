@@ -617,5 +617,5 @@ class TestMoonshotConfig:
         # Apply fill_reasoning_content
         result = config.fill_reasoning_content(messages)
 
-        # reasoning_content should be preserved in the assistant message
+        assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
         assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
