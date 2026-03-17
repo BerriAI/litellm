@@ -1094,6 +1094,7 @@ def create_pass_through_route(
     _forward_headers: Optional[bool] = False,
     _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
+    require_auth: Optional[bool] = None,
     include_subpath: Optional[bool] = False,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
@@ -1105,7 +1106,11 @@ def create_pass_through_route(
     from litellm._uuid import uuid
     from litellm.proxy.types_utils.utils import get_instance_fn
 
-    _require_auth = dependencies is not None and len(dependencies) > 0
+    _require_auth = (
+        require_auth
+        if require_auth is not None
+        else dependencies is not None and len(dependencies) > 0
+    )
 
     def _resolve_user_api_key(
         user_api_key_dict: Optional[UserAPIKeyAuth],
@@ -1918,6 +1923,7 @@ class InitPassThroughEndpointHelpers:
         forward_headers: Optional[bool],
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
+        require_auth: Optional[bool],
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
@@ -1959,6 +1965,7 @@ class InitPassThroughEndpointHelpers:
                 forward_headers,
                 merge_query_params,
                 dependencies,
+                require_auth=require_auth,
                 cost_per_request=cost_per_request,
                 default_query_params=default_query_params,
                 guardrails=guardrails,
@@ -1994,6 +2001,7 @@ class InitPassThroughEndpointHelpers:
         forward_headers: Optional[bool],
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
+        require_auth: Optional[bool],
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
@@ -2035,6 +2043,7 @@ class InitPassThroughEndpointHelpers:
                 forward_headers,
                 merge_query_params,
                 dependencies,
+                require_auth=require_auth,
                 include_subpath=True,
                 cost_per_request=cost_per_request,
                 default_query_params=default_query_params,
@@ -2262,15 +2271,19 @@ async def initialize_pass_through_endpoints(
             isinstance(_auth, str) and str(_auth).lower() == "false"
         )
         if not auth_explicitly_false:
-            if _auth is not None and str(_auth).lower() == "true" and premium_user is not True:
+            if (
+                _auth is not None
+                and str(_auth).lower() == "true"
+                and premium_user is not True
+            ):
                 raise ValueError(
                     "Error Setting Authentication on Pass Through Endpoint: {}".format(
                         CommonProxyErrors.not_premium_user.value
                     )
                 )
-            _dependencies = [Depends(user_api_key_auth)]
             # Only add to openai_routes when auth is explicitly true (preserve original scope)
             if _auth is not None and str(_auth).lower() == "true":
+                _dependencies = [Depends(user_api_key_auth)]
                 LiteLLMRoutes.openai_routes.value.append(_path)
 
         if _target is None:
@@ -2294,6 +2307,7 @@ async def initialize_pass_through_endpoints(
             forward_headers=_forward_headers,
             merge_query_params=_merge_query_params,
             dependencies=_dependencies,
+            require_auth=not auth_explicitly_false,
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
             guardrails=_guardrails,
@@ -2318,6 +2332,7 @@ async def initialize_pass_through_endpoints(
                 forward_headers=_forward_headers,
                 merge_query_params=_merge_query_params,
                 dependencies=_dependencies,
+                require_auth=not auth_explicitly_false,
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
                 guardrails=_guardrails,
@@ -2625,6 +2640,16 @@ async def update_pass_through_endpoints(
     # Re-register the route with updated headers
     _custom_headers: Optional[dict] = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
+    _updated_auth = updated_endpoint.auth
+    _updated_auth_explicitly_false = _updated_auth is False or (
+        isinstance(_updated_auth, str) and str(_updated_auth).lower() == "false"
+    )
+    _updated_require_auth = not _updated_auth_explicitly_false
+    _updated_dependencies = (
+        [Depends(user_api_key_auth)]
+        if _updated_auth is not None and str(_updated_auth).lower() == "true"
+        else None
+    )
 
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
@@ -2634,7 +2659,8 @@ async def update_pass_through_endpoints(
             custom_headers=_custom_headers,
             forward_headers=None,  # Defaults not available in model? assuming None logic handles it
             merge_query_params=None,
-            dependencies=None,
+            dependencies=_updated_dependencies,
+            require_auth=_updated_require_auth,
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
@@ -2649,7 +2675,8 @@ async def update_pass_through_endpoints(
             custom_headers=_custom_headers,
             forward_headers=None,
             merge_query_params=None,
-            dependencies=None,
+            dependencies=_updated_dependencies,
+            require_auth=_updated_require_auth,
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
@@ -2718,6 +2745,16 @@ async def create_pass_through_endpoints(
     # Register the new route
     _custom_headers: Optional[dict] = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
+    _created_auth = created_endpoint.auth
+    _created_auth_explicitly_false = _created_auth is False or (
+        isinstance(_created_auth, str) and str(_created_auth).lower() == "false"
+    )
+    _created_require_auth = not _created_auth_explicitly_false
+    _created_dependencies = (
+        [Depends(user_api_key_auth)]
+        if _created_auth is not None and str(_created_auth).lower() == "true"
+        else None
+    )
 
     if created_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
@@ -2727,7 +2764,8 @@ async def create_pass_through_endpoints(
             custom_headers=_custom_headers,
             forward_headers=None,
             merge_query_params=None,
-            dependencies=None,
+            dependencies=_created_dependencies,
+            require_auth=_created_require_auth,
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
@@ -2742,7 +2780,8 @@ async def create_pass_through_endpoints(
             custom_headers=_custom_headers,
             forward_headers=None,
             merge_query_params=None,
-            dependencies=None,
+            dependencies=_created_dependencies,
+            require_auth=_created_require_auth,
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),

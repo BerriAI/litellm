@@ -562,7 +562,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-        ## EARLY EXIT: Pass-through routes with auth disabled must skip all auth parsing.
+        ## EARLY EXIT: after pre_db_read_auth_checks, skip auth parsing for auth-disabled pass-through routes.
+        ## pre_db_read_auth_checks (IP/body/route safety) should still run for these requests.
         ## This avoids NoneType.split() when api_key is None and JWT/OAuth2 parsing runs.
         ## Default: auth required when auth is not set (None). Only bypass when explicitly false.
         if pass_through_endpoints is not None:
