@@ -258,8 +258,8 @@ async def background_streaming_task(  # noqa: PLR0915
                                 ),
                             )
 
-                            # Extract error for failed responses
-                            if event_type == "response.failed":
+                            # Extract error for failed and incomplete responses
+                            if event_type == "response.failed" or event_type == "response.incomplete":
                                 terminal_error = response_data.get("error")
 
                             # Core response fields
@@ -337,7 +337,7 @@ async def background_streaming_task(  # noqa: PLR0915
         )
 
         verbose_proxy_logger.info(
-            f"Finished background streaming for {polling_id}, status={final_status}, output_items={len(output_items)}"
+            f"Finished background streaming for {polling_id}, status={final_status}, error={terminal_error}, output_items={len(output_items)}"
         )
 
     except Exception as e:
