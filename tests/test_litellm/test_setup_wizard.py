@@ -23,6 +23,18 @@ def test_yaml_escape_combined():
     assert _yaml_escape('ab\\"cd') == 'ab\\\\\\"cd'
 
 
+def test_yaml_escape_newline():
+    assert _yaml_escape("sk-abc\ndef") == "sk-abc\\ndef"
+
+
+def test_yaml_escape_carriage_return():
+    assert _yaml_escape("sk-abc\rdef") == "sk-abc\\rdef"
+
+
+def test_yaml_escape_tab():
+    assert _yaml_escape("sk-abc\tdef") == "sk-abc\\tdef"
+
+
 # ---------------------------------------------------------------------------
 # SetupWizard._build_config
 # ---------------------------------------------------------------------------
@@ -137,7 +149,8 @@ def test_build_config_azure_no_deployment_skipped():
     """Azure without a deployment name should emit nothing (not fallback to gpt-4o)."""
     env_vars = {"AZURE_API_KEY": "az-key"}  # no deployment sentinel
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
-    assert "azure" not in config or "model_list:" in config  # no azure model emitted
+    # No azure model entry should be emitted when deployment name is absent
+    assert "model: azure/" not in config
 
 
 def test_build_config_no_display_name_collision_openai_and_azure():
