@@ -677,7 +677,56 @@ async def oauth_authorization_server_mcp(
 # Alias for standard OpenID discovery
 @router.get("/.well-known/openid-configuration")
 async def openid_configuration(request: Request):
-    return await oauth_authorization_server_mcp(request)
+    response = await oauth_authorization_server_mcp(request)
+
+    # If MCPJWTSigner is active, augment the discovery doc with JWKS fields so
+    # MCP servers and gateways (e.g. AWS Bedrock AgentCore Gateway) can resolve
+    # the signing keys and verify liteLLM-issued tokens.
+    try:
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+            get_mcp_jwt_signer,
+        )
+
+        signer = get_mcp_jwt_signer()
+        if signer is not None:
+            request_base_url = get_request_base_url(request)
+            if isinstance(response, dict):
+                response["jwks_uri"] = f"{request_base_url}/.well-known/jwks.json"
+                response["id_token_signing_alg_values_supported"] = ["RS256"]
+    except ImportError:
+        pass
+
+    return response
+
+
+@router.get("/.well-known/jwks.json")
+async def jwks_json(request: Request):
+    """
+    JSON Web Key Set endpoint.
+
+    Returns the RSA public key used by MCPJWTSigner to sign outbound MCP tokens.
+    MCP servers and gateways use this endpoint to verify liteLLM-issued JWTs.
+
+    Returns an empty key set if MCPJWTSigner is not configured.
+    """
+    try:
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+            get_mcp_jwt_signer,
+        )
+
+        signer = get_mcp_jwt_signer()
+        if signer is not None:
+            return JSONResponse(
+                content=signer.get_jwks(),
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+    except ImportError:
+        pass
+
+    return JSONResponse(
+        content={"keys": []},
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # Additional legacy pattern support
