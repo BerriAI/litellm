@@ -853,18 +853,25 @@ class Router:
                 cache_ttl=sticky_args.get("cache_ttl", 600),
             )
 
-            # Clean stale references from input_callback, then re-add the
-            # singleton. This prevents duplicate handlers while preserving state.
+            # Clean stale references from input_callback — remove BOTH sticky
+            # handler types to prevent dual-handler bug when switching strategies.
+            # Without this, switching from sticky-least-busy-redis to sticky-least-busy
+            # (or vice versa) leaves the old handler's singleton in the callback list,
+            # causing double increment/decrement of in-flight counts in Redis.
             if isinstance(litellm.input_callback, list):
                 litellm.input_callback = [
                     cb for cb in litellm.input_callback
-                    if not isinstance(cb, StickyLeastBusyLoggingHandler)
+                    if not isinstance(cb, (StickyLeastBusyLoggingHandler, StickyLeastBusyRedisLoggingHandler))
                 ]
                 litellm.input_callback.append(self.sticky_leastbusy_logger)  # type: ignore
             else:
                 litellm.input_callback = [self.sticky_leastbusy_logger]  # type: ignore
-            # add_litellm_callback already deduplicates by class, safe to call repeatedly
+            # Clean stale sticky handlers from callbacks list too
             if isinstance(litellm.callbacks, list):
+                litellm.callbacks = [
+                    cb for cb in litellm.callbacks
+                    if not isinstance(cb, (StickyLeastBusyLoggingHandler, StickyLeastBusyRedisLoggingHandler))
+                ]
                 litellm.logging_callback_manager.add_litellm_callback(self.sticky_leastbusy_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.STICKY_LEAST_BUSY_REDIS.value
@@ -878,17 +885,20 @@ class Router:
                 sticky_ttl=sticky_redis_args.get("sticky_ttl", 900),
             )
 
-            # Clean stale references from input_callback, then re-add the
-            # singleton. This prevents duplicate handlers while preserving state.
+            # Clean stale references — remove BOTH sticky handler types
             if isinstance(litellm.input_callback, list):
                 litellm.input_callback = [
                     cb for cb in litellm.input_callback
-                    if not isinstance(cb, StickyLeastBusyRedisLoggingHandler)
+                    if not isinstance(cb, (StickyLeastBusyLoggingHandler, StickyLeastBusyRedisLoggingHandler))
                 ]
                 litellm.input_callback.append(self.sticky_leastbusy_redis_logger)  # type: ignore
             else:
                 litellm.input_callback = [self.sticky_leastbusy_redis_logger]  # type: ignore
             if isinstance(litellm.callbacks, list):
+                litellm.callbacks = [
+                    cb for cb in litellm.callbacks
+                    if not isinstance(cb, (StickyLeastBusyLoggingHandler, StickyLeastBusyRedisLoggingHandler))
+                ]
                 litellm.logging_callback_manager.add_litellm_callback(self.sticky_leastbusy_redis_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
