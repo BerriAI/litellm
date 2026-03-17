@@ -65,9 +65,34 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     tools = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
+    strip_custom_from_tools_list(tools)
+
+
+def strip_custom_from_tools_list(tools: list) -> None:
+    """
+    Strip ``custom`` field from each tool in the list (modifies in-place).
+
+    Claude Code sends Anthropic-specific fields like ``custom: {eager_input_streaming: true}``
+    or ``custom: {input_examples: [...]}`` on tool definitions. Anthropic's API accepts these
+    but Bedrock Converse rejects them with "Extra inputs are not permitted" for some models
+    (e.g. Haiku 4.5).
+
+    Handles both top-level tool ``custom`` and nested ``function.custom`` (OpenAI format).
+
+    Args:
+        tools: List of tool dicts to modify in-place.
+
+    Ref: https://github.com/BerriAI/litellm/issues/23825
+    Ref: https://github.com/BerriAI/litellm/issues/16679
+    """
+    if not tools or not isinstance(tools, list):
+        return
     for tool in tools:
         if isinstance(tool, dict):
             tool.pop("custom", None)
+            func = tool.get("function")
+            if isinstance(func, dict):
+                func.pop("custom", None)
 
 
 class AmazonBedrockGlobalConfig:

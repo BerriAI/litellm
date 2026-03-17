@@ -73,6 +73,7 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
+    strip_custom_from_tools_list,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -1298,6 +1299,12 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        # Strip custom field from tools before sending to Bedrock Converse.
+        # Claude Code sends custom: {eager_input_streaming: true} etc. which Anthropic
+        # accepts but Bedrock rejects for some models (e.g. Haiku 4.5) with
+        # "Extra inputs are not permitted". Ref: https://github.com/BerriAI/litellm/issues/23825
+        strip_custom_from_tools_list(filtered_tools)
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):

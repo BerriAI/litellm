@@ -319,6 +319,45 @@ def test_get_supported_openai_params_bedrock_converse():
         print(f"✅ Passed for model: {model}")
 
 
+def test_process_tools_and_beta_strips_custom_field():
+    """
+    Test that _process_tools_and_beta strips custom field from tools before sending to Bedrock.
+
+    Claude Code sends custom: {eager_input_streaming: true} on tool definitions.
+    Bedrock Converse rejects this for Haiku 4.5 with "Extra inputs are not permitted".
+    Ref: https://github.com/BerriAI/litellm/issues/23825
+    """
+    config = AmazonConverseConfig()
+    tools_with_custom = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+            "custom": {"eager_input_streaming": True},
+        },
+    ]
+    additional_params = {}
+    bedrock_tools, _ = config._process_tools_and_beta(
+        original_tools=tools_with_custom,
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        headers=None,
+        additional_request_params=additional_params,
+    )
+    # Should produce valid Bedrock tools (toolSpec format) without custom
+    assert len(bedrock_tools) == 1
+    assert "toolSpec" in bedrock_tools[0]
+    assert bedrock_tools[0]["toolSpec"]["name"] == "get_weather"
+    # Original tools list should have been modified in-place (custom stripped)
+    assert "custom" not in tools_with_custom[0]
+
+
 def test_transform_request_helper_includes_anthropic_beta_and_tools():
     """Test _transform_request_helper includes anthropic_beta for computer tools."""
     config = AmazonConverseConfig()
