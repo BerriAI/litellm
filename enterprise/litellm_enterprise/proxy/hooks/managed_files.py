@@ -29,7 +29,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
 )
-from litellm.types.llms.openai import (
+from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
     ChatCompletionFileObject,
@@ -442,25 +442,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle managed files in responses API input and tools
             file_ids = []
-            
+
             # Extract file IDs from input parameter
             input_data = data.get("input")
             if input_data:
                 file_ids.extend(self.get_file_ids_from_responses_input(input_data))
-            
+
             # Extract file IDs from tools parameter (e.g., code_interpreter container)
             tools = data.get("tools")
             if tools:
                 file_ids.extend(self.get_file_ids_from_responses_tools(tools))
-            
+
             if file_ids:
                 # Check user has access to all managed files
                 await self.check_file_ids_access(file_ids, user_api_key_dict)
-                
+
                 model_file_id_mapping = await self.get_model_file_id_mapping(
                     file_ids, user_api_key_dict.parent_otel_span
                 )
                 data["model_file_id_mapping"] = model_file_id_mapping
+
+            # Check access for file_search vector_store_ids
+            if tools:
+                unified_vs_ids = self.get_vector_store_ids_from_file_search_tools(tools)
+                if unified_vs_ids:
+                    await self.check_vector_store_ids_access(
+                        unified_vs_ids, user_api_key_dict
+                    )
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = (
@@ -703,6 +711,92 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_ids.append(file_id)
         
         return file_ids
+
+    def get_vector_store_ids_from_file_search_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Extract unified vector_store_ids from file_search tools.
+
+        Only returns IDs that are LiteLLM-managed (base64 unified IDs).
+        Native provider IDs are skipped — they have no LiteLLM access record.
+        """
+        from litellm.llms.base_llm.managed_resources.utils import (
+            is_base64_encoded_unified_id,
+        )
+
+        vs_ids: List[str] = []
+        if not isinstance(tools, list):
+            return vs_ids
+
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("type") != "file_search":
+                continue
+            vector_store_ids = tool.get("vector_store_ids")
+            if not isinstance(vector_store_ids, list):
+                continue
+            for vs_id in vector_store_ids:
+                if isinstance(vs_id, str) and is_base64_encoded_unified_id(vs_id):
+                    vs_ids.append(vs_id)
+
+        return vs_ids
+
+    async def check_vector_store_ids_access(
+        self,
+        vector_store_ids: List[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Verify the caller's team can access each LiteLLM-managed vector store.
+
+        Batch-fetches vector stores from DB and checks team_id.
+        Raises HTTPException(403) on the first access violation.
+        Non-managed (native) IDs should already be filtered out before calling this.
+        """
+        from litellm.llms.base_llm.managed_resources.utils import (
+            extract_unified_uuid_from_unified_id,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not vector_store_ids or prisma_client is None:
+            return
+
+        # Map each unified ID to its internal UUID for a single batch DB fetch
+        uuid_to_unified: Dict[str, str] = {}
+        for vs_id in vector_store_ids:
+            uuid = extract_unified_uuid_from_unified_id(vs_id)
+            if uuid:
+                uuid_to_unified[uuid] = vs_id
+
+        if not uuid_to_unified:
+            return
+
+        rows = await prisma_client.db.litellm_managedvectorstorestable.find_many(
+            where={"vector_store_id": {"in": list(uuid_to_unified.keys())}},
+            take=len(uuid_to_unified),
+        )
+
+        found_uuids = {row.vector_store_id for row in rows}
+
+        for uuid, original_id in uuid_to_unified.items():
+            if uuid not in found_uuids:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Vector store '{original_id}' not found or access denied.",
+                )
+
+        caller_team_id = user_api_key_dict.team_id
+        for row in rows:
+            vs_team_id = getattr(row, "team_id", None)
+            if vs_team_id is not None and vs_team_id != caller_team_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Team '{caller_team_id}' does not have access to vector "
+                        f"store '{row.vector_store_id}'. The store belongs to team "
+                        f"'{vs_team_id}'."
+                    ),
+                )
 
     async def get_model_file_id_mapping(
         self, file_ids: List[str], litellm_parent_otel_span: Span
@@ -954,7 +1048,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 )
                             else:
                                 file_object = await litellm.afile_retrieve(
-                                    custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                                    custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",  # type: ignore[arg-type]
                                     file_id=original_file_id,
                                 )
                             verbose_logger.debug(
