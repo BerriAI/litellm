@@ -621,9 +621,11 @@ def _setup_generic_sso_env_vars(
     )
 
 
-async def _setup_team_mappings() -> Optional["TeamMappings"]:
-    """Setup team mappings from SSO database settings."""
-    team_mappings: Optional["TeamMappings"] = None
+async def _load_sso_settings_from_db() -> Optional[dict]:
+    """Load the SSO settings JSON from DB in a single query.
+
+    Returns the sso_settings dict or None if unavailable.
+    """
     try:
         from litellm.proxy.utils import get_prisma_client_or_throw
 
@@ -636,64 +638,63 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
         )
 
         if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            team_mappings_data = sso_settings_dict.get("team_mappings")
-
-            if team_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
-
-                if isinstance(team_mappings_data, dict):
-                    team_mappings = TeamMappings(**team_mappings_data)
-                elif isinstance(team_mappings_data, TeamMappings):
-                    team_mappings = team_mappings_data
-
-                if team_mappings and team_mappings.team_ids_jwt_field:
-                    verbose_proxy_logger.debug(
-                        f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
-                    )
+            return dict(sso_db_record.sso_settings)
     except Exception as e:
         verbose_proxy_logger.debug(
-            f"Could not load team_mappings from database: {e}. Continuing with config-based team mapping."
+            f"Could not load SSO settings from database: {e}."
         )
 
+    return None
+
+
+def _parse_team_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["TeamMappings"]:
+    """Parse team mappings from SSO settings dict."""
+    if not sso_settings_dict:
+        return None
+
+    team_mappings_data = sso_settings_dict.get("team_mappings")
+    if not team_mappings_data:
+        return None
+
+    from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+
+    team_mappings: Optional[TeamMappings] = None
+    if isinstance(team_mappings_data, dict):
+        team_mappings = TeamMappings(**team_mappings_data)
+    elif isinstance(team_mappings_data, TeamMappings):
+        team_mappings = team_mappings_data
+
+    if team_mappings and team_mappings.team_ids_jwt_field:
+        verbose_proxy_logger.debug(
+            f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
+        )
     return team_mappings
 
 
-async def _setup_role_mappings() -> Optional["RoleMappings"]:
-    """Setup role mappings from SSO database settings."""
+def _parse_role_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["RoleMappings"]:
+    """Parse role mappings from SSO settings dict, with env var fallback."""
     role_mappings: Optional["RoleMappings"] = None
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
 
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
+    if sso_settings_dict:
+        role_mappings_data = sso_settings_dict.get("role_mappings")
+        if role_mappings_data:
+            from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
+            if isinstance(role_mappings_data, dict):
+                role_mappings = RoleMappings(**role_mappings_data)
+            elif isinstance(role_mappings_data, RoleMappings):
+                role_mappings = role_mappings_data
 
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            role_mappings_data = sso_settings_dict.get("role_mappings")
+            if role_mappings:
+                verbose_proxy_logger.debug(
+                    f"Loaded role_mappings for provider '{role_mappings.provider}'"
+                )
 
-            if role_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
-
-                if isinstance(role_mappings_data, dict):
-                    role_mappings = RoleMappings(**role_mappings_data)
-                elif isinstance(role_mappings_data, RoleMappings):
-                    role_mappings = role_mappings_data
-
-                if role_mappings:
-                    verbose_proxy_logger.debug(
-                        f"Loaded role_mappings for provider '{role_mappings.provider}'"
-                    )
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
-        )
-
+    # Env var fallback for role mappings
     generic_role_mappings = os.getenv("GENERIC_ROLE_MAPPINGS_ROLES", None)
     generic_role_mappings_group_claim = os.getenv(
         "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
@@ -714,18 +715,15 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             if isinstance(generic_user_role_mappings_data, dict):
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
-                role_mappings_data = {
-                    "provider": "generic",
-                    "group_claim": generic_role_mappings_group_claim,
-                    "default_role": generic_role_mappoings_default_role,
-                    "roles": generic_user_role_mappings_data,
-                }
-
-                role_mappings = RoleMappings(**role_mappings_data)
+                role_mappings = RoleMappings(
+                    provider="generic",
+                    group_claim=generic_role_mappings_group_claim or "",
+                    default_role=generic_role_mappoings_default_role,
+                    roles=generic_user_role_mappings_data,
+                )
                 verbose_proxy_logger.debug(
                     f"Loaded role_mappings from environments for provider '{role_mappings.provider}'."
                 )
-                return role_mappings
         except TypeError as e:
             verbose_proxy_logger.warning(
                 f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic."
@@ -733,44 +731,59 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     return role_mappings
 
 
+def _parse_attribute_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["AttributeMappings"]:
+    """Parse attribute mappings from SSO settings dict."""
+    if not sso_settings_dict:
+        return None
+
+    attribute_mappings_data = sso_settings_dict.get("attribute_mappings")
+    if not attribute_mappings_data:
+        return None
+
+    from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+    attribute_mappings: Optional[AttributeMappings] = None
+    if isinstance(attribute_mappings_data, dict):
+        attribute_mappings = AttributeMappings(**attribute_mappings_data)
+    elif isinstance(attribute_mappings_data, AttributeMappings):
+        attribute_mappings = attribute_mappings_data
+
+    if attribute_mappings:
+        verbose_proxy_logger.debug("Loaded attribute_mappings from database")
+    return attribute_mappings
+
+
+async def _setup_all_sso_mappings() -> Tuple[
+    Optional["RoleMappings"],
+    Optional["TeamMappings"],
+    Optional["AttributeMappings"],
+]:
+    """Load all SSO mappings from DB in a single query."""
+    sso_settings_dict = await _load_sso_settings_from_db()
+    role_mappings = _parse_role_mappings_from_settings(sso_settings_dict)
+    team_mappings = _parse_team_mappings_from_settings(sso_settings_dict)
+    attribute_mappings = _parse_attribute_mappings_from_settings(sso_settings_dict)
+    return role_mappings, team_mappings, attribute_mappings
+
+
+async def _setup_team_mappings() -> Optional["TeamMappings"]:
+    """Setup team mappings from SSO database settings."""
+    sso_settings_dict = await _load_sso_settings_from_db()
+    return _parse_team_mappings_from_settings(sso_settings_dict)
+
+
+async def _setup_role_mappings() -> Optional["RoleMappings"]:
+    """Setup role mappings from SSO database settings."""
+    sso_settings_dict = await _load_sso_settings_from_db()
+    return _parse_role_mappings_from_settings(sso_settings_dict)
+
+
 async def _setup_attribute_mappings() -> Optional["AttributeMappings"]:
     """Setup attribute mappings from SSO database settings."""
-    attribute_mappings: Optional["AttributeMappings"] = None
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
-
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
-
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
-
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            attribute_mappings_data = sso_settings_dict.get("attribute_mappings")
-
-            if attribute_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import (
-                    AttributeMappings,
-                )
-
-                if isinstance(attribute_mappings_data, dict):
-                    attribute_mappings = AttributeMappings(**attribute_mappings_data)
-                elif isinstance(attribute_mappings_data, AttributeMappings):
-                    attribute_mappings = attribute_mappings_data
-
-                if attribute_mappings:
-                    verbose_proxy_logger.debug(
-                        "Loaded attribute_mappings from database"
-                    )
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Could not load attribute_mappings from database: {e}. Continuing with environment variable attribute mapping."
-        )
-
-    return attribute_mappings
+    sso_settings_dict = await _load_sso_settings_from_db()
+    return _parse_attribute_mappings_from_settings(sso_settings_dict)
 
 
 def _parse_generic_sso_headers() -> dict:
@@ -876,9 +889,7 @@ async def get_generic_sso_response(
         userinfo_endpoint=generic_userinfo_endpoint,
     )
 
-    role_mappings = await _setup_role_mappings()
-    team_mappings = await _setup_team_mappings()
-    attribute_mappings = await _setup_attribute_mappings()
+    role_mappings, team_mappings, attribute_mappings = await _setup_all_sso_mappings()
 
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
@@ -1228,8 +1239,8 @@ def _build_sso_user_update_data(
     if isinstance(extra_fields, dict) and extra_fields:
         sso_attrs["extra_fields"] = extra_fields
 
-    if sso_attrs and existing_metadata is not None:
-        merged_metadata = dict(existing_metadata)
+    if sso_attrs:
+        merged_metadata = dict(existing_metadata) if existing_metadata else {}
         merged_metadata["sso_attributes"] = sso_attrs
         update_data["metadata"] = json.dumps(merged_metadata)
 
@@ -2167,14 +2178,15 @@ class SSOAuthenticationHandler:
             if user_info is not None:
                 user_id = user_info.user_id
                 raw_metadata = getattr(user_info, "metadata", None)
-                existing_metadata: Optional[dict] = None
                 if isinstance(raw_metadata, str):
                     try:
-                        existing_metadata = json.loads(raw_metadata)
+                        existing_metadata: dict = json.loads(raw_metadata)
                     except (json.JSONDecodeError, TypeError):
                         existing_metadata = {}
                 elif isinstance(raw_metadata, dict):
                     existing_metadata = raw_metadata
+                else:
+                    existing_metadata = {}
                 update_data = _build_sso_user_update_data(
                     result=result,
                     user_email=user_email,

@@ -5437,3 +5437,39 @@ class TestAttributeMappings:
 
         assert result is None
 
+    def test_build_sso_user_update_data_null_existing_metadata(self):
+        """Test that SSO attributes are persisted even when existing metadata is None.
+
+        This covers users created before this feature whose metadata column is NULL.
+        """
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="New User",
+            first_name="New",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+        )
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata=None,
+        )
+
+        assert "metadata" in update_data
+        metadata = json.loads(update_data["metadata"])
+        assert metadata["sso_attributes"]["display_name"] == "New User"
+        assert metadata["sso_attributes"]["first_name"] == "New"
+        assert metadata["sso_attributes"]["last_name"] == "User"
+
