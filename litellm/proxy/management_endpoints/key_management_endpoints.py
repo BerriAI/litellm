@@ -2120,7 +2120,10 @@ async def update_key_fn(
             data=data, existing_key_row=existing_key_row
         )
 
-        _validate_key_alias_format(key_alias=non_default_values.get("key_alias", None))
+        # Only validate key_alias format if it's actually being changed
+        new_key_alias = non_default_values.get("key_alias", None)
+        if new_key_alias != existing_key_row.key_alias:
+            _validate_key_alias_format(key_alias=new_key_alias)
 
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
@@ -3579,7 +3582,10 @@ async def _execute_virtual_key_regeneration(
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db
         )
-        _validate_key_alias_format(key_alias=non_default_values.get("key_alias"))
+        # Only validate key_alias format if it's actually being changed
+        new_key_alias = non_default_values.get("key_alias")
+        if new_key_alias != key_in_db.key_alias:
+            _validate_key_alias_format(key_alias=new_key_alias)
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
     update_data.update(non_default_values)
     update_data = prisma_client.jsonify_object(data=update_data)
