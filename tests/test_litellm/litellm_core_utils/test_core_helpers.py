@@ -74,6 +74,9 @@ class TestMapFinishReasonAnthropic:
     def test_compaction(self):
         assert map_finish_reason("compaction") == "length"
 
+    def test_refusal(self):
+        assert map_finish_reason("refusal") == "content_filter"
+
 
 class TestMapFinishReasonGemini:
     @pytest.mark.parametrize(
