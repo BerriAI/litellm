@@ -87,6 +87,26 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
+# Model info/listing routes exempt from budget checks.
+_MODEL_INFO_ROUTES = [
+    "/models",
+    "/v1/models",
+    "/model/info",
+    "/v1/model/info",
+    "/v2/model/info",
+    "/model_group/info",
+]
+
+
+def is_model_info_route(route: str) -> bool:
+    """Check if the route is a model info/listing route exempt from budget checks."""
+    if route in _MODEL_INFO_ROUTES:
+        return True
+    if route.startswith("/models/") or route.startswith("/v1/models/"):
+        return True
+    return False
+
+
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     """
     Log a warning when budget lookup fails; cache will not be populated.
@@ -509,8 +529,9 @@ async def common_checks(  # noqa: PLR0915
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    # If this is a free model, skip all budget checks
-    if not skip_budget_checks:
+    # Skip all budget checks for free-model routes or model info/listing routes
+    # (these don't consume AI resources so they shouldn't be blocked by budget)
+    if not skip_budget_checks and not is_model_info_route(route):
         # 3. If team is in budget
         with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
             await _team_max_budget_check(
