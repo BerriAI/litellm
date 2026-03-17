@@ -2254,16 +2254,12 @@ class MCPServerManager:
                 "Calling OpenAPI tool %s directly via HTTP handler", name
             )
             if hook_result.get("extra_headers"):
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": (
-                            "pre_mcp_call hook returned extra_headers for an "
-                            "OpenAPI-backed MCP server, which does not support "
-                            "hook header injection. Use a regular MCP server "
-                            "(SSE/HTTP transport) for hook header support."
-                        )
-                    },
+                verbose_logger.warning(
+                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
+                    "MCP server '%s' — header injection is not supported for "
+                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
+                    "transport to enable hook header injection.",
+                    server_name,
                 )
             tasks.append(
                 asyncio.create_task(

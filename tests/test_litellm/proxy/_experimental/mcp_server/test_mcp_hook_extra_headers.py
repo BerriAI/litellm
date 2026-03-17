@@ -422,8 +422,8 @@ class TestCallToolFlowsHookHeaders:
                         assert call_kwargs.kwargs.get("arguments") == modified_args
 
     @pytest.mark.asyncio
-    async def test_openapi_server_raises_on_hook_headers(self):
-        """OpenAPI-backed servers should raise HTTPException when hook injects headers."""
+    async def test_openapi_server_warns_and_continues_on_hook_headers(self):
+        """OpenAPI-backed servers log a warning and continue when hook injects headers."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="test-id",
@@ -449,20 +449,26 @@ class TestCallToolFlowsHookHeaders:
                     "_create_during_hook_task",
                     return_value=asyncio.create_task(asyncio.sleep(0)),
                 ):
-                    proxy_logging = MagicMock(spec=ProxyLogging)
+                    with patch.object(
+                        manager,
+                        "_call_openapi_tool_handler",
+                        new_callable=AsyncMock,
+                        return_value=MagicMock(),
+                    ):
+                        import litellm.proxy._experimental.mcp_server.mcp_server_manager as mgr_mod
 
-                    with pytest.raises(HTTPException) as exc_info:
-                        await manager.call_tool(
-                            server_name="openapi_server",
-                            name="test_tool",
-                            arguments={},
-                            proxy_logging_obj=proxy_logging,
-                        )
+                        proxy_logging = MagicMock(spec=ProxyLogging)
 
-                    assert exc_info.value.status_code == 500
-                    assert "does not support hook header injection" in str(
-                        exc_info.value.detail
-                    )
+                        with patch.object(mgr_mod, "verbose_logger") as mock_logger:
+                            # Should NOT raise — just warn and proceed
+                            await manager.call_tool(
+                                server_name="openapi_server",
+                                name="test_tool",
+                                arguments={},
+                                proxy_logging_obj=proxy_logging,
+                            )
+                            mock_logger.warning.assert_called_once()
+                            assert "header injection is not supported" in mock_logger.warning.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_openapi_server_no_error_without_hook_headers(self):

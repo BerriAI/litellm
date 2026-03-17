@@ -130,11 +130,13 @@ class MCPJWTSigner(CustomGuardrail):
         key_material = os.environ.get(self.SIGNING_KEY_ENV)
         if key_material:
             self._private_key = _load_private_key_from_env(self.SIGNING_KEY_ENV)
+            self._persistent_key: bool = True
             verbose_proxy_logger.info(
                 "MCPJWTSigner: loaded RSA key from env var %s", self.SIGNING_KEY_ENV
             )
         else:
             self._private_key = _generate_rsa_key_pair()
+            self._persistent_key = False
             verbose_proxy_logger.info(
                 "MCPJWTSigner: auto-generated RSA-2048 keypair (set %s to use your own key)",
                 self.SIGNING_KEY_ENV,
@@ -154,11 +156,16 @@ class MCPJWTSigner(CustomGuardrail):
             or os.environ.get("MCP_JWT_AUDIENCE")
             or self.DEFAULT_AUDIENCE
         )
-        self.ttl_seconds: int = int(
+        resolved_ttl = int(
             ttl_seconds
             if ttl_seconds is not None
             else os.environ.get("MCP_JWT_TTL_SECONDS", str(self.DEFAULT_TTL))
         )
+        if resolved_ttl <= 0:
+            raise ValueError(
+                f"MCPJWTSigner: ttl_seconds must be > 0, got {resolved_ttl}"
+            )
+        self.ttl_seconds: int = resolved_ttl
 
         # Register singleton so the JWKS endpoint can access it.
         global _mcp_jwt_signer_instance
@@ -175,6 +182,17 @@ class MCPJWTSigner(CustomGuardrail):
     # ------------------------------------------------------------------
     # Public helpers (used by /.well-known/jwks.json endpoint)
     # ------------------------------------------------------------------
+
+    @property
+    def jwks_max_age(self) -> int:
+        """
+        Recommended Cache-Control max-age for the JWKS response (seconds).
+
+        Use 1 hour for persistent keys (loaded from env var) — safe to cache long.
+        Use 5 minutes for auto-generated keys — key rotates on every restart, so
+        MCP servers must re-fetch quickly to avoid verifying with a stale key.
+        """
+        return 3600 if self._persistent_key else 300
 
     def get_jwks(self) -> Dict[str, Any]:
         """
@@ -217,10 +235,20 @@ class MCPJWTSigner(CustomGuardrail):
             "nbf": now,
         }
 
-        # sub: End-user identity (RFC 8693)
+        # sub: End-user identity (RFC 8693).
+        # Falls back to a stable hash of the API token for service-account / anonymous
+        # callers so strict JWT consumers (which require sub) always get a value.
         user_id = getattr(user_api_key_dict, "user_id", None)
         if user_id:
             claims["sub"] = user_id
+        else:
+            token = getattr(user_api_key_dict, "token", None) or getattr(
+                user_api_key_dict, "api_key", None
+            )
+            if token:
+                claims["sub"] = "apikey:" + hashlib.sha256(token.encode()).hexdigest()[:16]
+            else:
+                claims["sub"] = "litellm-proxy"
 
         user_email = getattr(user_api_key_dict, "user_email", None)
         if user_email:

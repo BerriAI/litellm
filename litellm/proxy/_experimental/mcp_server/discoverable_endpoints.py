@@ -718,14 +718,15 @@ async def jwks_json(request: Request):
         if signer is not None:
             return JSONResponse(
                 content=signer.get_jwks(),
-                headers={"Cache-Control": "public, max-age=3600"},
+                headers={"Cache-Control": f"public, max-age={signer.jwks_max_age}"},
             )
     except ImportError:
         pass
 
+    # No signer active — return empty key set; short cache so activation is picked up quickly.
     return JSONResponse(
         content={"keys": []},
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "public, max-age=60"},
     )
 
 

@@ -233,6 +233,68 @@ def test_build_claims_act_fallback_to_litellm_proxy():
     assert claims["act"]["sub"] == "litellm-proxy"
 
 
+def test_build_claims_sub_fallback_to_token_hash():
+    """_build_claims() sets sub to an apikey: hash when user_id is absent."""
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict(user_id="")
+    user_dict.user_id = None
+    user_dict.token = "sk-test-api-key-abc123"
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert claims["sub"].startswith("apikey:")
+    assert len(claims["sub"]) == len("apikey:") + 16  # sha256 hex[:16]
+
+
+def test_build_claims_sub_fallback_to_litellm_proxy_when_no_token():
+    """_build_claims() falls back to 'litellm-proxy' when user_id and token are both absent."""
+    signer = _make_signer()
+    user_dict = _make_user_api_key_dict(user_id="")
+    user_dict.user_id = None
+    user_dict.token = None
+    user_dict.api_key = None
+
+    claims = signer._build_claims(user_dict, {})
+
+    assert claims["sub"] == "litellm-proxy"
+
+
+def test_init_raises_on_zero_ttl():
+    """MCPJWTSigner raises ValueError when ttl_seconds is 0."""
+    with pytest.raises(ValueError, match="ttl_seconds must be > 0"):
+        _make_signer(ttl_seconds=0)
+
+
+def test_init_raises_on_negative_ttl():
+    """MCPJWTSigner raises ValueError when ttl_seconds is negative."""
+    with pytest.raises(ValueError, match="ttl_seconds must be > 0"):
+        _make_signer(ttl_seconds=-60)
+
+
+def test_jwks_max_age_persistent_key():
+    """jwks_max_age is 3600 when key loaded from env var."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa as crsa
+
+    private_key = crsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    with patch.dict("os.environ", {"MCP_JWT_SIGNING_KEY": pem}):
+        signer = _make_signer()
+
+    assert signer.jwks_max_age == 3600
+
+
+def test_jwks_max_age_auto_generated_key():
+    """jwks_max_age is 300 for auto-generated (ephemeral) keys."""
+    signer = _make_signer()
+    assert signer.jwks_max_age == 300
+
+
 # ---------------------------------------------------------------------------
 # Hook dispatch tests
 # ---------------------------------------------------------------------------
