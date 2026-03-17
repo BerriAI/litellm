@@ -1503,6 +1503,24 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
+            # Detect data URL images in string content (from Anthropic adapter's
+            # single-image tool_result conversion — it converts the image to a
+            # data URL string, which would otherwise be treated as plain text).
+            # Fixes: https://github.com/BerriAI/litellm/issues/23712
+            if content_str.startswith("data:image/"):
+                try:
+                    image_obj = convert_to_anthropic_image_obj(
+                        content_str, format=None
+                    )
+                    inline_data = BlobType(
+                        data=image_obj["data"],
+                        mime_type=image_obj["media_type"],
+                    )
+                    content_str = ""  # Image extracted, don't duplicate as text
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Failed to extract image from data URL in tool response: {e}"
+                    )
         elif isinstance(message["content"], List):
             content_list = message["content"]
             for content in content_list:
