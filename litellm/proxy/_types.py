@@ -484,6 +484,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/list",
         "/team/available",
         "/user/info",
+        "/v2/user/info",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -1006,6 +1007,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    organization_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -2563,6 +2565,30 @@ class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_info: Optional[Union[dict, BaseModel]]
     keys: List
     teams: List
+
+
+class UserInfoV2Response(LiteLLMPydanticObjectBase):
+    """
+    Response model for GET /v2/user/info
+
+    Returns ONLY the user object - no keys, no teams objects.
+    This is a lightweight alternative to UserInfoResponse.
+    """
+
+    user_id: str
+    user_email: Optional[str] = None
+    user_alias: Optional[str] = None
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    max_budget: Optional[float] = None
+    models: List[str] = []
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    sso_user_id: Optional[str] = None
+    teams: List[str] = []  # Just team IDs, not full team objects
 
 
 class LiteLLM_Config(LiteLLMPydanticObjectBase):

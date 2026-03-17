@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
@@ -384,6 +385,32 @@ def _get_cost_breakdown_from_logging_obj(
     return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
+def _has_attribute_error_in_chain(exc: Exception) -> bool:
+    """Walk the exception chain to find an AttributeError at any depth.
+
+    Checks __cause__, __context__, and the litellm-specific original_exception
+    attribute iteratively. Depth is capped at DEFAULT_MAX_RECURSE_DEPTH to
+    avoid infinite loops from circular exception references.
+    """
+    stack: list[BaseException] = [exc]
+    seen: set[int] = set()
+    depth = 0
+    while stack and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        current = stack.pop()
+        exc_id = id(current)
+        if exc_id in seen:
+            continue
+        seen.add(exc_id)
+        if isinstance(current, AttributeError):
+            return True
+        for attr in ("__cause__", "__context__", "original_exception"):
+            inner = getattr(current, attr, None)
+            if inner is not None and isinstance(inner, BaseException):
+                stack.append(inner)
+        depth += 1
+    return False
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -530,6 +557,8 @@ class ProxyBaseLLMRequestProcessing:
             "aresponses",
             "_arealtime",
             "_aresponses_websocket",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
@@ -553,6 +582,10 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -566,6 +599,10 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
             "acreate_container",
             "alist_containers",
             "aingest",
@@ -774,20 +811,36 @@ class ProxyBaseLLMRequestProcessing:
             "aembedding",
             "aresponses",
             "_arealtime",
+            "_aresponses_websocket",
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
             "acompact_responses",
+            "acreate_batch",
+            "aretrieve_batch",
+            "alist_batches",
+            "acancel_batch",
+            "afile_content",
+            "afile_retrieve",
+            "afile_delete",
             "atext_completion",
-            "aimage_edit",
+            "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
             "alist_input_items",
+            "aimage_edit",
             "agenerate_content",
             "agenerate_content_stream",
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -801,6 +854,10 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
             "acreate_container",
             "alist_containers",
             "aingest",
@@ -815,8 +872,8 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
-            "acancel_batch",
-            "afile_delete",
+            "asend_message",
+            "call_mcp_tool",
             "acreate_eval",
             "alist_evals",
             "aget_eval",
@@ -1259,23 +1316,11 @@ class ProxyBaseLLMRequestProcessing:
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
-        # Check for AttributeError in various places:
-        # 1. Direct AttributeError (already handled above)
-        # 2. In underlying exception (__cause__, __context__, original_exception)
-        has_attribute_error = (
-            (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__cause__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "__context__", None), AttributeError)
-            )
-            or (
-                isinstance(e, Exception)
-                and isinstance(getattr(e, "original_exception", None), AttributeError)
-            )
-        )
+        # Check for AttributeError in the exception chain.
+        # The AttributeError may be wrapped in multiple layers
+        # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
+        # so walk __cause__, __context__, and original_exception recursively.
+        has_attribute_error = _has_attribute_error_in_chain(e)
 
         if has_attribute_error:
             raise ProxyException(

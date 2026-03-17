@@ -456,11 +456,8 @@ async def list_tags(
         dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
             by=["tag"],
             where={"tag": {"not": None}},
-            # The old find_many(distinct=...) returned arbitrary timestamps from
-            # whichever row Prisma happened to pick. MIN/MAX give more meaningful
-            # values: earliest appearance and most recent activity.
-            _min={"created_at": True},
-            _max={"updated_at": True},
+            min={"created_at": True},
+            max={"updated_at": True},
         )
 
         dynamic_tag_config = [
@@ -468,8 +465,8 @@ async def list_tags(
                 "name": row["tag"],
                 "description": "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
                 "models": None,
-                "created_at": row["_min"]["created_at"].isoformat(),
-                "updated_at": row["_max"]["updated_at"].isoformat(),
+                "created_at": row["_min"]["created_at"],
+                "updated_at": row["_max"]["updated_at"],
             }
             for row in dynamic_tag_rows
             if row["tag"] not in stored_tag_names
