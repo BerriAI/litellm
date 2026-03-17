@@ -873,8 +873,9 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-@pytest.mark.parametrize(
+    "vertex_location, expected_location",
     "vertex_location, expected_location",
     [
         # Supported regions should be preserved
