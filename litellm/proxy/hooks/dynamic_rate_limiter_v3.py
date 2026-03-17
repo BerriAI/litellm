@@ -17,10 +17,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
+    RateLimitStatus,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.fallback_event_handlers import (
+    _check_non_standard_fallback_format,
+)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 
@@ -471,44 +475,43 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             f"Read-only check: {json.dumps(check_response, indent=2)}"
         )
 
-        # PHASE 2: Decide which limits to enforce
-        # Only proceed if the overall rate limiter verdict is OVER_LIMIT.
-        # This preserves backward-compatible behavior for existing users.
-        # Exception: for model_saturation_check, also enforce if limit_remaining <= 0
-        # (exact-capacity boundary condition).
+        # PHASE 2: Decide which limits to enforce.
+        # Helper to raise a uniform 429 for model saturation, used in both the
+        # OVER_LIMIT branch and the exact-capacity boundary check below.
+        def _raise_model_saturation_exceeded(status: RateLimitStatus) -> None:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": f"Model capacity reached for {model}. "
+                    f"Priority: {priority}, "
+                    f"Rate limit type: {status['rate_limit_type']}, "
+                    f"Remaining: {status['limit_remaining']}"
+                },
+                headers={
+                    "retry-after": str(self.v3_limiter.window_size),
+                    "rate_limit_type": str(status["rate_limit_type"]),
+                    "x-litellm-priority": priority or "default",
+                },
+            )
+
+        # Always scan statuses for the model saturation boundary condition
+        # (limit_remaining <= 0).  The rate limiter may report overall_code=OK
+        # in the same window tick that fills the last slot; we must still block
+        # that request so the counter stays accurate.
+        for status in check_response["statuses"]:
+            if (
+                status["descriptor_key"] == "model_saturation_check"
+                and status["limit_remaining"] <= 0
+            ):
+                _raise_model_saturation_exceeded(status)
+
+        # For OVER_LIMIT responses, also enforce priority limits when saturated.
         if check_response["overall_code"] == "OVER_LIMIT":
             for status in check_response["statuses"]:
                 descriptor_key = status["descriptor_key"]
-                is_over_limit = status["code"] == "OVER_LIMIT"
-                
-                # For model saturation, also consider the boundary condition: limit_remaining <= 0
-                # This ensures exact-capacity scenarios are treated as over-limit.
-                if (
-                    descriptor_key == "model_saturation_check"
-                    and status["limit_remaining"] <= 0
-                ):
-                    is_over_limit = True
-
-                if is_over_limit:
-                    # Model-wide limit exceeded (ALWAYS enforce)
-                    if descriptor_key == "model_saturation_check":
-                        raise HTTPException(
-                            status_code=429,
-                            detail={
-                                "error": f"Model capacity reached for {model}. "
-                                f"Priority: {priority}, "
-                                f"Rate limit type: {status['rate_limit_type']}, "
-                                f"Remaining: {status['limit_remaining']}"
-                            },
-                            headers={
-                                "retry-after": str(self.v3_limiter.window_size),
-                                "rate_limit_type": str(status["rate_limit_type"]),
-                                "x-litellm-priority": priority or "default",
-                            },
-                        )
-
+                if status["code"] == "OVER_LIMIT":
                     # Priority limit exceeded (ONLY enforce when saturated)
-                    elif descriptor_key == "priority_model" and should_enforce_priority:
+                    if descriptor_key == "priority_model" and should_enforce_priority:
                         verbose_proxy_logger.debug(
                             f"Enforcing priority limits for {model}, saturation: {saturation:.1%}, "
                             f"priority: {priority}"
@@ -529,28 +532,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                                 "x-litellm-saturation": f"{saturation:.2%}",
                             },
                         )
-        else:
-            # Even if overall_code is OK, enforce the model saturation boundary condition
-            for status in check_response["statuses"]:
-                descriptor_key = status["descriptor_key"]
-                if (
-                    descriptor_key == "model_saturation_check"
-                    and status["limit_remaining"] <= 0
-                ):
-                    raise HTTPException(
-                        status_code=429,
-                        detail={
-                            "error": f"Model capacity reached for {model}. "
-                            f"Priority: {priority}, "
-                            f"Rate limit type: {status['rate_limit_type']}, "
-                            f"Remaining: {status['limit_remaining']}"
-                        },
-                        headers={
-                            "retry-after": str(self.v3_limiter.window_size),
-                            "rate_limit_type": str(status["rate_limit_type"]),
-                            "x-litellm-priority": priority or "default",
-                        },
-                    )
 
 
         # PHASE 3: Increment counters separately to avoid early-exit issues
@@ -632,6 +613,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         def _has_fallback_for_model(_fallbacks: Optional[list], _model: str) -> bool:
             if not _fallbacks:
                 return False
+            # Non-standard formats (flat string list or LiteLLMParams dict list) are
+            # treated as model-agnostic fallbacks — the router will try them regardless
+            # of which model group triggered the rate limit.
+            if _check_non_standard_fallback_format(_fallbacks):
+                return True
             for item in _fallbacks:
                 if isinstance(item, dict):
                     if _model in item or "*" in item:

@@ -36,6 +36,8 @@ litellm/proxy/log.txt
 proxy_server_config_@.yaml
 .gitignore
 proxy_server_config_2.yaml
+proxy_server.log
+proxy_server_config.yaml
 litellm/proxy/secret_managers/credentials.json
 hosted_config.yaml
 litellm/proxy/tests/node_modules

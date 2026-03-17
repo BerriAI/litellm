@@ -5433,9 +5433,18 @@ class Router:
             # rate-limit errors should follow normal fallback logic, not mock testing.
             rate_limit_error = kwargs.pop("_litellm_rate_limit_error", None)
             if rate_limit_error is not None:
-                verbose_router_logger.info(
-                    f"Rate limit detected from pre-call hook for {model_group}, triggering fallback"
-                )
+                if disable_fallbacks:
+                    # The pre-call hook should have raised HTTPException directly
+                    # when disable_fallbacks=True.  Log a warning if we reach here
+                    # unexpectedly (e.g. data dict and kwargs diverged).
+                    verbose_router_logger.debug(
+                        f"Unexpected: _litellm_rate_limit_error marker set for "
+                        f"{model_group} but disable_fallbacks=True. Raising directly."
+                    )
+                else:
+                    verbose_router_logger.info(
+                        f"Rate limit detected from pre-call hook for {model_group}, triggering fallback"
+                    )
                 raise rate_limit_error
             
             self._handle_mock_testing_fallbacks(
