@@ -1054,6 +1054,7 @@ const sidebars = {
           label: "AI Coding Tools (OpenWebUI, Claude Code, Gemini CLI, OpenAI Codex, etc.)",
           href: "/docs/ai_tools",
         },
+        "tutorials/file_search_responses_api",
         "tutorials/anthropic_file_usage",
         "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
