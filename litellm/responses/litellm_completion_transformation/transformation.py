@@ -153,6 +153,53 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
+    def _transform_responses_api_reasoning_to_chat_completion_message(
+        reasoning_item: Any,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        Transform a Responses API reasoning item into a visible assistant message.
+
+        DeepSeek may place the user-visible final text in a `reasoning` item while the
+        paired `message` item is empty. Codex expects assistant-visible content, so we
+        bridge reasoning text into a normal assistant message here.
+        """
+        if not isinstance(reasoning_item, dict):
+            return []
+
+        content_blocks = reasoning_item.get("content") or []
+        text_parts: List[str] = []
+
+        for block in content_blocks:
+            if not isinstance(block, dict):
+                continue
+
+            block_type = str(block.get("type") or "")
+            if block_type not in ("output_text", "text"):
+                continue
+
+            text = str(block.get("text") or "")
+            text = LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                text
+            )
+            if text.strip():
+                text_parts.append(text.strip())
+
+        bridged_text = "\n\n".join(text_parts).strip()
+
+        return [
+            GenericChatCompletionMessage(
+                role="assistant",
+                content=bridged_text,
+            )
+        ]
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: Union[str, ResponseInputParam],
@@ -190,11 +237,36 @@ class LiteLLMCompletionResponsesConfig:
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
 
-        litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
-            ),
+            )
+        )
+
+        deepseek_reasoning_required = False
+        if custom_llm_provider == "deepseek":
+            model_l = (model or "").lower()
+            if "reasoner" in model_l or "r1" in model_l:
+                deepseek_reasoning_required = True
+            if reasoning_effort and reasoning_effort != "none":
+                deepseek_reasoning_required = True
+            if responses_api_request.get("thinking") is not None:
+                deepseek_reasoning_required = True
+
+        if deepseek_reasoning_required:
+            messages = (
+                LiteLLMCompletionResponsesConfig._ensure_deepseek_reasoning_content(
+                    messages=messages
+                )
+            )
+
+        messages = LiteLLMCompletionResponsesConfig._coalesce_assistant_messages_between_tool_calls_and_tool_outputs(
+            messages=messages
+        )
+
+        litellm_completion_request: dict = {
+            "messages": messages,
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
                 responses_api_request.get("tool_choice")
@@ -340,6 +412,30 @@ class LiteLLMCompletionResponsesConfig:
                         "custom_llm_provider", ""
                     ),
                 )
+
+        deepseek_reasoning_required = False
+        if litellm_completion_request.get("custom_llm_provider") == "deepseek":
+            model_l = str(litellm_completion_request.get("model") or "").lower()
+            if "reasoner" in model_l or "r1" in model_l:
+                deepseek_reasoning_required = True
+            if (
+                litellm_completion_request.get("reasoning_effort")
+                and litellm_completion_request.get("reasoning_effort") != "none"
+            ):
+                deepseek_reasoning_required = True
+            if litellm_completion_request.get("thinking") is not None:
+                deepseek_reasoning_required = True
+
+        if deepseek_reasoning_required:
+            combined_messages = (
+                LiteLLMCompletionResponsesConfig._ensure_deepseek_reasoning_content(
+                    messages=combined_messages
+                )
+            )
+
+        combined_messages = LiteLLMCompletionResponsesConfig._coalesce_assistant_messages_between_tool_calls_and_tool_outputs(
+            messages=combined_messages
+        )
 
         litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
@@ -973,20 +1069,235 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
+        elif LiteLLMCompletionResponsesConfig._is_input_item_reasoning(input_item):
+            return LiteLLMCompletionResponsesConfig._transform_responses_api_reasoning_to_chat_completion_message(
+                reasoning_item=input_item
+            )
         else:
             content = input_item.get("content")
-            # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
-            # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+
+            role = input_item.get("role") or "user"
+            transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                content
+            )
+
+            if role == "assistant":
+                if isinstance(transformed_content, str):
+                    transformed_content = LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                        transformed_content
+                    )
+                elif isinstance(transformed_content, list):
+                    cleaned_parts: List[Union[str, Dict[str, Any]]] = []
+                    for part in transformed_content:
+                        if isinstance(part, str):
+                            cleaned_parts.append(
+                                LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                                    part
+                                )
+                            )
+                        elif isinstance(part, dict):
+                            part_copy = dict(part)
+                            text_val = part_copy.get("text")
+                            if text_val is not None:
+                                part_copy["text"] = (
+                                    LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                                        str(text_val)
+                                    )
+                                )
+                            cleaned_parts.append(part_copy)
+                        else:
+                            cleaned_parts.append(part)
+                    transformed_content = cleaned_parts
+
+                if LiteLLMCompletionResponsesConfig._is_effectively_empty_assistant_content(
+                    transformed_content
+                ):
+                    return []
+
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
+                    role=role,
+                    content=transformed_content,
                 )
             ]
+
+    @staticmethod
+    def _strip_deepseek_thinking_markers(text: str) -> str:
+        """
+        Some DeepSeek models emit delimiter tokens inside assistant-visible content.
+        If we persist these as standalone assistant messages, they can violate
+        DeepSeek's tool-call sequencing requirements.
+        """
+        if not isinstance(text, str):
+            return str(text) if text is not None else ""
+        markers = (
+            "<｜end▁of▁thinking｜>",
+            "<|end_of_thinking|>",
+            "</think>",
+            "<think>",
+        )
+        for marker in markers:
+            text = text.replace(marker, "")
+        return text
+
+    @staticmethod
+    def _coalesce_assistant_messages_between_tool_calls_and_tool_outputs(
+        messages: Sequence[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionResponseMessage,
+            ]
+        ],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        DeepSeek requires assistant(tool_calls) to be immediately followed by tool
+        messages for each tool_call_id. If the client inserts assistant text in
+        between, merge that text into the preceding assistant(tool_calls) message.
+        """
+        fixed: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
+        pending_tool_call_ids: Optional[set] = None
+        last_tool_calls_idx: Optional[int] = None
+
+        def _merge_assistant_content(*, target: dict, src: dict) -> None:
+            src_content = src.get("content")
+            if not src_content:
+                return
+            tgt_content = target.get("content")
+
+            if isinstance(tgt_content, str) and isinstance(src_content, str):
+                if tgt_content.strip():
+                    target["content"] = (
+                        tgt_content.rstrip() + "\n\n" + src_content.lstrip()
+                    )
+                else:
+                    target["content"] = src_content
+                return
+
+            def _to_list(v: Any) -> list:
+                if v is None:
+                    return []
+                if isinstance(v, list):
+                    return v
+                return [v]
+
+            target["content"] = _to_list(tgt_content) + _to_list(src_content)
+
+        for message in messages:
+            if not isinstance(message, dict):
+                fixed.append(message)
+                continue
+
+            role = message.get("role")
+            tool_calls = message.get("tool_calls")
+
+            if role == "assistant" and tool_calls:
+                ids: set = set()
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        tc_id = tc.get("id")
+                    else:
+                        tc_id = getattr(tc, "id", None)
+                    if tc_id:
+                        ids.add(str(tc_id))
+                pending_tool_call_ids = ids or set()
+                fixed.append(message)
+                last_tool_calls_idx = len(fixed) - 1
+                continue
+
+            if pending_tool_call_ids is not None and len(pending_tool_call_ids) > 0:
+                if role == "tool":
+                    tool_call_id = message.get("tool_call_id")
+                    if tool_call_id and str(tool_call_id) in pending_tool_call_ids:
+                        pending_tool_call_ids.remove(str(tool_call_id))
+                    fixed.append(message)
+                    continue
+
+                if (
+                    role == "assistant"
+                    and not tool_calls
+                    and last_tool_calls_idx is not None
+                ):
+                    try:
+                        _merge_assistant_content(
+                            target=cast(dict, fixed[last_tool_calls_idx]),
+                            src=message,
+                        )
+                    except Exception:
+                        pass
+                    continue
+
+                continue
+
+            fixed.append(message)
+
+            if pending_tool_call_ids is not None and len(pending_tool_call_ids) == 0:
+                pending_tool_call_ids = None
+                last_tool_calls_idx = None
+
+        return fixed
+
+    @staticmethod
+    def _is_effectively_empty_assistant_content(
+        transformed_content: Union[str, List[Union[str, Dict[str, Any]]]],
+    ) -> bool:
+        """
+        Return True if assistant content is effectively empty, including when it only
+        contains DeepSeek thinking delimiter tokens.
+        """
+        if isinstance(transformed_content, str):
+            normalized = (
+                LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                    transformed_content
+                )
+            )
+            return normalized.strip() == ""
+
+        if isinstance(transformed_content, list):
+            for part in transformed_content:
+                if isinstance(part, str):
+                    normalized = LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                        part
+                    )
+                    if normalized.strip() != "":
+                        return False
+                elif isinstance(part, dict):
+                    text_val = part.get("text")
+                    if text_val is None:
+                        return False
+                    normalized = LiteLLMCompletionResponsesConfig._strip_deepseek_thinking_markers(
+                        str(text_val)
+                    )
+                    if normalized.strip() != "":
+                        return False
+                else:
+                    return False
+            return True
+
+        return False
+
+    @staticmethod
+    def _is_input_item_reasoning(input_item: Any) -> bool:
+        """
+        Detect Responses API reasoning items, including DeepSeek/OpenAI-style outputs.
+        """
+        if not isinstance(input_item, dict):
+            return False
+        return str(input_item.get("type") or "") == "reasoning"
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -2055,9 +2366,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
             else:
                 output_details_dict["reasoning_tokens"] = 0
 

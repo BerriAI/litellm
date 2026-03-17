@@ -22,6 +22,20 @@ from litellm.types.utils import (
 )
 
 
+class _StaticSyncStream:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self._index = 0
+        self.logging_obj = AsyncMock()
+
+    def __next__(self):
+        if self._index >= len(self._chunks):
+            raise StopIteration
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+
 def test_tool_call_delta_is_emitted_as_responses_events():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
@@ -68,6 +82,113 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert evt2.output_index == 1
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
+
+
+def test_sync_iterator_emits_message_then_text_for_same_chunk():
+    chunk = ModelResponseStream(
+        id="chunk-sync-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="DeepSeek final answer",
+                ),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_StaticSyncStream([chunk]),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    evt1 = next(iterator)
+    evt2 = next(iterator)
+    evt3 = next(iterator)
+
+    assert evt1.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert evt2.type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS
+    assert evt3.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+
+    evt4 = next(iterator)
+    assert evt4.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+    assert evt4.delta == "DeepSeek final answer"
+
+
+def test_sync_iterator_emits_message_item_when_text_arrives_after_tool_call():
+    tool_chunk = ModelResponseStream(
+        id="chunk-tool-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_late_text",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": "{}"},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    text_chunk = ModelResponseStream(
+        id="chunk-text-1",
+        created=124,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="Final answer after tool call",
+                ),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_StaticSyncStream([tool_chunk, text_chunk]),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    seen_events = []
+    for _ in range(8):
+        seen_events.append(next(iterator))
+
+    message_item_events = [
+        evt
+        for evt in seen_events
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and getattr(getattr(evt, "item", None), "type", None) == "message"
+    ]
+    text_delta_events = [
+        evt
+        for evt in seen_events
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+    ]
+
+    assert len(message_item_events) == 1
+    assert len(text_delta_events) == 1
+    assert text_delta_events[0].delta == "Final answer after tool call"
 
 
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
@@ -120,11 +241,11 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
             delta_events.append(evt)
         else:
             break
-    
+
     # Verify we got delta events
     assert len(delta_events) > 0
     # Verify they reconstruct the original arguments
-    concatenated_args = ''.join(evt.delta for evt in delta_events)
+    concatenated_args = "".join(evt.delta for evt in delta_events)
     assert concatenated_args == '{"y":2}'
 
     # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
@@ -142,8 +263,8 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     """
     Test that large tool call arguments are split into smaller chunks (size 10)
     to replicate OpenAI's native streaming behavior.
-    
-    This is especially important for providers like Bedrock that send complete 
+
+    This is especially important for providers like Bedrock that send complete
     arguments at once, which need to be split to match OpenAI's token-by-token streaming.
     """
     iterator = LiteLLMCompletionStreamingIterator(
@@ -154,7 +275,9 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     )
 
     # Create a chunk with a large arguments string that should be split
-    large_arguments = '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
+    large_arguments = (
+        '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
+    )
     chunk = ModelResponseStream(
         id="chunk-1",
         created=123,
@@ -171,7 +294,10 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
                         {
                             "id": "call_test",
                             "type": "function",
-                            "function": {"name": "test_function", "arguments": large_arguments},
+                            "function": {
+                                "name": "test_function",
+                                "arguments": large_arguments,
+                            },
                         }
                     ],
                 ),
@@ -181,13 +307,13 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
 
     # Process the chunk once - it queues all events internally
     evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
-    
+
     # First event should be OUTPUT_ITEM_ADDED
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 1
-    assert hasattr(evt, '__dict__') and 'sequence_number' in evt.__dict__
-    
+    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
     empty_chunk = ModelResponseStream(
@@ -203,29 +329,31 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
             )
         ],
     )
-    
+
     # Keep draining pending events (expected: ceil(67 / 10) = 7 delta events)
     while iterator._pending_tool_events:
-        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(empty_chunk)
+        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            empty_chunk
+        )
         if evt and evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
             delta_events.append(evt)
-    
+
     # Verify multiple delta events were created (at least 6 chunks for 67 chars)
     assert len(delta_events) >= 6  # 67 chars split into chunks of max 10 chars each
-    
+
     # Verify each delta is at most 10 characters
     for evt in delta_events:
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
         assert evt.output_index == 1
-        assert hasattr(evt, '__dict__') and 'sequence_number' in evt.__dict__
-    
+        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+
     # Verify all deltas concatenated equal the original arguments
-    concatenated = ''.join(evt.delta for evt in delta_events)
+    concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
-    
+
     # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__['sequence_number'] for evt in delta_events]
+    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 

@@ -100,6 +100,14 @@ class TestReasoningContentStreaming:
         assert transformed_chunk.delta == "First, let me analyze..."
         assert transformed_chunk.type == "response.reasoning_summary_text.delta"
 
+        follow_up_chunk = (
+            iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+        )
+
+        assert follow_up_chunk is not None
+        assert follow_up_chunk.delta == "Here is the answer"
+        assert follow_up_chunk.type == "response.output_text.delta"
+
     def test_no_reasoning_content(self):
         """Test handling when no reasoning content is present"""
         # Setup

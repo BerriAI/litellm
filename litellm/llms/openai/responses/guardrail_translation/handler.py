@@ -270,6 +270,90 @@ class OpenAIResponsesHandler(BaseTranslation):
             remapped = self._remap_tools_to_responses_api_format(guardrailed_tools)
             data["tools"] = self._merge_tools_after_guardrail(original_tools, remapped)
 
+    @staticmethod
+    def _extract_reasoning_fallback_text_from_outputs(outputs: List[Any]) -> str:
+        """
+        DeepSeek reasoner may place the user-visible final answer inside a
+        `reasoning` output item while the paired `message` item is empty.
+
+        This extracts reasoning output text as a fallback visible assistant text.
+        """
+        reasoning_parts: List[str] = []
+
+        for item in outputs:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "reasoning":
+                continue
+
+            content = item.get("content") or []
+            if not isinstance(content, list):
+                continue
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "output_text":
+                    continue
+
+                text = str(block.get("text") or "")
+                if text.strip():
+                    reasoning_parts.append(text.strip())
+
+        return "\n\n".join(reasoning_parts).strip()
+
+    @staticmethod
+    def _inject_fallback_text_into_response_outputs(
+        outputs: List[Any], fallback_text: str
+    ) -> List[Any]:
+        """
+        Ensure the response outputs contain a visible assistant `message` item
+        so downstream clients like Codex can render the text.
+        """
+        if not fallback_text.strip():
+            return outputs
+
+        for item in outputs:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "message":
+                continue
+
+            content = item.get("content") or []
+            if not isinstance(content, list):
+                item["content"] = [
+                    {"type": "output_text", "text": fallback_text, "annotations": []}
+                ]
+                return outputs
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "output_text":
+                    current_text = str(block.get("text") or "")
+                    if not current_text.strip():
+                        block["text"] = fallback_text
+                    return outputs
+
+            # message exists but has no output_text block
+            content.append(
+                {"type": "output_text", "text": fallback_text, "annotations": []}
+            )
+            return outputs
+
+        # no message item exists at all
+        outputs.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": fallback_text, "annotations": []}
+                ],
+            }
+        )
+        return outputs
+
     def _extract_input_text_and_images(
         self,
         message: Any,  # Can be Dict[str, Any] or ResponseInputParam
@@ -495,9 +579,36 @@ class OpenAIResponsesHandler(BaseTranslation):
                 handle_raw_dict_callback=None,
             )
 
+            fallback_text = ""
+            tool_calls = None
+            text = None
+
             if model_response_choices:
                 tool_calls = model_response_choices[0].message.tool_calls
                 text = model_response_choices[0].message.content
+
+            # DeepSeek reasoner fallback:
+            # if normal assistant message content is empty, extract visible text from reasoning item
+            if not text or not str(text).strip():
+                fallback_text = self._extract_reasoning_fallback_text_from_outputs(
+                    outputs
+                )
+                if fallback_text:
+                    text = fallback_text
+                    # Write the text back into response.output so downstream clients can render it
+                    if (
+                        isinstance(final_chunk, dict)
+                        and isinstance(final_chunk.get("response"), dict)
+                        and isinstance(final_chunk["response"].get("output"), list)
+                    ):
+                        final_chunk["response"]["output"] = (
+                            self._inject_fallback_text_into_response_outputs(
+                                final_chunk["response"]["output"],
+                                fallback_text,
+                            )
+                        )
+
+            if model_response_choices or fallback_text:
                 guardrail_inputs = GenericGuardrailAPIInputs()
                 if text:
                     guardrail_inputs["texts"] = [text]
