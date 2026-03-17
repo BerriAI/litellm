@@ -410,7 +410,7 @@ export default function UISettings() {
               <Typography.Text strong>Disable custom Virtual key values</Typography.Text>
               <Typography.Text type="secondary">
                 {disableCustomApiKeysProperty?.description ??
-                  "If true, users cannot specify custom API key values. All keys must be auto-generated."}
+                  "If true, users cannot specify custom key values. All keys must be auto-generated."}
               </Typography.Text>
             </Space>
           </Space>
