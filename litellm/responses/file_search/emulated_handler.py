@@ -53,34 +53,43 @@ def should_use_emulated_file_search(
 
 def _build_function_tool(vector_store_ids: List[str]) -> Dict[str, Any]:
     """
-    Create an OpenAI function-tool definition that describes file search.
-    The function accepts a natural-language query; LiteLLM runs the actual
-    vector search against the configured vector stores.
+    Create a Responses API function-tool definition that describes file search.
+    The function accepts one or more natural-language queries (like OpenAI's native
+    file_search); LiteLLM runs the actual vector search against the configured
+    vector stores.
+
+    Note: Uses Responses API format (name/description/parameters at top level),
+    NOT Chat Completion format (nested under "function"), so that the
+    LiteLLMCompletionResponsesConfig transformation picks up name and description.
     """
     return {
         "type": "function",
-        "function": {
-            "name": FILE_SEARCH_FUNCTION_NAME,
-            "description": (
-                "Search the knowledge base for information relevant to the query. "
-                "Use this whenever you need to look up specific facts, documents, "
-                "or content from the vector store."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to look up in the vector store.",
-                    },
-                    "vector_store_id": {
-                        "type": "string",
-                        "description": "ID of the vector store to search.",
-                        "enum": vector_store_ids,
-                    },
+        "name": FILE_SEARCH_FUNCTION_NAME,
+        "description": (
+            "Search the knowledge base for information relevant to the query. "
+            "Use this whenever you need to look up specific facts, documents, "
+            "or content from the vector store. You can provide multiple queries "
+            "to search for different aspects of the information."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "One or more search queries to look up in the vector store. "
+                        "Multiple queries help find comprehensive information from "
+                        "different angles."
+                    ),
                 },
-                "required": ["query"],
+                "vector_store_id": {
+                    "type": "string",
+                    "description": "ID of the vector store to search.",
+                    "enum": vector_store_ids,
+                },
             },
+            "required": ["queries"],
         },
     }
 
@@ -117,37 +126,44 @@ def _replace_file_search_tools(
 # ---------------------------------------------------------------------------
 
 async def _run_vector_searches(
-    query: str,
+    queries: List[str],
     vector_store_ids: List[str],
     fallback_vector_store_ids: List[str],
 ) -> Tuple[List[str], List[VectorStoreSearchResult]]:
     """
-    Run `asearch` against all vector stores and collect results.
+    Run `asearch` against all vector stores for all queries and collect results.
+
+    Args:
+        queries: List of search queries to execute (like OpenAI's multi-query approach)
+        vector_store_ids: Specific vector store IDs to search
+        fallback_vector_store_ids: Fallback IDs if vector_store_ids is empty
 
     Returns:
         (queries_list, combined_results)
     """
     import litellm.vector_stores.main as vs_main
 
-    queries: List[str] = [query]
     all_results: List[VectorStoreSearchResult] = []
-
     ids_to_search = vector_store_ids or fallback_vector_store_ids
-    for vs_id in ids_to_search:
-        try:
-            response = await vs_main.asearch(
-                vector_store_id=vs_id,
-                query=query,
-            )
-            results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
-            if results_data:
-                all_results.extend(results_data)
-        except Exception as exc:
-            verbose_logger.warning(
-                "file_search emulated: search failed for vector_store_id='%s': %s",
-                vs_id,
-                exc,
-            )
+
+    # Execute each query against all vector stores
+    for query in queries:
+        for vs_id in ids_to_search:
+            try:
+                response = await vs_main.asearch(
+                    vector_store_id=vs_id,
+                    query=query,
+                )
+                results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
+                if results_data:
+                    all_results.extend(results_data)
+            except Exception as exc:
+                verbose_logger.warning(
+                    "file_search emulated: search failed for query='%s', vector_store_id='%s': %s",
+                    query,
+                    vs_id,
+                    exc,
+                )
 
     return queries, all_results
 
@@ -155,6 +171,13 @@ async def _run_vector_searches(
 # ---------------------------------------------------------------------------
 # Result formatting
 # ---------------------------------------------------------------------------
+
+def _get_field(result: Any, key: str, default: Any = None) -> Any:
+    """Read a field from either a dict/TypedDict or an attribute-based object."""
+    if isinstance(result, dict):
+        return result.get(key, default)
+    return getattr(result, key, default)
+
 
 def _format_search_results_as_tool_output(
     results: List[VectorStoreSearchResult],
@@ -165,10 +188,10 @@ def _format_search_results_as_tool_output(
 
     parts: List[str] = []
     for i, result in enumerate(results, 1):
-        score = getattr(result, "score", None)
-        file_id = getattr(result, "file_id", None)
-        filename = getattr(result, "filename", None)
-        content_items = getattr(result, "content", []) or []
+        score = _get_field(result, "score")
+        file_id = _get_field(result, "file_id")
+        filename = _get_field(result, "filename")
+        content_items = _get_field(result, "content") or []
         text_chunks = [
             c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
             for c in content_items
@@ -189,17 +212,57 @@ def _format_search_results_as_tool_output(
     return "\n\n".join(parts)
 
 
+def _build_search_results_for_include(
+    results: List[VectorStoreSearchResult],
+) -> List[Dict[str, Any]]:
+    """
+    Convert VectorStoreSearchResult objects to the format expected in
+    file_search_call.search_results (mirrors OpenAI's include= format).
+    """
+    formatted: List[Dict[str, Any]] = []
+    for result in results:
+        content_items = _get_field(result, "content") or []
+        text_chunks = [
+            c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
+            for c in content_items
+        ]
+        text = " ".join(t for t in text_chunks if t)
+        formatted.append(
+            {
+                "file_id": _get_field(result, "file_id") or "",
+                "filename": _get_field(result, "filename") or "",
+                "score": _get_field(result, "score"),
+                "text": text,
+                "attributes": _get_field(result, "attributes") or {},
+            }
+        )
+    return formatted
+
+
 def _build_file_search_call_output(
     call_id: str,
     queries: List[str],
+    results: Optional[List[VectorStoreSearchResult]] = None,
+    include_search_results: bool = False,
 ) -> Dict[str, Any]:
-    """Build the file_search_call output item (mirrors OpenAI's format)."""
+    """Build the file_search_call output item (mirrors OpenAI's format).
+
+    Args:
+        call_id: Unique ID for this file_search call.
+        queries: List of search queries used.
+        results: The raw search results (used when include_search_results=True).
+        include_search_results: Populate search_results when the caller passed
+            ``include=["file_search_call.results"]``.
+    """
+    search_results = None
+    if include_search_results and results:
+        search_results = _build_search_results_for_include(results)
     return {
         "type": "file_search_call",
         "id": call_id,
         "status": "completed",
         "queries": queries,
-        "search_results": None,
+        "search_results": search_results,
     }
 
 
@@ -216,8 +279,8 @@ def _build_file_citation_annotations(
     seen_file_ids: set = set()
 
     for result in results:
-        file_id = getattr(result, "file_id", None)
-        filename = getattr(result, "filename", None)
+        file_id = _get_field(result, "file_id")
+        filename = _get_field(result, "filename")
         if not file_id or file_id in seen_file_ids:
             continue
         seen_file_ids.add(file_id)
@@ -312,6 +375,19 @@ async def aresponses_with_emulated_file_search(
     Replaces file_search tools with a function tool, intercepts the tool call,
     runs vector search, and synthesizes an OpenAI-format response.
     """
+    # Determine whether caller wants search_results populated in the output.
+    _include: List[str] = list(kwargs.get("include") or [])
+    _include_search_results = "file_search_call.results" in _include
+
+    # Disable streaming for emulated file_search (not yet supported)
+    _original_stream = kwargs.get("stream")
+    if _original_stream:
+        verbose_logger.debug(
+            "Streaming is not yet supported for emulated file_search. "
+            "Disabling stream for this request."
+        )
+        kwargs = {**kwargs, "stream": False}
+
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
 
@@ -349,7 +425,12 @@ async def aresponses_with_emulated_file_search(
         response_text = _extract_text_from_responses_output(first_response)
         return _synthesize_responses_api_response(
             original_response=first_response,
-            file_search_call_output=_build_file_search_call_output(call_id, [str(input)]),
+            file_search_call_output=_build_file_search_call_output(
+                call_id=call_id,
+                queries=[str(input)],
+                results=None,
+                include_search_results=False,
+            ),
             message_output=_build_message_output(response_text, []),
         )
 
@@ -372,12 +453,20 @@ async def aresponses_with_emulated_file_search(
         except json.JSONDecodeError:
             args = {}
 
-        query = args.get("query", str(input))
+        # Extract queries array (OpenAI-style multi-query support)
+        queries_from_call = args.get("queries")
+        if not queries_from_call:
+            # Fallback: check for single "query" field (backward compat)
+            single_query = args.get("query")
+            queries_from_call = [single_query] if single_query else [str(input)]
+        elif not isinstance(queries_from_call, list):
+            queries_from_call = [str(queries_from_call)]
+
         vs_id_arg = args.get("vector_store_id")
         vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
 
         queries, results = await _run_vector_searches(
-            query=query,
+            queries=queries_from_call,
             vector_store_ids=vs_ids_for_call,
             fallback_vector_store_ids=all_vs_ids,
         )
@@ -426,6 +515,8 @@ async def aresponses_with_emulated_file_search(
         file_search_call_output=_build_file_search_call_output(
             call_id=file_search_call_id,
             queries=all_queries or [str(input)],
+            results=all_results,
+            include_search_results=_include_search_results,
         ),
         message_output=_build_message_output(response_text, all_results),
     )
