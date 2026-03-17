@@ -15,6 +15,53 @@ def gpt5_config() -> OpenAIGPT5Config:
     return OpenAIGPT5Config()
 
 
+@pytest.fixture(scope="module", autouse=True)
+def register_gpt_5_4_mini_nano_models() -> None:
+    # The default model cost map is fetched remotely at import time.
+    # Register the branch-local GPT-5.4 mini/nano entries so tests do not
+    # depend on the upstream raw JSON being updated before this change lands.
+    litellm.register_model(
+        {
+            "gpt-5.4-mini": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 128000,
+                "supports_reasoning": True,
+                "supports_tool_choice": True,
+                "supports_none_reasoning_effort": True,
+                "supports_xhigh_reasoning_effort": True,
+            },
+            "gpt-5.4-mini-2026-03-17": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 128000,
+                "supports_reasoning": True,
+                "supports_tool_choice": True,
+                "supports_none_reasoning_effort": True,
+                "supports_xhigh_reasoning_effort": True,
+            },
+            "gpt-5.4-nano": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 128000,
+                "supports_reasoning": True,
+                "supports_tool_choice": True,
+                "supports_none_reasoning_effort": True,
+                "supports_xhigh_reasoning_effort": True,
+            },
+            "gpt-5.4-nano-2026-03-17": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 128000,
+                "supports_reasoning": True,
+                "supports_tool_choice": True,
+                "supports_none_reasoning_effort": True,
+                "supports_xhigh_reasoning_effort": True,
+            },
+        }
+    )
+
+
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
@@ -267,6 +314,14 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4-mini", "none")
+    assert gpt5_config._supports_reasoning_effort_level(
+        "gpt-5.4-mini-2026-03-17", "none"
+    )
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.4-nano", "none")
+    assert gpt5_config._supports_reasoning_effort_level(
+        "gpt-5.4-nano-2026-03-17", "none"
+    )
     # codex/pro/chat variants do not support none
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
@@ -319,6 +374,26 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         non_default_params={"reasoning_effort": "xhigh"},
         optional_params={},
         model="gpt-5.4-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_mini_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_nano_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-nano",
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
@@ -449,6 +524,28 @@ def test_gpt5_4_keeps_reasoning_effort_none_with_tools(config: OpenAIConfig):
     )
     assert params["reasoning_effort"] == "none"
     assert params["tools"] == tools
+
+
+def test_gpt5_4_mini_temperature_with_reasoning_effort_none(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.4, "reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.4
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_nano_temperature_with_reasoning_effort_none(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.4, "reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-nano",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.4
+    assert params["reasoning_effort"] == "none"
 
 
 def test_gpt5_2_keeps_reasoning_effort_with_tools(config: OpenAIConfig):
