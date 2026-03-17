@@ -82,9 +82,9 @@ async def test_pass_through_request_timeout_actually_fires():
                 )
 
             # Verify the exception message indicates a timeout
-            assert "timeout" in exc_info.value.message.lower(), (
-                f"Expected 'timeout' in message, got: {exc_info.value.message}"
-            )
+            assert (
+                "timeout" in exc_info.value.message.lower()
+            ), f"Expected 'timeout' in message, got: {exc_info.value.message}"
     finally:
         await runner.cleanup()
         if cache is not None:

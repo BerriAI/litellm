@@ -2232,11 +2232,15 @@ def test_build_full_path_with_root_default():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with default root path
         mock_get_root.return_value = "/"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/api/v1/endpoint"
 
 
@@ -2248,11 +2252,15 @@ def test_build_full_path_with_root_custom():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/proxy/api/v1/endpoint"
 
 
@@ -2264,7 +2272,9 @@ def test_build_full_path_with_root_nested():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with nested root path /api/v2
         mock_get_root.return_value = "/api/v2"
 
@@ -2296,24 +2306,46 @@ def test_is_registered_pass_through_route_with_custom_root():
         "headers": {},
     }
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
         # Should match when request route includes the root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match when request route doesn't include root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is False
+        )
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should match with default root
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match with root prepended when root is /
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is False
+        )
 
     # Clean up
     _registered_pass_through_routes.clear()
@@ -2345,25 +2377,33 @@ def test_get_registered_pass_through_route_with_custom_root():
     route_key = f"{endpoint_id}:exact:{path}"
     _registered_pass_through_routes[route_key] = target_config
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /litellm
         mock_get_root.return_value = "/litellm"
 
         # Should return config when request route includes root path
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/litellm/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
         assert result["headers"]["Authorization"] == "Bearer token123"
 
         # Should return None when route doesn't match
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is None
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should return config with default root
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
 
@@ -2382,9 +2422,7 @@ def test_mapped_pass_through_routes_with_server_root_path():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch(
-        "litellm.proxy.utils.get_server_root_path"
-    ) as mock_get_root:
+    with patch("litellm.proxy.utils.get_server_root_path") as mock_get_root:
         mock_get_root.return_value = "/litellm"
 
         # prefixed route should match mapped routes like /vertex_ai
@@ -2410,7 +2448,6 @@ def test_mapped_pass_through_routes_with_server_root_path():
         )
 
 
-
 @pytest.mark.asyncio
 async def test_multipart_passthrough_preserves_boundary():
     """
@@ -2425,7 +2462,9 @@ async def test_multipart_passthrough_preserves_boundary():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = httpx.Headers({"content-type": "application/json"})
-    mock_response.aread = AsyncMock(return_value=b'{"filename": "test.txt", "size": 17}')
+    mock_response.aread = AsyncMock(
+        return_value=b'{"filename": "test.txt", "size": 17}'
+    )
     mock_response.text = '{"filename": "test.txt", "size": 17}'
 
     async def mock_httpx_request(method, url, **kwargs):
@@ -2435,7 +2474,9 @@ async def test_multipart_passthrough_preserves_boundary():
 
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
-        assert "content-type" not in headers, "content-type should be removed for multipart"
+        assert (
+            "content-type" not in headers
+        ), "content-type should be removed for multipart"
 
         filename, content, content_type = kwargs["files"]["file"]
         assert filename == "test.txt"
@@ -2627,7 +2668,6 @@ def test_passthrough_params_include_timeout():
 
     route_data = list(matching_routes.values())[0]
     assert route_data["passthrough_params"]["timeout"] == 120
-
 
 
 @pytest.mark.asyncio
