@@ -4788,18 +4788,19 @@ async def block_key(
     else:
         hashed_token = data.key
 
-    if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
+    # Check if the key exists before trying to block it
+    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if existing_record is None:
+        raise ProxyException(
+            message=f"Key not found. Passed key={data.key}",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+
+    if litellm.store_audit_logs is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -4813,7 +4814,7 @@ async def block_key(
                     object_id=hashed_token,
                     action="blocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=existing_record.model_dump_json(),
                 )
             )
         )
@@ -4822,24 +4823,9 @@ async def block_key(
         where={"token": hashed_token}, data={"blocked": True}  # type: ignore
     )
 
-    ## UPDATE KEY CACHE
-
-    ### get cached object ###
-    key_object = await get_key_object(
+    ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
+    await _delete_cache_key_object(
         hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    ### update cached object ###
-    key_object.blocked = True
-
-    ### store cached object ###
-    await _cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=key_object,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -4902,18 +4888,19 @@ async def unblock_key(
     else:
         hashed_token = data.key
 
-    if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
+    # Check if the key exists before trying to unblock it
+    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if existing_record is None:
+        raise ProxyException(
+            message=f"Key not found. Passed key={data.key}",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+
+    if litellm.store_audit_logs is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -4925,9 +4912,9 @@ async def unblock_key(
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
-                    action="blocked",
+                    action="unblocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=existing_record.model_dump_json(),
                 )
             )
         )
@@ -4936,24 +4923,9 @@ async def unblock_key(
         where={"token": hashed_token}, data={"blocked": False}  # type: ignore
     )
 
-    ## UPDATE KEY CACHE
-
-    ### get cached object ###
-    key_object = await get_key_object(
+    ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
+    await _delete_cache_key_object(
         hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    ### update cached object ###
-    key_object.blocked = False
-
-    ### store cached object ###
-    await _cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=key_object,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
