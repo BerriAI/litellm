@@ -1306,6 +1306,56 @@ class TestMCPServerManager:
         assert server.needs_user_oauth_token is False
 
     @pytest.mark.asyncio
+    async def test_discovered_token_url_suppressed_for_2lo_without_explicit_token_url(self):
+        """
+        Regression guard for the suppression branch (line 309 in mcp_server_manager.py).
+
+        When oauth2_flow=client_credentials is set WITHOUT an explicit token_url, and
+        discovery returns a token_url, the resolved token_url must be suppressed (set to
+        None) to prevent the proxy from silently using a discovered token endpoint the
+        operator never intended to authorise.
+
+        Expected state after load_servers_from_config:
+        - server.token_url is None   (suppressed, not the discovered value)
+        - server.has_client_credentials is True  (explicit opt-in via oauth2_flow)
+        """
+        manager = MCPServerManager()
+
+        discovered_metadata = MCPOAuthMetadata(
+            scopes=["read"],
+            authorization_url="https://discovered.example.com/auth",
+            token_url="https://discovered.example.com/token",
+        )
+
+        async def fake_discovery(server_url: str):
+            return discovered_metadata
+
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            config = {
+                "m2m-server": {
+                    "url": "https://m2m.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "my-client-id",
+                    "client_secret": "my-client-secret",
+                    "oauth2_flow": "client_credentials",  # explicit 2LO opt-in
+                    # Deliberately NO token_url — triggers the suppression branch
+                }
+            }
+
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_url is None, (
+            "Auto-discovered token_url must be suppressed when oauth2_flow=client_credentials "
+            "is set without an explicit token_url — using a discovered endpoint could grant "
+            "unintended M2M access"
+        )
+        assert server.has_client_credentials is True, (
+            "has_client_credentials must be True: oauth2_flow=client_credentials is set"
+        )
+
+    @pytest.mark.asyncio
     async def test_requires_per_user_auth_property_passthrough_auth(self):
         """Test that requires_per_user_auth returns True for passthrough auth (auth_type=none + Authorization header)"""
         # Passthrough auth with Authorization header
