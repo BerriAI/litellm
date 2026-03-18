@@ -229,18 +229,6 @@ class RubrikLogger(CustomBatchLogger):
             data=list(self.log_queue),
         )
 
-    def _send_batch(self):
-        """Calls async_send_batch in an event loop."""
-        if not self.log_queue:
-            return
-
-        try:
-            loop = asyncio.get_running_loop()
-            # If we're inside a running event loop, schedule as a task
-            loop.create_task(self.async_send_batch())
-        except RuntimeError:
-            # No running event loop — run the coroutine directly
-            asyncio.run(self.async_send_batch())
 
     async def async_post_call_success_hook(
         self,
@@ -282,6 +270,14 @@ class RubrikLogger(CustomBatchLogger):
                 return response
 
             if response_format == LLMResponseFormat.ANTHROPIC:
+                # Skip blocking service if the response has no tool calls (text-only)
+                content = response.get("content", []) if isinstance(response, dict) else []
+                has_tools = any(
+                    isinstance(b, dict) and b.get("type") == _BLOCK_TYPE_TOOL_USE
+                    for b in content
+                )
+                if not has_tools:
+                    return response
                 return await self._handle_anthropic_non_streaming(response)
 
             openai_dict = response.model_dump()
@@ -949,11 +945,10 @@ class RubrikLogger(CustomBatchLogger):
         # Preserve non-tool, non-text blocks (thinking, citations, etc.) from the original response.
         # Text and tool_use blocks are taken from the converted response since the blocking service
         # may have modified text (added explanation) and removed blocked tool calls.
-        _REPLACED_TYPES = _REPLACED_BLOCK_TYPES
         original_content = original_response.get("content", [])
         preserved_blocks = [
             block for block in original_content
-            if not (isinstance(block, dict) and block.get("type") in _REPLACED_TYPES)
+            if not (isinstance(block, dict) and block.get("type") in _REPLACED_BLOCK_TYPES)
         ]
 
         original_response["content"] = preserved_blocks + new_content

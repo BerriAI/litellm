@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -137,12 +137,7 @@ async def test_anthropic_text_only_response(handler):
     with open(sample_file) as f:
         response_dict = json.load(f)
 
-    async def mock_post(*args: Any, **kwargs: Any) -> Mock:
-        request_json = kwargs.get("json", {})
-        mock_response = Mock()
-        mock_response.json.return_value = request_json
-        mock_response.raise_for_status = Mock()
-        return mock_response
+    mock_post = AsyncMock()
 
     with patch.object(handler.tool_blocking_client, "post", new=mock_post):
         result = await handler.async_post_call_success_hook(
@@ -152,6 +147,7 @@ async def test_anthropic_text_only_response(handler):
         )
 
         assert result is response_dict, "Should return the same dict object"
+        mock_post.assert_not_called(), "Blocking service should not be called for text-only responses"
 
         first_block = result["content"][0]
         block_type = getattr(first_block, "type", first_block.get("type") if isinstance(first_block, dict) else None)
