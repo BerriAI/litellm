@@ -161,7 +161,6 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
 
-        self.log_queue = []
         asyncio.create_task(self.periodic_flush())
 
     async def aclose(self):
@@ -210,8 +209,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 headers=headers,
             )
 
-            # In practice, this is almost never going to get called as the client.post will
-            # usually raise an error
+            # Log context before raising — raise_for_status() produces HTTPStatusError
+            # which is caught by the outer except block.
             if response.status_code >= 300:
                 verbose_logger.error(f"Rubrik Error: {response.status_code} - {response.text}")
                 response.raise_for_status()
@@ -584,6 +583,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # Drain remaining stream events (e.g., message_stop)
             async for remaining_chunk in parsed_stream:
                 yield self._encode_anthropic_chunk_to_sse(remaining_chunk)
+            return  # Stream fully consumed; exit the generator
 
         # Post-loop fail-open: if we were still buffering when the stream ended
         # (e.g., no message_delta was received), emit buffered non-terminal chunks as-is
