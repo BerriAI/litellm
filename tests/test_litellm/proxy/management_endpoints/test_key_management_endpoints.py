@@ -7185,3 +7185,88 @@ def test_update_key_request_has_organization_id():
     # Also verify it defaults to None
     data_no_org = UpdateKeyRequest(key="sk-test-key")
     assert data_no_org.organization_id is None
+
+
+@pytest.mark.asyncio
+async def test_body_key_does_not_override_authorization_header(monkeypatch):
+    """
+    Verify that the request body 'key' field (used by /key/block, /key/unblock,
+    /key/update) does not contaminate the api_key used for authentication.
+
+    Regression test: previously, sending a request like
+        POST /key/block
+        Authorization: Bearer <master_key>
+        Body: {"key": "sk-does-not-exist"}
+    would authenticate against "sk-does-not-exist" instead of the master key,
+    returning a 401 for a non-existent key even though the caller had a valid
+    master key in the Authorization header.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    master_key = "sk-master-test-key-1234"
+
+    # Mock proxy_server globals
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+        "default_user_id",
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.open_telemetry_logger", None
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.model_max_budget_limiter", MagicMock()
+    )
+    mock_user_api_key_cache = MagicMock()
+    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_user_api_key_cache.get_cache = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        mock_user_api_key_cache,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
+    )
+
+    # Build a mock request that simulates:
+    #   POST /key/block
+    #   Authorization: Bearer <master_key>
+    #   Body: {"key": "sk-does-not-exist"}
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "Authorization": f"Bearer {master_key}",
+        "Content-Type": "application/json",
+    }
+    mock_request.url.path = "/key/block"
+    mock_request.method = "POST"
+    mock_request.query_params = {}
+    mock_request.scope = {
+        "type": "http",
+        "path": "/key/block",
+        # Simulate a pre-parsed body with a 'key' field that differs from the master key
+        "parsed_body": (
+            ("key",),
+            {"key": "sk-does-not-exist"},
+        ),
+    }
+    mock_request.state = MagicMock()
+
+    # Call user_api_key_auth the way FastAPI does. If the body 'key' field
+    # contaminates the api_key parameter, pass it explicitly to prove the
+    # guard works.
+    result = await user_api_key_auth(
+        request=mock_request,
+        api_key="sk-does-not-exist",  # Simulates the contaminated value
+    )
+
+    # Auth should succeed — the guard re-reads the Authorization header
+    assert result is not None
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
