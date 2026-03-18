@@ -545,7 +545,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data if request_data is not None else {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
