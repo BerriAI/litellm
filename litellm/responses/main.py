@@ -470,6 +470,7 @@ async def aresponses(
         litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
         prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        original_model = model
 
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=kwargs
@@ -487,7 +488,7 @@ async def aresponses(
             (
                 model,
                 merged_input,
-                merged_optional_params,
+                _,
             ) = await litellm_logging_obj.async_get_chat_completion_prompt(
                 model=model,
                 messages=client_input,
@@ -498,14 +499,10 @@ async def aresponses(
                 prompt_version=kwargs.get("prompt_version", None),
             )
             input = cast(Union[str, ResponseInputParam], merged_input)
-            if "/" in model:
+            if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                     model=model
                 )
-                local_vars["custom_llm_provider"] = custom_llm_provider
-            for k, v in merged_optional_params.items():
-                if k in local_vars:
-                    local_vars[k] = v
 
         func = partial(
             responses,
@@ -672,6 +669,7 @@ def responses(
         #########################################################
         prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        original_model = model
 
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=kwargs
@@ -702,7 +700,7 @@ def responses(
             input = cast(Union[str, ResponseInputParam], merged_input)
             local_vars["input"] = input
             local_vars["model"] = model
-            if "/" in model:
+            if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                     model=model
                 )
