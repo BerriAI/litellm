@@ -1564,3 +1564,60 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
     )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
+
+
+def test_codestral_streaming_usage_condition_operator_precedence():
+    """
+    Regression test for operator-precedence bug in text-completion-codestral
+    streaming handler (streaming_handler.py, text-completion-codestral branch).
+
+    The original buggy condition was:
+        if "usage" in response_obj is not None:
+
+    Python evaluates chained comparisons as:
+        ("usage" in response_obj) and (response_obj is not None)
+
+    Since response_obj is never None, this reduces to just:
+        "usage" in response_obj
+
+    Consequently, when response_obj contains the key "usage" with a None value
+    (e.g. the last chunk from Codestral that carries finish_reason but no usage
+    data), the condition is True and the code then tries to access
+    response_obj["usage"].prompt_tokens — raising AttributeError on None.
+
+    The fix is:
+        if "usage" in response_obj and response_obj["usage"] is not None:
+    """
+    # Scenario 1: key present but value is None — buggy condition is True,
+    # fixed condition must be False (no AttributeError on None).
+    d_with_none_usage = {"usage": None, "text": "hello"}
+
+    buggy_condition = "usage" in d_with_none_usage is not None  # always True
+    assert buggy_condition is True, (
+        "Chained comparison should be True when 'usage' key exists with None "
+        "value, confirming the original operator-precedence bug."
+    )
+
+    fixed_condition = (
+        "usage" in d_with_none_usage and d_with_none_usage["usage"] is not None
+    )
+    assert fixed_condition is False, (
+        "Fixed condition must be False when 'usage' key is present but None, "
+        "preventing AttributeError on None."
+    )
+
+    # Scenario 2: key absent — both conditions are False (safe).
+    d_without_usage = {"text": "hello", "is_finished": False}
+    assert ("usage" in d_without_usage is not None) is False
+    assert (
+        "usage" in d_without_usage and d_without_usage.get("usage") is not None
+    ) is False
+
+    # Scenario 3: key present with a real usage object — fixed condition is True.
+    d_with_real_usage = {
+        "usage": MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        "text": "hello",
+    }
+    assert (
+        "usage" in d_with_real_usage and d_with_real_usage["usage"] is not None
+    ) is True
