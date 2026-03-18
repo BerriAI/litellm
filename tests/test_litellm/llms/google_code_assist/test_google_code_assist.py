@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import json
 from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
@@ -72,8 +72,14 @@ class TestGoogleCodeAssist:
 
     @pytest.mark.asyncio
     @patch("litellm.llms.google_code_assist.chat.AsyncHTTPHandler.post")
+    @patch(
+        "litellm.llms.google_code_assist.chat.AsyncHTTPHandler.close",
+        new_callable=AsyncMock,
+    )
     @patch("litellm.llms.gemini.common_utils.get_gemini_oauth_token")
-    async def test_acompletion_basic(self, mock_get_token, mock_async_post):
+    async def test_acompletion_basic(
+        self, mock_get_token, mock_async_close, mock_async_post
+    ):
         """
         Test async completion.
         """
@@ -125,3 +131,4 @@ class TestGoogleCodeAssist:
         )
 
         assert response.choices[0].message.content == "Async success"
+        mock_async_close.assert_awaited_once()

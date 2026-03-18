@@ -113,32 +113,39 @@ class GoogleCodeAssistChat:
             initial_project_id = gemini_auth_data.get("project_id")
 
             async_handler = AsyncHTTPHandler()
+            try:
+                final_project_id = await self._ahandle_handshake(
+                    async_handler, token, initial_project_id
+                )
+                litellm_params["google_code_assist_project"] = final_project_id
 
-            final_project_id = await self._ahandle_handshake(
-                async_handler, token, initial_project_id
-            )
-            litellm_params["google_code_assist_project"] = final_project_id
+                data = self.config.transform_request(
+                    model, messages, optional_params, litellm_params
+                )
+                url = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+                headers = self._get_headers(token)
 
-            data = self.config.transform_request(
-                model, messages, optional_params, litellm_params
-            )
-            url = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
-            headers = self._get_headers(token)
+                response = await async_handler.post(url=url, headers=headers, json=data)
+                response.raise_for_status()
 
-            response = await async_handler.post(url=url, headers=headers, json=data)
-            response.raise_for_status()
-
-            return self.config.transform_response(
-                model=model,
-                raw_response=response,
-                model_response=model_response,
-                logging_obj=logging_obj,
-                request_data=data,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                encoding=None,
-            )
+                return self.config.transform_response(
+                    model=model,
+                    raw_response=response,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=None,
+                )
+            finally:
+                try:
+                    await async_handler.close()
+                except Exception as close_error:
+                    verbose_logger.debug(
+                        f"Failed to close Google Code Assist async HTTP handler: {close_error}"
+                    )
 
         except Exception as e:
             raise self._handle_error(e)

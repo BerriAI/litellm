@@ -1,5 +1,6 @@
 import base64
 import datetime
+import json
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -159,7 +160,78 @@ def should_fallback_to_google_code_assist(error: Exception) -> bool:
     """
     Returns True if the error indicates missing OAuth scope for Gemini calls.
     """
-    return "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(error)
+
+    def _iter_exception_chain(exc: BaseException):
+        seen = set()
+        current: Optional[BaseException] = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            yield current
+            current = current.__cause__ or current.__context__
+
+    def _contains_scope_code(value: Any) -> bool:
+        if isinstance(value, str):
+            return "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in value
+        if isinstance(value, dict):
+            for v in value.values():
+                if _contains_scope_code(v):
+                    return True
+            return False
+        if isinstance(value, list):
+            for item in value:
+                if _contains_scope_code(item):
+                    return True
+            return False
+        return False
+
+    def _extract_json_payload_from_response(response: Any) -> Optional[dict]:
+        if response is None:
+            return None
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+        try:
+            text = getattr(response, "text", None)
+            if isinstance(text, str):
+                payload = json.loads(text)
+                if isinstance(payload, dict):
+                    return payload
+        except Exception:
+            pass
+        return None
+
+    for exc in _iter_exception_chain(error):
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = getattr(exc, "response", None)
+            if response is None or getattr(response, "status_code", None) != 403:
+                continue
+
+            payload = _extract_json_payload_from_response(response)
+            if payload and _contains_scope_code(payload):
+                return True
+            continue
+
+        status_code = getattr(exc, "status_code", None)
+        if status_code != 403:
+            continue
+
+        body = getattr(exc, "body", None)
+        if body and _contains_scope_code(body):
+            return True
+
+        response = getattr(exc, "response", None)
+        payload = _extract_json_payload_from_response(response)
+        if payload and _contains_scope_code(payload):
+            return True
+
+        message = getattr(exc, "message", None)
+        if message and _contains_scope_code(message):
+            return True
+
+    return False
 
 
 def get_gemini_oauth_token() -> Optional[dict]:  # noqa: PLR0915

@@ -148,7 +148,7 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
             vertex_request["generationConfig"] = generation_config
 
         # 3. Wrap in Code Assist envelope (matches verified gemini-cli structure)
-        user_prompt_id = f"litellm-{uuid.uuid4()}"[:13]
+        user_prompt_id = f"litellm-{uuid.uuid4()}"
         model_name = model.split("/")[-1]
 
         ca_request = {
