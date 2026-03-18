@@ -700,7 +700,9 @@ class AzureAIAgentsHandler:
                                 raw_annotations
                             )
                             if transformed:
-                                collected_annotations = transformed
+                                if collected_annotations is None:
+                                    collected_annotations = []
+                                collected_annotations.extend(transformed)
 
                 # Process message deltas - this is where the actual content comes
                 if current_event == "thread.message.delta":
