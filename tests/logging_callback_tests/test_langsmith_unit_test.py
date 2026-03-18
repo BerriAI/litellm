@@ -456,6 +456,120 @@ async def test_langsmith_key_based_logging():
 
 
 @pytest.mark.asyncio
+async def test_prepare_log_data_includes_usage_metadata():
+    """
+    Test that _prepare_log_data populates outputs["usage_metadata"] with
+    token counts and cost from the StandardLoggingPayload, so the LangSmith
+    Cost column is populated.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24001
+    """
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.default_credentials
+
+    mock_payload = {
+        "metadata": {},
+        "response": {
+            "id": "chatcmpl-test",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 25,
+                "total_tokens": 40,
+            },
+        },
+        "startTime": 1000.0,
+        "endTime": 1001.0,
+        "request_tags": [],
+        "error_str": None,
+        "status": "success",
+        "prompt_tokens": 15,
+        "completion_tokens": 25,
+        "total_tokens": 40,
+        "response_cost": 0.00123,
+        "cost_breakdown": {
+            "input_cost": 0.00045,
+            "output_cost": 0.00078,
+            "total_cost": 0.00123,
+            "tool_usage_cost": 0.0,
+        },
+    }
+
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": mock_payload,
+    }
+
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+
+    # outputs must contain usage_metadata for LangSmith Cost column
+    assert "usage_metadata" in data["outputs"]
+    usage_meta = data["outputs"]["usage_metadata"]
+    assert usage_meta["input_tokens"] == 15
+    assert usage_meta["output_tokens"] == 25
+    assert usage_meta["total_tokens"] == 40
+    assert usage_meta["total_cost"] == 0.00123
+    assert usage_meta["input_token_cost"] == 0.00045
+    assert usage_meta["output_token_cost"] == 0.00078
+
+
+@pytest.mark.asyncio
+async def test_prepare_log_data_usage_metadata_without_cost_breakdown():
+    """
+    Test that usage_metadata is populated even when cost_breakdown is None.
+    """
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.default_credentials
+
+    mock_payload = {
+        "metadata": {},
+        "response": {
+            "id": "chatcmpl-test",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+            },
+        },
+        "startTime": 1000.0,
+        "endTime": 1001.0,
+        "request_tags": [],
+        "error_str": None,
+        "status": "success",
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30,
+        "response_cost": 0.005,
+        "cost_breakdown": None,
+    }
+
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": mock_payload,
+    }
+
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+
+    usage_meta = data["outputs"]["usage_metadata"]
+    assert usage_meta["total_cost"] == 0.005
+    assert usage_meta["input_token_cost"] == 0.0
+    assert usage_meta["output_token_cost"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_langsmith_queue_logging():
     try:
         # Initialize LangsmithLogger
