@@ -27,25 +27,6 @@ FILE_SEARCH_FUNCTION_NAME = "litellm_file_search"
 
 
 # ---------------------------------------------------------------------------
-# Detection
-# ---------------------------------------------------------------------------
-
-def should_use_emulated_file_search(
-    tools: Optional[Iterable[ToolParam]],
-    provider_config: Any,  # BaseResponsesAPIConfig
-) -> bool:
-    """Return True when there is a file_search tool and the provider can't handle it natively."""
-    if not tools:
-        return False
-    has_fs = any(
-        isinstance(t, dict) and t.get("type") == "file_search" for t in tools
-    )
-    if not has_fs:
-        return False
-    return provider_config is None or not provider_config.supports_native_file_search()
-
-
-# ---------------------------------------------------------------------------
 # Tool conversion
 # ---------------------------------------------------------------------------
 
@@ -126,15 +107,13 @@ def _replace_file_search_tools(
 async def _run_vector_searches(
     queries: List[str],
     vector_store_ids: List[str],
-    fallback_vector_store_ids: List[str],
 ) -> Tuple[List[str], List[VectorStoreSearchResult]]:
     """
     Run `asearch` against all vector stores for all queries and collect results.
 
     Args:
         queries: List of search queries to execute (like OpenAI's multi-query approach)
-        vector_store_ids: Specific vector store IDs to search
-        fallback_vector_store_ids: Fallback IDs if vector_store_ids is empty
+        vector_store_ids: Vector store IDs to search
 
     Returns:
         (queries_list, combined_results)
@@ -142,7 +121,7 @@ async def _run_vector_searches(
     import litellm.vector_stores.main as vs_main
 
     all_results: List[VectorStoreSearchResult] = []
-    ids_to_search = vector_store_ids or fallback_vector_store_ids
+    ids_to_search = vector_store_ids
 
     # Execute each query against all vector stores
     for query in queries:
@@ -337,11 +316,16 @@ def _synthesize_responses_api_response(
     original_response: ResponsesAPIResponse,
     file_search_call_output: Dict[str, Any],
     message_output: Dict[str, Any],
+    first_response: Optional[ResponsesAPIResponse] = None,
 ) -> ResponsesAPIResponse:
     """
     Return a new ResponsesAPIResponse with:
       output[0] = file_search_call item
       output[1] = message item (with citations)
+
+    When first_response is provided, its response_cost is accumulated into the
+    synthesized _hidden_params so that billing callbacks see the total cost of
+    both provider calls that the emulated flow makes.
     """
     synthesized = ResponsesAPIResponse(
         id=getattr(original_response, "id", f"resp_{uuid.uuid4().hex}"),
@@ -354,7 +338,14 @@ def _synthesize_responses_api_response(
         error=None,
     )
     if hasattr(original_response, "_hidden_params"):
-        synthesized._hidden_params = getattr(original_response, "_hidden_params")
+        hidden = dict(getattr(original_response, "_hidden_params") or {})
+        if first_response is not None and hasattr(first_response, "_hidden_params"):
+            first_hidden = getattr(first_response, "_hidden_params") or {}
+            first_cost = first_hidden.get("response_cost") if isinstance(first_hidden, dict) else getattr(first_hidden, "response_cost", None)
+            if first_cost is not None:
+                current_cost = hidden.get("response_cost") if isinstance(hidden, dict) else 0
+                hidden["response_cost"] = (current_cost or 0) + first_cost
+        synthesized._hidden_params = hidden
     return synthesized
 
 
@@ -473,7 +464,6 @@ async def aresponses_with_emulated_file_search(
         queries, results = await _run_vector_searches(
             queries=queries_from_call,
             vector_store_ids=vs_ids_for_call,
-            fallback_vector_store_ids=all_vs_ids,
         )
         all_queries.extend(queries)
         all_results.extend(results)
@@ -486,28 +476,15 @@ async def aresponses_with_emulated_file_search(
             }
         )
 
-    # 5. Build follow-up input: original messages + all assistant tool calls + tool results
+    # 5. Build follow-up input: original messages + ALL first-response output items + tool results
+    # Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
+    # like Anthropic that emit text before the tool call have complete conversation context.
     original_input_items = list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
-    follow_up_function_calls: List[Dict[str, Any]] = []
-    for tc in file_search_calls:
-        if isinstance(tc, dict):
-            tc_call_id = tc.get("call_id") or tc.get("id") or file_search_call_id
-            tc_args = tc.get("arguments") or "{}"
-        else:
-            tc_call_id = getattr(tc, "call_id", None) or getattr(tc, "id", file_search_call_id)
-            tc_args = getattr(tc, "arguments", "{}") or "{}"
-        follow_up_function_calls.append(
-            {
-                "type": "function_call",
-                "name": FILE_SEARCH_FUNCTION_NAME,
-                "call_id": tc_call_id,
-                "arguments": tc_args,
-            }
-        )
+    first_response_output_items = list(first_response.output)
 
     follow_up_input = (
         original_input_items
-        + follow_up_function_calls
+        + first_response_output_items
         + tool_results
     )
 
@@ -534,4 +511,5 @@ async def aresponses_with_emulated_file_search(
             include_search_results=_include_search_results,
         ),
         message_output=_build_message_output(response_text, all_results),
+        first_response=first_response,
     )
