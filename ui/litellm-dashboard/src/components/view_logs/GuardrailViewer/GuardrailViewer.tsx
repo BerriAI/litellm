@@ -107,7 +107,7 @@ const modeMatches = (
   if (typeof mode === "object" && "default" in mode) {
     const def = mode.default;
     if (typeof def === "string") return def === target;
-    if (Array.isArray(def)) return (def as string[]).includes(target);
+    if (Array.isArray(def)) return def.some((x) => typeof x === "string" && x === target);
   }
   return false;
 };
