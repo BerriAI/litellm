@@ -1,4 +1,3 @@
-
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
@@ -14,13 +13,13 @@ End-to-End tutorial for LiteLLM Proxy to:
 
 ## Pre-Requisites 
 
-- Install LiteLLM Docker Image **OR** LiteLLM CLI (pip package)
+Choose your install method. **Docker Compose** users complete their full setup inside the tab and are done. **Docker** and **pip** users continue with the steps below the tabs.
 
 <Tabs>
 
 <TabItem value="docker" label="Docker">
 
-```
+```bash
 docker pull docker.litellm.ai/berriai/litellm:main-latest
 ```
 
@@ -38,9 +37,11 @@ $ pip install 'litellm[proxy]'
 
 <TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
 
+Docker Compose bundles LiteLLM with a Postgres database. Follow the steps below — the proxy will be fully running by the end.
+
 ### Step 1 — Pull the LiteLLM database image
 
-LiteLLM provides a dedicated `litellm-database` image for proxy deployments that connect to Postgres. Pull it before starting Docker Compose.
+LiteLLM provides a dedicated `litellm-database` image for proxy deployments that connect to Postgres.
 
 ```bash
 docker pull ghcr.io/berriai/litellm-database:main-latest
@@ -50,11 +51,11 @@ See all available tags on the [GitHub Container Registry](https://github.com/Ber
 
 ---
 
-### Step 2 — Create required config files
+### Step 2 — Set up a database
 
-You need three files in the same directory as `docker-compose.yml` before running `docker compose up`: `.env`, `config.yaml`, and `prometheus.yml`.
+Complete all three config files **before** running `docker compose up`. The proxy server will not start correctly if any of these are missing.
 
-### Step 2.1 — Create your `.env`
+#### 2.1 — Get `docker-compose.yml` and create `.env`
 
 ```bash
 # Get the docker compose file
@@ -73,9 +74,9 @@ echo 'AZURE_API_BASE="https://openai-***********/"' >> .env
 echo 'AZURE_API_KEY="your-azure-api-key"' >> .env
 ```
 
-### Step 2.2 — Create your `config.yaml`
+#### 2.2 — Create `config.yaml`
 
-Proxy and model configuration. If you use the default `docker-compose.yml`, the Postgres container is available at `db:5432`.
+The default `docker-compose.yml` starts a Postgres container at `db:5432`. Your `config.yaml` must include `database_url` pointing to it:
 
 ```yaml
 model_list:
@@ -87,17 +88,17 @@ model_list:
       api_version: "2025-01-01-preview"
 
 general_settings:
-  master_key: sk-1234   # 🔑 your proxy admin key (must start with sk-)
+  master_key: sk-1234 # 🔑 your proxy admin key (must start with sk-)
   database_url: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
 ```
 
 :::tip
-`database_url` is required for virtual keys, spend tracking, and the UI. If you want a managed database instead, replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string.
+`database_url` enables virtual keys, spend tracking, and the UI. Replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string if you prefer a managed database.
 :::
 
-### Step 2.3 — Create your `prometheus.yml`
+#### 2.3 — Create `prometheus.yml`
 
-Metrics scrape config. This file **must exist as a file** before `docker compose up`. If it is missing, Docker auto-creates it as an empty directory, which causes the Prometheus container to fail.
+This file **must exist as a file** before `docker compose up`. If it is missing, Docker auto-creates it as an empty directory and the Prometheus container fails to start.
 
 ```yaml
 global:
@@ -110,19 +111,19 @@ scrape_configs:
       - targets: ["litellm:4000"]
 ```
 
-Also verify that the `config.yaml` volume mount and `--config` command are **not commented out** in your `docker-compose.yml`:
+Also verify that the `config.yaml` volume mount and `--config` flag are **not commented out** in `docker-compose.yml`:
 
 ```yaml
 services:
   litellm:
     volumes:
-      - ./config.yaml:/app/config.yaml   # ✅ must be uncommented
+      - ./config.yaml:/app/config.yaml # ✅ must be uncommented
     command:
-      - "--config=/app/config.yaml"       # ✅ must be uncommented
+      - "--config=/app/config.yaml" # ✅ must be uncommented
 ```
 
 :::warning
-All three files must be present before running `docker compose up`. Missing files are the most common cause of startup errors. See the [Troubleshooting](#troubleshooting) section if you run into issues.
+All three files (`.env`, `config.yaml`, `prometheus.yml`) must be present before running `docker compose up`. See [Troubleshooting](#troubleshooting) if you run into issues.
 :::
 
 ---
@@ -199,15 +200,18 @@ Navigate to **Virtual Keys** and click **+ Create New Key**:
 Virtual keys let you track spend, set rate limits, and control model access per user or team.
 
 </TabItem>
+
 </Tabs>
 
-## 1. Add a model 
+:::note Docker Compose users
+Your setup is complete — the steps below are for **Docker** and **pip** users only.
+:::
 
-Control LiteLLM Proxy with a config.yaml file.
+---
 
-Setup your config.yaml with your azure model.
+## Step 1 — Add a model
 
-Note: When using the proxy with a database, you can also **just add models via UI** (UI is available on `/ui` route).
+Control LiteLLM Proxy with a `config.yaml` file. Create one with your Azure model:
 
 ```yaml
 model_list:
@@ -278,19 +282,19 @@ $ litellm --config /app/config.yaml --detailed_debug
 
 </Tabs>
 
+Confirm your config was loaded correctly — you should see this in the logs:
 
-Confirm your config.yaml got mounted correctly
-
-```bash
+```
 Loaded config YAML (api_key and environment_variables are not shown):
 {
-"model_list": [
-{
-"model_name ...
+  "model_list": [
+    {
+      "model_name": ...
 ```
 
 ### 2.2 Make Call 
 
+LiteLLM Proxy is 100% OpenAI-compatible. Test your model via `/chat/completions`:
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -390,9 +394,11 @@ Track spend and control model access via virtual keys for the proxy.
 
 ### Prerequisite — Set up a database
 
-**Requirements**
-- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+:::note Docker Compose users
+Your Postgres container is already running — skip ahead to [Create Key w/ RPM Limit](#create-key-w-rpm-limit) below.
+:::
 
+**Docker / pip users** — you need a Postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), or self-hosted). Add `general_settings` to your `config.yaml`:
 
 ```yaml
 model_list:
@@ -447,7 +453,6 @@ docker run \
     ghcr.io/berriai/litellm-database:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
-
 
 ### Create Key w/ RPM Limit
 
@@ -696,15 +701,15 @@ If you see:
 Error: cannot create subdirectories in ".../prometheus.yml": not a directory
 ```
 
-Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time — Docker auto-creates missing bind-mount paths as directories.
+Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time.
 
-Fix it by deleting the directory and creating the file manually:
+Fix it:
 
 ```bash
 rm -rf prometheus.yml
 ```
 
-Then create a valid `prometheus.yml` file (see [Step 2](#step-25--create-required-config-files)) and run `docker compose up` again.
+Then create the file (see [Step 2.4](#step-24--create-prometheusyml)) and run `docker compose up` again.
 
 ### Non-root docker image?
 
