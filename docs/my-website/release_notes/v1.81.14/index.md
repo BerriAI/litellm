@@ -56,7 +56,7 @@ pip install litellm==1.81.14
 
 AI Platform Admins can now browse built-in and partner guardrails from the Guardrail Garden. Guardrails are organized by use case — blocking financial advice, filtering insults, detecting competitor mentions, and more — so you can find the right one and deploy it in a few clicks.
 
-![Guardrail Garden](../img/release_notes/guardrail_garden.png)
+![Guardrail Garden](../../img/release_notes/guardrail_garden.png)
 
 ### 3 New Built-in Guardrails
 
@@ -72,7 +72,7 @@ These guardrails are built for production and on our benchmarks had a 100% Recal
 
 Previously, the `store_model_in_db` setting could only be configured in `proxy_config.yaml` under `general_settings`, requiring a proxy restart to take effect. Now you can enable or disable this setting directly from the Admin UI without any restarts. This is especially useful for cloud deployments where you don't have direct access to config files or want to avoid downtime. Enable `store_model_in_db` to move model definitions from your YAML into the database—reducing config complexity, improving scalability, and enabling dynamic model management across multiple proxy instances.
 
-![Store model in DB Setting](../img/ui_store_model_in_db.png)
+![Store model in DB Setting](../../img/ui_store_model_in_db.png)
 
 
 #### Eval results
@@ -91,14 +91,14 @@ We benchmarked our new built-in guardrails against labeled datasets before shipp
 
 The Compliance Playground lets you test any guardrail against our pre-built eval datasets or your own custom datasets, so you can see precision, recall, and false positive rate before rolling it out to production.
 
-![Compliance Playground](../img/release_notes/compliance_playground.png)
+![Compliance Playground](../../img/release_notes/compliance_playground.png)
 
 
 ---
 
 ## Performance & Reliability — Up to 13% Lower Latency
 
-<Image img={require('../img/release_notes/v1_81_14_perf.png')} />
+<Image img={require('../../img/release_notes/v1_81_14_perf.png')} />
 
 This release cuts latency across all percentiles through 20+ micro-optimizations across logging, cost calculation, routing, and connection management. See [benchmarking](../../docs/benchmarks) for more info about how to benchmark yourself. 
 
