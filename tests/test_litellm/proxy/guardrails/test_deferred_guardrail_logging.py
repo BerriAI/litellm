@@ -123,7 +123,8 @@ async def test_deferred_flag_stores_and_executes_closure():
     """
     When _defer_async_logging is True on logging_obj:
     1. wrapper_async stores a callable closure instead of calling create_task
-    2. Calling the closure fires create_task + handle_sync_success_callbacks
+    2. Calling the closure fires create_task
+    3. Sync callbacks fire immediately (not deferred)
     """
     mock_logging_obj = MagicMock()
     mock_logging_obj._defer_async_logging = True
@@ -141,7 +142,10 @@ async def test_deferred_flag_stores_and_executes_closure():
     enqueue_fn = mock_logging_obj._enqueue_deferred_logging
     assert callable(enqueue_fn), "Closure should be stored on logging_obj"
 
-    # --- Part 2: calling the closure fires the logging machinery ---
+    # --- Part 2: sync callbacks fired immediately (not in closure) ---
+    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+
+    # --- Part 3: calling the closure fires create_task ---
     created_tasks = []
     real_create_task = asyncio.create_task
 
@@ -154,7 +158,6 @@ async def test_deferred_flag_stores_and_executes_closure():
         enqueue_fn()
 
     assert len(created_tasks) >= 1, "Closure should fire asyncio.create_task"
-    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
 
     # Clean up tasks
     for task in created_tasks:

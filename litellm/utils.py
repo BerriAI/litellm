@@ -1950,8 +1950,8 @@ def client(original_function):  # noqa: PLR0915
                 # Proxy has post-call guardrails that must complete before the
                 # SLO is built.  Store a closure the proxy will call after
                 # post_call_success_hook so guardrail_information is in metadata.
-                # Both async (create_task) and sync callbacks are deferred so
-                # all callbacks see consistent guardrail_information state.
+                # Only create_task is deferred; sync callbacks fire immediately
+                # to preserve existing behavior for billing/rate-limiting.
                 def _enqueue_deferred_logging() -> None:
                     asyncio.create_task(
                         _client_async_logging_helper(
@@ -1962,13 +1962,13 @@ def client(original_function):  # noqa: PLR0915
                             is_completion_with_fallbacks=is_completion_with_fallbacks,
                         )
                     )
-                    logging_obj.handle_sync_success_callbacks_for_async_calls(
-                        result=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
 
                 logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                logging_obj.handle_sync_success_callbacks_for_async_calls(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             else:
                 asyncio.create_task(
                     _client_async_logging_helper(
