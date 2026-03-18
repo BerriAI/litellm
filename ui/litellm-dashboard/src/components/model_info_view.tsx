@@ -241,7 +241,7 @@ export default function ModelInfoView({
         return;
       }
 
-      let updatedLitellmParams = {
+      let updatedLitellmParams: Record<string, any> = {
         ...values.litellm_params,
         ...parsedExtraParams,
         model: values.litellm_model_name,
@@ -255,20 +255,26 @@ export default function ModelInfoView({
         stream_timeout: values.stream_timeout,
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
-        tags: values.tags,
       };
+
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      
+      // check if guardrails / vector stores are attached, if yes, add it. else delete it to prevent auto-injection
+      if (values.guardrails > 0 && Array.isArray(values.guardrails)) {
         updatedLitellmParams.guardrails = values.guardrails;
+      } else {
+        delete updatedLitellmParams.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      
+      if (values.vector_store_ids.length > 0 && Array.isArray(values.vector_store_ids)) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids
+      } else {
+        delete updatedLitellmParams.vector_store_ids; 
       }
 
       // Handle cache control settings
