@@ -402,12 +402,8 @@ class VertexAIBatchPrediction(VertexLLM):
         retrieve_api_base_default = f"{default_api_base}/{batch_id}"
         cancel_api_base_default = f"{retrieve_api_base_default}:cancel"
 
-        # Save the caller-supplied value before _check_custom_proxy overwrites api_base,
-        # so we can pass it unchanged to the second proxy-check for the retrieve URL.
-        caller_api_base = api_base
-
         _, api_base = self._check_custom_proxy(
-            api_base=caller_api_base,
+            api_base=api_base,
             custom_llm_provider="vertex_ai",
             gemini_api_key=None,
             endpoint="cancel",
@@ -420,20 +416,10 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_api_version="v1",
         )
 
-        # Route the retrieve GET through the same proxy as the cancel POST by running
-        # _check_custom_proxy a second time with the non-cancel default URL.
-        _, retrieve_api_base = self._check_custom_proxy(
-            api_base=caller_api_base,
-            custom_llm_provider="vertex_ai",
-            gemini_api_key=None,
-            endpoint="",
-            stream=None,
-            auth_header=None,
-            url=retrieve_api_base_default,
-            model=None,
-            vertex_project=vertex_project or project_id,
-            vertex_location=vertex_location or "us-central1",
-            vertex_api_version="v1",
+        retrieve_api_base = (
+            api_base.removesuffix(":cancel")
+            if api_base.endswith(":cancel")
+            else retrieve_api_base_default
         )
 
         headers = {
