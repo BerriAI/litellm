@@ -420,6 +420,82 @@ def test_output_config_removed_from_bedrock_chat_invoke_request():
     assert result["max_tokens"] == 100
 
 
+def test_bedrock_chat_invoke_preserves_output_config_for_claude_4_6():
+    """
+    Claude 4.6 models support output_config.effort on Bedrock Invoke.
+    Verify that output_config is preserved (not stripped) for these models
+    on the /v1/chat/completions -> Bedrock Invoke path.
+    """
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+
+    # Sonnet 4.6 supports effort=high (not max)
+    optional_params = {
+        "max_tokens": 128000,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+    result = config.transform_request(
+        model="global.anthropic.claude-sonnet-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" in result, (
+        "output_config should be preserved for Claude Sonnet 4.6"
+    )
+    assert result["output_config"]["effort"] == "high"
+
+    # Opus 4.6 supports effort=max
+    optional_params = {
+        "max_tokens": 128000,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "max"},
+    }
+    result = config.transform_request(
+        model="global.anthropic.claude-opus-4-6-v1",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "output_config" in result, (
+        "output_config should be preserved for Claude Opus 4.6"
+    )
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_bedrock_chat_invoke_strips_output_config_for_pre_4_6():
+    """
+    Pre-4.6 models do not support output_config on Bedrock Invoke.
+    Verify that output_config is still stripped for these models.
+    """
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+
+    for model_id in [
+        "anthropic.claude-sonnet-4-20250514-v1:0",
+        "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    ]:
+        optional_params = {
+            "max_tokens": 100,
+            "output_config": {"effort": "high"},
+        }
+
+        result = config.transform_request(
+            model=model_id,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert "output_config" not in result, (
+            f"output_config should be stripped for pre-4.6 model {model_id}"
+        )
+
+
 def test_output_format_removed_from_bedrock_invoke_request():
     """
     Test that output_format parameter is removed from Bedrock Invoke requests.

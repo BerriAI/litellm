@@ -342,3 +342,90 @@ def test_bedrock_messages_strips_output_config_with_output_format():
 
     assert "output_config" not in result
     assert "output_format" not in result
+
+
+def test_bedrock_messages_preserves_output_config_for_claude_4_6():
+    """
+    Claude 4.6 models support output_config.effort on Bedrock Invoke.
+    Verify that output_config is preserved (not stripped) for these models.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+    # Opus 4.6 supports effort=max
+    for model_id in [
+        "global.anthropic.claude-opus-4-6-v1",
+        "anthropic.claude-opus-4-6-v1:0",
+    ]:
+        optional_params = {
+            "max_tokens": 128000,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+        }
+
+        result = cfg.transform_anthropic_messages_request(
+            model=model_id,
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "output_config" in result, (
+            f"output_config should be preserved for Claude 4.6 model {model_id}"
+        )
+        assert result["output_config"]["effort"] == "max"
+        assert result["thinking"]["type"] == "adaptive"
+
+    # Sonnet 4.6 supports effort=high (not max)
+    optional_params = {
+        "max_tokens": 128000,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="global.anthropic.claude-sonnet-4-6",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "output_config" in result, (
+        "output_config should be preserved for Claude Sonnet 4.6"
+    )
+    assert result["output_config"]["effort"] == "high"
+
+
+def test_bedrock_messages_strips_output_config_for_pre_4_6():
+    """
+    Pre-4.6 models do not support output_config on Bedrock Invoke.
+    Verify that output_config is stripped for these models.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+    for model_id in [
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "anthropic.claude-sonnet-4-20250514-v1:0",
+        "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    ]:
+        optional_params = {
+            "max_tokens": 4096,
+            "output_config": {"effort": "high"},
+        }
+
+        result = cfg.transform_anthropic_messages_request(
+            model=model_id,
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "output_config" not in result, (
+            f"output_config should be stripped for pre-4.6 model {model_id}"
+        )

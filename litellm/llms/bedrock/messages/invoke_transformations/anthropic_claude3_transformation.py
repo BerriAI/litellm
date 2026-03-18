@@ -419,9 +419,11 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
-        # 5b. Strip `output_config` — Bedrock Invoke doesn't support it
-        # Fixes: https://github.com/BerriAI/litellm/issues/22797
-        anthropic_messages_request.pop("output_config", None)
+        # 5b. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
+        # but older models do not — strip it to avoid request rejection.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
+        if not AnthropicModelInfo._is_claude_4_6_model(model):
+            anthropic_messages_request.pop("output_config", None)
 
         # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
