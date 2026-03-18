@@ -1160,12 +1160,12 @@ follow_up = await router.aresponses(
 To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
 
 - `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
-- `encrypted_content_affinity`: **[Recommended]** content-aware routing for encrypted items (e.g., `rs_...` reasoning items) (**requires LiteLLM >= 1.82.1**)
+- `encrypted_content_affinity`: **[Recommended]** content-aware routing for encrypted items (e.g., `rs_...` reasoning items) (**requires LiteLLM >= 1.82.3**)
 - `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
 - `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
 
 :::tip Recommended: Use `encrypted_content_affinity`
-For Responses API with load balancing across deployments with **different API keys**, use `encrypted_content_affinity` instead of `deployment_affinity`. It only pins requests that contain encrypted content, avoiding quota reduction while preventing `invalid_encrypted_content` errors.
+For Responses API with load balancing across deployments with **different API keys**, use `encrypted_content_affinity` instead of `deployment_affinity`. It only pins requests that contain encrypted content, avoiding quota reduction while preventing `invalid_encrypted_content` errors. (Requires LiteLLM >= 1.82.3.)
 :::
 
 Notes:
