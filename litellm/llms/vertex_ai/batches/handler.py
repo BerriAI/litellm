@@ -399,14 +399,11 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_project=vertex_project or project_id,
         )
 
-        # Compute endpoint from the URL without :cancel for consistency with other methods
-        base_without_cancel = f"{default_api_base}/{batch_id}"
-        default_api_base = f"{base_without_cancel}:cancel"
+        retrieve_api_base_default = f"{default_api_base}/{batch_id}"
+        default_api_base = f"{retrieve_api_base_default}:cancel"
 
-        if len(base_without_cancel.split(":")) > 1:
-            endpoint = base_without_cancel.split(":")[-1]
-        else:
-            endpoint = ""
+        # The Vertex AI action suffix for this operation
+        endpoint = "cancel"
 
         _, api_base = self._check_custom_proxy(
             api_base=api_base,
@@ -422,13 +419,9 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_api_version="v1",
         )
 
-        if not api_base.endswith(":cancel"):
-            raise ValueError(
-                f"cancel_batch: expected api_base to end with ':cancel', got: {api_base!r}. "
-                "Custom proxy URL rewriting is not supported for this operation."
-            )
-
-        retrieve_api_base = api_base.rsplit(":cancel", 1)[0]
+        # Use the canonical retrieve URL built from components rather than stripping
+        # ":cancel" from api_base, so custom proxy URL rewriting does not break retrieval.
+        retrieve_api_base = retrieve_api_base_default
 
         headers = {
             "Content-Type": "application/json; charset=utf-8",
