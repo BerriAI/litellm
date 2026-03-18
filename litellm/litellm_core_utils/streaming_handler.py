@@ -1110,9 +1110,10 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
+                    _chunk_has_content = isinstance(chunk, dict) and (
                         bool(chunk.get("text", ""))
                         or chunk.get("tool_use") is not None
-                        or chunk.get("reasoning_content") is not None
+                        or bool(chunk.get("reasoning_content", ""))
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
