@@ -858,7 +858,13 @@ async def new_team(  # noqa: PLR0915
 
         # Apply defaults from litellm.default_team_params for any fields
         # not explicitly provided in the request.
-        for field in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "team_member_permissions"):
+        for field in (
+            "max_budget",
+            "budget_duration",
+            "tpm_limit",
+            "rpm_limit",
+            "team_member_permissions",
+        ):
             if getattr(data, field, None) is None:
                 default_value = _get_default_team_param(field)
                 if default_value is not None:
@@ -3323,6 +3329,30 @@ async def _build_team_list_where_conditions(
     return where_conditions
 
 
+def _convert_teams_to_response_models(
+    teams: list,
+    use_deleted_table: bool,
+) -> List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
+    """Convert raw Prisma team rows to response models."""
+    team_list: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
+    for team in teams:
+        try:
+            team_dict = team.model_dump()
+        except Exception:
+            team_dict = team.dict()
+
+        if use_deleted_table:
+            team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
+        else:
+            members_with_roles = team_dict.get("members_with_roles")
+            if not isinstance(members_with_roles, list):
+                members_with_roles = []
+                team_dict["members_with_roles"] = members_with_roles
+            members_count = len(members_with_roles)
+            team_list.append(TeamListItem(**team_dict, members_count=members_count))
+    return team_list
+
+
 @router.get(
     "/v2/team/list",
     tags=["team management"],
@@ -3521,22 +3551,7 @@ async def list_team_v2(
     total_pages = -(-total_count // page_size)  # Ceiling division
 
     # Convert Prisma models to response models with members_count
-    team_list: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
-    for team in teams:
-        try:
-            team_dict = team.model_dump()
-        except Exception:
-            team_dict = team.dict()
-
-        if use_deleted_table:
-            team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
-        else:
-            members_with_roles = team_dict.get("members_with_roles")
-            if not isinstance(members_with_roles, list):
-                members_with_roles = []
-                team_dict["members_with_roles"] = members_with_roles
-            members_count = len(members_with_roles)
-            team_list.append(TeamListItem(**team_dict, members_count=members_count))
+    team_list = _convert_teams_to_response_models(teams, use_deleted_table)
 
     return {
         "teams": team_list,

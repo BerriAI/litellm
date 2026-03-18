@@ -1861,16 +1861,10 @@ async def _validate_update_key_data(
     user_api_key_cache: Any,
 ) -> None:
     """Validate permissions and constraints for key update."""
-    _is_proxy_admin = (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    )
+    _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
     # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
-    if (
-        data.user_id is not None
-        and data.user_id == ""
-        and not _is_proxy_admin
-    ):
+    if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
         raise HTTPException(
             status_code=403,
             detail="Non-admin users cannot remove the user_id from a key.",

@@ -26,7 +26,9 @@ if custom_cache_dir:
 else:
     cache_dir = filename
 
-os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+os.environ[
+    "TIKTOKEN_CACHE_DIR"
+] = cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 
 import tiktoken
 import time
@@ -48,4 +50,3 @@ for attempt in range(_max_retries):
         # Exponential backoff with jitter to reduce collision probability
         delay = _retry_delay * (2**attempt) + random.uniform(0, 0.1)
         time.sleep(delay)
-

@@ -1,37 +1,46 @@
-import { render, screen } from "@testing-library/react";
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ExportTypeSelector from "./ExportTypeSelector";
 
 describe("ExportTypeSelector", () => {
   it("should render", () => {
-    render(<ExportTypeSelector value="daily" onChange={vi.fn()} entityType="team" />);
+    renderWithProviders(
+      <ExportTypeSelector value="daily" onChange={vi.fn()} entityType="team" />
+    );
     expect(screen.getByText("Export type")).toBeInTheDocument();
   });
 
-  it("should render all three radio options", () => {
-    render(<ExportTypeSelector value="daily" onChange={vi.fn()} entityType="team" />);
-    expect(screen.getAllByRole("radio")).toHaveLength(3);
+  it("should display entity type in radio labels", () => {
+    renderWithProviders(
+      <ExportTypeSelector value="daily" onChange={vi.fn()} entityType="team" />
+    );
+    expect(screen.getByText(/Day-by-day breakdown by team$/)).toBeInTheDocument();
+    expect(screen.getByText(/Day-by-day breakdown by team and key/)).toBeInTheDocument();
+    expect(screen.getByText(/Day-by-day by team and model/)).toBeInTheDocument();
   });
 
-  it("should interpolate entity type in labels", () => {
-    render(<ExportTypeSelector value="daily" onChange={vi.fn()} entityType="organization" />);
+  it("should display the correct entity type for different entities", () => {
+    renderWithProviders(
+      <ExportTypeSelector value="daily" onChange={vi.fn()} entityType="organization" />
+    );
     expect(screen.getByText(/Day-by-day breakdown by organization$/)).toBeInTheDocument();
-    expect(screen.getByText(/organization and key/)).toBeInTheDocument();
-    expect(screen.getByText(/organization and model/)).toBeInTheDocument();
   });
 
-  it("should call onChange when a different option is selected", async () => {
-    const onChange = vi.fn();
+  it("should call onChange when a radio option is selected", async () => {
     const user = userEvent.setup();
-    render(<ExportTypeSelector value="daily" onChange={onChange} entityType="team" />);
-    await user.click(screen.getByText(/by team and key/));
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ExportTypeSelector value="daily" onChange={onChange} entityType="team" />
+    );
+    await user.click(screen.getByRole("radio", { name: /Day-by-day breakdown by team and key/i }));
     expect(onChange).toHaveBeenCalledWith("daily_with_keys");
   });
 
-  it("should have the correct radio checked based on value prop", () => {
-    render(<ExportTypeSelector value="daily_with_models" onChange={vi.fn()} entityType="team" />);
-    const modelRadio = screen.getByRole("radio", { name: /by team and model/i });
-    expect(modelRadio).toBeChecked();
+  it("should have the correct radio checked", () => {
+    renderWithProviders(
+      <ExportTypeSelector value="daily_with_models" onChange={vi.fn()} entityType="team" />
+    );
+    expect(screen.getByRole("radio", { name: /Day-by-day by team and model/i })).toBeChecked();
   });
 });
