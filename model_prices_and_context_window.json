@@ -3435,7 +3435,8 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
-        "supports_none_reasoning_effort": true
+        "supports_none_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.1-chat-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -18217,7 +18218,8 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
-        "supports_xhigh_reasoning_effort": false
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
     },
     "gpt-5.1": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -18256,7 +18258,8 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
-        "supports_xhigh_reasoning_effort": false
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
     },
     "gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -18295,7 +18298,8 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
-        "supports_xhigh_reasoning_effort": false
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
     },
     "gpt-5.1-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -19406,7 +19410,6 @@
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
         "supports_minimal_reasoning_effort": true
-
     },
     "gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
