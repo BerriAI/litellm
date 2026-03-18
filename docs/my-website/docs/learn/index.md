@@ -55,19 +55,19 @@ items={[
     icon: "⚡",
     title: "Stream Responses",
     description: "Return tokens as they are generated.",
-    to: "/docs/completion/stream",
+    to: "/docs/guides/core_request_response_patterns",
   },
   {
     icon: "🧰",
     title: "Use Tools",
     description: "Add function calling to your app.",
-    to: "/docs/completion/function_call",
+    to: "/docs/guides/tools_integrations",
   },
   {
     icon: "🔀",
     title: "Add Routing",
     description: "Retries, fallbacks, and load balancing.",
-    to: "/docs/routing",
+    to: "/docs/routing-load-balancing",
   },
   {
     icon: "🔑",
@@ -86,36 +86,6 @@ items={[
     title: "Choose A Provider",
     description: "Find provider-specific auth and params.",
     to: "/docs/providers",
-  },
-]}
-/>
-
----
-
-## Explore
-
-Use these when you want examples or tool-specific walkthroughs.
-
-<NavigationCards
-columns={3}
-items={[
-  {
-    icon: "🧪",
-    title: "Playground",
-    description: "Compare providers side by side.",
-    to: "/docs/tutorials/first_playground",
-  },
-  {
-    icon: "🤖",
-    title: "Agent SDKs",
-    description: "OpenAI Agents SDK, Claude Agent SDK, ADK, and more.",
-    to: "/docs/agent_sdks",
-  },
-  {
-    icon: "🛠️",
-    title: "AI Coding Tools",
-    description: "Claude Code, Cursor, Copilot, Gemini CLI, and more.",
-    to: "/docs/ai_tools",
   },
 ]}
 />
