@@ -44,6 +44,26 @@ import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 
+// Known LiteLLM params that have dedicated form fields - these should not appear in litellm_extra_params
+const KNOWN_LITELLM_PARAMS = [
+  "model",
+  "api_base",
+  "custom_llm_provider",
+  "organization",
+  "tpm",
+  "rpm",
+  "max_retries",
+  "timeout",
+  "stream_timeout",
+  "input_cost_per_token",
+  "output_cost_per_token",
+  "tags",
+  "guardrails",
+  "vector_store_ids",
+  "cache_control_injection_points",
+  "litellm_credential_name",
+];
+
 interface ModelInfoViewProps {
   modelId: string;
   onClose: () => void;
@@ -640,7 +660,7 @@ export default function ModelInfoView({
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
                         Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key]) => key !== "litellm_credential_name",
+                          ([key]) => !KNOWN_LITELLM_PARAMS.includes(key),
                         ),
                       ),
                       null,

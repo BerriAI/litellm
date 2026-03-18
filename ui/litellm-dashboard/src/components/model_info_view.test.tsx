@@ -526,17 +526,21 @@ describe("ModelInfoView", () => {
 
     await user.click(screen.getByRole("button", { name: /edit settings/i }));
 
+    // Find the LiteLLM Params textarea by placeholder
     const litellmParamsInput = screen
       .getAllByRole("textbox")
       .find(
         (input) =>
           input.tagName === "TEXTAREA" &&
-          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+          input.getAttribute("placeholder")?.includes("rpm"),
       );
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
       return;
     }
+    // Known params like custom_llm_provider should NOT be in the textarea
+    expect((litellmParamsInput as HTMLTextAreaElement).value).not.toContain("custom_llm_provider");
+    // litellm_credential_name should also NOT be in the textarea
     expect((litellmParamsInput as HTMLTextAreaElement).value).not.toContain("litellm_credential_name");
     await user.clear(litellmParamsInput);
     await user.paste(`{"litellm_credential_name":"from-json","timeout":42}`);
@@ -635,5 +639,65 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("should allow removing custom params from LiteLLM Params json", async () => {
+    const user = userEvent.setup();
+    const modelWithCustomParams = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        litellm_image_enabled: true,
+        custom_param: "value",
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [modelWithCustomParams],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    // Find the LiteLLM Params textarea
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" &&
+          input.getAttribute("placeholder")?.includes("rpm"),
+      );
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+
+    // Verify custom params are in the textarea
+    expect((litellmParamsInput as HTMLTextAreaElement).value).toContain("litellm_image_enabled");
+    expect((litellmParamsInput as HTMLTextAreaElement).value).toContain("custom_param");
+
+    // Remove the custom params
+    await user.clear(litellmParamsInput);
+    await user.paste(`{}`);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    // Verify the payload does not include the removed custom params
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.litellm_image_enabled).toBeUndefined();
+    expect(updatePayload.litellm_params.custom_param).toBeUndefined();
   });
 });
