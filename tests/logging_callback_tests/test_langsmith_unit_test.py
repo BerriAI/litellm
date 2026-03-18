@@ -448,11 +448,144 @@ async def test_langsmith_key_based_logging():
             actual_body["post"][0]["session_name"]
             == expected_body["post"][0]["session_name"]
         )
-        
+
+        # Verify usage_metadata is populated in outputs (fixes #24001)
+        usage_metadata = actual_body["post"][0]["outputs"].get("usage_metadata")
+        assert usage_metadata is not None, "usage_metadata should be present in outputs"
+        assert "total_cost" in usage_metadata
+        assert "input_tokens" in usage_metadata
+        assert "output_tokens" in usage_metadata
+        assert "total_tokens" in usage_metadata
+        assert usage_metadata["input_tokens"] == 10
+        assert usage_metadata["output_tokens"] == 20
+        assert usage_metadata["total_tokens"] == 30
+        assert isinstance(usage_metadata["total_cost"], (int, float))
+
         mock_get_client.stop()
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_langsmith_usage_metadata_populated():
+    """
+    Verify that _prepare_log_data injects usage_metadata into outputs
+    so LangSmith can display the Cost column. (Fixes #24001)
+    """
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.default_credentials
+
+    fake_payload = {
+        "id": "test-id",
+        "trace_id": "test-trace",
+        "call_type": "completion",
+        "stream": False,
+        "response_cost": 0.0035,
+        "cost_breakdown": {
+            "input_cost": 0.001,
+            "output_cost": 0.0025,
+        },
+        "status": "success",
+        "total_tokens": 150,
+        "prompt_tokens": 50,
+        "completion_tokens": 100,
+        "startTime": 1700000000.0,
+        "endTime": 1700000001.0,
+        "response_time": 1.0,
+        "model": "gpt-4o-mini",
+        "metadata": {},
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": [],
+        "response": {
+            "id": "chatcmpl-test",
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150},
+        },
+        "error_str": None,
+        "messages": [{"role": "user", "content": "say hi"}],
+    }
+
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": fake_payload,
+    }
+
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+
+    # Verify usage_metadata was injected into outputs
+    assert "usage_metadata" in data["outputs"]
+    um = data["outputs"]["usage_metadata"]
+    assert um["input_tokens"] == 50
+    assert um["output_tokens"] == 100
+    assert um["total_tokens"] == 150
+    assert um["total_cost"] == 0.0035
+    assert um["input_token_cost"] == 0.001
+    assert um["output_token_cost"] == 0.0025
+
+
+@pytest.mark.asyncio
+async def test_langsmith_usage_metadata_without_cost_breakdown():
+    """
+    Verify usage_metadata works when cost_breakdown is None.
+    """
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.default_credentials
+
+    fake_payload = {
+        "id": "test-id",
+        "trace_id": "test-trace",
+        "call_type": "completion",
+        "stream": False,
+        "response_cost": 0.005,
+        "cost_breakdown": None,
+        "status": "success",
+        "total_tokens": 200,
+        "prompt_tokens": 80,
+        "completion_tokens": 120,
+        "startTime": 1700000000.0,
+        "endTime": 1700000001.0,
+        "response_time": 1.0,
+        "model": "gpt-4o-mini",
+        "metadata": {},
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": [],
+        "response": {
+            "id": "chatcmpl-test",
+            "choices": [{"message": {"content": "hello"}}],
+            "usage": {"prompt_tokens": 80, "completion_tokens": 120, "total_tokens": 200},
+        },
+        "error_str": None,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": fake_payload,
+    }
+
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+
+    um = data["outputs"]["usage_metadata"]
+    assert um["total_cost"] == 0.005
+    assert um["input_token_cost"] == 0.0
+    assert um["output_token_cost"] == 0.0
+    assert um["input_tokens"] == 80
+    assert um["output_tokens"] == 120
 
 
 @pytest.mark.asyncio
