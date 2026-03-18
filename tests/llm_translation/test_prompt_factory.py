@@ -776,6 +776,7 @@ def test_ensure_alternating_roles(
 
 
 def test_ensure_alternating_roles_with_tool_calls():
+    """Fixes Regression in #18685 """
     messages = [
         {"role": "user", "content": "What's the weather?"},
         {
