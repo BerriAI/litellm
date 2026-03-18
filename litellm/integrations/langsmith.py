@@ -165,6 +165,16 @@ class LangsmithLogger(CustomBatchLogger):
                 "extra": extra_metadata,
             }
 
+            if isinstance(data.get("outputs"), dict):
+                data["outputs"]["usage_metadata"] = {
+                    "input_tokens": payload.get("prompt_tokens", 0),
+                    "output_tokens": payload.get("completion_tokens", 0),
+                    "total_tokens": payload.get("total_tokens", 0),
+                    "input_cost": payload.get("response_cost", 0.0),
+                    "output_cost": 0.0,
+                    "total_cost": payload.get("response_cost", 0.0),
+                }
+
             if payload["error_str"] is not None and payload["status"] == "failure":
                 data["error"] = payload["error_str"]
 
