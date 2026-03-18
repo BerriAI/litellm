@@ -50,9 +50,11 @@ See all available tags on the [GitHub Container Registry](https://github.com/Ber
 
 ---
 
-### Step 2 — Set up a database
+### Step 2 — Create required config files
 
-Get the docker compose file and create your `.env` first:
+You need three files in the same directory as `docker-compose.yml` before running `docker compose up`: `.env`, `config.yaml`, and `prometheus.yml`.
+
+### Step 2.1 — Create your `.env`
 
 ```bash
 # Get the docker compose file
@@ -71,7 +73,9 @@ echo 'AZURE_API_BASE="https://openai-***********/"' >> .env
 echo 'AZURE_API_KEY="your-azure-api-key"' >> .env
 ```
 
-Then finish your `config.yaml` before starting the proxy server. If you use the default `docker-compose.yml`, the Postgres container is available at `db:5432`.
+### Step 2.2 — Create your `config.yaml`
+
+Proxy and model configuration. If you use the default `docker-compose.yml`, the Postgres container is available at `db:5432`.
 
 ```yaml
 model_list:
@@ -91,13 +95,41 @@ general_settings:
 `database_url` is required for virtual keys, spend tracking, and the UI. If you want a managed database instead, replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string.
 :::
 
-Save this file as `config.yaml`.
+### Step 2.3 — Create your `prometheus.yml`
+
+Metrics scrape config. This file **must exist as a file** before `docker compose up`. If it is missing, Docker auto-creates it as an empty directory, which causes the Prometheus container to fail.
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "litellm"
+    static_configs:
+      - targets: ["litellm:4000"]
+```
+
+Also verify that the `config.yaml` volume mount and `--config` command are **not commented out** in your `docker-compose.yml`:
+
+```yaml
+services:
+  litellm:
+    volumes:
+      - ./config.yaml:/app/config.yaml   # ✅ must be uncommented
+    command:
+      - "--config=/app/config.yaml"       # ✅ must be uncommented
+```
+
+:::warning
+All three files must be present before running `docker compose up`. Missing files are the most common cause of startup errors. See the [Troubleshooting](#troubleshooting) section if you run into issues.
+:::
 
 ---
 
 ### Step 3 — Start the proxy server and test it
 
-After `config.yaml` and `.env` are complete, start the proxy:
+After `config.yaml`, `prometheus.yml`, and `.env` are complete, start the proxy:
 
 ```bash
 docker compose up
@@ -629,6 +661,24 @@ model_list:
 
 
 ## Troubleshooting 
+
+### `prometheus.yml` mount error — "not a directory"
+
+If you see:
+
+```bash
+Error: cannot create subdirectories in ".../prometheus.yml": not a directory
+```
+
+Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time — Docker auto-creates missing bind-mount paths as directories.
+
+Fix it by deleting the directory and creating the file manually:
+
+```bash
+rm -rf prometheus.yml
+```
+
+Then create a valid `prometheus.yml` file (see [Step 2](#step-25--create-required-config-files)) and run `docker compose up` again.
 
 ### Non-root docker image?
 
