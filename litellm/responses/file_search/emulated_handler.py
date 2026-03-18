@@ -27,6 +27,25 @@ FILE_SEARCH_FUNCTION_NAME = "litellm_file_search"
 
 
 # ---------------------------------------------------------------------------
+# Detection
+# ---------------------------------------------------------------------------
+
+def should_use_emulated_file_search(
+    tools: Optional[Iterable[ToolParam]],
+    provider_config: Any,  # BaseResponsesAPIConfig
+) -> bool:
+    """Return True when there is a file_search tool and the provider can't handle it natively."""
+    if not tools:
+        return False
+    has_fs = any(
+        isinstance(t, dict) and t.get("type") == "file_search" for t in tools
+    )
+    if not has_fs:
+        return False
+    return provider_config is None or not provider_config.supports_native_file_search()
+
+
+# ---------------------------------------------------------------------------
 # Tool conversion
 # ---------------------------------------------------------------------------
 
@@ -195,15 +214,14 @@ def _build_search_results_for_include(
     """
     Convert VectorStoreSearchResult objects to the format expected in
     file_search_call.search_results (mirrors OpenAI's include= format).
+
+    All chunks are returned — no deduplication by file_id — matching the
+    behaviour of OpenAI's native file_search which surfaces every relevant
+    chunk even when multiple chunks originate from the same document.
     """
     formatted: List[Dict[str, Any]] = []
-    seen_file_ids: set = set()
     for result in results:
         file_id = _get_field(result, "file_id") or ""
-        if file_id and file_id in seen_file_ids:
-            continue
-        if file_id:
-            seen_file_ids.add(file_id)
         content_items = _get_field(result, "content") or []
         text_chunks = [
             c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "")
