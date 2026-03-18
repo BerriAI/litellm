@@ -73,6 +73,26 @@ litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandl
 #################################################
 
 
+def _coerce_responses_input_to_prompt_management_messages(
+    input: Union[str, ResponseInputParam],
+) -> List[AllMessageValues]:
+    """
+    Convert Responses API input into message-like items for prompt management hooks.
+
+    ResponseInputParam can contain non-message event objects (e.g. function results).
+    Prompt management hooks expect chat-style role/content messages only.
+    """
+    if isinstance(input, str):
+        return [{"role": "user", "content": input}]  # type: ignore[list-item]
+
+    message_items: List[AllMessageValues] = []
+    for item in list(input):
+        if isinstance(item, dict) and isinstance(item.get("role"), str):
+            message_items.append(cast(AllMessageValues, item))
+
+    return message_items
+
+
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
@@ -464,6 +484,44 @@ async def aresponses(
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
 
+        #########################################################
+        # PROMPT MANAGEMENT (ASYNC)
+        #########################################################
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        tools_for_prompt_hook: Optional[List[Dict]] = (
+            list(cast(Iterable[Dict], tools)) if tools is not None else None
+        )
+
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+            litellm_logging_obj.should_run_prompt_management_hooks(
+                prompt_id=prompt_id,
+                non_default_params=kwargs,
+                tools=tools_for_prompt_hook,
+            )
+        ):
+            client_input = _coerce_responses_input_to_prompt_management_messages(input=input)
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                tools=tools_for_prompt_hook,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
+            input = cast(Union[str, ResponseInputParam], merged_input)
+            local_vars["input"] = input
+            kwargs.update(merged_optional_params)
+            # Prevent responses() from re-applying prompt management in executor path.
+            kwargs["_skip_prompt_management_for_responses"] = True
+
         func = partial(
             responses,
             input=input,
@@ -630,15 +688,17 @@ def responses(
         prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
 
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+        if (
+            not kwargs.get("_skip_prompt_management_for_responses", False)
+            and isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+            and (
             litellm_logging_obj.should_run_prompt_management_hooks(
                 prompt_id=prompt_id, non_default_params=kwargs
             )
+        )
         ):
-            client_input: List[AllMessageValues] = (
-                [{"role": "user", "content": input}]
-                if isinstance(input, str)
-                else cast(List[AllMessageValues], list(input))
+            client_input = _coerce_responses_input_to_prompt_management_messages(
+                input=input
             )
             (
                 model,

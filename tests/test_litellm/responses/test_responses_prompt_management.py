@@ -9,7 +9,9 @@ Covers:
 """
 
 from typing import List
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
@@ -32,6 +34,9 @@ def _make_logging_obj(
         merged_model,
         merged_messages,
         {},
+    )
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=(merged_model, merged_messages, {})
     )
     # Instance attribute accessed by post-call metadata utilities
     logging_obj.model_call_details = {}
@@ -132,6 +137,33 @@ class TestResponsesAPIPromptManagement:
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         assert call_kwargs["messages"] == client_messages
 
+    def test_non_message_items_are_filtered_before_prompt_hook(self):
+        """Only role-based message items should be passed to prompt hooks."""
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[{"role": "user", "content": "Hi"}],  # type: ignore[list-item]
+        )
+
+        input_items = [
+            {"type": "function_call_output", "call_id": "abc", "output": "done"},
+            {"role": "user", "content": "Hi"},
+        ]
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            import litellm
+
+            litellm.responses(
+                input=input_items,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="helper-prompt",
+                litellm_logging_obj=logging_obj,
+            )
+
+        logging_obj.get_chat_completion_prompt.assert_called_once()
+        call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+
     def test_no_prompt_id_skips_hook(self):
         """[C] When prompt_id is absent, prompt management hooks are not called."""
         logging_obj = _make_logging_obj(
@@ -209,3 +241,39 @@ class TestResponsesAPIPromptManagement:
         # The model passed to the downstream handler should be the overridden one
         handler_call_kwargs = mock_handler.call_args.kwargs
         assert handler_call_kwargs.get("model") == "openai/gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_aresponses_uses_async_prompt_hook(self):
+        """Async responses path should call async prompt hook before executor dispatch."""
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o-mini",
+            merged_messages=[{"role": "user", "content": "Hi"}],  # type: ignore[list-item]
+        )
+        logging_obj.get_chat_completion_prompt.reset_mock()
+        logging_obj.async_get_chat_completion_prompt.reset_mock()
+
+        with patch(
+            "litellm.responses.main.litellm.get_llm_provider",
+            return_value=("gpt-4o", "openai", None, None),
+        ), patch(
+            "litellm.responses.main.responses", return_value=MagicMock()
+        ) as mock_responses:
+            import litellm
+
+            await litellm.aresponses(
+                input=[
+                    {"type": "function_call_output", "call_id": "abc", "output": "done"},
+                    {"role": "user", "content": "Hi"},
+                ],  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="helper-prompt",
+                litellm_logging_obj=logging_obj,
+            )
+
+        logging_obj.async_get_chat_completion_prompt.assert_awaited_once()
+        async_call_kwargs = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+        assert async_call_kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+        logging_obj.get_chat_completion_prompt.assert_not_called()
+        assert mock_responses.call_args.kwargs.get(
+            "_skip_prompt_management_for_responses"
+        ) is True
