@@ -206,6 +206,8 @@ class CustomStreamWrapper:
                     )
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
+        if not stream_options:
+            return True
         return (
             stream_options is not None
             and stream_options.get("include_usage", False) is True
