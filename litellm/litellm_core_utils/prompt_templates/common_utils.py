@@ -257,6 +257,15 @@ def detect_first_expected_role(
     return None
 
 
+def _counts_for_alternation(message: AllMessageValues) -> bool:
+    role = message.get("role")
+    if role == "user":
+        return True
+    if role == "assistant":
+        return not bool(message.get("tool_calls"))
+    return False
+
+
 def _insert_user_continue_message(
     messages: List[AllMessageValues],
     user_continue_message: Optional[ChatCompletionUserMessage],
@@ -274,14 +283,6 @@ def _insert_user_continue_message(
     """
     if not messages:
         return messages
-
-    def _counts_for_alternation(message: AllMessageValues) -> bool:
-        role = message.get("role")
-        if role == "user":
-            return True
-        if role == "assistant":
-            return not bool(message.get("tool_calls"))
-        return False
 
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
@@ -346,36 +347,32 @@ def _insert_assistant_continue_message(
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
-
-    def _counts_for_alternation(message: AllMessageValues) -> bool:
-        role = message.get("role")
-        if role == "user":
-            return True
-        if role == "assistant":
-            return not bool(message.get("tool_calls"))
-        return False
-
-    # Create a new list to store modified messages
-    modified_messages: List[AllMessageValues] = []
+    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+    insert_before_indexes = set()
 
     for i, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+
+        next_counted_index = i + 1
+        while next_counted_index < len(messages) and not _counts_for_alternation(
+            messages[next_counted_index]
+        ):
+            next_counted_index += 1
+
+        if (
+            next_counted_index < len(messages)
+            and messages[next_counted_index].get("role") == "user"
+        ):
+            # Insert before the next counted user turn.
+            # This avoids splitting assistant tool-call -> tool chains.
+            insert_before_indexes.add(next_counted_index)
+
+    modified_messages: List[AllMessageValues] = []
+    for idx, message in enumerate(messages):
+        if idx in insert_before_indexes:
+            modified_messages.append(continue_message)
         modified_messages.append(message)
-
-        if message.get("role") == "user" and _counts_for_alternation(message):
-            next_counted_index = i + 1
-            while next_counted_index < len(messages) and not _counts_for_alternation(
-                messages[next_counted_index]
-            ):
-                next_counted_index += 1
-
-            if (
-                next_counted_index < len(messages)
-                and messages[next_counted_index].get("role") == "user"
-            ):
-                continue_message = (
-                    assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-                )
-                modified_messages.append(continue_message)
 
     return modified_messages
 
