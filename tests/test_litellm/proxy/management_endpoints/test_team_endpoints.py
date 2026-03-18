@@ -2142,19 +2142,21 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"):
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
-        # Mock user lookup
-        mock_user_object = Mock()
-        mock_user_object.model_dump.return_value = {
-            "user_id": "non_admin_user_123",
-            "teams": ["team_1", "team_2"],
-        }
-        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
-        
+
+        # Mock get_user_object to return a user with teams
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        mock_user = LiteLLM_UserTable(
+            user_id="non_admin_user_123",
+            teams=["team_1", "team_2"],
+        )
+
         # Mock team lookup
         mock_teams = [
             Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
@@ -2163,21 +2165,26 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
 
-        # Should NOT raise an exception
-        result = await list_team_v2(
-            http_request=mock_request,
-            user_id="non_admin_user_123",  # Non-admin querying their own teams
-            user_api_key_dict=mock_user_api_key_dict_non_admin,
-            team_id=None,
-            page=1,
-            page_size=10,
-            status=None,
-        )
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user,
+        ):
+            # Should NOT raise an exception
+            result = await list_team_v2(
+                http_request=mock_request,
+                user_id="non_admin_user_123",  # Non-admin querying their own teams
+                user_api_key_dict=mock_user_api_key_dict_non_admin,
+                team_id=None,
+                page=1,
+                page_size=10,
+                status=None,
+            )
 
-        # Should return results without error
-        assert "teams" in result
-        assert "total" in result
-        assert result["total"] == 2
+            # Should return results without error
+            assert "teams" in result
+            assert "total" in result
+            assert result["total"] == 2
 
 
 @pytest.mark.asyncio
