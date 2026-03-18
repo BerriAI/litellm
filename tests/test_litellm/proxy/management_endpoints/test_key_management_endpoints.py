@@ -961,6 +961,91 @@ async def test_key_info_returns_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_key_info_sanitizes_sensitive_metadata(monkeypatch):
+    """
+    Test that /key/info correctly sanitizes sensitive callback credentials from metadata.
+
+    This test verifies that when calling /key/info for a key with Langfuse credentials
+    in metadata, the response has those credentials redacted to prevent information leakage.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/23776
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Mock key with sensitive metadata containing Langfuse credentials
+    test_key_token = "hashed_test_token_456"
+
+    sensitive_metadata = {
+        "langfuse_public_key": "pk-lf-12345",
+        "langfuse_secret_key": "sk-lf-secret-67890",
+        "langfuse_host": "https://langfuse.example.com",
+        "langsmith_api_key": "ls-api-key-secret",
+        "slack_webhook_url": "https://hooks.slack.com/services/T00/B00/XXX",
+        "safe_field": "this-should-remain-visible",
+        "model_rpm_limit": {"gpt-4": 100},
+    }
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user123"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+
+    # Mock the dict/model_dump methods
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "object_permission_id": None,
+        "user_id": "user123",
+        "team_id": None,
+        "litellm_budget_table": None,
+        "metadata": json.dumps(sensitive_metadata),
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    # Mock find_unique for the key lookup
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+
+    # Create user API key dict
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-key-789",
+    )
+
+    # Call info_key_fn
+    result = await info_key_fn(
+        key="sk-test-key-789",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Assertions
+    assert "info" in result
+    assert "metadata" in result["info"]
+
+    # Parse the returned metadata
+    returned_metadata = json.loads(result["info"]["metadata"])
+
+    # Verify sensitive fields are redacted
+    assert returned_metadata["langfuse_public_key"] == "***REDACTED***"
+    assert returned_metadata["langfuse_secret_key"] == "***REDACTED***"
+    assert returned_metadata["langfuse_host"] == "***REDACTED***"
+    assert returned_metadata["langsmith_api_key"] == "***REDACTED***"
+    assert returned_metadata["slack_webhook_url"] == "***REDACTED***"
+
+    # Verify non-sensitive fields remain intact
+    assert returned_metadata["safe_field"] == "this-should-remain-visible"
+    assert returned_metadata["model_rpm_limit"] == {"gpt-4": 100}
+
+
+@pytest.mark.asyncio
 async def test_get_new_token_with_valid_key(monkeypatch):
     """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
     from unittest.mock import AsyncMock

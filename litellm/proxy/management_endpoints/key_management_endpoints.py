@@ -2616,6 +2616,21 @@ async def info_key_fn_v2(
             except Exception:
                 # if using pydantic v1
                 k = k.dict()
+            # Sanitize metadata to prevent sensitive credentials from leaking
+            if k.get("metadata"):
+                from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+                    sanitize_metadata_for_key_info,
+                )
+
+                try:
+                    metadata_dict = json.loads(k["metadata"])
+                    if isinstance(metadata_dict, dict):
+                        k["metadata"] = json.dumps(
+                            sanitize_metadata_for_key_info(metadata_dict)
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    # If metadata is not valid JSON, skip sanitization
+                    pass
             filtered_key_info.append(k)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -2698,6 +2713,22 @@ async def info_key_fn(
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")
+
+        # Sanitize metadata to prevent sensitive credentials from leaking
+        if key_info.get("metadata"):
+            from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+                sanitize_metadata_for_key_info,
+            )
+
+            try:
+                metadata_dict = json.loads(key_info["metadata"])
+                if isinstance(metadata_dict, dict):
+                    key_info["metadata"] = json.dumps(
+                        sanitize_metadata_for_key_info(metadata_dict)
+                    )
+            except (json.JSONDecodeError, TypeError):
+                # If metadata is not valid JSON, skip sanitization
+                pass
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
