@@ -165,6 +165,23 @@ class LangsmithLogger(CustomBatchLogger):
                 "extra": extra_metadata,
             }
 
+            # Populate usage_metadata so LangSmith can display cost in
+            # the project overview.  LangSmith reads cost exclusively from
+            # outputs.usage_metadata.total_cost (the same structure that the
+            # official LangSmith OpenAI/Gemini wrappers produce).
+            if isinstance(data.get("outputs"), dict):
+                response_cost = payload.get("response_cost") or 0.0
+                data["outputs"]["usage_metadata"] = {
+                    "input_tokens": payload.get("prompt_tokens", 0),
+                    "output_tokens": payload.get("completion_tokens", 0),
+                    "total_tokens": payload.get("total_tokens", 0),
+                    "input_token_details": {},
+                    "output_token_details": {},
+                    "input_cost": response_cost,
+                    "output_cost": 0.0,
+                    "total_cost": response_cost,
+                }
+
             if payload["error_str"] is not None and payload["status"] == "failure":
                 data["error"] = payload["error_str"]
 
