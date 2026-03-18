@@ -369,7 +369,8 @@ jobs:
   release:
     name: "New LiteLLM Release"
     needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
-
+    permissions:
+      contents: write
     runs-on: "ubuntu-latest"
    
     steps:
