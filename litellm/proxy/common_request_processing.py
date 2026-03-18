@@ -46,6 +46,8 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -1245,9 +1247,6 @@ class ProxyBaseLLMRequestProcessing:
         identical logging output, just fires it slightly later, so
         false-positives are harmless.
         """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.types.guardrails import GuardrailEventHooks
-
         for cb in litellm.callbacks:
             if (
                 not isinstance(cb, str)

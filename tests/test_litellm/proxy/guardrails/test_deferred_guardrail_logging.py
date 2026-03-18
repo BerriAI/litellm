@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -238,8 +239,6 @@ async def test_deferred_logging_fires_on_guardrail_exception():
         async def async_post_call_success_hook(
             self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
         ) -> Any:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=400, detail="Content blocked")
 
     guardrail = BlockingGuardrail()
@@ -250,8 +249,6 @@ async def test_deferred_logging_fires_on_guardrail_exception():
 
     with patch("litellm.callbacks", [guardrail]):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-
-        from fastapi import HTTPException
 
         with pytest.raises(HTTPException):
             try:
