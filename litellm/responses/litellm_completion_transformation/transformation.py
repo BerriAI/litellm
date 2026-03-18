@@ -906,6 +906,12 @@ class LiteLLMCompletionResponsesConfig:
             )
             if input_item.get("cache_control"):
                 msg["cache_control"] = input_item.get("cache_control")
+                # Also propagate to the last content element for providers
+                # that read cache_control from content blocks (Anthropic, Bedrock)
+                if isinstance(msg["content"], list) and len(msg["content"]) > 0:
+                    last_element = msg["content"][-1]
+                    if isinstance(last_element, dict):
+                        last_element["cache_control"] = input_item["cache_control"]
             return [msg]
 
     @staticmethod
