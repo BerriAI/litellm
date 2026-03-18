@@ -10,7 +10,7 @@ def gemini():
 
 @gemini.command(name="login")
 def login():
-    """Login to Gemini using OAuth Device Flow (Loopback)"""
+    """Authenticate with Gemini using the OAuth Authorization Code flow (loopback redirect)"""
     try:
         auth = GeminiAuthenticator()
         auth.get_token()
