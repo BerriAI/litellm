@@ -3,7 +3,7 @@
 from typing import Optional, Union
 
 import litellm
-from litellm.utils import _supports_factory
+from litellm.utils import _get_model_cost_key, _get_model_info_helper, _supports_factory
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -113,6 +113,28 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             key=f"supports_{level}_reasoning_effort",
         )
 
+    @classmethod
+    def _is_reasoning_effort_level_explicitly_disabled(
+        cls, model: str, level: str
+    ) -> bool:
+        """Return True only when the model map explicitly sets the capability to False.
+
+        Unlike ``_supports_reasoning_effort_level`` (which requires an explicit True),
+        this method returns True only when ``supports_{level}_reasoning_effort`` is
+        explicitly set to ``False`` in the model map.  A missing key is treated as
+        supported (i.e. this method returns False = not disabled).
+
+        Use this for opt-out checks where unknown models should be allowed through.
+        """
+        try:
+            key = f"supports_{level}_reasoning_effort"
+            cost_key = _get_model_cost_key(model)
+            entry = litellm.model_cost.get(cost_key or model) or {}
+            val = entry.get(key)
+            return val is False
+        except Exception:
+            return False
+
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):
             return [
@@ -200,10 +222,22 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 if "reasoning_effort" in optional_params:
                     optional_params["reasoning_effort"] = normalized
 
-        if effective_effort is not None and (
-            effective_effort == "xhigh" or effective_effort == "minimal"
-        ):
+        if effective_effort == "xhigh":
+            # xhigh is an opt-in capability: only allow if model explicitly supports it.
             if not self._supports_reasoning_effort_level(model, effective_effort):
+                if litellm.drop_params or drop_params:
+                    non_default_params.pop("reasoning_effort", None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"reasoning_effort={effective_effort} is not supported for this model."
+                        ),
+                        status_code=400,
+                    )
+        elif effective_effort == "minimal":
+            # minimal is opt-out: unknown models pass through; only block when
+            # the model map explicitly sets supports_minimal_reasoning_effort=false.
+            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
