@@ -18,7 +18,7 @@ def test_run_gemini_completion_with_code_assist_fallback_disabled():
             return_value=True,
         ),
         patch(
-            "litellm.llms.gemini.fallback_handler.GoogleCodeAssistChat.completion"
+            "litellm.llms.gemini.fallback_handler._google_code_assist_chat.completion"
         ) as mock_completion,
     ):
         with pytest.raises(Exception, match="ACCESS_TOKEN_SCOPE_INSUFFICIENT"):
@@ -42,7 +42,7 @@ async def test_run_gemini_acompletion_with_code_assist_fallback_enabled():
             return_value=True,
         ),
         patch(
-            "litellm.llms.gemini.fallback_handler.GoogleCodeAssistChat.acompletion",
+            "litellm.llms.gemini.fallback_handler._google_code_assist_chat.acompletion",
             new_callable=AsyncMock,
         ) as mock_acompletion,
     ):
