@@ -142,17 +142,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Tuple[dict, Optional[str]]:
-        import os
-
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
         )
-        if api_key is None:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
 
-        if "x-api-key" not in headers and "authorization" not in headers and api_key:
-            headers["x-api-key"] = api_key
+        if "x-api-key" not in headers and "authorization" not in headers:
+            auth_header = AnthropicModelInfo.get_auth_header(api_key)
+            if auth_header is not None:
+                headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
