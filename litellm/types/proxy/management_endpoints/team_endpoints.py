@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
@@ -43,10 +44,16 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
     team_member_permissions: List[str]
 
 
+class TeamListItem(LiteLLM_TeamTable):
+    """A team item in the paginated list response, enriched with computed fields."""
+
+    members_count: int = 0
+
+
 class TeamListResponse(BaseModel):
     """Response to get the list of teams"""
 
-    teams: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
+    teams: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
     total: int
     page: int
     page_size: int
