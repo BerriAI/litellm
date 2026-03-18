@@ -101,6 +101,7 @@ from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -3436,27 +3437,56 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
             new_params = safe_deep_copy(optional_params or {})
-            response = vertex_chat_completion.completion(  # type: ignore
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=new_params,
-                litellm_params=litellm_params,  # type: ignore
-                logger_fn=logger_fn,
-                encoding=_get_encoding(),
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                vertex_credentials=vertex_credentials,
-                gemini_api_key=gemini_api_key,
-                logging_obj=logging,
-                acompletion=acompletion,
-                timeout=timeout,
-                custom_llm_provider=custom_llm_provider,  # type: ignore
-                client=client,
-                api_base=api_base,
-                extra_headers=headers,
-            )
+            try:
+                response = vertex_chat_completion.completion(  # type: ignore
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=new_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    logger_fn=logger_fn,
+                    encoding=_get_encoding(),
+                    vertex_location=vertex_ai_location,
+                    vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
+                    gemini_api_key=gemini_api_key,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,
+                    custom_llm_provider=custom_llm_provider,  # type: ignore
+                    client=client,
+                    api_base=api_base,
+                    extra_headers=headers,
+                )
+            except Exception as e:
+                # Fallback to google_code_assist if scope is insufficient
+                if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(e):
+                    google_code_assist_chat = GoogleCodeAssistChat()
+                    if acompletion is True:
+                        response = google_code_assist_chat.acompletion(
+                            model=model,
+                            messages=messages,
+                            model_response=model_response,
+                            print_verbose=print_verbose,
+                            optional_params=optional_params,
+                            litellm_params=litellm_params,  # type: ignore
+                            logging_obj=logging,
+                            logger_fn=logger_fn,
+                        )
+                    else:
+                        response = google_code_assist_chat.completion(
+                            model=model,
+                            messages=messages,
+                            model_response=model_response,
+                            print_verbose=print_verbose,
+                            optional_params=optional_params,
+                            litellm_params=litellm_params,  # type: ignore
+                            logging_obj=logging,
+                            logger_fn=logger_fn,
+                        )
+                else:
+                    raise e
 
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -3632,6 +3662,33 @@ def completion(  # type: ignore # noqa: PLR0915
                     )
                     return response
             response = model_response
+
+        elif custom_llm_provider == "google_code_assist":
+            google_code_assist_chat = GoogleCodeAssistChat()
+            if acompletion is True:
+                response = google_code_assist_chat.acompletion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    logging_obj=logging,
+                    logger_fn=logger_fn,
+                )
+            else:
+                model_response = google_code_assist_chat.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    logging_obj=logging,
+                    logger_fn=logger_fn,
+                )
+                response = model_response
+
         elif custom_llm_provider == "predibase":
             tenant_id = (
                 optional_params.pop("tenant_id", None)
@@ -7533,9 +7590,7 @@ def stream_chunk_builder(  # noqa: PLR0915
             # the final chunk.
             all_annotations: list = []
             for ac in annotation_chunks:
-                all_annotations.extend(
-                    ac["choices"][0]["delta"]["annotations"]
-                )
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
             response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [
