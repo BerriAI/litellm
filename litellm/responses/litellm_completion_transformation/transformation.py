@@ -1738,10 +1738,7 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
         if tool_result_items:
-            result_by_id = {
-                (item.get("id") if isinstance(item, dict) else item.id): item
-                for item in tool_result_items
-            }
+            result_by_id = {item.id: item for item in tool_result_items}
             replaced_ids = set(result_by_id.keys())
             responses_output = [
                 (
@@ -1778,7 +1775,14 @@ class LiteLLMCompletionResponsesConfig:
                 continue
             results = psf.get("code_interpreter_results")
             if results and isinstance(results, list):
-                output_items.extend(results)
+                for item in results:
+                    # In the streaming path, items are plain dicts after
+                    # model_dump() in stream_chunk_builder.  Reconstruct
+                    # Pydantic objects so responses_output has a uniform type.
+                    if isinstance(item, dict):
+                        output_items.append(OutputCodeInterpreterCall(**item))
+                    else:
+                        output_items.append(item)
         return output_items
 
     @staticmethod
