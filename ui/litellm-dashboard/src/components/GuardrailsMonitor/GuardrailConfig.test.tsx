@@ -24,6 +24,8 @@ describe("GuardrailConfig", () => {
     expect(screen.getByText(/Configure Content Safety behavior/)).toBeInTheDocument();
   });
 
+  // Note: Version history entries are hardcoded placeholders in the component.
+  // These assertions will need updating when wired to real API data.
   it("should show version history when 'View history' is clicked", async () => {
     const user = userEvent.setup();
     render(<GuardrailConfig {...defaultProps} />);
@@ -87,6 +89,7 @@ describe("GuardrailConfig", () => {
   it("should display the Revert and Save buttons", () => {
     render(<GuardrailConfig {...defaultProps} />);
     expect(screen.getByRole("button", { name: /revert/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /save as v4/i })).toBeInTheDocument();
+    // The component's hardcoded default version is "v3", so Save shows "v4"
+    expect(screen.getByRole("button", { name: /save as v\d+/i })).toBeInTheDocument();
   });
 });

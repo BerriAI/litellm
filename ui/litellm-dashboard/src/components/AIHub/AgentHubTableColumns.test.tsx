@@ -94,8 +94,14 @@ describe("AgentHubTableColumns", () => {
 
   it("should display I/O modes", () => {
     render(<TestTable data={[mockAgent]} />);
-    expect(screen.getByText("text")).toBeInTheDocument();
-    expect(screen.getByText("text, image")).toBeInTheDocument();
+    // "In:" and "Out:" are in <span> children; getByText with exact:false
+    // matches against the element's full textContent across child nodes
+    expect(screen.getByText((_, el) =>
+      el?.tagName === "P" && el.textContent === "In: text"
+    )).toBeInTheDocument();
+    expect(screen.getByText((_, el) =>
+      el?.tagName === "P" && el.textContent === "Out: text, image"
+    )).toBeInTheDocument();
   });
 
   it("should display 'Yes' badge for public agents", () => {

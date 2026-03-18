@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { vi } from "vitest";
 import { ScoreChart } from "./ScoreChart";
 
 vi.mock("@tremor/react", async (importOriginal) => {
