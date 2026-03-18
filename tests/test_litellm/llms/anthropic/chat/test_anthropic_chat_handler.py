@@ -1513,3 +1513,71 @@ def test_empty_output_produces_null_outputs():
     assert (
         code_results[0].outputs is None
     ), f"Expected outputs=None for empty execution, got {code_results[0].outputs}"
+
+
+def test_non_bash_tool_result_skipped():
+    """
+    Tool result types other than bash_code_execution_tool_result (e.g.
+    text_editor_code_execution_tool_result) should be skipped and NOT
+    produce code_interpreter_call items.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "text_editor",
+                "input": {"command": "view", "path": "/tmp/test.py"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # text_editor result — should NOT become a code_interpreter_call
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": [
+                    {"type": "text", "text": "file contents here"},
+                ],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # code_interpreter_results should be emitted but empty (no bash results)
+    assert (
+        code_results is not None
+    ), "Expected code_interpreter_results key to be emitted"
+    assert (
+        len(code_results) == 0
+    ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
