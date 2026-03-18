@@ -105,17 +105,16 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_count_tokens_location = litellm_params.get("vertex_count_tokens_location")
         vertex_location = (
-            litellm_params.get("vertex_count_tokens_location")
+            vertex_count_tokens_location
             or self.get_vertex_ai_location(litellm_params)
         )
 
         # For Claude models, count-tokens only works in us-central1 unless
         # vertex_count_tokens_location is explicitly configured to override.
         # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if "claude" in model.lower() and not litellm_params.get(
-            "vertex_count_tokens_location"
-        ):
+        if "claude" in model.lower() and not vertex_count_tokens_location:
             vertex_location = "us-central1"
         elif not vertex_location:
             vertex_location = "us-central1"
