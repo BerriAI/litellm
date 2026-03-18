@@ -946,6 +946,7 @@ def responses_api_bridge_check(
                 model=model, custom_llm_provider=custom_llm_provider
             ),
         )
+
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.replace("responses/", "")
             mode = "responses"
@@ -7533,9 +7534,7 @@ def stream_chunk_builder(  # noqa: PLR0915
             # the final chunk.
             all_annotations: list = []
             for ac in annotation_chunks:
-                all_annotations.extend(
-                    ac["choices"][0]["delta"]["annotations"]
-                )
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
             response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [

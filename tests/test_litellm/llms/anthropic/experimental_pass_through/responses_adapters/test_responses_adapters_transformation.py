@@ -170,6 +170,7 @@ class TestOutputConfigStructuredOutput:
 # translate_messages_to_responses_input
 # ---------------------------------------------------------------------------
 
+
 # Helper: cast plain dicts to the expected type so call sites stay clean.
 def _translate_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     return _ADAPTER.translate_messages_to_responses_input(messages)  # type: ignore[arg-type]
@@ -204,6 +205,23 @@ class TestTranslateMessagesToResponsesInput:
                 "type": "message",
                 "role": "user",
                 "content": [{"type": "input_text", "text": "What is 2+2?"}],
+            }
+        ]
+
+    def test_user_list_input_text_block(self):
+        """User message with input_text block maps to input_text."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is 3+3?"}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is 3+3?"}],
             }
         ]
 
@@ -274,7 +292,11 @@ class TestTranslateMessagesToResponsesInput:
                 "content": [
                     {
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": ""},
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": "",
+                        },
                     }
                 ],
             }
@@ -325,6 +347,26 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert result[0]["output"] == "Line 1\nLine 2"
+
+    def test_user_tool_result_input_text_list_content(self):
+        """tool_result with input_text blocks is joined into a single string."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_input_text",
+                        "content": [
+                            {"type": "input_text", "text": "Line A"},
+                            {"type": "input_text", "text": "Line B"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["output"] == "Line A\nLine B"
 
     def test_user_tool_result_null_content(self):
         """tool_result with null content becomes empty string output."""
@@ -462,7 +504,10 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"][0] == {"type": "input_text", "text": "Describe this image:"}
+        assert result[0]["content"][0] == {
+            "type": "input_text",
+            "text": "Describe this image:",
+        }
         assert result[0]["content"][1] == {
             "type": "input_image",
             "image_url": "https://example.com/cat.jpg",
@@ -688,6 +733,16 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "Be concise.\nBe helpful."
 
+    def test_system_list_of_input_text_blocks_joined(self):
+        req = _make_request(
+            system=[
+                {"type": "input_text", "text": "Use bullet points."},
+                {"type": "input_text", "text": "Be precise."},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["instructions"] == "Use bullet points.\nBe precise."
+
     def test_system_list_skips_non_text_blocks(self):
         req = _make_request(
             system=[
@@ -715,7 +770,9 @@ class TestTranslateRequestBroaderCoverage:
 
     def test_tools_translated(self):
         req = _make_request(
-            tools=[{"name": "calculator", "description": "Does math.", "input_schema": {}}]
+            tools=[
+                {"name": "calculator", "description": "Does math.", "input_schema": {}}
+            ]
         )
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["tools"]) == 1
@@ -753,8 +810,17 @@ class TestTranslateRequestBroaderCoverage:
     def test_no_optional_fields_does_not_add_spurious_keys(self):
         req = _make_request()
         kwargs = _ADAPTER.translate_request(req)
-        for key in ("instructions", "temperature", "top_p", "tools", "tool_choice",
-                    "reasoning", "text", "context_management", "user"):
+        for key in (
+            "instructions",
+            "temperature",
+            "top_p",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "text",
+            "context_management",
+            "user",
+        ):
             assert key not in kwargs, f"unexpected key: {key}"
 
 
@@ -801,9 +867,7 @@ def _make_output_message(texts: List[str]) -> MagicMock:
     return msg
 
 
-def _make_function_call_item(
-    call_id: str, name: str, arguments: str
-) -> MagicMock:
+def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
     """Build a mock ResponseFunctionToolCall."""
     from openai.types.responses import ResponseFunctionToolCall  # type: ignore[import]
 
