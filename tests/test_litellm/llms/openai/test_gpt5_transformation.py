@@ -345,6 +345,25 @@ def test_gpt5_4_nano_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     )
     assert params["reasoning_effort"] == "xhigh"
 
+def test_gpt5_4_nano_allows_reasoning_effort_none(config: OpenAIConfig):
+    """gpt-5.4-nano supports reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-nano",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+
+def test_gpt5_4_mini_allows_reasoning_effort_none(config: OpenAIConfig):
+    """gpt-5.4-mini supports reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
 
 def test_gpt5_4_allows_reasoning_effort_minimal(config: OpenAIConfig):
     """gpt-5.4 supports reasoning_effort='minimal'."""
