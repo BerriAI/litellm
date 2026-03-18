@@ -84,11 +84,17 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
 const resolveMode = (mode: GuardrailInformation["guardrail_mode"]): string | null => {
   if (mode == null) return null;
   if (typeof mode === "string") return mode;
-  if (Array.isArray(mode)) return mode[0] ?? null;
+  if (Array.isArray(mode)) {
+    const first = mode[0];
+    return typeof first === "string" ? first : null;
+  }
   if (typeof mode === "object" && "default" in mode) {
     const def = mode.default;
     if (typeof def === "string") return def;
-    if (Array.isArray(def)) return def[0] ?? null;
+    if (Array.isArray(def)) {
+      const first = def[0];
+      return typeof first === "string" ? first : null;
+    }
   }
   return null;
 };
