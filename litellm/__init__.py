@@ -433,6 +433,10 @@ default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
+# Backward-compatible default: do not silently reroute gemini/* calls unless explicitly enabled.
+auto_fallback_to_google_code_assist: bool = os.getenv(
+    "LITELLM_AUTO_FALLBACK_TO_GOOGLE_CODE_ASSIST", "false"
+).lower() in ("1", "true", "yes", "on")
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[
@@ -1465,9 +1469,15 @@ if TYPE_CHECKING:
     from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
     from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
     from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
-    from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
-    from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
-    from .llms.sagemaker.nova.transformation import SagemakerNovaConfig as SagemakerNovaConfig
+    from .llms.sagemaker.completion.transformation import (
+        SagemakerConfig as SagemakerConfig,
+    )
+    from .llms.sagemaker.chat.transformation import (
+        SagemakerChatConfig as SagemakerChatConfig,
+    )
+    from .llms.sagemaker.nova.transformation import (
+        SagemakerNovaConfig as SagemakerNovaConfig,
+    )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from .llms.anthropic.experimental_pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,

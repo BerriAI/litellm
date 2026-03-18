@@ -101,6 +101,11 @@ from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.google_code_assist.chat import get_google_code_assist_chat
+from litellm.llms.gemini.fallback_handler import (
+    run_gemini_acompletion_with_code_assist_fallback,
+    run_gemini_completion_with_code_assist_fallback,
+)
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -156,6 +161,8 @@ from litellm.utils import (
     validate_openai_optional_params,
 )
 
+_google_code_assist_chat = get_google_code_assist_chat()
+
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import safe_deep_copy
@@ -197,7 +204,9 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env
+from .llms.gemini.common_utils import (
+    get_api_key_from_env,
+)
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -3436,27 +3445,76 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
             new_params = safe_deep_copy(optional_params or {})
-            response = vertex_chat_completion.completion(  # type: ignore
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=new_params,
-                litellm_params=litellm_params,  # type: ignore
-                logger_fn=logger_fn,
-                encoding=_get_encoding(),
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                vertex_credentials=vertex_credentials,
-                gemini_api_key=gemini_api_key,
-                logging_obj=logging,
-                acompletion=acompletion,
-                timeout=timeout,
-                custom_llm_provider=custom_llm_provider,  # type: ignore
-                client=client,
-                api_base=api_base,
-                extra_headers=headers,
-            )
+            if acompletion is True:
+                response = run_gemini_acompletion_with_code_assist_fallback(
+                    primary_call=vertex_chat_completion.completion(  # type: ignore
+                        model=model,
+                        messages=messages,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        optional_params=new_params,
+                        litellm_params=litellm_params,  # type: ignore
+                        logger_fn=logger_fn,
+                        encoding=_get_encoding(),
+                        vertex_location=vertex_ai_location,
+                        vertex_project=vertex_ai_project,
+                        vertex_credentials=vertex_credentials,
+                        gemini_api_key=gemini_api_key,
+                        logging_obj=logging,
+                        acompletion=True,
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,  # type: ignore
+                        client=client,
+                        api_base=api_base,
+                        extra_headers=headers,
+                    ),
+                    fallback_kwargs={
+                        "model": model,
+                        "messages": messages,
+                        "model_response": model_response,
+                        "print_verbose": print_verbose,
+                        "optional_params": optional_params or {},
+                        "litellm_params": litellm_params,  # type: ignore
+                        "logging_obj": logging,
+                        "logger_fn": logger_fn,
+                    },
+                    auto_fallback_to_google_code_assist=litellm.auto_fallback_to_google_code_assist,
+                )
+            else:
+                response = run_gemini_completion_with_code_assist_fallback(
+                    primary_call=lambda: vertex_chat_completion.completion(  # type: ignore
+                        model=model,
+                        messages=messages,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        optional_params=new_params,
+                        litellm_params=litellm_params,  # type: ignore
+                        logger_fn=logger_fn,
+                        encoding=_get_encoding(),
+                        vertex_location=vertex_ai_location,
+                        vertex_project=vertex_ai_project,
+                        vertex_credentials=vertex_credentials,
+                        gemini_api_key=gemini_api_key,
+                        logging_obj=logging,
+                        acompletion=False,
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,  # type: ignore
+                        client=client,
+                        api_base=api_base,
+                        extra_headers=headers,
+                    ),
+                    fallback_kwargs={
+                        "model": model,
+                        "messages": messages,
+                        "model_response": model_response,
+                        "print_verbose": print_verbose,
+                        "optional_params": optional_params or {},
+                        "litellm_params": litellm_params,  # type: ignore
+                        "logging_obj": logging,
+                        "logger_fn": logger_fn,
+                    },
+                    auto_fallback_to_google_code_assist=litellm.auto_fallback_to_google_code_assist,
+                )
 
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -3632,6 +3690,31 @@ def completion(  # type: ignore # noqa: PLR0915
                     )
                     return response
             response = model_response
+
+        elif custom_llm_provider == "google_code_assist":
+            if acompletion is True:
+                response = _google_code_assist_chat.acompletion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    logging_obj=logging,
+                    logger_fn=logger_fn,
+                )
+            else:
+                response = _google_code_assist_chat.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    logging_obj=logging,
+                    logger_fn=logger_fn,
+                )
+
         elif custom_llm_provider == "predibase":
             tenant_id = (
                 optional_params.pop("tenant_id", None)
@@ -7533,9 +7616,7 @@ def stream_chunk_builder(  # noqa: PLR0915
             # the final chunk.
             all_annotations: list = []
             for ac in annotation_chunks:
-                all_annotations.extend(
-                    ac["choices"][0]["delta"]["annotations"]
-                )
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
             response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [

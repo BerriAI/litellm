@@ -2,6 +2,7 @@
 Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
+import asyncio
 import json
 from typing import Any, Dict, Literal, Optional, Union
 
@@ -130,6 +131,36 @@ class GoogleBatchEmbeddings(VertexLLM):
         client=None,
         extra_headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
+        optional_params = optional_params or {}
+
+        is_multimodal = _is_multimodal_input(input)
+        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        mode: Literal["embedding", "batch_embedding"]
+        if use_embed_content:
+            mode = "embedding"
+        else:
+            mode = "batch_embedding"
+
+        if aembedding is True:
+            return self._async_batch_embeddings_with_auth_resolution(  # type: ignore
+                model=model,
+                input=input,
+                model_response=model_response,
+                custom_llm_provider=custom_llm_provider,
+                optional_params=optional_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                use_embed_content=use_embed_content,
+                mode=mode,
+                timeout=timeout,
+                client=client,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
+                extra_headers=extra_headers,
+            )
+
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -148,16 +179,6 @@ class GoogleBatchEmbeddings(VertexLLM):
             sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
         else:
             sync_handler = client  # type: ignore
-
-        optional_params = optional_params or {}
-
-        is_multimodal = _is_multimodal_input(input)
-        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
-        mode: Literal["embedding", "batch_embedding"]
-        if use_embed_content:
-            mode = "embedding"
-        else:
-            mode = "batch_embedding"
 
         auth_header, url = self._get_token_and_url(
             model=model,
@@ -183,22 +204,6 @@ class GoogleBatchEmbeddings(VertexLLM):
                 headers["Authorization"] = f"Bearer {auth_header}"
         if extra_headers is not None:
             headers.update(extra_headers)
-
-        if aembedding is True:
-            return self.async_batch_embeddings(  # type: ignore
-                model=model,
-                api_base=api_base,
-                url=url,
-                data=None,
-                model_response=model_response,
-                timeout=timeout,
-                headers=headers,
-                input=input,
-                use_embed_content=use_embed_content,
-                api_key=api_key,
-                optional_params=optional_params,
-                logging_obj=logging_obj,
-            )
 
         ### TRANSFORMATION (sync path) ###
         request_data: Any
@@ -256,6 +261,78 @@ class GoogleBatchEmbeddings(VertexLLM):
                 _predictions=_predictions,
                 input=input,
             )
+
+    async def _async_batch_embeddings_with_auth_resolution(
+        self,
+        model: str,
+        input: EmbeddingInput,
+        model_response: EmbeddingResponse,
+        custom_llm_provider: Literal["gemini", "vertex_ai"],
+        optional_params: dict,
+        logging_obj: Any,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        use_embed_content: bool,
+        mode: Literal["embedding", "batch_embedding"],
+        timeout: Optional[Union[float, httpx.Timeout]],
+        client: Optional[AsyncHTTPHandler],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[Any],
+        extra_headers: Optional[dict],
+    ) -> EmbeddingResponse:
+        _auth_header, vertex_project = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+        gemini_auth_data = None
+        if custom_llm_provider == "gemini" and api_key is None:
+            from litellm.llms.gemini.common_utils import get_gemini_oauth_token
+
+            gemini_auth_data = await asyncio.to_thread(get_gemini_oauth_token)
+
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            auth_header=_auth_header,
+            gemini_api_key=api_key,
+            gemini_auth_data=gemini_auth_data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=None,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode=mode,
+        )
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        if auth_header is not None:
+            if isinstance(auth_header, dict):
+                headers.update(auth_header)
+            else:
+                headers["Authorization"] = f"Bearer {auth_header}"
+        if extra_headers is not None:
+            headers.update(extra_headers)
+
+        return await self.async_batch_embeddings(
+            model=model,
+            api_base=api_base,
+            url=url,
+            data=None,
+            model_response=model_response,
+            timeout=timeout,
+            headers=headers,
+            client=client,
+            input=input,
+            use_embed_content=use_embed_content,
+            api_key=api_key,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+        )
 
     async def async_batch_embeddings(
         self,
