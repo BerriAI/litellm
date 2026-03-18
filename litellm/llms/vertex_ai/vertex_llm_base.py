@@ -416,7 +416,7 @@ class VertexBase:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
                 else:
                     raise ValueError(
-                        "Missing Gemini authentication. Please set `GEMINI_API_KEY` or `GEMINI_OAUTH_TOKEN`."
+                        "Missing gemini_api_key. Please set `GEMINI_API_KEY` or `GEMINI_OAUTH_TOKEN`."
                     )
             else:
                 # For Vertex AI

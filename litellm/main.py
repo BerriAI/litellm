@@ -198,7 +198,10 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env
+from .llms.gemini.common_utils import (
+    get_api_key_from_env,
+    should_fallback_to_google_code_assist,
+)
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -3464,9 +3467,13 @@ def completion(  # type: ignore # noqa: PLR0915
                             extra_headers=headers,
                         )
                     except Exception as e:
-                        if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" not in str(e):
+                        if not should_fallback_to_google_code_assist(e):
                             raise e
 
+                        verbose_logger.warning(
+                            "Gemini request failed with ACCESS_TOKEN_SCOPE_INSUFFICIENT. "
+                            "Falling back to google_code_assist."
+                        )
                         return await google_code_assist_chat.acompletion(
                             model=model,
                             messages=messages,
@@ -3504,7 +3511,11 @@ def completion(  # type: ignore # noqa: PLR0915
                     )
                 except Exception as e:
                     # Fallback to google_code_assist if scope is insufficient
-                    if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(e):
+                    if should_fallback_to_google_code_assist(e):
+                        verbose_logger.warning(
+                            "Gemini request failed with ACCESS_TOKEN_SCOPE_INSUFFICIENT. "
+                            "Falling back to google_code_assist."
+                        )
                         google_code_assist_chat = GoogleCodeAssistChat()
                         response = google_code_assist_chat.completion(
                             model=model,

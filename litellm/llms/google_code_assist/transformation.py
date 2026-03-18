@@ -18,6 +18,22 @@ class GoogleCodeAssistError(BaseLLMException):
         super().__init__(status_code=status_code, message=message)
 
 
+class ParsedJSONResponseAdapter:
+    """
+    Adapter that provides the subset of httpx.Response surface used by
+    VertexGeminiConfig.transform_response.
+    """
+
+    def __init__(self, json_data: dict):
+        self._json = json_data
+        self.status_code = 200
+        self.text = json.dumps(json_data)
+        self.headers = httpx.Headers({"content-type": "application/json"})
+
+    def json(self):
+        return self._json
+
+
 class GoogleCodeAssistConfig(VertexGeminiConfig):
     """
     Reference: https://cloud.google.com/gemini/docs/api/reference/rest/v1internal/projects.locations.codeAssist/generateContent
@@ -166,20 +182,9 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         # Code Assist wraps the response in a "response" key
         gemini_response = data.get("response", data)
 
-        # Reuse base vertex transformation
-        class MockResponse:
-            def __init__(self, json_data):
-                self._json = json_data
-                self.status_code = 200
-                self.text = json.dumps(json_data)
-                self.headers = httpx.Headers({"content-type": "application/json"})
-
-            def json(self):
-                return self._json
-
         return super().transform_response(
             model=model,
-            raw_response=MockResponse(gemini_response),
+            raw_response=ParsedJSONResponseAdapter(gemini_response),
             model_response=model_response,
             logging_obj=logging_obj,
             request_data=request_data,

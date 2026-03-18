@@ -155,6 +155,13 @@ def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
+def should_fallback_to_google_code_assist(error: Exception) -> bool:
+    """
+    Returns True if the error indicates missing OAuth scope for Gemini calls.
+    """
+    return "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(error)
+
+
 def get_gemini_oauth_token() -> Optional[dict]:  # noqa: PLR0915
     """
     Returns the Gemini OAuth token and metadata.

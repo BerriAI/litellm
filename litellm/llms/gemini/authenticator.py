@@ -3,6 +3,7 @@ import os
 import time
 import webbrowser
 import http.server
+import html
 import urllib.parse
 import secrets
 import hashlib
@@ -86,8 +87,7 @@ class GeminiAuthenticator:
         # If we get here, we need to log in
         verbose_logger.info("Starting Gemini OAuth login flow...")
         creds = self._login()
-        with open(self.oauth_creds_file, "w") as f:
-            json.dump(creds, f)
+        self._write_oauth_creds(creds)
         return creds.get("access_token")
 
     def _refresh_token(self, refresh_token: str) -> str:
@@ -116,15 +116,35 @@ class GeminiAuthenticator:
         if "expires_in" in new_creds:
             creds["expires_at"] = time.time() + new_creds["expires_in"]
 
-        with open(self.oauth_creds_file, "w") as f:
-            json.dump(creds, f)
+        self._write_oauth_creds(creds)
 
         return creds.get("access_token")
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
         if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
+            os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+        else:
+            try:
+                os.chmod(self.token_dir, 0o700)
+            except OSError:
+                pass
+
+    def _write_oauth_creds(self, creds: Dict[str, Any]) -> None:
+        """
+        Write oauth credentials with user-only permissions.
+        """
+        fd = os.open(
+            self.oauth_creds_file,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(creds, f)
+        try:
+            os.chmod(self.oauth_creds_file, 0o600)
+        except OSError:
+            pass
 
     def _login(self) -> Dict[str, Any]:
         """Perform loopback flow login."""
@@ -177,7 +197,11 @@ class GeminiAuthenticator:
                     self.send_header("Content-type", "text/html")
                     self.end_headers()
                     self.wfile.write(
-                        f"<html><body><h1>Authentication failed</h1><p>{error}</p></body></html>".encode()
+                        (
+                            "<html><body><h1>Authentication failed</h1><p>"
+                            f"{html.escape(error)}"
+                            "</p></body></html>"
+                        ).encode()
                     )
                 else:
                     self.send_response(404)
