@@ -40,7 +40,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        api_params = _get_api_params(params=optional_params)
+        api_params = _get_api_params(params=optional_params, model=model)
 
         ## UPDATE HEADERS
         headers = watsonx_chat_transformation.validate_environment(

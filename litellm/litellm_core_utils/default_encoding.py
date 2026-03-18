@@ -15,9 +15,37 @@ except (ImportError, AttributeError):
         __name__, "litellm_core_utils/tokenizers"
     )
 
-os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
-    "CUSTOM_TIKTOKEN_CACHE_DIR", filename
-)  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
-import tiktoken
+# Always default TIKTOKEN_CACHE_DIR to the bundled tokenizers directory
+# unless the user explicitly overrides it via CUSTOM_TIKTOKEN_CACHE_DIR.
+# This keeps tiktoken fully offline-capable by default (see #1071).
+custom_cache_dir = os.getenv("CUSTOM_TIKTOKEN_CACHE_DIR")
+if custom_cache_dir:
+    # If the user opts into a custom cache dir, ensure it exists.
+    os.makedirs(custom_cache_dir, exist_ok=True)
+    cache_dir = custom_cache_dir
+else:
+    cache_dir = filename
 
-encoding = tiktoken.get_encoding("cl100k_base")
+os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+
+import tiktoken
+import time
+import random
+
+# Retry logic to handle race conditions when multiple processes try to create
+# the tiktoken cache file simultaneously (common in parallel test execution on Windows)
+_max_retries = 5
+_retry_delay = 0.1  # Start with 100ms
+
+for attempt in range(_max_retries):
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        break
+    except (FileExistsError, OSError):
+        if attempt == _max_retries - 1:
+            # Last attempt, re-raise the exception
+            raise
+        # Exponential backoff with jitter to reduce collision probability
+        delay = _retry_delay * (2**attempt) + random.uniform(0, 0.1)
+        time.sleep(delay)
+

@@ -169,12 +169,14 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
+GeminiImageAspectRatio = Literal[
+    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
+]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -207,17 +209,20 @@ class GenerationConfig(TypedDict, total=False):
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
+    response_json_schema: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    mediaResolution: str
     speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
     """Enum for Vertex AI tool field names."""
+
     GOOGLE_SEARCH = "googleSearch"
     GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
     ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
@@ -260,9 +265,12 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[
+        PromptTokensDetails
+    ]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -394,6 +402,8 @@ class Candidates(TypedDict, total=False):
         "BLOCKLIST",
         "PROHIBITED_CONTENT",
         "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
     ]
     safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata
@@ -552,11 +562,22 @@ class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
 
 
+class GeminiEmbedContentRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class GeminiEmbedContentResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
 # Vertex AI Batch Prediction
 
 
 class GcsSource(TypedDict):
-    uris: str
+    uris: List[str]
 
 
 class InputConfig(TypedDict):

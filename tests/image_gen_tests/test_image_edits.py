@@ -143,6 +143,23 @@ class TestOpenAIImageEditDallE2(BaseLLMImageEditTest):
         }
 
 
+class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
+    """
+    Concrete implementation of BaseLLMImageEditTest for Azure AI FLUX 2 image edits.
+    FLUX 2 uses JSON with base64 image instead of multipart/form-data.
+    """
+
+    def get_base_image_edit_call_args(self) -> dict:
+        """Return base call args for Azure AI FLUX 2 image edit"""
+        return {
+            "model": "azure_ai/flux.2-pro",
+            "image": SINGLE_TEST_IMAGE,
+            "api_base": "https://litellm-ci-cd-prod.services.ai.azure.com",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_version": "preview",
+        }
+
+
 @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_openai_image_edit_litellm_router():
@@ -322,14 +339,23 @@ async def test_openai_image_edit_cost_tracking():
     litellm.logging_callback_manager._reset_all_callbacks()
     litellm.callbacks = [test_custom_logger]
     
-    # Mock response for Azure image edit
+    # Mock response for Azure image edit with usage data for cost tracking
     mock_response = {
         "created": 1589478378,
         "data": [
             {
                 "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
             }
-        ]
+        ],
+        "usage": {
+            "total_tokens": 1100,
+            "input_tokens": 100,
+            "input_tokens_details": {
+                "image_tokens": 50,
+                "text_tokens": 50
+            },
+            "output_tokens": 1000
+        }
     }
 
     class MockResponse:
@@ -401,14 +427,23 @@ async def test_azure_image_edit_cost_tracking():
     litellm.logging_callback_manager._reset_all_callbacks()
     litellm.callbacks = [test_custom_logger]
     
-    # Mock response for Azure image edit
+    # Mock response for Azure image edit with usage data for cost tracking
     mock_response = {
         "created": 1589478378,
         "data": [
             {
                 "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
             }
-        ]
+        ],
+        "usage": {
+            "total_tokens": 1100,
+            "input_tokens": 100,
+            "input_tokens_details": {
+                "image_tokens": 50,
+                "text_tokens": 50
+            },
+            "output_tokens": 1000
+        }
     }
 
     class MockResponse:

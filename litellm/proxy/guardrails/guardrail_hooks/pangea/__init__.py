@@ -21,6 +21,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         pangea_output_recipe=litellm_params.pangea_output_recipe,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
     litellm.logging_callback_manager.add_litellm_callback(_pangea_callback)

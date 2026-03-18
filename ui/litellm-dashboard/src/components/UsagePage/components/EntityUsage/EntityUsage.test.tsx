@@ -20,6 +20,7 @@ vi.mock("../../../networking", () => ({
   organizationDailyActivityCall: vi.fn(),
   customerDailyActivityCall: vi.fn(),
   agentDailyActivityCall: vi.fn(),
+  userDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -36,8 +37,20 @@ vi.mock("./TopModelView", () => ({
   default: () => <div>Top Models</div>,
 }));
 
-vi.mock("./EntityUsageExport", () => ({
+vi.mock("../../../EntityUsageExport/EntityUsageExportModal", () => ({
+  default: () => <div>Entity Usage Export Modal</div>,
+}));
+
+vi.mock("../../../EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
+}));
+
+// Mock useTeams hook
+vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(() => ({
+    teams: [],
+    setTeams: vi.fn(),
+  })),
 }));
 
 describe("EntityUsage", () => {
@@ -46,6 +59,7 @@ describe("EntityUsage", () => {
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
+  const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -111,6 +125,208 @@ describe("EntityUsage", () => {
     },
   };
 
+  const mockAgentSpendData = {
+    results: [
+      {
+        date: "2025-01-01",
+        metrics: {
+          spend: 245.8,
+          api_requests: 3200,
+          successful_requests: 3100,
+          failed_requests: 100,
+          total_tokens: 1250000,
+          prompt_tokens: 850000,
+          completion_tokens: 400000,
+          cache_read_input_tokens: 50000,
+          cache_creation_input_tokens: 10000,
+        },
+        breakdown: {
+          entities: {
+            "agent-code-review": {
+              metrics: {
+                spend: 120.4,
+                api_requests: 1500,
+                successful_requests: 1450,
+                failed_requests: 50,
+                total_tokens: 620000,
+                prompt_tokens: 420000,
+                completion_tokens: 200000,
+                cache_read_input_tokens: 30000,
+                cache_creation_input_tokens: 5000,
+              },
+              metadata: { agent_name: "Code Review Agent" },
+              api_key_breakdown: {},
+            },
+            "agent-customer-support": {
+              metrics: {
+                spend: 85.2,
+                api_requests: 1200,
+                successful_requests: 1170,
+                failed_requests: 30,
+                total_tokens: 430000,
+                prompt_tokens: 290000,
+                completion_tokens: 140000,
+                cache_read_input_tokens: 15000,
+                cache_creation_input_tokens: 3000,
+              },
+              metadata: { agent_name: "Customer Support Agent" },
+              api_key_breakdown: {},
+            },
+            "agent-data-analyst": {
+              metrics: {
+                spend: 40.2,
+                api_requests: 500,
+                successful_requests: 480,
+                failed_requests: 20,
+                total_tokens: 200000,
+                prompt_tokens: 140000,
+                completion_tokens: 60000,
+                cache_read_input_tokens: 5000,
+                cache_creation_input_tokens: 2000,
+              },
+              metadata: { agent_name: "Data Analyst Agent" },
+              api_key_breakdown: {},
+            },
+          },
+          models: {
+            "gpt-4o": {
+              metrics: {
+                spend: 180.0,
+                api_requests: 2000,
+                successful_requests: 1950,
+                failed_requests: 50,
+                total_tokens: 900000,
+                prompt_tokens: 600000,
+                completion_tokens: 300000,
+                cache_read_input_tokens: 40000,
+                cache_creation_input_tokens: 8000,
+              },
+              metadata: {},
+              api_key_breakdown: {},
+            },
+            "claude-sonnet-4-20250514": {
+              metrics: {
+                spend: 65.8,
+                api_requests: 1200,
+                successful_requests: 1150,
+                failed_requests: 50,
+                total_tokens: 350000,
+                prompt_tokens: 250000,
+                completion_tokens: 100000,
+                cache_read_input_tokens: 10000,
+                cache_creation_input_tokens: 2000,
+              },
+              metadata: {},
+              api_key_breakdown: {},
+            },
+          },
+          api_keys: {},
+          providers: {
+            openai: {
+              metrics: {
+                spend: 180.0,
+                api_requests: 2000,
+                successful_requests: 1950,
+                failed_requests: 50,
+                total_tokens: 900000,
+                prompt_tokens: 600000,
+                completion_tokens: 300000,
+                cache_read_input_tokens: 40000,
+                cache_creation_input_tokens: 8000,
+              },
+            },
+            anthropic: {
+              metrics: {
+                spend: 65.8,
+                api_requests: 1200,
+                successful_requests: 1150,
+                failed_requests: 50,
+                total_tokens: 350000,
+                prompt_tokens: 250000,
+                completion_tokens: 100000,
+                cache_read_input_tokens: 10000,
+                cache_creation_input_tokens: 2000,
+              },
+            },
+          },
+        },
+      },
+      {
+        date: "2025-01-02",
+        metrics: {
+          spend: 198.5,
+          api_requests: 2800,
+          successful_requests: 2720,
+          failed_requests: 80,
+          total_tokens: 980000,
+          prompt_tokens: 670000,
+          completion_tokens: 310000,
+          cache_read_input_tokens: 42000,
+          cache_creation_input_tokens: 9000,
+        },
+        breakdown: {
+          entities: {
+            "agent-code-review": {
+              metrics: {
+                spend: 95.3,
+                api_requests: 1300,
+                successful_requests: 1270,
+                failed_requests: 30,
+                total_tokens: 510000,
+                prompt_tokens: 350000,
+                completion_tokens: 160000,
+                cache_read_input_tokens: 25000,
+                cache_creation_input_tokens: 4000,
+              },
+              metadata: { agent_name: "Code Review Agent" },
+              api_key_breakdown: {},
+            },
+            "agent-customer-support": {
+              metrics: {
+                spend: 68.7,
+                api_requests: 1000,
+                successful_requests: 970,
+                failed_requests: 30,
+                total_tokens: 320000,
+                prompt_tokens: 220000,
+                completion_tokens: 100000,
+                cache_read_input_tokens: 12000,
+                cache_creation_input_tokens: 3000,
+              },
+              metadata: { agent_name: "Customer Support Agent" },
+              api_key_breakdown: {},
+            },
+            "agent-data-analyst": {
+              metrics: {
+                spend: 34.5,
+                api_requests: 500,
+                successful_requests: 480,
+                failed_requests: 20,
+                total_tokens: 150000,
+                prompt_tokens: 100000,
+                completion_tokens: 50000,
+                cache_read_input_tokens: 5000,
+                cache_creation_input_tokens: 2000,
+              },
+              metadata: { agent_name: "Data Analyst Agent" },
+              api_key_breakdown: {},
+            },
+          },
+          models: {},
+          api_keys: {},
+          providers: {},
+        },
+      },
+    ],
+    metadata: {
+      total_spend: 444.3,
+      total_api_requests: 6000,
+      total_successful_requests: 5820,
+      total_failed_requests: 180,
+      total_tokens: 2230000,
+    },
+  };
+
   const defaultProps = {
     accessToken: "test-token",
     entityType: "tag" as const,
@@ -134,11 +350,13 @@ describe("EntityUsage", () => {
     mockOrganizationDailyActivityCall.mockClear();
     mockCustomerDailyActivityCall.mockClear();
     mockAgentDailyActivityCall.mockClear();
+    mockUserDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
-    mockAgentDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
+    mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -213,6 +431,21 @@ describe("EntityUsage", () => {
     });
 
     expect(screen.getByText("Agent Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$444.30");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with user entity type and call user API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="user" />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("User Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
@@ -351,6 +584,87 @@ describe("EntityUsage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Tag 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should display Agent Activity tab for team entity type", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Agent Activity")).toBeInTheDocument();
+  });
+
+  it("should not display Agent Activity tab for non-team entity types", async () => {
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
+  });
+
+  it("should display Top Agents Driving Spend card for team entity type", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Top Agents Driving Spend")).toBeInTheDocument();
+  });
+
+  it("should not display Top Agents Driving Spend card for non-team entity types", async () => {
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText("Top Agents Driving Spend")).not.toBeInTheDocument();
+  });
+
+  it("should fetch agent activity data when entity type is team", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockAgentDailyActivityCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        1,
+        null,
+      );
+    });
+  });
+
+  it("should not fetch agent activity data for non-team entity types", async () => {
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
+  });
+
+  it("should switch to Agent Activity tab for team entity type", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    const agentActivityTab = screen.getByText("Agent Activity");
+    act(() => {
+      fireEvent.click(agentActivityTab);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Activity Metrics").length).toBeGreaterThan(0);
     });
   });
 

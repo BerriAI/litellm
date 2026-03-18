@@ -16,7 +16,7 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Supported operations | Create image edits | Single and multiple images supported |
 | Supported LiteLLM SDK Versions | 1.63.8+ | Gemini support requires 1.79.3+ |
 | Supported LiteLLM Proxy Versions | 1.71.1+ | Gemini support requires 1.79.3+ |
-| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. |
+| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI**, **OpenRouter**, **Stability AI**, **AWS Bedrock (Stability)**, **Black Forest Labs** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. OpenRouter routes image edits through chat completions. Stability AI and Bedrock Stability support various image editing operations. Black Forest Labs supports FLUX Kontext models. |
 
  #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 
@@ -199,6 +199,63 @@ for idx, image_obj in enumerate(response.data):
 
 </TabItem>
 
+<TabItem value="bfl" label="Black Forest Labs">
+
+#### Basic Image Edit
+```python showLineNumbers title="Black Forest Labs Image Edit"
+import os
+import litellm
+
+os.environ["BFL_API_KEY"] = "your-api-key"
+
+response = litellm.image_edit(
+    model="black_forest_labs/flux-kontext-pro",
+    image=open("original_image.png", "rb"),
+    prompt="Add a green leaf to the scene",
+)
+
+print(response.data[0].url)
+```
+
+#### Inpainting with Mask
+```python showLineNumbers title="Black Forest Labs Inpainting"
+import os
+import litellm
+
+os.environ["BFL_API_KEY"] = "your-api-key"
+
+# Use flux-pro-1.0-fill for inpainting
+response = litellm.image_edit(
+    model="black_forest_labs/flux-pro-1.0-fill",
+    image=open("original_image.png", "rb"),
+    mask=open("mask_image.png", "rb"),
+    prompt="Replace with a garden",
+)
+
+print(response.data[0].url)
+```
+
+#### Outpainting (Expand)
+```python showLineNumbers title="Black Forest Labs Outpainting"
+import os
+import litellm
+
+os.environ["BFL_API_KEY"] = "your-api-key"
+
+# Use flux-pro-1.0-expand to extend image borders
+response = litellm.image_edit(
+    model="black_forest_labs/flux-pro-1.0-expand",
+    image=open("original_image.png", "rb"),
+    prompt="Continue the scene with mountains",
+    top=256,
+    bottom=256,
+)
+
+print(response.data[0].url)
+```
+
+</TabItem>
+
 <TabItem value="vertex_ai" label="Vertex AI">
 
 #### Basic Image Edit (Gemini)
@@ -239,6 +296,47 @@ response = litellm.image_edit(
     prompt="Turn this into watercolor style scenery",
     n=2,  # Number of variations
     size="1024x1024",
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="openrouter" label="OpenRouter">
+
+#### Basic Image Edit
+```python showLineNumbers title="OpenRouter Image Edit"
+import os
+from litellm import image_edit
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Add aurora borealis to the night sky",
+)
+
+print(response)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="OpenRouter Multiple Images Edit"
+import os
+from litellm import image_edit
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene",
+    size="1536x1024",   # mapped to aspect_ratio 3:2
+    quality="high",      # mapped to image_size 4K
 )
 
 print(response)
@@ -351,6 +449,35 @@ curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
 
 </TabItem>
 
+<TabItem value="bfl" label="Black Forest Labs">
+
+1. Add Black Forest Labs image edit models to your `config.yaml`:
+```yaml showLineNumbers title="Black Forest Labs Proxy Configuration"
+model_list:
+  - model_name: bfl-kontext-pro
+    litellm_params:
+      model: black_forest_labs/flux-kontext-pro
+      api_key: os.environ/BFL_API_KEY
+    model_info:
+      mode: image_edit
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request:
+```bash showLineNumbers title="Black Forest Labs Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=bfl-kontext-pro" \
+  -F "image=@original_image.png" \
+  -F "prompt=Add a sunset in the background"
+```
+
+</TabItem>
+
 <TabItem value="vertex_ai" label="Vertex AI">
 
 1. Add Vertex AI image edit models to your `config.yaml`:
@@ -395,6 +522,34 @@ curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
   -F "mask=@mask_image.png" \
   -F "prompt=Turn this into watercolor style scenery" \
   -F "n=2" \
+  -F "size=1024x1024"
+```
+
+</TabItem>
+
+<TabItem value="openrouter" label="OpenRouter">
+
+1. Add the OpenRouter image edit model to your `config.yaml`:
+```yaml showLineNumbers title="OpenRouter Proxy Configuration"
+model_list:
+  - model_name: openrouter-image-edit
+    litellm_params:
+      model: openrouter/google/gemini-2.5-flash-image
+      api_key: os.environ/OPENROUTER_API_KEY
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request:
+```bash showLineNumbers title="OpenRouter Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=openrouter-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Make the sky a vibrant purple sunset" \
   -F "size=1024x1024"
 ```
 
