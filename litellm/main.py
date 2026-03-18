@@ -3473,7 +3473,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "messages": messages,
                         "model_response": model_response,
                         "print_verbose": print_verbose,
-                        "optional_params": optional_params,
+                        "optional_params": optional_params or {},
                         "litellm_params": litellm_params,  # type: ignore
                         "logging_obj": logging,
                         "logger_fn": logger_fn,
@@ -3508,7 +3508,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "messages": messages,
                         "model_response": model_response,
                         "print_verbose": print_verbose,
-                        "optional_params": optional_params,
+                        "optional_params": optional_params or {},
                         "litellm_params": litellm_params,  # type: ignore
                         "logging_obj": logging,
                         "logger_fn": logger_fn,

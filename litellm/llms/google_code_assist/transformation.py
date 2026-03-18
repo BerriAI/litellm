@@ -2,7 +2,7 @@ import json
 import uuid
 import copy
 import httpx
-from typing import Any, List, Optional
+from typing import Any
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -48,36 +48,6 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
     - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection.
     - `stop_sequences` (List[str]): The set of character sequences that will stop output generation.
     """
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-    ) -> None:
-        super().__init__(
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-            top_p=top_p,
-            top_k=top_k,
-            stop_sequences=stop_sequences,
-        )
-
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        return super().get_supported_openai_params(model)
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        messages: list,
-    ) -> dict:
-        return super().map_openai_params(
-            non_default_params, optional_params, model, messages
-        )
 
     def transform_request(
         self,
@@ -127,12 +97,6 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         elif "include_thoughts" in base_params:
             generation_config["thinkingConfig"] = {
                 "includeThoughts": base_params.pop("include_thoughts")
-            }
-        elif "thinkingConfig" in optional_params:
-            generation_config["thinkingConfig"] = optional_params["thinkingConfig"]
-        elif "include_thoughts" in optional_params:
-            generation_config["thinkingConfig"] = {
-                "includeThoughts": optional_params["include_thoughts"]
             }
 
         if (

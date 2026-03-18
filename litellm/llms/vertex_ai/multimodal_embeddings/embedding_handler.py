@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Literal, Optional, Union
 
@@ -50,6 +51,25 @@ class VertexMultimodalEmbedding(VertexLLM):
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
+        if aembedding is True:
+            return self._async_multimodal_embedding_with_auth_resolution(  # type: ignore
+                model=model,
+                input=input,
+                model_response=model_response,
+                custom_llm_provider=custom_llm_provider,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
+            )
+
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -108,21 +128,6 @@ class VertexMultimodalEmbedding(VertexLLM):
             },
         )
 
-        if aembedding is True:
-            return self.async_multimodal_embedding(  # type: ignore
-                model=model,
-                api_base=url,
-                data=request_data,
-                timeout=timeout,
-                headers=headers,
-                client=client,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logging_obj=logging_obj,
-                api_key=api_key,
-            )
-
         response = sync_handler.post(
             url=url,
             headers=headers,
@@ -138,6 +143,87 @@ class VertexMultimodalEmbedding(VertexLLM):
             request_data=request_data,
             optional_params=optional_params,
             litellm_params=litellm_params,
+        )
+
+    async def _async_multimodal_embedding_with_auth_resolution(
+        self,
+        model: str,
+        input: Union[list, str],
+        model_response: EmbeddingResponse,
+        custom_llm_provider: Literal["gemini", "vertex_ai"],
+        optional_params: dict,
+        litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: dict,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        client: Optional[AsyncHTTPHandler],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+    ) -> EmbeddingResponse:
+        _auth_header, vertex_project = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+        gemini_auth_data = None
+        if custom_llm_provider == "gemini" and api_key is None:
+            from litellm.llms.gemini.common_utils import get_gemini_oauth_token
+
+            gemini_auth_data = await asyncio.to_thread(get_gemini_oauth_token)
+
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            auth_header=_auth_header,
+            gemini_api_key=api_key,
+            gemini_auth_data=gemini_auth_data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=None,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode="embedding",
+        )
+
+        request_data = vertex_multimodal_embedding_handler.transform_embedding_request(
+            model, input, optional_params, headers
+        )
+        request_headers = vertex_multimodal_embedding_handler.validate_environment(
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+            api_key=auth_header,
+            api_base=api_base,
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": request_headers,
+            },
+        )
+
+        return await self.async_multimodal_embedding(
+            model=model,
+            api_base=url,
+            data=request_data,
+            timeout=timeout,
+            headers=request_headers,
+            client=client,
+            model_response=model_response,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
         )
 
     async def async_multimodal_embedding(

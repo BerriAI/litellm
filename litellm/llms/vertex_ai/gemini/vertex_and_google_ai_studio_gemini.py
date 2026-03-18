@@ -2814,7 +2814,6 @@ class VertexLLM(VertexBase):
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
-            gemini_auth_data=None,
             auth_header=_auth_header,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
