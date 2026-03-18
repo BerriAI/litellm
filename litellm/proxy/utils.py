@@ -1729,6 +1729,9 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Remove before callbacks iterate — not serialisable
+        request_data.pop("litellm_logging_obj", None)
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: Optional[HTTPException] = None
 
@@ -1849,7 +1852,7 @@ class ProxyLogging:
             for k, v in request_data.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k != "model" and k != "user":
+                elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
             litellm_logging_obj.update_environment_variables(
@@ -1865,15 +1868,23 @@ class ProxyLogging:
             ):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                litellm_logging_obj.call_type = CallTypes.acompletion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                litellm_logging_obj.call_type = CallTypes.atext_completion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                litellm_logging_obj.call_type = CallTypes.aembedding.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.aembedding.value
+            # Pass-through endpoints are logged via the callback loop's
+            # async_post_call_failure_hook — skip pre_call and failure handlers.
+            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
+                return
+
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
