@@ -1969,3 +1969,199 @@ def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():
     assert metadata is not None
     assert metadata.get("user_api_key_hash") == "sk-hashed-empty-test"
     assert metadata.get("user_api_key_team_id") == "team-empty-test"
+
+
+def test_streaming_populates_hidden_params_in_metadata():
+    """
+    Regression test for LIT-1274: Streaming requests should populate hidden_params
+    in litellm_params.metadata for OTEL/callback integrations.
+
+    This test verifies that when streaming completes, the success_handler calls
+    _process_hidden_params_and_response_cost() which writes hidden_params to metadata.
+    """
+    import datetime
+    from unittest.mock import patch
+
+    # Create logging object with stream=True
+    logging_obj = _make_logging_obj(stream=True)
+
+    # Set up litellm_params with metadata
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {}
+    }
+
+    # Create a complete streaming response with hidden_params
+    complete_response = ModelResponse(
+        id="resp-1",
+        choices=[],
+        model="gpt-3.5-turbo",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    )
+    complete_response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "api_base": "https://api.openai.com",
+        "response_cost": 0.00015,
+        "litellm_call_id": "test-123"
+    }
+
+    start_time = datetime.datetime.now()
+    end_time = datetime.datetime.now()
+
+    with patch.object(
+        logging_obj,
+        "_process_hidden_params_and_response_cost",
+        wraps=logging_obj._process_hidden_params_and_response_cost,
+    ) as spy, patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
+        logging_obj.success_handler(
+            result=complete_response,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False
+        )
+        spy.assert_called_once()
+
+    # Assert that hidden_params was written to metadata
+    assert "litellm_params" in logging_obj.model_call_details
+    assert "metadata" in logging_obj.model_call_details["litellm_params"]
+    assert "hidden_params" in logging_obj.model_call_details["litellm_params"]["metadata"]
+    
+    # Verify the content of hidden_params
+    hidden_params = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    assert hidden_params["custom_llm_provider"] == "openai"
+    assert hidden_params["api_base"] == "https://api.openai.com"
+    assert "response_cost" in hidden_params
+    assert hidden_params["litellm_call_id"] == "test-123"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_populates_hidden_params_in_metadata():
+    """
+    Regression test for LIT-1274: Async streaming requests should populate hidden_params
+    in litellm_params.metadata for OTEL/callback integrations.
+
+    This test verifies that when async streaming completes, the async_success_handler calls
+    _process_hidden_params_and_response_cost() which writes hidden_params to metadata.
+    """
+    import datetime
+    from unittest.mock import patch
+
+    # Create logging object with stream=True
+    logging_obj = _make_logging_obj(stream=True)
+
+    # Set up litellm_params with metadata
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {},
+        "acompletion": True  # Mark as async
+    }
+
+    # Create a complete streaming response with hidden_params
+    complete_response = ModelResponse(
+        id="resp-1",
+        choices=[],
+        model="gpt-3.5-turbo",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    )
+    complete_response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "api_base": "https://api.openai.com",
+        "response_cost": 0.00015,
+        "litellm_call_id": "test-456"
+    }
+
+    start_time = datetime.datetime.now()
+    end_time = datetime.datetime.now()
+
+    with patch.object(
+        logging_obj,
+        "_process_hidden_params_and_response_cost",
+        wraps=logging_obj._process_hidden_params_and_response_cost,
+    ) as spy, patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
+        await logging_obj.async_success_handler(
+            result=complete_response,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False
+        )
+        spy.assert_called_once()
+
+    # Assert that hidden_params was written to metadata
+    assert "litellm_params" in logging_obj.model_call_details
+    assert "metadata" in logging_obj.model_call_details["litellm_params"]
+    assert "hidden_params" in logging_obj.model_call_details["litellm_params"]["metadata"]
+    
+    # Verify the content of hidden_params
+    hidden_params = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    assert hidden_params["custom_llm_provider"] == "openai"
+    assert hidden_params["api_base"] == "https://api.openai.com"
+    assert "response_cost" in hidden_params
+    assert hidden_params["litellm_call_id"] == "test-456"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_notfounderror_still_emits_span(monkeypatch):
+    """
+    If cost calculation raises NotFoundError for async streaming, we should still
+    build and emit the standard logging payload (span present, cost optional).
+    Addresses Harshit's review: OTEL/callbacks must not lose the span for unknown models.
+    """
+    from datetime import datetime
+    from unittest.mock import patch
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+
+    logging_obj = LiteLLMLoggingObj(
+        model="unknown/model",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="notfound-async-stream",
+        function_id="test-fn-id",
+    )
+
+    complete_streaming_response = ModelResponse(
+        id="cmpl-1",
+        model="unknown/model",
+        choices=[],
+        usage=None,
+    )
+    setattr(
+        complete_streaming_response,
+        "_hidden_params",
+        {"api_base": "https://api.example.com", "custom_llm_provider": "custom"},
+    )
+
+    monkeypatch.setattr(
+        logging_obj,
+        "_get_assembled_streaming_response",
+        lambda **_: complete_streaming_response,
+    )
+
+    def _raise_not_found(*_, **__):
+        raise litellm.NotFoundError(
+            "missing pricing for model", model="unknown/model", llm_provider="custom"
+        )
+
+    monkeypatch.setattr(logging_obj, "_response_cost_calculator", _raise_not_found)
+
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+    ) as mock_emit, patch.object(
+        logging_obj, "get_combined_callback_list", return_value=[]
+    ):
+        start_time = datetime.now()
+        end_time = datetime.now()
+
+        await logging_obj.async_success_handler(
+            result=complete_streaming_response,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+        )
+
+        mock_emit.assert_called_once()
+        payload = mock_emit.call_args[0][0]
+        assert payload is not None
+        assert logging_obj.model_call_details.get("response_cost") is None
