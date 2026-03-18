@@ -316,6 +316,8 @@ def _insert_user_continue_message(
                 i += 2
                 inserted_continue_message = True
             else:
+                # Safe to scan result_messages while mutating it because all
+                # previous inserts happened at positions >= i, never before j.
                 j = i - 1
                 while j >= 0:
                     previous_message = result_messages[j]
