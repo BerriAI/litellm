@@ -830,10 +830,14 @@ class TestAsyncPostCallStreamingIteratorHook:
         # All buffered chunks replayed when all tools are allowed (2 tool deltas + 1 finish)
         assert len(chunks) == 3
 
-        # First chunk has tool call header
+        # First chunk has tool call header with original empty arguments — not mutated
         assert chunks[0].choices[0].delta.tool_calls is not None
         assert chunks[0].choices[0].delta.tool_calls[0].id == "call_123"
         assert chunks[0].choices[0].delta.tool_calls[0].function.name == "safe_tool"
+        assert chunks[0].choices[0].delta.tool_calls[0].function.arguments == ""
+
+        # Second chunk has the arguments
+        assert chunks[1].choices[0].delta.tool_calls[0].function.arguments == '{"arg": "value"}'
 
         # Last chunk has finish_reason
         assert chunks[-1].choices[0].finish_reason == "tool_calls"

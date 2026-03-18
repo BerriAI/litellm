@@ -629,7 +629,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # First delta for this index: store full copy as base
             if delta_index not in accumulated_tool_calls:
-                accumulated_tool_calls[delta_index] = delta.model_copy()
+                accumulated_tool_calls[delta_index] = delta.model_copy(deep=True)
                 continue
 
             # Subsequent deltas: append arguments
@@ -783,6 +783,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             Exception: If the blocking service returns an empty response.
         """
         all_tool_calls = list(tool_calls_by_index.values())
+        if not all_tool_calls:
+            return None
         message_tool_calls = [
             ChatCompletionMessageToolCall(id=tc.id, type=tc.type or "function", function=tc.function)
             for tc in all_tool_calls
