@@ -181,7 +181,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                         system_scaffold = {"role": "system", "content": system_prompt_msg_list}
                         if isinstance(standard_logging_payload["messages"], list):
                             if not standard_logging_payload["messages"] or standard_logging_payload["messages"][0].get("role") != "system":
-                                standard_logging_payload["messages"].insert(0, system_scaffold)  # type: ignore[union-attr]
+                                standard_logging_payload["messages"] = [system_scaffold] + list(standard_logging_payload["messages"])  # type: ignore[union-attr]
                         elif isinstance(standard_logging_payload["messages"], (dict, str)):
                             standard_logging_payload["messages"] = [
                                 system_scaffold,
@@ -317,9 +317,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Accumulates tool call deltas as they stream, validates them with the blocking
         service, then yields filtered results with blocked tools removed.
 
-        If the tool blocking service is unavailable or returns an error, the original
-        stream is passed through unchanged (fail-open behavior). Any chunks consumed
-        before the error are yielded before passing through the remaining stream.
+        Each format-specific handler owns its own fail-open behavior: if the blocking
+        service is unavailable, buffered chunks are emitted unchanged.
         """
         response_format = self._detect_llm_response_format(request_data)
 
@@ -333,32 +332,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 yield chunk
             return
 
-        # Buffer chunks as they're consumed from the original stream so we can yield them if an error occurs
-        buffered_chunks: list[ModelResponseStream | bytes] = []
-
-        async def buffering_generator():
-            """Wrapper that buffers chunks as they're consumed."""
-            async for item in response:
-                buffered_chunks.append(item)
-                yield item
-
-        try:
-            async for chunk in handler(buffering_generator()):
-                yield chunk
-            # Handler completed successfully — clear the buffer
-            buffered_chunks.clear()
-        except Exception as e:
-            verbose_logger.error(
-                f"Streaming tool blocking failed: {e}. Passing through buffered and remaining chunks.",
-                exc_info=True,
-            )
-            # Yield any buffered chunks that were consumed but not yet yielded
-            for buffered_chunk in buffered_chunks:
-                yield buffered_chunk
-
-            # Pass through the remaining chunks from the original stream
-            async for chunk in response:
-                yield chunk
+        async for chunk in handler(response):
+            yield chunk
 
     @staticmethod
     def _detect_llm_response_format(request_data: dict[str, Any]) -> LLMResponseFormat:
@@ -426,7 +401,16 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 continue
 
             # Stream finished — validate buffered tool calls and replay
-            blocked = await self._get_allowed_tool_calls(accumulated_tool_calls)
+            try:
+                blocked = await self._get_allowed_tool_calls(accumulated_tool_calls)
+            except Exception as e:
+                verbose_logger.error(
+                    f"OpenAI tool blocking service failed: {e}. Emitting buffered chunks unchanged (fail-open).",
+                    exc_info=True,
+                )
+                for buffered_chunk in buffered_chunks:
+                    yield buffered_chunk
+                return
 
             if not blocked:
                 for buffered_chunk in buffered_chunks:
@@ -439,6 +423,16 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 blocked.explanation,
             ):
                 yield filtered_chunk
+            return
+
+        # Post-loop fail-open: stream ended without finish_reason while buffering tool calls
+        if buffered_chunks:
+            verbose_logger.warning(
+                "OpenAI stream ended while buffering tool calls without a finish_reason — "
+                "emitting buffered chunks unchanged (fail-open)"
+            )
+            for buffered_chunk in buffered_chunks:
+                yield buffered_chunk
 
     @staticmethod
     async def _replay_filtered_tool_chunks(
@@ -556,7 +550,18 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 continue
 
             # Stream complete - validate tools and emit filtered results
-            blocked_indices, explanation = await self._get_blocked_anthropic_tool_calls(accumulated_tools)
+            try:
+                blocked_indices, explanation = await self._get_blocked_anthropic_tool_calls(accumulated_tools)
+            except Exception as e:
+                verbose_logger.error(
+                    f"Anthropic tool blocking service failed: {e}. Emitting buffered chunks unchanged (fail-open).",
+                    exc_info=True,
+                )
+                for buffered_chunk in buffered_chunks:
+                    yield self._encode_anthropic_chunk_to_sse(buffered_chunk)
+                async for remaining_chunk in parsed_stream:
+                    yield self._encode_anthropic_chunk_to_sse(remaining_chunk)
+                return
 
             # Emit allowed chunks with sequential content block reindexing
             for buffered_chunk in buffered_chunks:
