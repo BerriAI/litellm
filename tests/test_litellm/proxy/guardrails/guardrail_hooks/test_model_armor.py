@@ -1801,8 +1801,8 @@ async def test_model_armor_post_call_skips_embedding_response():
 
 
 @pytest.mark.asyncio
-async def test_model_armor_post_call_skips_image_response():
-    """Post-call hook does NOT call Model Armor for ImageResponse (not text-scannable)."""
+async def test_model_armor_post_call_skips_image_response_no_revised_prompt():
+    """Post-call hook does NOT call Model Armor for ImageResponse with no revised_prompt."""
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     guardrail = ModelArmorGuardrail(
@@ -1815,9 +1815,53 @@ async def test_model_armor_post_call_skips_image_response():
     guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     with patch.object(guardrail.async_handler, "post", AsyncMock()) as mock_post:
+        # DALL-E 2 / url-only responses have no revised_prompt
         image_response = litellm.ImageResponse(
             created=1234567890,
             data=[{"url": "https://example.com/image.png"}],
+        )
+
+        request_data = {
+            "model": "dall-e-2",
+            "prompt": "a cat",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=image_response,
+        )
+
+        # No revised_prompt → nothing to scan → API must NOT be called
+        mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_armor_post_call_image_response_with_revised_prompt():
+    """Post-call hook DOES call Model Armor when ImageResponse contains revised_prompt."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
+        # DALL-E 3 returns a revised_prompt — this must be scanned post-call
+        image_response = litellm.ImageResponse(
+            created=1234567890,
+            data=[{"url": "https://example.com/image.png", "revised_prompt": "a fluffy cat sitting on a couch"}],
         )
 
         request_data = {
@@ -1832,8 +1876,11 @@ async def test_model_armor_post_call_skips_image_response():
             response=image_response,
         )
 
-        # Model Armor API must NOT have been called for a non-text response
-        mock_post.assert_not_called()
+        # revised_prompt is text → Model Armor MUST be called
+        mock_post.assert_called_once()
+        body = mock_post.call_args.kwargs.get("json", {})
+        assert "modelResponseData" in body
+        assert "a fluffy cat sitting on a couch" in body["modelResponseData"]["text"]
 
 
 @pytest.mark.asyncio
