@@ -155,7 +155,7 @@ def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
-def get_gemini_oauth_token() -> Optional[dict]:
+def get_gemini_oauth_token() -> Optional[dict]:  # noqa: PLR0915
     """
     Returns the Gemini OAuth token and metadata.
     Check:
@@ -166,7 +166,25 @@ def get_gemini_oauth_token() -> Optional[dict]:
     5. ~/.config/gcloud/application_default_credentials.json (Standard ADC)
     """
     import json
+    import time
     from pathlib import Path
+
+    def _is_expired(creds_data: dict) -> bool:
+        expires_at = creds_data.get("expires_at")
+        if isinstance(expires_at, (int, float)):
+            return expires_at <= (time.time() + 60)
+
+        expiry = creds_data.get("expiry") or creds_data.get("expires_on")
+        if isinstance(expiry, str):
+            try:
+                expires_dt = datetime.datetime.fromisoformat(
+                    expiry.replace("Z", "+00:00")
+                )
+                return expires_dt.timestamp() <= (time.time() + 60)
+            except Exception:
+                return False
+
+        return False
 
     # 1. Check GEMINI_OAUTH_TOKEN
     token = get_secret_str("GEMINI_OAUTH_TOKEN")
@@ -218,6 +236,13 @@ def get_gemini_oauth_token() -> Optional[dict]:
                     # Fallback to manual reading
                     with open(creds_path, "r") as f:
                         creds_data = json.load(f)
+                        if _is_expired(creds_data):
+                            verbose_logger.warning(
+                                "Gemini OAuth token appears expired in %s. "
+                                "Run `litellm-proxy gemini login` to refresh credentials.",
+                                creds_path,
+                            )
+                            continue
                         token = creds_data.get("access_token")
                         if not token and "token" in creds_data:
                             token = creds_data["token"].get("accessToken")

@@ -3437,34 +3437,37 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
             new_params = safe_deep_copy(optional_params or {})
-            try:
-                response = vertex_chat_completion.completion(  # type: ignore
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=new_params,
-                    litellm_params=litellm_params,  # type: ignore
-                    logger_fn=logger_fn,
-                    encoding=_get_encoding(),
-                    vertex_location=vertex_ai_location,
-                    vertex_project=vertex_ai_project,
-                    vertex_credentials=vertex_credentials,
-                    gemini_api_key=gemini_api_key,
-                    logging_obj=logging,
-                    acompletion=acompletion,
-                    timeout=timeout,
-                    custom_llm_provider=custom_llm_provider,  # type: ignore
-                    client=client,
-                    api_base=api_base,
-                    extra_headers=headers,
-                )
-            except Exception as e:
-                # Fallback to google_code_assist if scope is insufficient
-                if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(e):
-                    google_code_assist_chat = GoogleCodeAssistChat()
-                    if acompletion is True:
-                        response = google_code_assist_chat.acompletion(
+            if acompletion is True:
+                google_code_assist_chat = GoogleCodeAssistChat()
+
+                async def _gemini_acompletion_with_fallback():
+                    try:
+                        return await vertex_chat_completion.completion(  # type: ignore
+                            model=model,
+                            messages=messages,
+                            model_response=model_response,
+                            print_verbose=print_verbose,
+                            optional_params=new_params,
+                            litellm_params=litellm_params,  # type: ignore
+                            logger_fn=logger_fn,
+                            encoding=_get_encoding(),
+                            vertex_location=vertex_ai_location,
+                            vertex_project=vertex_ai_project,
+                            vertex_credentials=vertex_credentials,
+                            gemini_api_key=gemini_api_key,
+                            logging_obj=logging,
+                            acompletion=True,
+                            timeout=timeout,
+                            custom_llm_provider=custom_llm_provider,  # type: ignore
+                            client=client,
+                            api_base=api_base,
+                            extra_headers=headers,
+                        )
+                    except Exception as e:
+                        if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" not in str(e):
+                            raise e
+
+                        return await google_code_assist_chat.acompletion(
                             model=model,
                             messages=messages,
                             model_response=model_response,
@@ -3474,7 +3477,35 @@ def completion(  # type: ignore # noqa: PLR0915
                             logging_obj=logging,
                             logger_fn=logger_fn,
                         )
-                    else:
+
+                response = _gemini_acompletion_with_fallback()
+            else:
+                try:
+                    response = vertex_chat_completion.completion(  # type: ignore
+                        model=model,
+                        messages=messages,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        optional_params=new_params,
+                        litellm_params=litellm_params,  # type: ignore
+                        logger_fn=logger_fn,
+                        encoding=_get_encoding(),
+                        vertex_location=vertex_ai_location,
+                        vertex_project=vertex_ai_project,
+                        vertex_credentials=vertex_credentials,
+                        gemini_api_key=gemini_api_key,
+                        logging_obj=logging,
+                        acompletion=False,
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,  # type: ignore
+                        client=client,
+                        api_base=api_base,
+                        extra_headers=headers,
+                    )
+                except Exception as e:
+                    # Fallback to google_code_assist if scope is insufficient
+                    if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(e):
+                        google_code_assist_chat = GoogleCodeAssistChat()
                         response = google_code_assist_chat.completion(
                             model=model,
                             messages=messages,
@@ -3485,8 +3516,8 @@ def completion(  # type: ignore # noqa: PLR0915
                             logging_obj=logging,
                             logger_fn=logger_fn,
                         )
-                else:
-                    raise e
+                    else:
+                        raise e
 
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (

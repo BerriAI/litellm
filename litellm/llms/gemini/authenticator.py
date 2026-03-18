@@ -12,11 +12,8 @@ from typing import Any, Dict
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
 
-# OAuth client credentials for Gemini login flow.
-# These must be provided via env vars to avoid storing credentials in source.
-GEMINI_CLIENT_ID = os.getenv("GEMINI_OAUTH_CLIENT_ID")
-GEMINI_CLIENT_SECRET = os.getenv("GEMINI_OAUTH_CLIENT_SECRET")
 GEMINI_SCOPES = [
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -45,12 +42,15 @@ class GeminiAuthenticator:
 
     @staticmethod
     def _get_oauth_client_credentials() -> tuple[str, str]:
-        if not GEMINI_CLIENT_ID or not GEMINI_CLIENT_SECRET:
+        client_id = get_secret_str("GEMINI_OAUTH_CLIENT_ID")
+        client_secret = get_secret_str("GEMINI_OAUTH_CLIENT_SECRET")
+
+        if not client_id or not client_secret:
             raise ValueError(
                 "Missing Gemini OAuth client credentials. "
                 "Set GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET."
             )
-        return GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET
+        return client_id, client_secret
 
     def get_token(self) -> str:
         """

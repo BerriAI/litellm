@@ -395,9 +395,13 @@ class VertexBase:
                     )
                 url = "{}/models/{}:{}".format(api_base, model, endpoint)
 
-                from litellm.llms.gemini.common_utils import get_gemini_oauth_token
+                gemini_auth_data = None
+                if gemini_api_key is None:
+                    from litellm.llms.gemini.common_utils import (
+                        get_gemini_oauth_token,
+                    )
 
-                gemini_auth_data = get_gemini_oauth_token()
+                    gemini_auth_data = get_gemini_oauth_token()
                 gemini_oauth_token = (
                     gemini_auth_data.get("token") if gemini_auth_data else None
                 )
@@ -467,9 +471,11 @@ class VertexBase:
         """
         version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
-            from litellm.llms.gemini.common_utils import get_gemini_oauth_token
+            gemini_auth_data = None
+            if gemini_api_key is None:
+                from litellm.llms.gemini.common_utils import get_gemini_oauth_token
 
-            gemini_auth_data = get_gemini_oauth_token()
+                gemini_auth_data = get_gemini_oauth_token()
             gemini_oauth_token = (
                 gemini_auth_data.get("token") if gemini_auth_data else None
             )
