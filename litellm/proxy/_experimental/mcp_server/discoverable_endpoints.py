@@ -424,6 +424,26 @@ async def callback(code: str, state: str):
 
         # Forward to client's callback endpoint
         complete_returned_url = f"{base_url}?{urlencode(params)}"
+        scheme = urlparse(complete_returned_url).scheme.lower()
+        if scheme not in ("http", "https", ""):
+            if not all(c.isalnum() or c == "-" for c in scheme):
+                return HTMLResponse(
+                    "<html><body>Invalid redirect scheme. You can close this window.</body></html>",
+                    status_code=400,
+                )
+            escaped = complete_returned_url.replace("\\", "%5C").replace('"', "%22").replace("'", "%27").replace("\n", "").replace("\r", "")
+            return HTMLResponse(content=f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head><meta charset="UTF-8"><title>Authorization Successful</title></head>
+                                <body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+                                <div style="text-align:center">
+                                <p>Authorization successful. Redirecting back to your application…</p>
+                                <a href="{escaped}" style="color:#3794ff">Click here if not redirected automatically.</a>
+                                </div>
+                                <script>window.location.replace("{escaped}");</script>
+                                </body>
+                                </html>""", status_code=200)
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
     except Exception:
