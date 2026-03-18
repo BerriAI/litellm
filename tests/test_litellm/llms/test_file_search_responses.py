@@ -345,6 +345,24 @@ class TestManagedFilesVectorStoreAccess:
         )
         assert result == [unified_id]
 
+    def _make_vs_row(self, vector_store_id: str, team_id: Optional[str]) -> Any:
+        """Build a row compatible with get_managed_vector_store_rows_by_uuids (Prisma model_dump)."""
+        from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable
+
+        return LiteLLM_ManagedVectorStoresTable(
+            vector_store_id=vector_store_id,
+            custom_llm_provider="openai",
+            vector_store_name=None,
+            vector_store_description=None,
+            vector_store_metadata=None,
+            created_at=None,
+            updated_at=None,
+            litellm_credential_name=None,
+            litellm_params=None,
+            team_id=team_id,
+            user_id=None,
+        )
+
     @pytest.mark.asyncio
     async def test_F3_wrong_team_raises_403(self):
         from fastapi import HTTPException
@@ -352,18 +370,17 @@ class TestManagedFilesVectorStoreAccess:
         hook = self._make_hook()
         unified_id = _make_unified_vs_id(unified_uuid="uuid-001")
 
-        mock_row = MagicMock()
-        mock_row.vector_store_id = "uuid-001"
-        mock_row.team_id = "team-other"
+        mock_row = self._make_vs_row(vector_store_id="uuid-001", team_id="team-other")
 
-        mock_db = MagicMock()
-        mock_db.litellm_managedvectorstorestable.find_many = AsyncMock(
-            return_value=[mock_row]
-        )
+        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
+            return [mock_row]
 
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(db=mock_db),
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+            side_effect=mock_get_rows,
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await hook.check_vector_store_ids_access(
@@ -377,20 +394,18 @@ class TestManagedFilesVectorStoreAccess:
         hook = self._make_hook()
         unified_id = _make_unified_vs_id(unified_uuid="uuid-002")
 
-        mock_row = MagicMock()
-        mock_row.vector_store_id = "uuid-002"
-        mock_row.team_id = None  # legacy: no team restriction
+        mock_row = self._make_vs_row(vector_store_id="uuid-002", team_id=None)
 
-        mock_db = MagicMock()
-        mock_db.litellm_managedvectorstorestable.find_many = AsyncMock(
-            return_value=[mock_row]
-        )
+        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
+            return [mock_row]
 
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(db=mock_db),
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+            side_effect=mock_get_rows,
         ):
-            # Should not raise
             await hook.check_vector_store_ids_access(
                 [unified_id], self._make_user(team_id="team-caller")
             )
@@ -404,24 +419,25 @@ class TestManagedFilesVectorStoreAccess:
             for i in range(3)
         ]
 
-        rows = []
-        for i in range(3):
-            r = MagicMock()
-            r.vector_store_id = f"uuid-{i}"
-            r.team_id = "team-abc"
-            rows.append(r)
+        rows = [
+            self._make_vs_row(vector_store_id=f"uuid-{i}", team_id="team-abc")
+            for i in range(3)
+        ]
 
-        mock_db = MagicMock()
-        find_many_mock = AsyncMock(return_value=rows)
-        mock_db.litellm_managedvectorstorestable.find_many = find_many_mock
+        get_rows_mock = AsyncMock(return_value=rows)
 
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(db=mock_db),
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+            get_rows_mock,
         ):
             await hook.check_vector_store_ids_access(ids, self._make_user("team-abc"))
 
-        find_many_mock.assert_called_once()
+        get_rows_mock.assert_called_once()
+        call_args = get_rows_mock.call_args
+        assert set(call_args.kwargs["uuids"] or call_args.args[0]) == {"uuid-0", "uuid-1", "uuid-2"}
 
     @pytest.mark.asyncio
     async def test_F6_non_responses_call_type_skipped(self):
@@ -816,3 +832,61 @@ class TestEmulatedFileSearchHandler:
 
         tools = [{"type": "file_search", "vector_store_ids": ["vs_abc"]}]
         assert should_use_emulated_file_search(tools, None) is True
+
+    @pytest.mark.asyncio
+    async def test_H15_sub_calls_carry_internal_call_flag(self):
+        """Both internal aresponses sub-calls receive _is_litellm_internal_call=True.
+
+        This ensures wrapper_async skips success/failure callbacks for sub-calls so
+        billing fires exactly once (on the outer call) with the synthesized result.
+        """
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = self._make_mock_responses_api_response(include_function_call=True)
+        final_resp = self._make_mock_responses_api_response(text="answer")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-h15"
+        search_result.filename = "h15.pdf"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        captured_kwargs: list = []
+
+        async def _capture(*args, **kwargs):
+            captured_kwargs.append(dict(kwargs))
+            return captured_kwargs.__len__() == 1 and first_resp or final_resp
+
+        with patch(
+            "litellm.responses.file_search.emulated_handler._call_aresponses",
+            new=AsyncMock(side_effect=[first_resp, final_resp]),
+        ) as mock_call, patch(
+            "litellm.vector_stores.main.asearch",
+            new=AsyncMock(return_value=mock_search_response),
+        ):
+            # Intercept kwargs before the mock returns
+            original_side_effect = [first_resp, final_resp]
+            call_kwargs: list = []
+
+            async def _intercept(**kwargs):  # type: ignore[misc]
+                call_kwargs.append(dict(kwargs))
+                return original_side_effect.pop(0)
+
+            mock_call.side_effect = _intercept
+
+            await aresponses_with_emulated_file_search(
+                input="What is H15?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_h15"]}],
+            )
+
+        assert len(call_kwargs) == 2, "Expected exactly 2 sub-calls"
+        for i, kw in enumerate(call_kwargs):
+            assert kw.get("_is_litellm_internal_call") is True, (
+                f"Sub-call {i} must carry _is_litellm_internal_call=True to suppress "
+                "billing callbacks in wrapper_async"
+            )
