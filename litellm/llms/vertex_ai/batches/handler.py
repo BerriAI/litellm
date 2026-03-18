@@ -418,8 +418,6 @@ class VertexAIBatchPrediction(VertexLLM):
 
         if api_base.endswith(":cancel"):
             retrieve_api_base = api_base.removesuffix(":cancel")
-        elif api_base == cancel_api_base_default:
-            retrieve_api_base = retrieve_api_base_default
         else:
             retrieve_api_base = api_base.rsplit(":cancel", 1)[0].rstrip("/")
 
@@ -455,19 +453,17 @@ class VertexAIBatchPrediction(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        try:
-            retrieve_response = sync_handler.get(
-                url=retrieve_api_base,
-                headers=headers,
-            )
-        except httpx.HTTPStatusError as e:
+        # HTTPHandler.get() does not accept a timeout parameter
+        retrieve_response = sync_handler.get(
+            url=retrieve_api_base,
+            headers=headers,
+        )
+        if retrieve_response.status_code != 200:
             litellm.verbose_logger.error(
                 "Vertex AI batch retrieve-after-cancel failed: status=%s, body=%s",
-                e.response.status_code,
-                e.response.text[:1000],
+                retrieve_response.status_code,
+                retrieve_response.text[:1000],
             )
-            raise
-        if retrieve_response.status_code != 200:
             raise Exception(
                 f"Error: {retrieve_response.status_code} {retrieve_response.text}"
             )
@@ -505,19 +501,17 @@ class VertexAIBatchPrediction(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        try:
-            retrieve_response = await client.get(
-                url=retrieve_api_base,
-                headers=headers,
-            )
-        except httpx.HTTPStatusError as e:
+        # AsyncHTTPHandler.get() does not accept a timeout parameter
+        retrieve_response = await client.get(
+            url=retrieve_api_base,
+            headers=headers,
+        )
+        if retrieve_response.status_code != 200:
             litellm.verbose_logger.error(
                 "Vertex AI batch retrieve-after-cancel failed: status=%s, body=%s",
-                e.response.status_code,
-                e.response.text[:1000],
+                retrieve_response.status_code,
+                retrieve_response.text[:1000],
             )
-            raise
-        if retrieve_response.status_code != 200:
             raise Exception(
                 f"Error: {retrieve_response.status_code} {retrieve_response.text}"
             )
