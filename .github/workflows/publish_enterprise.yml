@@ -19,6 +19,7 @@ jobs:
     if: github.repository == 'BerriAI/litellm'
     permissions:
       contents: write
+      pull-requests: write
     defaults:
       run:
         working-directory: enterprise
@@ -56,14 +57,33 @@ jobs:
       - name: Build
         run: poetry build
 
-      - name: Commit version bump
+      - name: Commit version bump and create PR
+        id: create-pr
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cd ..
+          BRANCH="bump/enterprise-${{ steps.bump.outputs.new }}"
+          git checkout -b "$BRANCH"
           git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
           git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
-          git push
+          git push origin "$BRANCH" --force
+          gh pr create \
+            --title "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}" \
+            --body "Version bump for litellm-enterprise. Merge to update main." \
+            --head "$BRANCH" \
+            --base main \
+          || true
+          PR_URL=$(gh pr list --head "$BRANCH" --json url -q '.[0].url')
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Enable auto-merge
+        run: |
+          gh pr merge "${{ steps.create-pr.outputs.pr_url }}" --auto --squash
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Publish to PyPI
         env:

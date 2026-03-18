@@ -1,5 +1,6 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -23,6 +24,7 @@ import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings"
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
+import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -49,11 +51,24 @@ import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
+/**
+ * Interface for pre-filling the create key form from URL parameters
+ */
+export interface CreateKeyPrefillData {
+  owned_by?: "you" | "service_account" | "another_user";
+  team_id?: string;
+  key_alias?: string;
+  models?: string[];
+  key_type?: "default" | "llm_api" | "management";
+}
+
 interface CreateKeyProps {
   team: Team | null;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
+  autoOpenCreate?: boolean;
+  prefillData?: CreateKeyPrefillData;
 }
 
 interface User {
@@ -144,12 +159,14 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -159,11 +176,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+  const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
@@ -192,6 +212,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
     setSelectedAgentId(null);
+    setSelectedOrganizationId(null);
     setSelectedProjectId(null);
   };
 
@@ -209,6 +230,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
     setSelectedAgentId(null);
+    setSelectedOrganizationId(null);
     setSelectedProjectId(null);
   };
 
@@ -283,6 +305,55 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
     fetchPossibleRoles();
   }, [accessToken]);
+
+  // Auto-open modal and prefill form from URL params (deep link).
+  // Guarded by write access so we don't open for read-only users.
+  useEffect(() => {
+    if (autoOpenCreate && !hasPrefilled && teams && userRole && rolesWithWriteAccess.includes(userRole)) {
+      // Open the modal
+      setIsModalVisible(true);
+      setHasPrefilled(true);
+
+      // Apply prefill data if provided
+      if (prefillData) {
+        // Set key owner (owned_by) - validate that "another_user" is only allowed for Admin
+        if (prefillData.owned_by) {
+          if (prefillData.owned_by === "another_user" && userRole !== "Admin") {
+            // Ignore invalid owned_by for non-admin users, fall back to default
+            setKeyOwner("you");
+          } else {
+            setKeyOwner(prefillData.owned_by);
+          }
+        }
+
+        // Set team - find the team by ID and set it (only if team exists in user's teams)
+        if (prefillData.team_id) {
+          const selectedTeam = teams?.find((t) => t.team_id === prefillData.team_id) || null;
+          if (selectedTeam) {
+            setSelectedCreateKeyTeam(selectedTeam);
+            form.setFieldsValue({ team_id: prefillData.team_id });
+          }
+          // Silently ignore invalid team_id - don't prefill with a team user doesn't have access to
+        }
+
+        // Set key alias
+        if (prefillData.key_alias) {
+          form.setFieldsValue({ key_alias: prefillData.key_alias });
+        }
+
+        // Defer model selection until we load the allowed model list.
+        if (prefillData.models && prefillData.models.length > 0) {
+          setPendingPrefillModels(prefillData.models);
+        }
+
+        // Set key type
+        if (prefillData.key_type) {
+          setKeyType(prefillData.key_type);
+          form.setFieldsValue({ key_type: prefillData.key_type });
+        }
+      }
+    }
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
 
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
@@ -477,6 +548,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
+  // Fetch available models when team or auth changes.
+  // Note: Model prefill from URL params is handled by the useEffect below, which
+  // watches for pendingPrefillModels + modelsToPick to both be populated.
   useEffect(() => {
     if (selectedProjectId) {
       // When a project is selected, use the project's models
@@ -492,9 +566,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         setModelsToPick(allModels);
       });
     }
-    form.setFieldValue("models", []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole]);
+    // Only clear models if we don't have pending prefill models
+    if (!pendingPrefillModels) {
+      form.setFieldValue("models", []);
+    }
+    // Clear MCP server selection when team changes (available servers may differ)
+    form.setFieldValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
+  }, [selectedCreateKeyTeam, selectedProjectId, accessToken, userID, userRole, form]);
+
+  // Apply deferred model prefill once the available model list arrives.
+  // This handles timing where prefill data arrives before or after models are fetched.
+  useEffect(() => {
+    if (!pendingPrefillModels || pendingPrefillModels.length === 0) {
+      return;
+    }
+    if (!modelsToPick || modelsToPick.length === 0) {
+      return;
+    }
+
+    const validModels = pendingPrefillModels.filter((model) => modelsToPick.includes(model));
+    if (validModels.length > 0) {
+      form.setFieldsValue({ models: validModels });
+    }
+    setPendingPrefillModels(null);
+  }, [pendingPrefillModels, modelsToPick, form]);
 
   // Sync team when project is selected but teams loaded later (race condition)
   useEffect(() => {
@@ -667,6 +762,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
             <Form.Item
               label={
                 <span>
+                  Organization{" "}
+                  <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+              name="organization_id"
+              className="mt-4"
+            >
+              <OrganizationDropdown
+                organizations={organizations}
+                loading={isOrganizationsLoading}
+                disabled={userRole !== "Admin"}
+                onChange={(orgId) => {
+                  setSelectedOrganizationId(orgId || null);
+                  // Clear team and project when org changes
+                  setSelectedCreateKeyTeam(null);
+                  setSelectedProjectId(null);
+                  form.setFieldValue("team_id", undefined);
+                  form.setFieldValue("project_id", undefined);
+                }}
+              />
+            </Form.Item>
+            <Form.Item
+              label={
+                <span>
                   Team{" "}
                   <Tooltip title="The team this key belongs to, which determines available models and budget limits">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
@@ -685,7 +806,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown
-                teams={teams}
+                teams={selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams}
                 disabled={selectedProjectId !== null}
                 loading={!teams}
                 onChange={(teamId) => {
@@ -693,6 +814,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   setSelectedCreateKeyTeam(selectedTeam);
                   setSelectedProjectId(null);
                   form.setFieldValue("project_id", undefined);
+                  // Auto-populate org from team for non-admin users
+                  if (selectedTeam?.organization_id) {
+                    setSelectedOrganizationId(selectedTeam.organization_id);
+                    form.setFieldValue("organization_id", selectedTeam.organization_id);
+                  } else if (!teamId) {
+                    setSelectedOrganizationId(null);
+                    form.setFieldValue("organization_id", undefined);
+                  }
                 }}
               />
             </Form.Item>
@@ -1237,6 +1366,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
                           value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                           accessToken={accessToken}
+                          teamId={selectedCreateKeyTeam?.team_id ?? null}
                           placeholder="Select MCP servers or access groups (optional)"
                         />
                       </Form.Item>
@@ -1442,6 +1572,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         excludedFields={[
                           "key_alias",
                           "team_id",
+                          "organization_id",
                           "models",
                           "duration",
                           "metadata",
@@ -1451,6 +1582,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           "budget_duration",
                           "tpm_limit",
                           "rpm_limit",
+                          ...(disableCustomApiKeys ? ["key"] : []),
                         ]}
                       />
                     </AccordionBody>

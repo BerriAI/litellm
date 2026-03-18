@@ -1,4 +1,5 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
@@ -13,6 +14,7 @@ import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -96,9 +98,12 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
+  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -264,6 +269,10 @@ export function KeyEditView({
         }
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
+
+      if (neverExpire) {
+        values.duration = null;
+      }
 
       await onSubmit(values);
     } finally {
@@ -606,6 +615,28 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item
+        label={
+          <span>
+            Organization{" "}
+            <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="organization_id"
+      >
+        <OrganizationDropdown
+          organizations={organizations}
+          loading={isOrganizationsLoading}
+          disabled={userRole !== "Admin"}
+          onChange={(orgId) => {
+            setSelectedOrganizationId(orgId || null);
+            form.setFieldValue("team_id", undefined);
+          }}
+        />
+      </Form.Item>
+
+      <Form.Item
         label="Team ID"
         name="team_id"
         help={enableProjectsUI && hasProject ? "Team is locked because this key belongs to a project" : undefined}
@@ -615,13 +646,29 @@ export function KeyEditView({
           showSearch
           disabled={enableProjectsUI && hasProject}
           style={{ width: "100%" }}
+          onChange={(teamId) => {
+            const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
+            if (selectedTeam?.organization_id) {
+              setSelectedOrganizationId(selectedTeam.organization_id);
+              form.setFieldValue("organization_id", selectedTeam.organization_id);
+            } else if (!teamId) {
+              setSelectedOrganizationId(null);
+              form.setFieldValue("organization_id", undefined);
+            }
+          }}
           filterOption={(input, option) => {
-            const team = teams?.find((t) => t.team_id === option?.value);
+            const filteredTeams = selectedOrganizationId
+              ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
+              : teams;
+            const team = filteredTeams?.find((t) => t.team_id === option?.value);
             if (!team) return false;
             return team.team_alias?.toLowerCase().includes(input.toLowerCase()) ?? false;
           }}
         >
-          {teams?.map((team) => (
+          {(selectedOrganizationId
+            ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
+            : teams
+          )?.map((team) => (
             <Select.Option key={team.team_id} value={team.team_id}>
               {`${team.team_alias} (${team.team_id})`}
             </Select.Option>
@@ -660,6 +707,8 @@ export function KeyEditView({
           onAutoRotationChange={setAutoRotationEnabled}
           rotationInterval={rotationInterval}
           onRotationIntervalChange={setRotationInterval}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
         />
         <Form.Item name="duration" hidden initialValue="">
           <Input />

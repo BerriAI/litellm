@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 import traceback
-from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
+    ImageURLListItem,
     OpenAIModerationResponse,
 )
 from litellm.types.utils import (
@@ -26,13 +27,13 @@ from litellm.types.utils import (
     Function,
     HiddenParams,
     ImageResponse,
-    PromptTokensDetailsWrapper,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     RerankResponse,
     StreamingChoices,
     TextChoices,
@@ -50,6 +51,24 @@ _CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {
     "usage"
 }
+
+
+def _normalize_images_for_message(
+    images: Optional[List[dict]],
+) -> Optional[List[ImageURLListItem]]:
+    """
+    Ensure each image has an 'index' field, as required by ImageURLListItem.
+    Some providers (e.g. OpenRouter) return images without index.
+    """
+    if not images:
+        return cast(Optional[List[ImageURLListItem]], images)
+    normalized: List[ImageURLListItem] = []
+    for i, img in enumerate(images):
+        if isinstance(img, dict) and "index" not in img:
+            normalized.append(cast(ImageURLListItem, {**img, "index": i}))
+        else:
+            normalized.append(cast(ImageURLListItem, img))
+    return normalized
 
 
 def _safe_convert_created_field(created_value) -> int:
@@ -452,7 +471,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     if hidden_params is None:
         hidden_params = {}
-    
+
     # Preserve existing additional_headers if they contain important provider headers
     # For responses API, additional_headers may already be set with LLM provider headers
     existing_additional_headers = hidden_params.get("additional_headers", {})
@@ -463,7 +482,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
         # Merge new headers with existing ones
         if existing_additional_headers:
             additional_headers.update(existing_additional_headers)
-    
+
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
@@ -577,9 +596,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -591,7 +610,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         annotations=choice["message"].get("annotations", None),
-                        images=choice["message"].get("images", None),
+                        images=_normalize_images_for_message(
+                            choice["message"].get("images", None)
+                        ),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
@@ -633,7 +654,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if "id" in response_object:
                 # Preserve the auto-generated id from ModelResponse.__init__
                 # when the provider returns a falsy id (None, "")
-                model_response_object.id = response_object["id"] or model_response_object.id
+                model_response_object.id = (
+                    response_object["id"] or model_response_object.id
+                )
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
@@ -764,7 +787,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = response_object["_audio_transcription_duration"]
+                model_response_object._hidden_params[
+                    "audio_transcription_duration"
+                ] = response_object["_audio_transcription_duration"]
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
