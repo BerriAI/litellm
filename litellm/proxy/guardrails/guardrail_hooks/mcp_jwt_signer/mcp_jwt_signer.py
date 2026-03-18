@@ -293,8 +293,9 @@ class MCPJWTSigner(CustomGuardrail):
         self.token_introspection_endpoint: Optional[str] = token_introspection_endpoint
         self.verify_issuer: Optional[str] = verify_issuer
         self.verify_audience: Optional[str] = verify_audience
-        # Cached OIDC discovery document (fetched lazily on first use)
+        # Cached OIDC discovery document (fetched lazily, TTL = 24 h)
         self._oidc_discovery_doc: Optional[Dict[str, Any]] = None
+        self._oidc_discovery_fetched_at: float = 0.0
 
         # --- FR-12: End-user identity mapping ---
         # Default chain: try incoming JWT sub, fall back to litellm user_id
@@ -383,17 +384,23 @@ class MCPJWTSigner(CustomGuardrail):
     # FR-5: Verify + re-sign helpers
     # ------------------------------------------------------------------
 
+    # 24-hour TTL for the OIDC discovery doc — long enough to avoid hammering
+    # the IdP, short enough to pick up jwks_uri changes after key rotation.
+    _OIDC_DISCOVERY_TTL = 86400
+
     async def _get_oidc_discovery(self) -> Dict[str, Any]:
-        """Lazily fetch and cache the OIDC discovery document.
+        """Fetch and cache the OIDC discovery document with a 24-hour TTL.
 
         Only caches when the doc contains a 'jwks_uri' so that a transient or
-        malformed response (missing the key) doesn't permanently disable JWT
-        verification until proxy restart.
+        malformed response doesn't permanently disable JWT verification.
         """
-        if self._oidc_discovery_doc is None and self.access_token_discovery_uri:
+        now = time.time()
+        cache_expired = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
+        if (self._oidc_discovery_doc is None or cache_expired) and self.access_token_discovery_uri:
             doc = await _fetch_oidc_discovery(self.access_token_discovery_uri)
             if "jwks_uri" in doc:
                 self._oidc_discovery_doc = doc
+                self._oidc_discovery_fetched_at = now
             else:
                 return doc
         return self._oidc_discovery_doc or {}
@@ -415,9 +422,12 @@ class MCPJWTSigner(CustomGuardrail):
 
         jwks_keys = await _fetch_jwks(jwks_uri)
 
+        # Only read `kid` from the unverified header — never `alg`.
+        # Reading `alg` from an attacker-controlled header enables algorithm
+        # confusion attacks (e.g. alg:none, HS256 with the public key as secret).
+        # The algorithm is determined from the JWKS key entry instead.
         unverified_header = jwt.get_unverified_header(raw_token)
         kid = unverified_header.get("kid")
-        alg = unverified_header.get("alg", "RS256")
 
         # Build a JWKS object and pick the matching key.
         # PyJWT's PyJWKSet handles key-type parsing and kid matching correctly.
@@ -440,6 +450,11 @@ class MCPJWTSigner(CustomGuardrail):
             raise jwt.exceptions.PyJWKSetError(  # type: ignore[attr-defined]
                 f"No JWKS key matching kid={kid!r} at {jwks_uri!r}"
             )
+
+        # Use the algorithm declared by the JWKS key entry, not the token header.
+        # PyJWT populates algorithm_name from the key's `alg` field; when absent
+        # it infers from the key type (RSAPublicKey → RS256).
+        alg = getattr(signing_jwk, "algorithm_name", None) or "RS256"
 
         decode_options: Dict[str, Any] = {"verify_exp": True}
         decode_kwargs: Dict[str, Any] = {
