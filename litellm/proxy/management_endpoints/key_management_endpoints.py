@@ -41,10 +41,8 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
-    _cache_key_object,
     _delete_cache_key_object,
     can_team_access_model,
-    get_key_object,
     get_org_object,
     get_project_object,
     get_team_object,
