@@ -180,7 +180,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     if system_prompt_msg_list:
                         system_scaffold = {"role": "system", "content": system_prompt_msg_list}
                         if isinstance(standard_logging_payload["messages"], list):
-                            standard_logging_payload["messages"].insert(0, system_scaffold)  # type: ignore[union-attr]
+                            if not standard_logging_payload["messages"] or standard_logging_payload["messages"][0].get("role") != "system":
+                                standard_logging_payload["messages"].insert(0, system_scaffold)  # type: ignore[union-attr]
                         elif isinstance(standard_logging_payload["messages"], (dict, str)):
                             standard_logging_payload["messages"] = [
                                 system_scaffold,
@@ -290,11 +291,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     return response
 
             modified_openai_dict = await self._post_to_tool_blocking_service(openai_dict)
-            # Update the OpenAI Pydantic model fields with the modified dict entries
-            for key, value in modified_openai_dict.items():
-                if hasattr(response, key):
-                    setattr(response, key, value)
-            return response
+            try:
+                return type(response).model_validate(modified_openai_dict)
+            except Exception:
+                for key, value in modified_openai_dict.items():
+                    if hasattr(response, key):
+                        setattr(response, key, value)
+                return response
         except Exception as e:
             verbose_logger.error(
                 f"Tool blocking hook failed: {e}. Returning original response unchanged.",
@@ -856,7 +859,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             stripped_line = line.strip()
             if stripped_line.startswith(data_prefix):
                 json_payload = stripped_line[len(data_prefix) :].strip()
-                events.append(json.loads(json_payload))
+                try:
+                    events.append(json.loads(json_payload))
+                except json.JSONDecodeError:
+                    verbose_logger.warning(f"Skipping malformed Anthropic SSE payload: {json_payload!r}")
 
         return events
 
@@ -895,6 +901,17 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self._openai_dict_to_anthropic_response(modified_openai_dict, response)
         return response
 
+    @staticmethod
+    def _convert_anthropic_usage_to_openai(usage: dict[str, Any]) -> dict[str, Any]:
+        """Convert Anthropic usage format to OpenAI usage format."""
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        return {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+
     def _anthropic_response_to_openai_dict(self, response: dict[str, Any]) -> dict[str, Any]:
         """Convert raw Anthropic /v1/messages response to OpenAI format for the blocking service."""
         anthropic_completion = {
@@ -923,7 +940,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "created": int(time.time()),
             "model": response.get("model", ""),
             "choices": [{"index": 0, "message": message, "finish_reason": response.get("stop_reason", "stop")}],
-            "usage": response.get("usage", {}),
+            "usage": self._convert_anthropic_usage_to_openai(response.get("usage", {})),
         }
 
     def _openai_dict_to_anthropic_response(
