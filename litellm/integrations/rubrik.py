@@ -391,7 +391,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 buffered_chunks.append(chunk)
                 continue
 
-            # No tool calls seen yet — pass through immediately
+            # No tool calls seen yet — pass through immediately.
+            # If a finish chunk carries tool_calls but no prior header deltas were seen,
+            # accumulated_tool_calls is empty so we cannot block — fail-open and yield.
             if not buffered_chunks:
                 yield chunk
                 continue
@@ -464,10 +466,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                         continue
                     # GPT-5 style: finish chunk has no allowed tools — fall through
                     # to finish_reason handling below so an explanation chunk is emitted.
-                    buffered_chunk = buffered_chunk.model_copy()
+                    buffered_chunk = buffered_chunk.model_copy(deep=True)
                     buffered_chunk.choices[0].delta.tool_calls = None
                 else:
-                    buffered_chunk = buffered_chunk.model_copy()
+                    buffered_chunk = buffered_chunk.model_copy(deep=True)
                     buffered_chunk.choices[0].delta.tool_calls = filtered_calls
                     if buffered_chunk.choices[0].finish_reason:
                         # GPT-5 style: finish chunk carries allowed tool calls —
