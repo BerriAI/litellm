@@ -845,7 +845,10 @@ class ProxyLogging:
             # key collisions so that the most-specific guardrail (e.g. JWT signer)
             # takes precedence over earlier ones.
             existing = modified_kwargs.get("extra_headers") or {}
-            modified_kwargs["extra_headers"] = {**existing, **response_data["extra_headers"]}
+            modified_kwargs["extra_headers"] = {
+                **existing,
+                **response_data["extra_headers"],
+            }
 
         return modified_kwargs
 

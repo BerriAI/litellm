@@ -110,7 +110,7 @@ def _load_private_key_from_env(env_var: str) -> RSAPrivateKey:
             f"MCPJWTSigner: environment variable '{env_var}' is set but empty."
         )
     if key_material.startswith("file://"):
-        path = key_material[len("file://"):]
+        path = key_material[len("file://") :]
         with open(path, "rb") as f:
             key_bytes = f.read()
     else:
@@ -273,9 +273,7 @@ class MCPJWTSigner(CustomGuardrail):
             or "litellm"
         )
         self.audience: str = (
-            audience
-            or os.environ.get("MCP_JWT_AUDIENCE")
-            or self.DEFAULT_AUDIENCE
+            audience or os.environ.get("MCP_JWT_AUDIENCE") or self.DEFAULT_AUDIENCE
         )
         resolved_ttl = int(
             ttl_seconds
@@ -395,8 +393,12 @@ class MCPJWTSigner(CustomGuardrail):
         malformed response doesn't permanently disable JWT verification.
         """
         now = time.time()
-        cache_expired = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
-        if (self._oidc_discovery_doc is None or cache_expired) and self.access_token_discovery_uri:
+        cache_expired = (
+            now - self._oidc_discovery_fetched_at
+        ) >= self._OIDC_DISCOVERY_TTL
+        if (
+            self._oidc_discovery_doc is None or cache_expired
+        ) and self.access_token_discovery_uri:
             doc = await _fetch_oidc_discovery(self.access_token_discovery_uri)
             if "jwks_uri" in doc:
                 self._oidc_discovery_doc = doc
@@ -560,7 +562,7 @@ class MCPJWTSigner(CustomGuardrail):
             value: Optional[str] = None
 
             if source.startswith("token:"):
-                claim_name = source[len("token:"):]
+                claim_name = source[len("token:") :]
                 raw = (jwt_claims or {}).get(claim_name)
                 value = str(raw) if raw else None
 

@@ -1946,7 +1946,7 @@ class MCPServerManager:
         incoming_bearer_token: Optional[str] = None
         auth_hdr = normalized_raw.get("authorization", "")
         if auth_hdr.lower().startswith("bearer "):
-            incoming_bearer_token = auth_hdr[len("bearer "):]
+            incoming_bearer_token = auth_hdr[len("bearer ") :]
 
         pre_hook_kwargs = {
             "name": name,

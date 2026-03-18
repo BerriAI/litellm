@@ -730,7 +730,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     team_membership: Optional[LiteLLM_TeamMembership] = result.get(
                         "team_membership", None
                     )
-                    jwt_claims: Optional[dict] = result.get("jwt_claims", None)
+                    jwt_claims = result.get("jwt_claims", None)
 
                     global_proxy_spend = await get_global_proxy_spend(
                         litellm_proxy_admin_name=litellm_proxy_admin_name,

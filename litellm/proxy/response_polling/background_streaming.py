@@ -115,7 +115,9 @@ async def background_streaming_task(  # noqa: PLR0915
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status: Optional[ResponsesAPIStatus] = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: Optional[
+            ResponsesAPIStatus
+        ] = None  # Will be set by response.completed/failed/incomplete/cancelled
         terminal_error = None
         _event_to_status = {
             "response.completed": "completed",

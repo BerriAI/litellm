@@ -319,7 +319,8 @@ class SetupWizard:
 
     @staticmethod
     def _select_interactive() -> List[Dict]:
-        cursor, selected = 0, set()
+        cursor = 0
+        selected: set[int] = set()
 
         if _supports_color():
             sys.stdout.write(_CURSOR_HIDE)
@@ -432,9 +433,9 @@ class SetupWizard:
                     f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: "
                 )
                 if deployment:
-                    env_vars[f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"] = (
-                        deployment
-                    )
+                    env_vars[
+                        f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"
+                    ] = deployment
 
             # Store the key returned by validation — may be a re-entered replacement
             env_vars[p["env_key"]] = SetupWizard._validate_and_report(p, key)
