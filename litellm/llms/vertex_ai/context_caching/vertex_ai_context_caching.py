@@ -412,7 +412,15 @@ class ContextCachingEndpoints(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            error_message = err.response.text
+            # Check if this is a "cache too small" error
+            if "Cached content is too small" in error_message:
+                verbose_logger.debug(
+                    "Vertex AI context caching: cached content is below minimum token "
+                    "count. Skipping context caching."
+                )
+                return messages, optional_params, None
+            raise VertexAIError(status_code=error_code, message=error_message)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
@@ -556,7 +564,15 @@ class ContextCachingEndpoints(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            error_message = err.response.text
+            # Check if this is a "cache too small" error
+            if "Cached content is too small" in error_message:
+                verbose_logger.debug(
+                    "Vertex AI context caching: cached content is below minimum token "
+                    "count. Skipping context caching."
+                )
+                return messages, optional_params, None
+            raise VertexAIError(status_code=error_code, message=error_message)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
