@@ -89,7 +89,6 @@ class TestLeastBusyTieBreaking:
                 healthy_deployments=healthy,
                 all_deployments=dict(counts_with_stale),
             )
-            assert chosen["model_info"]["id"] in ("1", "2")
             assert chosen["model_info"]["id"] == "1"
 
 

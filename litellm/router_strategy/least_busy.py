@@ -215,13 +215,15 @@ class LeastBusyLoggingHandler(CustomLogger):
             elif v == min_traffic:
                 min_deployment_ids.append(k)
 
-        if min_deployment_ids:
-            chosen_id = random.choice(min_deployment_ids)
-            for m in healthy_deployments:
-                if m["model_info"]["id"] == chosen_id:
-                    return m
+        if not min_deployment_ids:
+            raise ValueError("No healthy deployments available")
 
-        return random.choice(healthy_deployments)
+        chosen_id = random.choice(min_deployment_ids)
+        for m in healthy_deployments:
+            if m["model_info"]["id"] == chosen_id:
+                return m
+
+        raise ValueError(f"Chosen deployment id {chosen_id!r} not found in healthy_deployments")
 
     def get_available_deployments(
         self,
