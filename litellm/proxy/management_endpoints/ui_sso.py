@@ -3302,10 +3302,14 @@ class MicrosoftSSOHandler:
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
+        # Load DB-configurable attribute mappings (same as generic SSO)
+        attribute_mappings = await _setup_attribute_mappings()
+
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
             user_role=user_role,
+            attribute_mappings=attribute_mappings,
         )
         return result
 
@@ -3314,18 +3318,38 @@ class MicrosoftSSOHandler:
         response: Optional[dict],
         team_ids: List[str],
         user_role: Optional[LitellmUserRoles],
+        attribute_mappings: Optional["AttributeMappings"] = None,
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+
+        # DB attribute_mappings override env var defaults for Microsoft SSO
+        email_attr = MICROSOFT_USER_EMAIL_ATTRIBUTE
+        id_attr = MICROSOFT_USER_ID_ATTRIBUTE
+        display_name_attr = MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE
+        first_name_attr = MICROSOFT_USER_FIRST_NAME_ATTRIBUTE
+        last_name_attr = MICROSOFT_USER_LAST_NAME_ATTRIBUTE
+        if attribute_mappings is not None:
+            if attribute_mappings.user_email_attribute:
+                email_attr = attribute_mappings.user_email_attribute
+            if attribute_mappings.user_id_attribute:
+                id_attr = attribute_mappings.user_id_attribute
+            if attribute_mappings.user_display_name_attribute:
+                display_name_attr = attribute_mappings.user_display_name_attribute
+            if attribute_mappings.user_first_name_attribute:
+                first_name_attr = attribute_mappings.user_first_name_attribute
+            if attribute_mappings.user_last_name_attribute:
+                last_name_attr = attribute_mappings.user_last_name_attribute
+
         openid_response = CustomOpenID(
             email=normalize_email(
-                response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")
+                response.get(email_attr) or response.get("mail")
             ),
-            display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
+            display_name=response.get(display_name_attr),
             provider="microsoft",
-            id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),
-            first_name=response.get(MICROSOFT_USER_FIRST_NAME_ATTRIBUTE),
-            last_name=response.get(MICROSOFT_USER_LAST_NAME_ATTRIBUTE),
+            id=response.get(id_attr),
+            first_name=response.get(first_name_attr),
+            last_name=response.get(last_name_attr),
             team_ids=team_ids,
             user_role=user_role,
         )

@@ -29,6 +29,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     process_sso_jwt_access_token,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
+    AttributeMappings,
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
@@ -174,6 +175,79 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
     assert result.first_name == "CustomFirst"
     assert result.last_name == "CustomLast"
     assert result.team_ids == expected_team_ids
+
+
+def test_microsoft_sso_handler_openid_from_response_with_db_attribute_mappings():
+    """
+    Test that MicrosoftSSOHandler.openid_from_response uses DB-configurable
+    attribute_mappings, overriding the env var defaults.
+    """
+    mock_response = {
+        "db_email": "db-mapped@example.com",
+        "db_display": "DB Display Name",
+        "db_id": "db_user_456",
+        "db_first": "DBFirst",
+        "db_last": "DBLast",
+        # Also include default fields — they should be ignored
+        "userPrincipalName": "should-be-ignored@example.com",
+        "displayName": "Should Be Ignored",
+    }
+
+    attribute_mappings = AttributeMappings(
+        user_email_attribute="db_email",
+        user_id_attribute="db_id",
+        user_display_name_attribute="db_display",
+        user_first_name_attribute="db_first",
+        user_last_name_attribute="db_last",
+    )
+
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response,
+        team_ids=["team1"],
+        user_role=None,
+        attribute_mappings=attribute_mappings,
+    )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "db-mapped@example.com"
+    assert result.display_name == "DB Display Name"
+    assert result.id == "db_user_456"
+    assert result.first_name == "DBFirst"
+    assert result.last_name == "DBLast"
+    assert result.provider == "microsoft"
+
+
+def test_microsoft_sso_handler_openid_from_response_db_mappings_partial_override():
+    """
+    Test that partial DB attribute_mappings only override specified fields,
+    falling back to env var defaults for unspecified fields.
+    """
+    mock_response = {
+        "custom_email_field": "custom@example.com",
+        "userPrincipalName": "default@example.com",
+        "displayName": "Default Display",
+        "id": "default_id",
+        "givenName": "DefaultFirst",
+        "surname": "DefaultLast",
+    }
+
+    # Only override email — rest should use env var defaults
+    attribute_mappings = AttributeMappings(
+        user_email_attribute="custom_email_field",
+    )
+
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response,
+        team_ids=[],
+        user_role=None,
+        attribute_mappings=attribute_mappings,
+    )
+
+    assert result.email == "custom@example.com"
+    assert result.display_name == "Default Display"
+    assert result.id == "default_id"
+    assert result.first_name == "DefaultFirst"
+    assert result.last_name == "DefaultLast"
 
 
 def test_get_microsoft_callback_response():
