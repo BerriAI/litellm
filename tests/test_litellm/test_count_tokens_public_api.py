@@ -74,7 +74,10 @@ def test_acount_tokens_with_tools():
             "function": {
                 "name": "get_weather",
                 "description": "Get weather info",
-                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
             },
         }
     ]
@@ -162,9 +165,7 @@ def test_acount_tokens_no_api_key_falls_back():
 
 def test_acount_tokens_opt_out_does_not_disable_openai_token_counting():
     """Anthropic opt-out flag should not affect direct OpenAI token counting."""
-    with patch.object(
-        litellm, "use_chat_completions_url_for_anthropic_messages", True
-    ):
+    with patch.object(litellm, "use_chat_completions_url_for_anthropic_messages", True):
         with patch(
             "litellm.llms.openai.responses.count_tokens.token_counter.openai_count_tokens_handler.handle_count_tokens_request",
             new_callable=AsyncMock,

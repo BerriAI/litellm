@@ -789,7 +789,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Keep Anthropic-native tools in their original format
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
-            
+
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 
@@ -874,7 +874,10 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_system_content: List[Dict[str, Any]] = []
             model_name = anthropic_message_request.get("model", "")
             for block in system_content:
-                if isinstance(block, dict) and block.get("type") in ("text", "input_text"):
+                if isinstance(block, dict) and block.get("type") in (
+                    "text",
+                    "input_text",
+                ):
                     text_block: Dict[str, Any] = {
                         "type": "text",
                         "text": block.get("text", ""),

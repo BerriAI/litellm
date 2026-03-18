@@ -207,7 +207,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        
+
         # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
         # bedrock/invoke models use Anthropic messages API which supports URLs
         if model.startswith("bedrock/invoke/"):
@@ -433,7 +433,7 @@ async def test_extra_body_with_fallback(
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         # Flush cache to ensure no stale aiohttp clients are used
         litellm.in_memory_llm_clients_cache.flush_cache()
-        
+
         # Set up test parameters
         model = "openrouter/deepseek/deepseek-chat"
         messages = [{"role": "user", "content": "Hello, world!"}]
@@ -466,8 +466,12 @@ async def test_extra_body_with_fallback(
                         "finish_reason": "stop",
                     }
                 ],
-                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-            }
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 12,
+                    "total_tokens": 21,
+                },
+            },
         )
 
         response = await litellm.acompletion(
@@ -480,8 +484,10 @@ async def test_extra_body_with_fallback(
 
         # Verify the response
         assert response is not None
-        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
-        
+        assert (
+            len(respx_mock.calls) > 0
+        ), "Mock was not called - check if aiohttp transport is properly disabled"
+
         # Get the request from the mock
         request: httpx.Request = respx_mock.calls[0].request
         request_body = request.read()
@@ -523,35 +529,43 @@ async def test_openai_env_base(
     # Configure respx mock to intercept the request
     mock_route = respx_mock.post(
         url__regex=r"http://localhost:12345/v1/chat/completions.*"
-    ).mock(return_value=httpx.Response(
-        status_code=200,
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello from mocked response!",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-        }
-    ))
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mocked response!",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 12,
+                    "total_tokens": 21,
+                },
+            },
+        )
+    )
 
     try:
         response = await litellm.acompletion(model=model, messages=messages)
-        
+
         # verify we had a response
         assert response.choices[0].message.content == "Hello from mocked response!"
-        
+
         # Verify the mock was called
-        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+        assert (
+            mock_route.called
+        ), "Mock route was not called - request may have bypassed respx"
     finally:
         # Clean up to avoid affecting other tests
         litellm.disable_aiohttp_transport = False
@@ -622,9 +636,9 @@ def test_responses_api_bridge_check_gpt_5_4_pro():
             model=model_name,
             custom_llm_provider="openai",
         )
-        assert model_info.get("mode") == "responses", (
-            f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
-        )
+        assert (
+            model_info.get("mode") == "responses"
+        ), f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses():
@@ -648,9 +662,7 @@ def test_responses_api_bridge_check_opt_out_does_not_disable_responses_prefix():
     """Anthropic opt-out flag should not affect generic responses/ prefix routing."""
     from litellm.main import responses_api_bridge_check
 
-    with patch.object(
-        litellm, "use_chat_completions_url_for_anthropic_messages", True
-    ):
+    with patch.object(litellm, "use_chat_completions_url_for_anthropic_messages", True):
         with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
             mock_get_model_info.return_value = {"max_tokens": 4096}
             model_info, model = responses_api_bridge_check(
@@ -666,9 +678,7 @@ def test_responses_api_bridge_check_opt_out_does_not_disable_gpt_5_4_tools_plus_
     """Anthropic opt-out flag should not affect generic OpenAI responses routing."""
     from litellm.main import responses_api_bridge_check
 
-    with patch.object(
-        litellm, "use_chat_completions_url_for_anthropic_messages", True
-    ):
+    with patch.object(litellm, "use_chat_completions_url_for_anthropic_messages", True):
         with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
             mock_get_model_info.return_value = {"max_tokens": 128000}
             model_info, model = responses_api_bridge_check(
@@ -1491,7 +1501,7 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 def test_image_edit_merges_headers_and_extra_headers():
     from litellm.images.main import base_llm_http_handler
-    
+
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",
