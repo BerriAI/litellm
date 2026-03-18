@@ -1535,17 +1535,6 @@ async def user_api_key_auth(
     Parent function to authenticate user api key / jwt token.
     """
 
-    # Guard: re-read the Authorization header directly from the request.
-    # On endpoints whose request body contains a "key" field (e.g. /key/block,
-    # /key/unblock, /key/update), the body value can contaminate the api_key
-    # Security dependency, causing the auth layer to authenticate against the
-    # target key instead of the caller's bearer token.
-    _raw_auth_header = request.headers.get(
-        SpecialHeaders.openai_authorization.value
-    )
-    if _raw_auth_header is not None:
-        api_key = _raw_auth_header
-
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(
         request_data=request_data, request=request
