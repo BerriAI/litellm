@@ -298,16 +298,23 @@ def _insert_user_continue_message(
         curr_message = result_messages[i]
         inserted_continue_message = False
         if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
-            j = i - 1
-            while j >= 0:
-                previous_message = result_messages[j]
-                if _counts_for_alternation(previous_message):
-                    if previous_message["role"] == "assistant":
-                        result_messages.insert(i, continue_message)
-                        i += 2
-                        inserted_continue_message = True
-                    break
-                j -= 1
+            # Preserve old behavior for malformed adjacent assistant sequences like
+            # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
+            if i > 0 and result_messages[i - 1].get("role") == "assistant":
+                result_messages.insert(i, continue_message)
+                i += 2
+                inserted_continue_message = True
+            else:
+                j = i - 1
+                while j >= 0:
+                    previous_message = result_messages[j]
+                    if _counts_for_alternation(previous_message):
+                        if previous_message["role"] == "assistant":
+                            result_messages.insert(i, continue_message)
+                            i += 2
+                            inserted_continue_message = True
+                        break
+                    j -= 1
         if not inserted_continue_message:
             i += 1
 
