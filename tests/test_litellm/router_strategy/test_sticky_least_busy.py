@@ -3,6 +3,7 @@ Tests for the sticky-least-busy routing strategy.
 """
 
 import hashlib
+from unittest.mock import patch
 
 import pytest
 
@@ -813,3 +814,221 @@ class TestAsyncIntegration:
         # Both rings should exist independently
         assert "llama-70b" in handler._rings
         assert "gpt-4" in handler._rings
+
+
+# =====================================================================
+# Test: Prometheus metrics
+# =====================================================================
+
+
+@pytest.fixture(autouse=True)
+def reset_singleton():
+    """Reset singleton between tests to ensure clean Prometheus init."""
+    StickyLeastBusyLoggingHandler._instance = None
+    yield
+    StickyLeastBusyLoggingHandler._instance = None
+
+
+class TestPrometheusMetrics:
+    def _reset_prometheus_registry(self):
+        """Unregister sticky routing metrics from Prometheus registry."""
+        try:
+            from prometheus_client import REGISTRY
+
+            for name in [
+                "litellm_sticky_routing_decisions_total",
+                "litellm_sticky_routing_in_flight",
+                "litellm_sticky_routing_fallback_total",
+            ]:
+                collector = REGISTRY._names_to_collectors.get(name)
+                if collector is not None:
+                    REGISTRY.unregister(collector)
+        except ImportError:
+            pass
+
+    def test_prometheus_metrics_emitted_on_sticky_decision(self):
+        """Routing decisions should increment the Prometheus counter."""
+        self._reset_prometheus_registry()
+        cache = DualCache()
+        handler = StickyLeastBusyLoggingHandler(router_cache=cache)
+
+        # Verify metrics are initialized (either real or NoOp)
+        assert hasattr(handler, "_routing_decisions")
+        assert hasattr(handler, "_routing_in_flight")
+        assert hasattr(handler, "_routing_fallback")
+
+        deployments = [_make_deployment(f"dep-{i}") for i in range(3)]
+        request_counts = {"dep-0": 5, "dep-1": 5, "dep-2": 5}
+        msgs = [{"role": "user", "content": "hello"}]
+        sticky_key = handler.compute_sticky_key(msgs)
+
+        # This should trigger a routing decision metric
+        result = handler._select_deployment(MG, deployments, request_counts, sticky_key)
+        assert result is not None
+
+        # Try to check the actual Prometheus metric value
+        try:
+            from prometheus_client import REGISTRY
+
+            # Get the metric and check it was incremented
+            metric = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_decisions_total"
+            )
+            if metric is not None:
+                # Collect samples and verify at least one has value > 0
+                samples = list(metric.collect())
+                total = sum(
+                    s.value for sample in samples for s in sample.samples
+                    if s.name == "litellm_sticky_routing_decisions_total_total"
+                )
+                assert total >= 1
+        except ImportError:
+            pass  # prometheus_client not installed, NoOp is fine
+
+    def test_prometheus_metrics_emitted_on_least_busy_decision(self):
+        """Least-busy decisions should also increment the counter."""
+        self._reset_prometheus_registry()
+        cache = DualCache()
+        handler = StickyLeastBusyLoggingHandler(router_cache=cache)
+        deployments = [_make_deployment(f"dep-{i}") for i in range(3)]
+        request_counts = {"dep-0": 10, "dep-1": 2, "dep-2": 10}
+
+        # No sticky key → least-busy decision
+        result = handler._select_deployment(MG, deployments, request_counts, None)
+        assert result["model_info"]["id"] == "dep-1"
+
+        try:
+            from prometheus_client import REGISTRY
+
+            metric = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_decisions_total"
+            )
+            if metric is not None:
+                samples = list(metric.collect())
+                least_busy_count = sum(
+                    s.value for sample in samples for s in sample.samples
+                    if s.name == "litellm_sticky_routing_decisions_total_total"
+                    and s.labels.get("decision") == "least_busy"
+                )
+                assert least_busy_count >= 1
+        except ImportError:
+            pass
+
+    def test_prometheus_in_flight_incremented_on_pre_api_call(self):
+        """log_pre_api_call should increment the in-flight gauge."""
+        self._reset_prometheus_registry()
+        cache = DualCache()
+        handler = StickyLeastBusyLoggingHandler(router_cache=cache)
+        kwargs = {
+            "litellm_call_id": "prom-test-call-1",
+            "litellm_params": {
+                "metadata": {"model_group": "test-group"},
+                "model_info": {"id": "dep-1"},
+                "litellm_call_id": "prom-test-call-1",
+            },
+        }
+        handler.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+
+        try:
+            from prometheus_client import REGISTRY
+
+            metric = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_in_flight"
+            )
+            if metric is not None:
+                samples = list(metric.collect())
+                in_flight = sum(
+                    s.value for sample in samples for s in sample.samples
+                    if s.name == "litellm_sticky_routing_in_flight"
+                    and s.labels.get("deployment_id") == "dep-1"
+                )
+                assert in_flight >= 1.0
+        except ImportError:
+            pass
+
+    def test_prometheus_in_flight_decremented_on_success(self):
+        """log_success_event should decrement the in-flight gauge."""
+        self._reset_prometheus_registry()
+        cache = DualCache()
+        handler = StickyLeastBusyLoggingHandler(router_cache=cache)
+        kwargs = {
+            "litellm_call_id": "prom-test-call-2",
+            "litellm_params": {
+                "metadata": {"model_group": "test-group"},
+                "model_info": {"id": "dep-1"},
+                "litellm_call_id": "prom-test-call-2",
+            },
+        }
+        handler.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+        handler.log_success_event(kwargs, None, None, None)
+
+        try:
+            from prometheus_client import REGISTRY
+
+            metric = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_in_flight"
+            )
+            if metric is not None:
+                samples = list(metric.collect())
+                in_flight = sum(
+                    s.value for sample in samples for s in sample.samples
+                    if s.name == "litellm_sticky_routing_in_flight"
+                    and s.labels.get("deployment_id") == "dep-1"
+                )
+                assert in_flight == 0.0
+        except ImportError:
+            pass
+
+    def test_prometheus_not_installed_uses_noop(self):
+        """When prometheus_client is not available, NoOpMetric should be used."""
+        self._reset_prometheus_registry()
+        with patch.dict("sys.modules", {"prometheus_client": None}):
+            # Force re-initialization
+            StickyLeastBusyLoggingHandler._instance = None
+            handler = StickyLeastBusyLoggingHandler.__new__(
+                StickyLeastBusyLoggingHandler,
+                router_cache=DualCache(),
+            )
+            handler._initialized = False
+            handler.__init__(router_cache=DualCache())
+
+            from litellm.types.integrations.prometheus import NoOpMetric
+
+            assert isinstance(handler._routing_decisions, NoOpMetric)
+            assert isinstance(handler._routing_in_flight, NoOpMetric)
+            assert isinstance(handler._routing_fallback, NoOpMetric)
+
+            # Verify routing still works
+            deployments = [_make_deployment(f"dep-{i}") for i in range(3)]
+            request_counts = {"dep-0": 0, "dep-1": 0, "dep-2": 0}
+            result = handler._select_deployment(
+                MG, deployments, request_counts, None
+            )
+            assert result is not None
+
+    def test_prometheus_strategy_label_is_consistent_hashing(self):
+        """Verify the strategy label is 'consistent_hashing'."""
+        self._reset_prometheus_registry()
+        cache = DualCache()
+        handler = StickyLeastBusyLoggingHandler(router_cache=cache)
+        deployments = [_make_deployment(f"dep-{i}") for i in range(3)]
+        request_counts = {"dep-0": 0, "dep-1": 0, "dep-2": 0}
+        handler._select_deployment(MG, deployments, request_counts, None)
+
+        try:
+            from prometheus_client import REGISTRY
+
+            metric = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_decisions_total"
+            )
+            if metric is not None:
+                samples = list(metric.collect())
+                strategies = {
+                    s.labels.get("strategy")
+                    for sample in samples
+                    for s in sample.samples
+                    if s.value > 0
+                }
+                assert "consistent_hashing" in strategies
+        except ImportError:
+            pass
