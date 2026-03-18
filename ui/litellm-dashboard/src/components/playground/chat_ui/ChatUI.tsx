@@ -3,7 +3,6 @@
 import {
   ApiOutlined,
   ArrowUpOutlined,
-  ClearOutlined,
   CodeOutlined,
   DatabaseOutlined,
   DeleteOutlined,
@@ -19,16 +18,11 @@ import {
   SoundOutlined,
   TagsOutlined,
   ToolOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
+import { Button, Input, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
-import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
 import PolicySelector from "../../policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/MCPToolArgumentsForm";
@@ -49,30 +43,27 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
-import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
-import AudioRenderer from "./AudioRenderer";
+import ChatHeader from "./ChatHeader";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
-import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
+import ChatMessageList from "./ChatMessageList";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
-import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import MCPEventsDisplay from "./MCPEventsDisplay";
+import GetCodeModal from "./GetCodeModal";
+import SuggestedPrompts from "./SuggestedPrompts";
 import type { MCPEvent } from "../../mcp_tools/types";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
-import ReasoningContent from "./ReasoningContent";
-import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
-import ResponsesImageRenderer from "./ResponsesImageRenderer";
 import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
-import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
-import { A2ATaskMetadata, MessageType } from "./types";
+import { MessageType } from "./types";
+import useChatHistory from "./useChatHistory";
 import { useCodeInterpreter } from "./useCodeInterpreter";
+import useFileUploads from "./useFileUploads";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -148,17 +139,59 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
-  const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
-    if (simplified) return [];
-    try {
-      const saved = sessionStorage.getItem("chatHistory");
-      return saved ? JSON.parse(saved) : [];
-    } catch (error) {
-      console.error("Error parsing chatHistory from sessionStorage", error);
-      return [];
-    }
+  // File uploads hook (manages images/audio for all endpoint types)
+  const fileUploads = useFileUploads();
+  const {
+    uploadedImages,
+    imagePreviewUrls,
+    handleImageUpload,
+    handleRemoveImage,
+    responsesUploadedImage,
+    responsesImagePreviewUrl,
+    handleResponsesImageUpload,
+    handleRemoveResponsesImage,
+    chatUploadedImage,
+    chatImagePreviewUrl,
+    handleChatImageUpload,
+    handleRemoveChatImage,
+    uploadedAudio,
+    handleAudioUpload,
+    handleRemoveAudio,
+  } = fileUploads;
+
+  // Chat history hook (manages chatHistory, inputMessage, mcpEvents, session IDs, and all updater functions)
+  const chatHistoryHook = useChatHistory({
+    simplified,
+    onClearUploads: fileUploads.clearAllUploads,
   });
+  const {
+    chatHistory,
+    setChatHistory,
+    inputMessage,
+    setInputMessage,
+    messageTraceId,
+    setMessageTraceId,
+    responsesSessionId,
+    useApiSessionManagement,
+    mcpEvents,
+    chatEndRef,
+    updateTextUI,
+    updateReasoningContent,
+    updateTimingData,
+    updateUsageData,
+    updateA2AMetadata,
+    updateTotalLatency,
+    updateSearchResults,
+    updateImageUI,
+    updateEmbeddingsUI,
+    updateAudioUI,
+    updateChatImageUI,
+    handleResponseId,
+    handleToggleSessionManagement,
+    handleMCPEvent,
+    clearMCPEvents,
+    clearChatHistory,
+  } = chatHistoryHook;
   const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -216,27 +249,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(
-    () => sessionStorage.getItem("messageTraceId") || null,
-  );
-  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("responsesSessionId") || null,
-  );
-  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
-    const saved = sessionStorage.getItem("useApiSessionManagement");
-    return saved ? JSON.parse(saved) : true; // Default to API session management
-  });
-  const [uploadedImages, setUploadedImages] = useState<File[]>([]);
-  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
-  const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
-  const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
-  const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
-  const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
-  const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  // messageTraceId, responsesSessionId, useApiSessionManagement provided by useChatHistory
+  // File upload state provided by useFileUploads
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
-  const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
+  // mcpEvents provided by useChatHistory
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
@@ -245,7 +263,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  // chatEndRef provided by useChatHistory
 
   // Fetch MCP servers
   const loadMCPServers = async () => {
@@ -330,16 +348,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     proxySettings,
   ]);
 
-  useEffect(() => {
-    if (simplified) return; // Do not persist chat history in simplified (embedded) mode
-    const handler = setTimeout(() => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
-    }, 500); // Debounce by 500ms
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [chatHistory, simplified]);
+  // chatHistory persistence is handled by useChatHistory
 
   useEffect(() => {
     sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
@@ -361,18 +370,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
         sessionStorage.removeItem("selectedModel");
       }
     }
-    if (messageTraceId) {
-      sessionStorage.setItem("messageTraceId", messageTraceId);
-    } else {
-      sessionStorage.removeItem("messageTraceId");
-    }
-    if (responsesSessionId) {
-      sessionStorage.setItem("responsesSessionId", responsesSessionId);
-    } else {
-      sessionStorage.removeItem("responsesSessionId");
-    }
-    sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
-    // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
+    // messageTraceId, responsesSessionId, useApiSessionManagement persistence handled by useChatHistory
+    // codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
     simplified,
     apiKeySource,
@@ -383,9 +382,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedVectorStores,
     selectedGuardrails,
     selectedPolicies,
-    messageTraceId,
-    responsesSessionId,
-    useApiSessionManagement,
     selectedMCPServers,
     mcpServerToolRestrictions,
     selectedVoice,
@@ -464,276 +460,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     loadAgents();
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
-  useEffect(() => {
-    // Scroll to the bottom of the chat whenever chatHistory updates
-    if (chatEndRef.current) {
-      // Add a small delay to ensure content is rendered
-      setTimeout(() => {
-        chatEndRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "end", // Keep the scroll position at the end
-        });
-      }, 100);
-    }
-  }, [chatHistory]);
+  // Auto-scroll on chat update is handled by useChatHistory
 
-  const updateTextUI = (role: string, chunk: string, model?: string) => {
-    console.log("updateTextUI called with:", role, chunk, model);
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // if the last message is already from this same role, append
-      if (last && last.role === role && !last.isImage && !last.isAudio) {
-        // build a new object, but only set `model` if it wasn't there already
-        const updated: MessageType = {
-          ...last,
-          content: last.content + chunk,
-          model: last.model ?? model, // ← only use the passed‐in model on the first chunk
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // otherwise start a brand new assistant bubble
-        return [
-          ...prev,
-          {
-            role,
-            content: chunk,
-            model, // model set exactly once here
-          },
-        ];
-      }
-    });
-  };
-
-  const updateReasoningContent = (chunk: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage && !lastMessage.isAudio) {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            reasoningContent: (lastMessage.reasoningContent || "") + chunk,
-          },
-        ];
-      } else {
-        // If there's no assistant message yet, we'll create one with empty content
-        // but with reasoning content
-        if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
-          return [
-            ...prevHistory,
-            {
-              role: "assistant",
-              content: "",
-              reasoningContent: chunk,
-            },
-          ];
-        }
-
-        return prevHistory;
-      }
-    });
-  };
-
-  const updateTimingData = (timeToFirstToken: number) => {
-    console.log("updateTimingData called with:", timeToFirstToken);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-      console.log("Current last message:", lastMessage);
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
-        const updatedHistory = [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            timeToFirstToken,
-          },
-        ];
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
-      }
-      // If the last message is a user message and no assistant message exists yet,
-      // create a new assistant message with empty content
-      else if (lastMessage && lastMessage.role === "user") {
-        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
-        return [
-          ...prevHistory,
-          {
-            role: "assistant",
-            content: "",
-            timeToFirstToken,
-          },
-        ];
-      }
-
-      console.log("No appropriate message found to update timing");
-      return prevHistory;
-    });
-  };
-
-  const updateUsageData = (usage: TokenUsage, toolName?: string) => {
-    console.log("Received usage data:", usage);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with usage data:", usage);
-        const updatedMessage = {
-          ...lastMessage,
-          usage,
-          toolName,
-        };
-        console.log("Updated message:", updatedMessage);
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateA2AMetadata = (a2aMetadata: A2ATaskMetadata) => {
-    console.log("Received A2A metadata:", a2aMetadata);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        const updatedMessage = {
-          ...lastMessage,
-          a2aMetadata,
-        };
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateTotalLatency = (totalLatency: number) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            totalLatency,
-          },
-        ];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateSearchResults = (searchResults: any[]) => {
-    console.log("Received search results:", searchResults);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with search results");
-        const updatedMessage = {
-          ...lastMessage,
-          searchResults,
-        };
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const handleResponseId = (responseId: string) => {
-    console.log("Received response ID for session management:", responseId);
-    if (useApiSessionManagement) {
-      setResponsesSessionId(responseId);
-    }
-  };
-
-  const handleToggleSessionManagement = (useApi: boolean) => {
-    setUseApiSessionManagement(useApi);
-    if (!useApi) {
-      // Clear API session when switching to UI mode
-      setResponsesSessionId(null);
-    }
-  };
-
-  const handleMCPEvent = (event: MCPEvent) => {
-    console.log("ChatUI: Received MCP event:", event);
-    setMCPEvents((prev) => {
-      // Check if this is a duplicate event (same item_id and type)
-      // Only check for duplicates if item_id is defined (for mcp_list_tools, item_id is "mcp_list_tools")
-      const isDuplicate = event.item_id
-        ? prev.some(
-            (existingEvent) =>
-              existingEvent.item_id === event.item_id &&
-              existingEvent.type === event.type &&
-              (existingEvent.sequence_number === event.sequence_number ||
-                (existingEvent.sequence_number === undefined && event.sequence_number === undefined)),
-          )
-        : false;
-
-      if (isDuplicate) {
-        console.log("ChatUI: Duplicate MCP event, skipping");
-        return prev;
-      }
-
-      const newEvents = [...prev, event];
-      console.log("ChatUI: Updated MCP events:", newEvents);
-      return newEvents;
-    });
-  };
-
-  const updateImageUI = (imageUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
-  };
-
-  const updateEmbeddingsUI = (embeddings: string, model?: string) => {
-    setChatHistory((prevHistory) => [
-      ...prevHistory,
-      { role: "assistant", content: truncateString(embeddings, 100), model, isEmbeddings: true },
-    ]);
-  };
-
-  const updateAudioUI = (audioUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: audioUrl, model, isAudio: true }]);
-  };
-
-  const updateChatImageUI = (imageUrl: string, model?: string) => {
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // If the last message is from assistant and has content, add image to it
-      if (last && last.role === "assistant" && !last.isImage && !last.isAudio) {
-        const updated = {
-          ...last,
-          image: {
-            url: imageUrl,
-            detail: "auto",
-          },
-          model: last.model ?? model,
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // Otherwise create a new assistant message with just the image
-        return [
-          ...prev,
-          {
-            role: "assistant",
-            content: "",
-            model,
-            image: {
-              url: imageUrl,
-              detail: "auto",
-            },
-          },
-        ];
-      }
-    });
-  };
+  // All chat history updater functions (updateTextUI, updateReasoningContent, etc.)
+  // handleResponseId, handleToggleSessionManagement, handleMCPEvent, and clearChatHistory
+  // are provided by useChatHistory above
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -752,67 +483,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
-  const handleImageUpload = (file: File) => {
-    setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
-    setImagePreviewUrls((prev) => [...prev, previewUrl]);
-    return false; // Prevent default upload behavior
-  };
-
-  const handleRemoveImage = (index: number) => {
-    if (imagePreviewUrls[index]) {
-      URL.revokeObjectURL(imagePreviewUrls[index]);
-    }
-    setUploadedImages((prev) => prev.filter((_, i) => i !== index));
-    setImagePreviewUrls((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveAllImages = () => {
-    imagePreviewUrls.forEach((url) => {
-      URL.revokeObjectURL(url);
-    });
-    setUploadedImages([]);
-    setImagePreviewUrls([]);
-  };
-
-  const handleResponsesImageUpload = (file: File): false => {
-    setResponsesUploadedImage(file);
-    const previewUrl = URL.createObjectURL(file);
-    setResponsesImagePreviewUrl(previewUrl);
-    return false; // Prevent default upload behavior
-  };
-
-  const handleRemoveResponsesImage = () => {
-    if (responsesImagePreviewUrl) {
-      URL.revokeObjectURL(responsesImagePreviewUrl);
-    }
-    setResponsesUploadedImage(null);
-    setResponsesImagePreviewUrl(null);
-  };
-
-  const handleChatImageUpload = (file: File): false => {
-    setChatUploadedImage(file);
-    const previewUrl = URL.createObjectURL(file);
-    setChatImagePreviewUrl(previewUrl);
-    return false; // Prevent default upload behavior
-  };
-
-  const handleRemoveChatImage = () => {
-    if (chatImagePreviewUrl) {
-      URL.revokeObjectURL(chatImagePreviewUrl);
-    }
-    setChatUploadedImage(null);
-    setChatImagePreviewUrl(null);
-  };
-
-  const handleAudioUpload = (file: File): false => {
-    setUploadedAudio(file);
-    return false; // Prevent default upload behavior
-  };
-
-  const handleRemoveAudio = () => {
-    setUploadedAudio(null);
-  };
+  // File upload handlers provided by useFileUploads
 
     const handleSendMessage = async () => {
     if (
@@ -965,7 +636,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
 
     setChatHistory([...chatHistory, displayMessage]);
-    setMCPEvents([]); // Clear previous MCP events for new conversation turn
+    clearMCPEvents(); // Clear previous MCP events for new conversation turn
     codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
@@ -1220,29 +891,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setInputMessage("");
   };
 
-  const clearChatHistory = () => {
-    // Clean up audio object URLs before clearing history
-    chatHistory.forEach((message) => {
-      if (message.isAudio && typeof message.content === "string") {
-        URL.revokeObjectURL(message.content);
-      }
-    });
-
-    setChatHistory([]);
-    setMessageTraceId(null);
-    setResponsesSessionId(null); // Clear responses session ID
-    setMCPEvents([]); // Clear MCP events
-    handleRemoveAllImages(); // Clear any uploaded images for image edits
-    handleRemoveResponsesImage(); // Clear any uploaded images for responses
-    handleRemoveChatImage(); // Clear any uploaded images for chat completions
-    handleRemoveAudio(); // Clear any uploaded audio for transcription
-    if (!simplified) {
-      sessionStorage.removeItem("chatHistory");
-      sessionStorage.removeItem("messageTraceId");
-      sessionStorage.removeItem("responsesSessionId");
-    }
-    NotificationsManager.success("Chat history cleared.");
-  };
+  // clearChatHistory is provided by useChatHistory
 
   if (userRole && userRole === "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -1900,240 +1549,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
               />
             ) : (
             <>
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
-              <div className="flex gap-2">
-                <TremorButton
-                  onClick={clearChatHistory}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-                  icon={ClearOutlined}
-                >
-                  Clear Chat
-                </TremorButton>
-                {!simplified && (
-                <TremorButton
-                  onClick={() => setIsGetCodeModalVisible(true)}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-                  icon={CodeOutlined}
-                >
-                  Get Code
-                </TremorButton>
-                )}
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto p-4 pb-0">
-              {chatHistory.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text>Start a conversation, generate an image, or handle audio</Text>
-                </div>
-              )}
-
-              {chatHistory.map((message, index) => (
-                <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
-                    <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-                        border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
-                        >
-                          {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
-                          ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
-                          )}
-                        </div>
-                        <strong className="text-sm capitalize">{message.role}</strong>
-                        {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
-                        )}
-                      </div>
-                      {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
-
-                      {/* Show MCP events at the start of assistant messages */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        mcpEvents.length > 0 &&
-                        (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) && (
-                          <div className="mb-3">
-                            <MCPEventsDisplay events={mcpEvents} />
-                          </div>
-                        )}
-
-                      {/* Show search results at the start of assistant messages */}
-                      {message.role === "assistant" && message.searchResults && (
-                        <SearchResultsDisplay searchResults={message.searchResults} />
-                      )}
-
-                      {/* Show Code Interpreter output for the last assistant message */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        codeInterpreter.result &&
-                        endpointType === EndpointType.RESPONSES && (
-                          <CodeInterpreterOutput
-                            code={codeInterpreter.result.code}
-                            containerId={codeInterpreter.result.containerId}
-                            annotations={codeInterpreter.result.annotations}
-                            accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
-                          />
-                        )}
-
-                      <div
-                        className="whitespace-pre-wrap break-words max-w-full message-content"
-                        style={{
-                          wordWrap: "break-word",
-                          overflowWrap: "break-word",
-                          wordBreak: "break-word",
-                          hyphens: "auto",
-                        }}
-                      >
-                        {message.isImage ? (
-                          <img
-                            src={typeof message.content === "string" ? message.content : ""}
-                            alt="Generated image"
-                            className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                            style={{ maxHeight: "500px" }}
-                          />
-                        ) : message.isAudio ? (
-                          <AudioRenderer message={message} />
-                        ) : (
-                          <>
-                            {/* Show attached image for user messages based on current endpoint */}
-                            {endpointType === EndpointType.RESPONSES && <ResponsesImageRenderer message={message} />}
-                            {endpointType === EndpointType.CHAT && <ChatImageRenderer message={message} />}
-
-                            <ReactMarkdown
-                              components={{
-                                code({
-                                  node,
-                                  inline,
-                                  className,
-                                  children,
-                                  ...props
-                                }: React.ComponentPropsWithoutRef<"code"> & {
-                                  inline?: boolean;
-                                  node?: any;
-                                }) {
-                                  const match = /language-(\w+)/.exec(className || "");
-                                  return !inline && match ? (
-                                    <SyntaxHighlighter
-                                      style={coy as any}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="rounded-md my-2"
-                                      wrapLines={true}
-                                      wrapLongLines={true}
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, "")}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code
-                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-                                      style={{ wordBreak: "break-word" }}
-                                      {...props}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                pre: ({ node, ...props }) => (
-                                  <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
-                                ),
-                              }}
-                            >
-                              {typeof message.content === "string" ? message.content : ""}
-                            </ReactMarkdown>
-
-                            {/* Show generated image from chat completions */}
-                            {message.image && (
-                              <div className="mt-3">
-                                <img
-                                  src={message.image.url}
-                                  alt="Generated image"
-                                  className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                                  style={{ maxHeight: "500px" }}
-                                />
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) &&
-                          !message.a2aMetadata && (
-                            <ResponseMetrics
-                              timeToFirstToken={message.timeToFirstToken}
-                              totalLatency={message.totalLatency}
-                              usage={message.usage}
-                              toolName={message.toolName}
-                            />
-                          )}
-
-                        {/* A2A Metrics - show for A2A agent responses */}
-                        {message.role === "assistant" && message.a2aMetadata && (
-                          <A2AMetrics
-                            a2aMetadata={message.a2aMetadata}
-                            timeToFirstToken={message.timeToFirstToken}
-                            totalLatency={message.totalLatency}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* Show MCP events during loading if no assistant message exists yet */}
-              {isLoading &&
-                mcpEvents.length > 0 &&
-                (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
-                chatHistory.length > 0 &&
-                chatHistory[chatHistory.length - 1].role === "user" && (
-                  <div className="text-left mb-4">
-                    <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: "#ffffff",
-                        border: "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: "#f5f5f5",
-                          }}
-                        >
-                          <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
-                        </div>
-                        <strong className="text-sm capitalize">Assistant</strong>
-                      </div>
-                      <MCPEventsDisplay events={mcpEvents} />
-                    </div>
-                  </div>
-                )}
-
-              {isLoading && (
-                <div className="flex justify-center items-center my-4">
-                  <Spin indicator={antIcon} />
-                </div>
-              )}
-              <div ref={chatEndRef} style={{ height: "1px" }} />
-            </div>
+            <ChatHeader
+              simplified={simplified}
+              onClearChat={clearChatHistory}
+              onGetCode={() => setIsGetCodeModalVisible(true)}
+            />
+            <ChatMessageList
+              chatHistory={chatHistory}
+              endpointType={endpointType}
+              mcpEvents={mcpEvents}
+              codeInterpreterResult={codeInterpreter.result}
+              isLoading={isLoading}
+              accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+              chatEndRef={chatEndRef}
+            />
 
             <div className="p-4 border-t border-gray-200 bg-white">
               {/* Image Upload Section for Image Edits */}
@@ -2341,21 +1770,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {/* Suggested prompts - show when chat is empty and not loading (skip for MCP - uses structured form) */}
               {chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP && (
-                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
-                  {(endpointType === EndpointType.A2A_AGENTS
-                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
-                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
-                  ).map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
-                      onClick={() => setInputMessage(prompt)}
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
+                <SuggestedPrompts
+                  endpointType={endpointType}
+                  onPromptClick={setInputMessage}
+                />
               )}
 
               <div className="flex items-center gap-2">
@@ -2501,49 +1919,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
         </div>
       </Card>
-      <Modal
-        title="Generated Code"
-        open={isGetCodeModalVisible}
-        onCancel={() => setIsGetCodeModalVisible(false)}
-        footer={null}
-        width={800}
-      >
-        <div className="flex justify-between items-end my-4">
-          <div>
-            <Text className="font-medium block mb-1 text-gray-700">SDK Type</Text>
-            <Select
-              value={selectedSdk}
-              onChange={(value) => setSelectedSdk(value as "openai" | "azure")}
-              style={{ width: 150 }}
-              options={[
-                { value: "openai", label: "OpenAI SDK" },
-                { value: "azure", label: "Azure SDK" },
-              ]}
-            />
-          </div>
-          <Button
-            onClick={() => {
-              navigator.clipboard.writeText(generatedCode);
-              NotificationsManager.success("Copied to clipboard!");
-            }}
-          >
-            Copy to Clipboard
-          </Button>
-        </div>
-        <SyntaxHighlighter
-          language="python"
-          style={coy as any}
-          wrapLines={true}
-          wrapLongLines={true}
-          className="rounded-md"
-          customStyle={{
-            maxHeight: "60vh",
-            overflowY: "auto",
-          }}
-        >
-          {generatedCode}
-        </SyntaxHighlighter>
-      </Modal>
+      <GetCodeModal
+        visible={isGetCodeModalVisible}
+        onClose={() => setIsGetCodeModalVisible(false)}
+        generatedCode={generatedCode}
+        selectedSdk={selectedSdk}
+        onSdkChange={(sdk) => setSelectedSdk(sdk)}
+      />
 
       {byokModalServer && (
         <ByokCredentialModal
