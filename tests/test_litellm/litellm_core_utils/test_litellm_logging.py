@@ -2118,6 +2118,7 @@ async def test_async_streaming_notfounderror_still_emits_span(monkeypatch):
         call_type="completion",
         start_time=time.time(),
         litellm_call_id="notfound-async-stream",
+        function_id="test-fn-id",
     )
 
     complete_streaming_response = ModelResponse(
@@ -2139,7 +2140,9 @@ async def test_async_streaming_notfounderror_still_emits_span(monkeypatch):
     )
 
     def _raise_not_found(*_, **__):
-        raise litellm.NotFoundError("missing pricing for model")
+        raise litellm.NotFoundError(
+            "missing pricing for model", model="unknown/model", llm_provider="custom"
+        )
 
     monkeypatch.setattr(logging_obj, "_response_cost_calculator", _raise_not_found)
 
