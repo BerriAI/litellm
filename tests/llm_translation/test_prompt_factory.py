@@ -903,6 +903,54 @@ def test_ensure_alternating_roles_does_not_split_tool_call_chain():
     ]
 
 
+def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
+    """
+    Preserve old behavior for malformed adjacent assistant turns:
+    [assistant(tool_calls), assistant(no-tool-calls), user] should insert
+    user_continue between assistant messages.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Please continue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
 def test_ensure_alternating_roles_trailing_tool_call_assistant():
     messages = [
         {"role": "user", "content": "What's the weather?"},
