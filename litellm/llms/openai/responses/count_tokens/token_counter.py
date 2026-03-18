@@ -5,6 +5,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 import os
 from typing import Any, Dict, List, Optional
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.common_utils import OpenAIError

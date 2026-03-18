@@ -644,6 +644,44 @@ def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_respo
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_opt_out_does_not_disable_responses_prefix():
+    """Anthropic opt-out flag should not affect generic responses/ prefix routing."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch.object(
+        litellm, "use_chat_completions_url_for_anthropic_messages", True
+    ):
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+            model_info, model = responses_api_bridge_check(
+                model="responses/gpt-4-responses",
+                custom_llm_provider="openai",
+            )
+
+    assert model == "gpt-4-responses"
+    assert model_info["mode"] == "responses"
+
+
+def test_responses_api_bridge_check_opt_out_does_not_disable_gpt_5_4_tools_plus_reasoning():
+    """Anthropic opt-out flag should not affect generic OpenAI responses routing."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch.object(
+        litellm, "use_chat_completions_url_for_anthropic_messages", True
+    ):
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 128000}
+            model_info, model = responses_api_bridge_check(
+                model="gpt-5.4",
+                custom_llm_provider="openai",
+                tools=[{"type": "function", "function": {"name": "get_capital"}}],
+                reasoning_effort="xhigh",
+            )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_responses():
     """gpt-5.5+ with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check

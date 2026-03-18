@@ -218,6 +218,23 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") == "responses"
         assert updated_model == model
 
+    def test_responses_api_bridge_check_opt_out_does_not_disable_xai_web_search(self):
+        """Anthropic opt-out flag should not suppress xAI Responses routing."""
+        model = "grok-4-1-fast"
+        custom_llm_provider = "xai"
+
+        with patch.object(
+            litellm, "use_chat_completions_url_for_anthropic_messages", True
+        ):
+            model_info, updated_model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options={},
+            )
+
+        assert model_info.get("mode") == "responses"
+        assert updated_model == model
+
     @patch("litellm.completion_extras.responses_api_bridge.completion")
     def test_completion_with_tools_routes_to_responses_api(
         self, mock_responses_completion

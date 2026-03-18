@@ -158,3 +158,20 @@ def test_acount_tokens_no_api_key_falls_back():
     finally:
         if env_backup:
             os.environ["OPENAI_API_KEY"] = env_backup
+
+
+def test_acount_tokens_opt_out_does_not_raise_name_error_and_falls_back():
+    """Anthropic opt-out flag should disable OpenAI token API without crashing."""
+    with patch.object(
+        litellm, "use_chat_completions_url_for_anthropic_messages", True
+    ):
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="sk-test-key",
+            )
+        )
+
+    assert result.total_tokens > 0
+    assert result.tokenizer_type == "local_tokenizer"
