@@ -632,6 +632,7 @@ const sidebars = {
             "mcp_openapi",
             "mcp_oauth",
             "mcp_aws_sigv4",
+            "mcp_zero_trust",
             "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
