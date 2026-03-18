@@ -288,16 +288,16 @@ class TestResponsesAPIPromptManagement:
 class TestAsyncResponsesAPIPromptManagement:
     """Tests for the async aresponses() prompt management path.
 
-    aresponses() calls async_get_chat_completion_prompt at the outer async level
-    (for async-only prompt loggers), then delegates to responses() via
-    run_in_executor where the sync hook also runs — mirroring acompletion() in
-    main.py. Optional params are handled by the sync responses() path.
+    aresponses() calls async_get_chat_completion_prompt at the outer async
+    level, then pops prompt_id from kwargs and passes merged_optional_params
+    via an internal kwarg. The sync responses() path sees no prompt_id and
+    skips the sync hook entirely — preventing double-merge of template messages.
     """
 
     @pytest.mark.asyncio
-    async def test_async_calls_async_hook(self):
-        """[H] aresponses() invokes async_get_chat_completion_prompt before
-        dispatching to the sync responses() path."""
+    async def test_async_calls_async_hook_not_sync(self):
+        """[H] aresponses() invokes async_get_chat_completion_prompt and the
+        sync get_chat_completion_prompt is NOT called (no double-merge)."""
         template_messages: List[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
@@ -318,14 +318,14 @@ class TestAsyncResponsesAPIPromptManagement:
             )
 
         logging_obj.async_get_chat_completion_prompt.assert_called_once()
+        logging_obj.get_chat_completion_prompt.assert_not_called()
         call_kwargs = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
         assert call_kwargs["prompt_id"] == "async-test"
 
     @pytest.mark.asyncio
     async def test_async_optional_params_propagated(self):
-        """[I] Template-defined optional params (e.g. temperature) reach the downstream
-        handler when called via aresponses(). The sync responses() path applies them
-        via local_vars."""
+        """[I] Template-defined optional params (e.g. temperature) from the async
+        hook reach the downstream handler — they are NOT silently discarded."""
         template_messages: List[AllMessageValues] = [
             {"role": "user", "content": "Hello"},  # type: ignore[list-item]
         ]
@@ -345,6 +345,7 @@ class TestAsyncResponsesAPIPromptManagement:
                 litellm_logging_obj=logging_obj,
             )
 
+        logging_obj.get_chat_completion_prompt.assert_not_called()
         handler_call_kwargs = mock_handler.call_args.kwargs
         request_params = handler_call_kwargs.get("responses_api_request", {})
         assert request_params.get("temperature") == 0.7
@@ -375,6 +376,7 @@ class TestAsyncResponsesAPIPromptManagement:
             )
 
         logging_obj.async_get_chat_completion_prompt.assert_called_once()
+        logging_obj.get_chat_completion_prompt.assert_not_called()
         call_kwargs = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
