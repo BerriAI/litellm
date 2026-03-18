@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,25 @@ vi.mock("./molecules/notifications_manager", () => ({
     info: vi.fn(),
     fromBackend: vi.fn(),
   },
+}));
+
+// Mock VectorStoreSelector as a controlled component that integrates with Ant Design Form.Item.
+// Form.Item passes value/onChange props to its child; this mock renders a hidden input so the
+// form value is properly tracked and can be manipulated in tests.
+vi.mock("./vector_store_management/VectorStoreSelector", () => ({
+  default: ({ value, onChange, ...rest }: any) =>
+    React.createElement("input", {
+      "data-testid": "vector-store-selector",
+      type: "hidden",
+      value: JSON.stringify(value ?? []),
+      onChange: (e: any) => {
+        try {
+          onChange?.(JSON.parse(e.target.value));
+        } catch {
+          onChange?.([]);
+        }
+      },
+    }),
 }));
 
 vi.mock("./networking", () => ({
@@ -635,5 +654,351 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("should not inject empty vector_store_ids into litellm_params on save", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has NO vector_store_ids in litellm_params
+    const modelWithoutVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        // no vector_store_ids
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithoutVectorStores] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.vector_store_ids).toBeUndefined();
+  });
+
+  it("should preserve non-empty vector_store_ids in litellm_params on save", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model HAS vector_store_ids configured
+    const modelWithVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        vector_store_ids: ["vs_abc123", "vs_def456"],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithVectorStores] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.vector_store_ids).toEqual(["vs_abc123", "vs_def456"]);
+  });
+
+  it("should not inject empty vector_store_ids when model previously had empty array", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has vector_store_ids set to empty array (the bug condition)
+    const modelWithEmptyVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        vector_store_ids: [],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithEmptyVectorStores] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.vector_store_ids).toBeUndefined();
+  });
+
+  it("should remove vector_store_ids when user clears all vector stores from a model that had them", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has vector_store_ids configured — simulates a model where user will remove them
+    const modelWithVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        vector_store_ids: ["vs_abc123"],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithVectorStores] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    // Simulate user clearing all vector stores by setting the form field to []
+    const vectorStoreInput = screen.getByTestId("vector-store-selector");
+    // Simulate user clearing all vector stores via the selector
+    fireEvent.change(vectorStoreInput, { target: { value: "[]" } });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    // vector_store_ids should be fully removed via the else { delete } branch,
+    // not re-injected via parsedExtraParams from the litellm_extra_params textarea
+    expect(updatePayload.litellm_params.vector_store_ids).toBeUndefined();
+  });
+
+  // --- guardrails tests (same pattern as vector_store_ids) ---
+
+  it("should not inject empty guardrails into litellm_params on save", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has NO guardrails in litellm_params
+    const modelWithoutGuardrails = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        // no guardrails
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithoutGuardrails] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.guardrails).toBeUndefined();
+  });
+
+  it("should preserve non-empty guardrails in litellm_params on save", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model HAS guardrails configured
+    const modelWithGuardrails = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        guardrails: ["content_filter", "toxicity_filter"],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithGuardrails] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.guardrails).toEqual(["content_filter", "toxicity_filter"]);
+  });
+
+  it("should not inject empty guardrails when model previously had empty array", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has guardrails set to empty array (same bug pattern as vector_store_ids)
+    const modelWithEmptyGuardrails = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        guardrails: [],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithEmptyGuardrails] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.guardrails).toBeUndefined();
+  });
+
+  it("should remove guardrails when model previously had them but they are cleared", async () => {
+    const user = userEvent.setup();
+    const mockOnModelUpdate = vi.fn();
+
+    // Model has guardrails configured — the else { delete } branch must scrub
+    // the value that leaks through parsedExtraParams when the form field is empty
+    const modelWithGuardrails = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        guardrails: ["content_filter"],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithGuardrails] },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onModelUpdate={mockOnModelUpdate} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    // Clear the guardrails select by removing all selected tags
+    // The Ant Design Select with mode="tags" renders selected items as removable tags
+    const removeButtons = screen.queryAllByLabelText("close");
+    for (const btn of removeButtons) {
+      await user.click(btn);
+    }
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    // guardrails should be fully removed via the else { delete } branch
+    expect(updatePayload.litellm_params.guardrails).toBeUndefined();
   });
 });

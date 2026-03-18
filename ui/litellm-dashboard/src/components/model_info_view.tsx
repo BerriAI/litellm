@@ -262,13 +262,15 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      if (Array.isArray(values.guardrails) && values.guardrails.length > 0) {
         updatedLitellmParams.guardrails = values.guardrails;
+      } else {
+        delete updatedLitellmParams.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      if (Array.isArray(values.vector_store_ids) && values.vector_store_ids.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
@@ -628,12 +630,12 @@ export default function ModelInfoView({
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
                       ? localModelData.model_info.access_groups
                       : [],
-                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
+                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails) && localModelData.litellm_params.guardrails.length > 0
                       ? localModelData.litellm_params.guardrails
-                      : [],
-                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
+                      : undefined,
+                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids) && localModelData.litellm_params.vector_store_ids.length > 0
                       ? localModelData.litellm_params.vector_store_ids
-                      : [],
+                      : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
