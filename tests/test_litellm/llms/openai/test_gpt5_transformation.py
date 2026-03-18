@@ -409,6 +409,41 @@ def test_gpt5_supports_reasoning_effort_level_minimal(gpt5_config: OpenAIGPT5Con
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-nano", "minimal")
 
 
+def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
+    """_is_reasoning_effort_level_explicitly_disabled returns True only for explicit False entries.
+
+    Models with supports_minimal_reasoning_effort=false → disabled.
+    Models with supports_minimal_reasoning_effort=true (or missing) → not disabled.
+    """
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-mini", "minimal"
+    )
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-nano", "minimal"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4", "minimal"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4-pro", "minimal"
+    )
+
+
+def test_gpt5_unknown_model_passes_through_minimal(config: OpenAIConfig):
+    """Unknown/unlisted gpt-5 models should pass reasoning_effort='minimal' through.
+
+    Missing supports_minimal_reasoning_effort key is treated as supported,
+    not as unsupported, to avoid breaking custom or newly-announced models.
+    """
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5.4-turbo-preview",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
 def test_gpt5_normalizes_reasoning_effort_dict_with_summary(config: OpenAIConfig):
     """Dict with summary/generate_summary is normalized for chat completions."""
     params = config.map_openai_params(
