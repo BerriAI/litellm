@@ -598,6 +598,23 @@ When `gpt-5.4+` requests to `litellm.completion()` include both `reasoning_effor
 
 You can also route explicitly via `openai/responses/gpt-5.4` or `azure/responses/gpt-5.4`. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
 
+**Azure custom deployment names:** Auto-routing relies on the deployment name matching the `gpt-5.4*` pattern. If you use a custom deployment name (e.g. `"my-reasoning-model"`), enable routing via:
+
+**SDK:**
+```python
+litellm.completion(model="azure/responses/my-reasoning-model", ...)
+```
+
+**Proxy config:**
+```yaml
+model_list:
+  - model_name: my-reasoning-model
+    litellm_params:
+      model: azure/my-reasoning-model
+    model_info:
+      mode: responses
+```
+
 :::
 
 ## OpenAI Responses API - Auto-Summary Control
