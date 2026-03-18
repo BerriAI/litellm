@@ -24,25 +24,21 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            reasoning_content: Optional[str] = None
 
             if processed_chunk.choices[0].delta.content is not None:  # type: ignore
                 text = processed_chunk.choices[0].delta.content  # type: ignore
 
             if (
+                getattr(processed_chunk.choices[0].delta, "reasoning_content", None)
+                is not None
+            ):  # type: ignore
+                reasoning_content = processed_chunk.choices[0].delta.reasoning_content  # type: ignore
+
+            if (
                 processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
                 and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments  # type: ignore
-                is not None
             ):
-                tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,  # type: ignore
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.name,
-                        arguments=processed_chunk.choices[0]
                         .delta.tool_calls[0]  # type: ignore
                         .function.arguments,
                     ),
@@ -68,6 +64,7 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
+                reasoning_content=reasoning_content,
             )
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

@@ -192,6 +192,50 @@ def test_is_chunk_non_empty_with_annotations(
     )
 
 
+def test_is_chunk_non_empty_with_reasoning_content_in_completion_obj(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Reasoning-only completion_obj chunks must not be dropped before Delta creation."""
+    chunk = {
+        "id": "reasoning-only-chunk",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "deepseek-reasoner",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": None},
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"content": "", "reasoning_content": "Thinking..."},
+            model_response=ModelResponseStream(**chunk),
+            response_obj={},
+        )
+        is True
+    )
+
+
+def test_return_processed_chunk_logic_keeps_reasoning_only_completion_obj(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Reasoning-only chunks should be returned once completion_obj carries reasoning_content."""
+    completion_obj = {"content": "", "reasoning_content": "Thinking..."}
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj=completion_obj,
+        model_response=ModelResponseStream(),
+        response_obj={},
+    )
+
+    assert returned_chunk is not None
+    assert returned_chunk.choices[0].delta.reasoning_content == "Thinking..."
+    assert returned_chunk.choices[0].delta.content == ""
+
+
 def test_optional_combine_thinking_block_in_choices(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
