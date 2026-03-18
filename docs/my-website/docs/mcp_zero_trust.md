@@ -3,6 +3,8 @@ import TabItem from '@theme/TabItem';
 
 # MCP Zero Trust Auth (JWT Signer)
 
+![Zero Trust MCP Gateway](/img/mcp_zero_trust_gateway.png)
+
 The `MCPJWTSigner` guardrail signs every outbound MCP tool call with a LiteLLM-issued RS256 JWT. MCP servers validate tokens against LiteLLM's JWKS endpoint instead of trusting each upstream IdP directly.
 
 ```mermaid
