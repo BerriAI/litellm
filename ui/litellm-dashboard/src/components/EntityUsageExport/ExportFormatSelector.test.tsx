@@ -27,9 +27,7 @@ describe("ExportFormatSelector", () => {
     // Open the Ant Design Select dropdown
     await user.click(screen.getByText("CSV (Excel, Google Sheets)"));
     // Select JSON option from the dropdown
-    const jsonOption = await screen.findByText("JSON (includes metadata)", {
-      selector: ".ant-select-item-option-content",
-    });
+    const jsonOption = await screen.findByText("JSON (includes metadata)");
     await user.click(jsonOption);
     expect(onChange).toHaveBeenCalledWith("json", expect.anything());
   });
