@@ -581,6 +581,19 @@ def test_get_gemini_url_stream_query_param_only_for_chat_mode():
     assert "alt=sse" not in embedding_url
 
 
+def test_get_gemini_url_requires_literal_true_for_streaming_endpoint_and_alt_sse():
+    url, endpoint = _get_gemini_url(
+        mode="chat",
+        model="gemini-1.5-flash",
+        stream=1,  # truthy non-bool should not be treated as streaming=True
+        gemini_api_key="test-key",
+        gemini_oauth_token=None,
+    )
+
+    assert endpoint == "generateContent"
+    assert "alt=sse" not in url
+
+
 @pytest.mark.parametrize(
     "model_cost_entry, vertex_region, expected_region",
     [

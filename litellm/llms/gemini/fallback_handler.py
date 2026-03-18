@@ -2,9 +2,9 @@ from typing import Any, Awaitable, Callable, Dict
 
 from litellm._logging import verbose_logger
 from litellm.llms.gemini.common_utils import should_fallback_to_google_code_assist
-from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
+from litellm.llms.google_code_assist.chat import get_google_code_assist_chat
 
-_google_code_assist_chat = GoogleCodeAssistChat()
+_google_code_assist_chat = get_google_code_assist_chat()
 
 
 async def run_gemini_acompletion_with_code_assist_fallback(

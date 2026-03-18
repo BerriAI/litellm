@@ -246,3 +246,13 @@ class GoogleCodeAssistChat:
         if isinstance(e, GoogleCodeAssistError):
             return e
         return GoogleCodeAssistError(status_code=500, message=str(e))
+
+
+_shared_google_code_assist_chat: Optional[GoogleCodeAssistChat] = None
+
+
+def get_google_code_assist_chat() -> GoogleCodeAssistChat:
+    global _shared_google_code_assist_chat
+    if _shared_google_code_assist_chat is None:
+        _shared_google_code_assist_chat = GoogleCodeAssistChat()
+    return _shared_google_code_assist_chat

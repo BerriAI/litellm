@@ -349,7 +349,6 @@ def _get_gemini_url(
         "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
     )
 
-    endpoint = "generateContent"
     if mode == "chat":
         endpoint = "generateContent"
         if stream is True:
@@ -374,7 +373,7 @@ def _get_gemini_url(
     params = []
     if gemini_api_key and not gemini_oauth_token:
         params.append(f"key={gemini_api_key}")
-    if mode == "chat" and stream:
+    if mode == "chat" and stream is True:
         params.append("alt=sse")
 
     if params:

@@ -2,11 +2,17 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import json
-from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
+from litellm.llms.google_code_assist.chat import (
+    GoogleCodeAssistChat,
+    get_google_code_assist_chat,
+)
 from litellm.types.utils import ModelResponse
 
 
 class TestGoogleCodeAssist:
+    def test_get_google_code_assist_chat_returns_singleton(self):
+        assert get_google_code_assist_chat() is get_google_code_assist_chat()
+
     @patch("litellm.llms.google_code_assist.chat._get_httpx_client")
     @patch("litellm.llms.gemini.common_utils.get_gemini_oauth_token")
     def test_completion_basic(self, mock_get_token, mock_get_client):

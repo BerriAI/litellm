@@ -101,7 +101,7 @@ from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
+from litellm.llms.google_code_assist.chat import get_google_code_assist_chat
 from litellm.llms.gemini.fallback_handler import (
     run_gemini_acompletion_with_code_assist_fallback,
     run_gemini_completion_with_code_assist_fallback,
@@ -161,7 +161,7 @@ from litellm.utils import (
     validate_openai_optional_params,
 )
 
-_google_code_assist_chat = GoogleCodeAssistChat()
+_google_code_assist_chat = get_google_code_assist_chat()
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
