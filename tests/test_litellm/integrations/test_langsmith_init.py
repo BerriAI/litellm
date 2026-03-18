@@ -12,16 +12,8 @@ from litellm.integrations.langsmith import LangsmithLogger
 class TestLangsmithPrepareLogData:
     """Test cases for LangSmith _prepare_log_data output formatting."""
 
-    @patch("asyncio.create_task")
-    def test_prepare_log_data_populates_usage_metadata(self, mock_create_task):
-        """outputs["usage_metadata"] must be present so LangSmith can show the Cost column."""
-        logger = LangsmithLogger(langsmith_api_key="test-key")
-        credentials = logger.get_credentials_from_env(
-            langsmith_api_key="test-key",
-            langsmith_project="test-project",
-            langsmith_base_url="https://api.smith.langchain.com",
-        )
-        standard_logging_object = {
+    def _make_kwargs(self, extra_payload=None):
+        payload = {
             "id": "test-id",
             "call_type": "completion",
             "model": "gpt-4o-mini",
@@ -53,13 +45,23 @@ class TestLangsmithPrepareLogData:
             "completion_tokens": 5,
             "total_tokens": 8,
             "response_cost": 0.00015,
+            "cost_breakdown": {"input_cost": 0.00009, "output_cost": 0.00006},
         }
-        kwargs = {
-            "litellm_params": {"metadata": {}},
-            "standard_logging_object": standard_logging_object,
-        }
+        if extra_payload:
+            payload.update(extra_payload)
+        return {"litellm_params": {"metadata": {}}, "standard_logging_object": payload}
+
+    @patch("asyncio.create_task")
+    def test_prepare_log_data_populates_usage_metadata(self, mock_create_task):
+        """outputs["usage_metadata"] must be present so LangSmith can show the Cost column."""
+        logger = LangsmithLogger(langsmith_api_key="test-key")
+        credentials = logger.get_credentials_from_env(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            langsmith_base_url="https://api.smith.langchain.com",
+        )
         data = logger._prepare_log_data(
-            kwargs=kwargs,
+            kwargs=self._make_kwargs(),
             response_obj=None,
             start_time=None,
             end_time=None,
@@ -74,8 +76,66 @@ class TestLangsmithPrepareLogData:
         assert usage_metadata["output_tokens"] == 5
         assert usage_metadata["total_tokens"] == 8
         assert usage_metadata["total_cost"] == pytest.approx(0.00015)
-        assert usage_metadata["input_cost"] == pytest.approx(0.00015)
+        assert usage_metadata["input_cost"] == pytest.approx(0.00009)
+        assert usage_metadata["output_cost"] == pytest.approx(0.00006)
+
+    @patch("asyncio.create_task")
+    def test_prepare_log_data_usage_metadata_none_values_default_to_zero(
+        self, mock_create_task
+    ):
+        """None token/cost fields must not be passed to LangSmith; they must fall back to 0."""
+        logger = LangsmithLogger(langsmith_api_key="test-key")
+        credentials = logger.get_credentials_from_env(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            langsmith_base_url="https://api.smith.langchain.com",
+        )
+        data = logger._prepare_log_data(
+            kwargs=self._make_kwargs(
+                {
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                    "response_cost": None,
+                    "cost_breakdown": None,
+                }
+            ),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+            credentials=credentials,
+        )
+        usage_metadata = data["outputs"]["usage_metadata"]
+        assert usage_metadata["input_tokens"] == 0
+        assert usage_metadata["output_tokens"] == 0
+        assert usage_metadata["total_tokens"] == 0
+        assert usage_metadata["input_cost"] == 0.0
         assert usage_metadata["output_cost"] == 0.0
+        assert usage_metadata["total_cost"] == 0.0
+
+    @patch("asyncio.create_task")
+    def test_prepare_log_data_does_not_mutate_original_response(
+        self, mock_create_task
+    ):
+        """Injecting usage_metadata must not modify the original payload['response'] dict."""
+        logger = LangsmithLogger(langsmith_api_key="test-key")
+        credentials = logger.get_credentials_from_env(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+            langsmith_base_url="https://api.smith.langchain.com",
+        )
+        kwargs = self._make_kwargs()
+        original_response = kwargs["standard_logging_object"]["response"]
+        logger._prepare_log_data(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+            credentials=credentials,
+        )
+        assert "usage_metadata" not in original_response, (
+            "_prepare_log_data must not mutate the original payload['response'] dict"
+        )
 
 
 class TestLangsmithLoggerInit:
