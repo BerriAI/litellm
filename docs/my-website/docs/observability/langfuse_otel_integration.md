@@ -83,6 +83,9 @@ os.environ["LANGFUSE_OTEL_HOST"] = "https://cloud.langfuse.com"  # EU region
 # Or use self-hosted instance
 # os.environ["LANGFUSE_OTEL_HOST"] = "https://my-langfuse.company.com"
 
+# Optional: Ignore otel context propagation to prevent parent-child relationships with spans from other providers
+# os.environ["OTEL_IGNORE_CONTEXT_PROPAGATION"] = "true"
+
 litellm.callbacks = ["langfuse_otel"]
 ```
 
@@ -124,6 +127,9 @@ export LANGFUSE_PUBLIC_KEY="pk-lf-..."
 export LANGFUSE_SECRET_KEY="sk-lf-..."
 export LANGFUSE_OTEL_HOST="https://us.cloud.langfuse.com"  # Default US region
 # export LANGFUSE_OTEL_HOST="https://otel.my-langfuse.company.com"  # custom OTEL endpoint
+
+# Optional: Ignore otel context propagation to prevent parent-child relationships with spans from other providers
+# export OTEL_IGNORE_CONTEXT_PROPAGATION="true"
 ```
 
 2. Setup config.yaml
