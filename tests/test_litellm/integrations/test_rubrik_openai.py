@@ -1190,6 +1190,75 @@ class TestAsyncPostCallStreamingIteratorHook:
         assert chunks[0].choices[0].finish_reason == "stop"
         assert explanation in chunks[0].choices[0].delta.content
 
+    async def test_streaming_finish_chunk_partial_blocking(self, handler):
+        """
+        Regression test: GPT-5 style finish chunk with two tools where one is blocked.
+        The explanation must still be emitted even though the finish chunk has allowed tools.
+        """
+        args_allowed = '{"query":"weather"}'
+        args_blocked = '{"path":"/etc/passwd"}'
+        explanation = "Tool blocked by policy"
+
+        async def mock_post(*_args: Any, **kwargs: Any) -> Mock:
+            """Return only the allowed tool (index 0), blocking index 1."""
+            payload = kwargs.get("json", {})
+            tool_calls = payload.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+            allowed = [tc for tc in tool_calls if tc.get("function", {}).get("name") == "get_weather"]
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "choices": [{"message": {"role": "assistant", "content": explanation, "tool_calls": allowed}}]
+            }
+            mock_response.raise_for_status = Mock()
+            return mock_response
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        handler.tool_blocking_client = mock_client
+
+        async def gpt5_two_tool_stream():
+            # Tool 0 header
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                ChatCompletionDeltaToolCall(index=0, id="call_weather", type="function", function=Function(name="get_weather", arguments="")),
+            ]), finish_reason=None)])
+            # Tool 0 args
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                ChatCompletionDeltaToolCall(index=0, id=None, type=None, function=Function(name=None, arguments=args_allowed)),
+            ]), finish_reason=None)])
+            # Tool 1 header
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                ChatCompletionDeltaToolCall(index=1, id="call_read_file", type="function", function=Function(name="read_file", arguments="")),
+            ]), finish_reason=None)])
+            # Tool 1 args
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                ChatCompletionDeltaToolCall(index=1, id=None, type=None, function=Function(name=None, arguments=args_blocked)),
+            ]), finish_reason=None)])
+            # GPT-5 style finish chunk repeating both tools
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                ChatCompletionDeltaToolCall(index=0, id=None, type=None, function=Function(name=None, arguments=args_allowed)),
+                ChatCompletionDeltaToolCall(index=1, id=None, type=None, function=Function(name=None, arguments=args_blocked)),
+            ]), finish_reason="tool_calls")])
+
+        chunks = []
+        async for chunk in handler.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=gpt5_two_tool_stream(),
+            request_data=create_openai_request_data(),
+        ):
+            chunks.append(chunk)
+
+        # Should have: tool 0 chunks (header + args), explanation chunk, finish chunk with allowed tool
+        # The blocked tool 1 chunks should be dropped
+        has_explanation = any(
+            c.choices[0].delta and c.choices[0].delta.content and explanation in c.choices[0].delta.content
+            for c in chunks
+        )
+        assert has_explanation, "Explanation chunk was not emitted for partial blocking"
+
+        # Finish chunk should have finish_reason="tool_calls" (not "stop")
+        finish_chunks = [c for c in chunks if c.choices[0].finish_reason]
+        assert len(finish_chunks) == 1
+        assert finish_chunks[0].choices[0].finish_reason == "tool_calls"
+
 
 @pytest.fixture
 def mock_response_no_tools():

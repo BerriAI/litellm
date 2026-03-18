@@ -466,6 +466,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     buffered_choice.delta.tool_calls = None
                 else:
                     buffered_choice.delta.tool_calls = filtered_calls
+                    if buffered_choice.finish_reason:
+                        # GPT-5 style: finish chunk carries allowed tool calls —
+                        # emit explanation before yielding the finish chunk.
+                        if explanation:
+                            yield RubrikLogger._create_openai_explanation_chunk(buffered_chunk, explanation)
                     yield buffered_chunk
                     continue
 
@@ -971,7 +976,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """
         openai_dict.setdefault("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
         anthropic_response = self.anthropic_adapter.translate_openai_response_to_anthropic(
-            response=ModelResponse(**openai_dict),
+            response=ModelResponse.model_validate(openai_dict),
         )
 
         new_content = anthropic_response.get("content") or []
