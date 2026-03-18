@@ -3249,6 +3249,8 @@ async def _build_team_list_where_conditions(
     user_id: Optional[str],
     use_deleted_table: bool,
     org_admin_org_ids: Optional[List[str]] = None,
+    user_api_key_cache: Optional[Any] = None,
+    proxy_logging_obj: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Build where conditions for team list query.
@@ -3274,34 +3276,33 @@ async def _build_team_list_where_conditions(
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
-        user_object = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}
-        )
-        if user_object is None:
+        try:
+            user_object_correct_type = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ValueError:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
-        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        if user_object_correct_type is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
         user_team_ids = user_object_correct_type.teams or []
 
         if use_deleted_table:
             where_conditions["members"] = {"has": user_id}
-        elif org_admin_org_ids is not None:
-            # Org admin with user_id filter: show teams in their orgs
-            # OR teams the user is a direct member of (matches legacy
-            # _authorize_and_filter_teams behaviour).
-            # When team_id is also provided, the exact match is already in
-            # where_conditions and the org scope just needs to be added —
-            # no OR expansion needed.
-            if team_id is not None:
-                where_conditions["organization_id"] = {"in": org_admin_org_ids}
-            elif user_team_ids:
-                org_condition: Dict[str, Any] = {"organization_id": {"in": org_admin_org_ids}}
-                where_conditions["OR"] = [org_condition, {"team_id": {"in": user_team_ids}}]
-            else:
-                where_conditions["organization_id"] = {"in": org_admin_org_ids}
         else:
+            # When user_id is provided, filter by that user's direct team
+            # memberships. For org admins the access control gate in
+            # list_team_v2 already verified the caller's authority — the
+            # filter logic is the same as for regular users.
             if not user_team_ids:
                 return None  # no memberships — skip the DB query
             elif team_id is not None:
@@ -3466,6 +3467,8 @@ async def list_team_v2(
         user_id=user_id,
         use_deleted_table=use_deleted_table,
         org_admin_org_ids=org_admin_org_ids,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     if where_conditions is None:
