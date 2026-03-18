@@ -312,9 +312,9 @@ class MCPServerManager:
                     server_id,
                     _discovered_token_url,
                 )
-            resolved_token_url = _explicit_token_url or (
-                _discovered_token_url if not _has_client_creds else None
-            )
+                resolved_token_url = None
+            else:
+                resolved_token_url = _explicit_token_url or _discovered_token_url
             resolved_registration_url = server_config.get("registration_url") or (
                 mcp_oauth_metadata.registration_url if mcp_oauth_metadata else None
             )

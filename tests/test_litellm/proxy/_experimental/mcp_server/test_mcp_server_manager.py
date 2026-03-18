@@ -762,8 +762,6 @@ class TestMCPServerManager:
             assert server_url == "https://example.com/mcp"
             return discovered_metadata
 
-        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
-
         config = {
             "example": {
                 "url": "https://example.com/mcp",
@@ -774,7 +772,8 @@ class TestMCPServerManager:
             }
         }
 
-        await manager.load_servers_from_config(config)
+        with unittest.mock.patch.object(manager, "_descovery_metadata", side_effect=fake_discovery):
+            await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.scopes == ["config"]  # config overrides discovery
