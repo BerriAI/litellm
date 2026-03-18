@@ -14,8 +14,10 @@ describe("ExportSummary", () => {
 
   it("should display formatted date range", () => {
     render(<ExportSummary dateRange={dateRange} selectedFilters={[]} />);
-    const text = screen.getByText(/\d+.*-.*\d+/);
-    expect(text).toBeInTheDocument();
+    // Pin locale to en-US so test is deterministic regardless of CI runner locale
+    const expectedFrom = dateRange.from!.toLocaleDateString("en-US");
+    const expectedTo = dateRange.to!.toLocaleDateString("en-US");
+    expect(screen.getByText(`${expectedFrom} - ${expectedTo}`)).toBeInTheDocument();
   });
 
   it("should show singular 'filter' for one filter", () => {
