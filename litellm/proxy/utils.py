@@ -1124,17 +1124,44 @@ class ProxyLogging:
             data.pop("prompt_version", None)
 
     def _process_guardrail_metadata(self, data: dict) -> None:
-        """
-        Previously this method pre-populated applied_guardrails with every guardrail
-        listed in metadata.guardrails, before any guardrail actually ran.  That caused
-        embeddings / image requests to show all configured guardrails as "applied" even
-        when the guardrails silently skipped them (returning early due to no text content).
+        """Process guardrails from metadata and add to applied_guardrails."""
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
 
-        The applied_guardrails list is now populated exclusively by guardrails that
-        actually execute — each guardrail calls add_guardrail_to_applied_guardrails_header
-        itself when it runs.  This method is kept as a no-op stub so existing call-sites
-        in pre_call_hook do not need to be changed.
-        """
+        metadata_standard = data.get("metadata") or {}
+        metadata_litellm = data.get("litellm_metadata") or {}
+
+        guardrails_in_metadata = []
+        if isinstance(metadata_standard, dict) and "guardrails" in metadata_standard:
+            guardrails_in_metadata = metadata_standard.get("guardrails", [])
+        elif isinstance(metadata_litellm, dict) and "guardrails" in metadata_litellm:
+            guardrails_in_metadata = metadata_litellm.get("guardrails", [])
+
+        if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):
+            applied_guardrails = []
+            if (
+                isinstance(metadata_standard, dict)
+                and "applied_guardrails" in metadata_standard
+            ):
+                applied_guardrails = metadata_standard.get("applied_guardrails", [])
+            elif (
+                isinstance(metadata_litellm, dict)
+                and "applied_guardrails" in metadata_litellm
+            ):
+                applied_guardrails = metadata_litellm.get("applied_guardrails", [])
+
+            if not isinstance(applied_guardrails, list):
+                applied_guardrails = []
+
+            for guardrail_name in guardrails_in_metadata:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                ):
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=data, guardrail_name=guardrail_name
+                    )
 
     async def _maybe_execute_pipelines(
         self,
