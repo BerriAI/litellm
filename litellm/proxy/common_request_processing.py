@@ -1098,7 +1098,12 @@ class ProxyBaseLLMRequestProcessing:
             _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
             if _enqueue_fn is not None:
                 logging_obj._enqueue_deferred_logging = None  # type: ignore[attr-defined]
-                _enqueue_fn()
+                try:
+                    _enqueue_fn()
+                except Exception as e:
+                    verbose_proxy_logger.exception(
+                        "Error firing deferred logging: %s", e
+                    )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
