@@ -1300,6 +1300,32 @@ def test_cache_control_preserved_in_tool_result_for_claude():
     assert tool_message["cache_control"] == {"type": "ephemeral"}
 
 
+def test_cache_control_preserved_in_input_text_for_claude():
+    """Cache control should be preserved in input_text blocks for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "input_text",
+                    "text": "Claude Agent SDK input",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_cache_control_not_preserved_in_tool_result_for_non_claude():
     """Cache control should NOT be preserved in tool_result for non-Claude models."""
     anthropic_messages = [

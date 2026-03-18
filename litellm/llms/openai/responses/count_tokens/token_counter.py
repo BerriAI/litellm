@@ -28,9 +28,6 @@ class OpenAITokenCounter(BaseTokenCounter):
         self,
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
-        # Don't use Responses API if user opted out
-        if litellm.use_chat_completions_url_for_anthropic_messages:
-            return False
         return custom_llm_provider == LlmProviders.OPENAI.value
 
     async def count_tokens(
