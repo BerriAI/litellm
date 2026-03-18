@@ -54,6 +54,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
 )
@@ -71,6 +72,9 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+    get_ui_settings_cached,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -93,6 +97,24 @@ from litellm.types.utils import (
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
+
+
+async def _check_custom_key_allowed(custom_key_value: Optional[str]) -> None:
+    """Raise 403 if custom API keys are disabled and a custom key was provided."""
+    if custom_key_value is None:
+        return
+
+    ui_settings = await get_ui_settings_cached()
+    if ui_settings.get("disable_custom_api_keys", False) is True:
+        verbose_proxy_logger.warning(
+            "Custom API key rejected: disable_custom_api_keys is enabled"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Custom API key values are disabled by your administrator. Keys must be auto-generated."
+            },
+        )
 
 
 def _is_team_key(data: Union[GenerateKeyRequest, LiteLLM_VerificationToken]):
@@ -353,6 +375,10 @@ def key_generation_check(
 
     ## check if key is for team or individual
     is_team_key = _is_team_key(data=data)
+    _is_admin = (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
@@ -360,7 +386,13 @@ def key_generation_check(
                 detail=f"Unable to find team object in database. Team ID: {data.team_id}",
             )
         elif team_table is None:
-            return True  # assume user is assigning team_id without using the team table
+            if _is_admin:
+                return True  # admins can assign team_id without team table
+            # Non-admin callers must have a valid team (LIT-1884)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unable to find team object in database. Team ID: {data.team_id}",
+            )
         return _team_key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
@@ -659,6 +691,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Reject custom key values if disabled by admin
+    await _check_custom_key_allowed(data.key)
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
@@ -1213,6 +1248,19 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+        # For non-admin internal users: auto-assign caller's user_id if not provided
+        # This prevents creating unbound keys with no user association (LIT-1884)
+        _is_proxy_admin = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not _is_proxy_admin and data.user_id is None:
+            data.user_id = user_api_key_dict.user_id
+            verbose_proxy_logger.warning(
+                "key/generate: auto-assigning user_id=%s for non-admin caller",
+                user_api_key_dict.user_id,
+            )
+
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:
             try:
@@ -1227,6 +1275,12 @@ async def generate_key_fn(
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
                 )
+                # For non-admin callers, team must exist (LIT-1884)
+                if not _is_proxy_admin:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot create keys for non-existent teams.",
+                    )
 
         key_generation_check(
             team_table=team_table,
@@ -1809,11 +1863,26 @@ async def _validate_update_key_data(
     user_api_key_cache: Any,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    _is_proxy_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+    # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
+    if (
+        data.user_id is not None
+        and data.user_id == ""
+        and not _is_proxy_admin
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the user_id from a key.",
+        )
+
     # sanity check - prevent non-proxy admin user from updating key to belong to a different user
     if (
         data.user_id is not None
         and data.user_id != existing_key_row.user_id
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_proxy_admin
     ):
         raise HTTPException(
             status_code=403,
@@ -1836,6 +1905,18 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
+    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget
+    if data.max_budget is not None and data.max_budget != existing_key_row.max_budget:
+        if prisma_client is not None:
+            hashed_key = existing_key_row.token
+            await _check_key_admin_access(
+                user_api_key_dict=user_api_key_dict,
+                hashed_token=hashed_key,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                route="/key/update (max_budget)",
+            )
+
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
     _team_id_to_check = data.team_id or getattr(existing_key_row, "team_id", None)
@@ -1846,6 +1927,13 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
+
+        # Validate team exists when non-admin sets a new team_id (LIT-1884)
+        if team_obj is None and data.team_id is not None and not _is_proxy_admin:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
+            )
 
         if team_obj is not None:
             await _check_team_key_limits(
@@ -2056,7 +2144,10 @@ async def update_key_fn(
             data=data, existing_key_row=existing_key_row
         )
 
-        _validate_key_alias_format(key_alias=non_default_values.get("key_alias", None))
+        # Only validate key_alias format if it's actually being changed
+        new_key_alias = non_default_values.get("key_alias", None)
+        if new_key_alias != existing_key_row.key_alias:
+            _validate_key_alias_format(key_alias=new_key_alias)
 
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
@@ -3412,8 +3503,10 @@ async def _rotate_master_key(  # noqa: PLR0915
         )
 
 
-def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
+async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
+        # Reject custom key values if disabled by admin
+        await _check_custom_key_allowed(data.new_key)
         new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
@@ -3505,7 +3598,7 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
 
-    new_token = get_new_token(data=data)
+    new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
     new_token_key_name = f"sk-...{new_token[-4:]}"
     update_data = {"token": new_token_hash, "key_name": new_token_key_name}
@@ -3515,7 +3608,10 @@ async def _execute_virtual_key_regeneration(
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db
         )
-        _validate_key_alias_format(key_alias=non_default_values.get("key_alias"))
+        # Only validate key_alias format if it's actually being changed
+        new_key_alias = non_default_values.get("key_alias")
+        if new_key_alias != key_in_db.key_alias:
+            _validate_key_alias_format(key_alias=new_key_alias)
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
     update_data.update(non_default_values)
     update_data = prisma_client.jsonify_object(data=update_data)
@@ -4733,6 +4829,64 @@ def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
     }
 
 
+async def _check_key_admin_access(
+    user_api_key_dict: UserAPIKeyAuth,
+    hashed_token: str,
+    prisma_client: Any,
+    user_api_key_cache: DualCache,
+    route: str,
+) -> None:
+    """
+    Check that the caller has admin privileges for the target key.
+
+    Allowed callers:
+    - Proxy admin
+    - Team admin for the key's team
+    - Org admin for the key's team's organization
+
+    Raises HTTPException(403) if the caller is not authorized.
+    """
+
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    # Look up the target key to find its team
+    target_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if target_key_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Key not found: {hashed_token}"},
+        )
+
+    # If the key belongs to a team, check team admin / org admin
+    if target_key_row.team_id:
+        team_obj = await get_team_object(
+            team_id=target_key_row.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        if team_obj is not None:
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                return
+            if await _is_user_org_admin_for_team(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                return
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": f"Only proxy admins, team admins, or org admins can call {route}. "
+            f"user_role={user_api_key_dict.user_role}, user_id={user_api_key_dict.user_id}"
+        },
+    )
+
+
 @router.post(
     "/key/block", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -4762,7 +4916,7 @@ async def block_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins can block keys.
+    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can block keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -4787,6 +4941,15 @@ async def block_key(
         hashed_token = hash_token(token=data.key)
     else:
         hashed_token = data.key
+
+    # Admin-only: only proxy admins, team admins, or org admins can block keys
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/block",
+    )
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
@@ -4876,7 +5039,7 @@ async def unblock_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins can unblock keys.
+    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can unblock keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -4901,6 +5064,15 @@ async def unblock_key(
         hashed_token = hash_token(token=data.key)
     else:
         hashed_token = data.key
+
+    # Admin-only: only proxy admins, team admins, or org admins can unblock keys
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/unblock",
+    )
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

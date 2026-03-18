@@ -1729,6 +1729,9 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Remove before callbacks iterate — not serialisable
+        request_data.pop("litellm_logging_obj", None)
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: Optional[HTTPException] = None
 
@@ -1849,7 +1852,7 @@ class ProxyLogging:
             for k, v in request_data.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k != "model" and k != "user":
+                elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
             litellm_logging_obj.update_environment_variables(
@@ -1865,15 +1868,23 @@ class ProxyLogging:
             ):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                litellm_logging_obj.call_type = CallTypes.acompletion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                litellm_logging_obj.call_type = CallTypes.atext_completion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                litellm_logging_obj.call_type = CallTypes.aembedding.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    litellm_logging_obj.call_type = CallTypes.aembedding.value
+            # Pass-through endpoints are logged via the callback loop's
+            # async_post_call_failure_hook — skip pre_call and failure handlers.
+            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
+                return
+
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
@@ -1909,6 +1920,7 @@ class ProxyLogging:
         4. /files
         """
 
+        from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1931,12 +1943,18 @@ class ProxyLogging:
                     ############## Handle Guardrails ########################################
                     #############################################################################
 
+            # Merge model-level guardrails before checking which guardrails to run
+            guardrail_data = _check_and_merge_model_level_guardrails(
+                data=data, llm_router=llm_router
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (
                     callback.should_run_guardrail(
-                        data=data, event_type=GuardrailEventHooks.post_call
+                        data=guardrail_data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
                     is not True
                 ):
