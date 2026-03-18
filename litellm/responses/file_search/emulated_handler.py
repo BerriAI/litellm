@@ -479,8 +479,16 @@ async def aresponses_with_emulated_file_search(
     # 5. Build follow-up input: original messages + ALL first-response output items + tool results
     # Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
     # like Anthropic that emit text before the tool call have complete conversation context.
+    # Serialize Pydantic model instances to plain dicts so the transformation layer can call .get().
     original_input_items = list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
-    first_response_output_items = list(first_response.output)
+    first_response_output_items: List[Any] = []
+    for _item in first_response.output:
+        if isinstance(_item, dict):
+            first_response_output_items.append(_item)
+        elif hasattr(_item, "model_dump"):
+            first_response_output_items.append(_item.model_dump(exclude_none=True))  # type: ignore[union-attr]
+        else:
+            first_response_output_items.append(_item)
 
     follow_up_input = (
         original_input_items
