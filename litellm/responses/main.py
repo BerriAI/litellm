@@ -630,10 +630,8 @@ def responses(
         prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
 
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-            litellm_logging_obj.should_run_prompt_management_hooks(
-                prompt_id=prompt_id, non_default_params=kwargs
-            )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id, non_default_params=kwargs
         ):
             client_input: List[AllMessageValues] = (
                 [{"role": "user", "content": input}]
@@ -655,9 +653,9 @@ def responses(
             )
             input = cast(Union[str, ResponseInputParam], merged_input)
             local_vars["input"] = input
-            # Apply prompt_template_optional_params (e.g. temperature, instructions)
-            # by updating kwargs so they flow into local_vars → response_api_optional_params
-            kwargs.update(merged_optional_params)
+            local_vars["model"] = model
+            for k, v in merged_optional_params.items():
+                local_vars[k] = v
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
