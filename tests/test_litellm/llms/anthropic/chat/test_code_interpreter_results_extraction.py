@@ -58,7 +58,8 @@ def test_extract_tool_result_output_items_from_pydantic_objects():
 
 
 def test_extract_tool_result_output_items_from_dicts():
-    """Streaming path: after model_dump(), code_interpreter_results are plain dicts."""
+    """Streaming path: after model_dump(), code_interpreter_results are plain dicts.
+    _extract_tool_result_output_items reconstructs them as Pydantic objects."""
     items = [
         {
             "type": "code_interpreter_call",
@@ -72,7 +73,8 @@ def test_extract_tool_result_output_items_from_dicts():
     resp = _make_model_response(code_interpreter_results=items)
     result = LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(resp)
     assert len(result) == 1
-    assert result[0]["id"] == "srvtoolu_01AAA"
+    assert isinstance(result[0], OutputCodeInterpreterCall)
+    assert result[0].id == "srvtoolu_01AAA"
 
 
 def test_extract_tool_result_output_items_empty():
@@ -258,8 +260,9 @@ def test_end_to_end_streaming_chunks_to_code_interpreter_output():
     )
     assert len(tool_result_items) == 1
     item = tool_result_items[0]
-    # Items are dicts after the model_dump path
-    assert item["type"] == "code_interpreter_call"
-    assert item["id"] == "srvtoolu_01AAA"
-    assert item["code"] == "echo e2e_test"
-    assert item["outputs"][0]["logs"] == "e2e_test\n"
+    # Items are reconstructed as Pydantic OutputCodeInterpreterCall objects
+    assert isinstance(item, OutputCodeInterpreterCall)
+    assert item.type == "code_interpreter_call"
+    assert item.id == "srvtoolu_01AAA"
+    assert item.code == "echo e2e_test"
+    assert item.outputs[0].logs == "e2e_test\n"

@@ -546,6 +546,7 @@ class ModelResponseIterator:
         self._server_tool_inputs: Dict[str, Any] = {}
         self.tool_results: List[Dict[str, Any]] = []
         self._current_server_tool_id: Optional[str] = None
+        self._container_id: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -726,7 +727,7 @@ class ModelResponseIterator:
                     type="code_interpreter_call",
                     id=call_id,
                     code=code,
-                    container_id=None,
+                    container_id=self._container_id,
                     status="completed",
                     outputs=log_outputs,
                 )
@@ -928,6 +929,17 @@ class ModelResponseIterator:
                 finish_reason, usage, container = self._handle_message_delta(chunk)
                 if container:
                     provider_specific_fields["container"] = container
+                    # Store container_id and re-emit code_interpreter_results
+                    # so stream_chunk_builder's last-value-wins picks up the
+                    # version with container_id populated.
+                    container_id = (
+                        container.get("id") if isinstance(container, dict) else None
+                    )
+                    if container_id and self.tool_results:
+                        self._container_id = container_id
+                        provider_specific_fields["code_interpreter_results"] = (
+                            self._build_code_interpreter_results()
+                        )
             elif type_chunk == "message_start":
                 """
                 Anthropic
