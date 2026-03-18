@@ -6,10 +6,18 @@ Covers:
   B) list input is merged with the template
   C) no prompt_id → hook is skipped, input is unchanged
   D) model override from the prompt template is applied
+  E) prompt_template_optional_params flow into the request
+  F) non-message items in input are filtered out
+  G) model override re-resolves provider
+  H) async path calls async_get_chat_completion_prompt
+  I) async path propagates optional params to downstream handler
 """
 
+import asyncio
 from typing import List
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
@@ -22,18 +30,19 @@ def _make_logging_obj(
     merged_model: str,
     merged_messages: List[AllMessageValues],
     should_run: bool = True,
+    merged_optional_params: dict = None,
 ) -> MagicMock:
     """Return a mock LiteLLMLoggingObj pre-configured for prompt management."""
+    if merged_optional_params is None:
+        merged_optional_params = {}
     logging_obj = MagicMock()
-    # Make isinstance(logging_obj, LiteLLMLoggingObj) return True
     logging_obj.__class__ = LiteLLMLoggingObj
     logging_obj.should_run_prompt_management_hooks.return_value = should_run
-    logging_obj.get_chat_completion_prompt.return_value = (
-        merged_model,
-        merged_messages,
-        {},
+    prompt_return = (merged_model, merged_messages, merged_optional_params)
+    logging_obj.get_chat_completion_prompt.return_value = prompt_return
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=prompt_return
     )
-    # Instance attribute accessed by post-call metadata utilities
     logging_obj.model_call_details = {}
     return logging_obj
 
@@ -274,3 +283,99 @@ class TestResponsesAPIPromptManagement:
 
         handler_call_kwargs = mock_handler.call_args.kwargs
         assert handler_call_kwargs.get("custom_llm_provider") == "anthropic"
+
+
+class TestAsyncResponsesAPIPromptManagement:
+    """Tests for the async aresponses() prompt management path.
+
+    aresponses() calls async_get_chat_completion_prompt at the outer async level
+    (for async-only prompt loggers), then delegates to responses() via
+    run_in_executor where the sync hook also runs — mirroring acompletion() in
+    main.py. Optional params are handled by the sync responses() path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_calls_async_hook(self):
+        """[H] aresponses() invokes async_get_chat_completion_prompt before
+        dispatching to the sync responses() path."""
+        template_messages: List[AllMessageValues] = [
+            {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=template_messages + [{"role": "user", "content": "Hi"}],  # type: ignore[list-item]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            import litellm
+            await litellm.aresponses(
+                input="Hi",
+                model="gpt-4o",
+                prompt_id="async-test",
+                prompt_variables={},
+                litellm_logging_obj=logging_obj,
+            )
+
+        logging_obj.async_get_chat_completion_prompt.assert_called_once()
+        call_kwargs = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+        assert call_kwargs["prompt_id"] == "async-test"
+
+    @pytest.mark.asyncio
+    async def test_async_optional_params_propagated(self):
+        """[I] Template-defined optional params (e.g. temperature) reach the downstream
+        handler when called via aresponses(). The sync responses() path applies them
+        via local_vars."""
+        template_messages: List[AllMessageValues] = [
+            {"role": "user", "content": "Hello"},  # type: ignore[list-item]
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=template_messages,
+            merged_optional_params={"temperature": 0.7},
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+            await litellm.aresponses(
+                input="Hello",
+                model="gpt-4o",
+                prompt_id="async-temp",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_call_kwargs = mock_handler.call_args.kwargs
+        request_params = handler_call_kwargs.get("responses_api_request", {})
+        assert request_params.get("temperature") == 0.7
+
+    @pytest.mark.asyncio
+    async def test_async_non_message_items_filtered(self):
+        """[J] Non-message items are filtered in the async path too."""
+        template_messages: List[AllMessageValues] = [
+            {"role": "system", "content": "Be helpful."},  # type: ignore[list-item]
+        ]
+        mixed_input = [
+            {"role": "user", "content": "Hello"},
+            {"type": "function_call_output", "call_id": "abc", "output": "42"},
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=template_messages + [{"role": "user", "content": "Hello"}],  # type: ignore[operator]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            import litellm
+            await litellm.aresponses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="async-filter",
+                litellm_logging_obj=logging_obj,
+            )
+
+        logging_obj.async_get_chat_completion_prompt.assert_called_once()
+        call_kwargs = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+        passed_messages = call_kwargs["messages"]
+        assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
+        assert len(passed_messages) == 1
