@@ -26,6 +26,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+    HiddenlayerGuardrailConfigModel
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -739,6 +742,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    HiddenlayerGuardrailConfigModel
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
