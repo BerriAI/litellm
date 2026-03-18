@@ -951,6 +951,57 @@ def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
     ]
 
 
+def test_ensure_alternating_roles_assistant_then_assistant_tool_call():
+    """
+    Preserve old behavior for malformed adjacent assistant turns:
+    [assistant(no-tool-calls), assistant(tool_calls), tool, user] should insert
+    user_continue between assistant messages.
+    """
+    messages = [
+        {"role": "user", "content": "Start"},
+        {"role": "assistant", "content": "I will call a tool next."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "results"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Start"},
+        {"role": "assistant", "content": "I will call a tool next."},
+        {"role": "user", "content": "Please continue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "results"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
 def test_ensure_alternating_roles_trailing_tool_call_assistant():
     messages = [
         {"role": "user", "content": "What's the weather?"},
