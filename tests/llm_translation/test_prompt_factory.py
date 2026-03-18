@@ -25,7 +25,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
-    strip_tool_messages_for_alternating_roles,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
@@ -800,8 +799,6 @@ def test_ensure_alternating_roles_with_tool_calls():
         {"role": "user", "content": "What about next week?"},
     ]
 
-    messages = strip_tool_messages_for_alternating_roles(messages)
-
     transformed_messages = get_completion_messages(
         messages=messages,
         assistant_continue_message=None,
@@ -811,12 +808,53 @@ def test_ensure_alternating_roles_with_tool_calls():
 
     assert transformed_messages == [
         {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
         {"role": "assistant", "content": "It's 72F and sunny in NYC."},
         {"role": "user", "content": "What about tomorrow?"},
         {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "And the day after?"},
         {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "What about next week?"},
+    ]
+
+
+def test_ensure_alternating_roles_three_consecutive_assistants():
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "assistant", "content": "A2"},
+        {"role": "assistant", "content": "A3"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A2"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A3"},
+        {"role": "user", "content": "Please continue."},
     ]
 
 
