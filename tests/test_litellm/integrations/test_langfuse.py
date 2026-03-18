@@ -390,12 +390,19 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             side_effect=lambda generation_params, **kwargs: generation_params,
             create=True,
         ), patch.object(self.logger, "_supports_prompt", return_value=True):
-            response_obj = MagicMock()
+            response_obj = MagicMock(spec=litellm.ModelResponse)
             response_obj.usage = MagicMock()
             response_obj.usage.prompt_tokens = 10
             response_obj.usage.completion_tokens = 20
             response_obj.usage.total_tokens = 30
             response_obj.usage.get = lambda key, default=None: default
+            response_obj.choices = [
+                MagicMock(
+                    message=MagicMock(content='{"name": "test"}'),
+                    finish_reason="stop",
+                )
+            ]
+            response_obj.system_fingerprint = None
 
             kwargs = {
                 "model": "gpt-4",
@@ -423,19 +430,14 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             }
 
             fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
-            self.logger._log_langfuse_v2(
-                user_id="test-user",
-                metadata={},
-                litellm_params=kwargs["litellm_params"],
-                output={"role": "assistant", "content": '{"name": "test"}'},
+
+            LangFuseLogger.log_event_on_langfuse(
+                self.logger,
+                kwargs=kwargs,
+                response_obj=response_obj,
                 start_time=fixed_time,
                 end_time=fixed_time + datetime.timedelta(seconds=1),
-                kwargs=kwargs,
-                optional_params=kwargs["optional_params"],
-                input={"messages": kwargs["messages"]},
-                response_obj=response_obj,
-                level="DEFAULT",
-                litellm_call_id=kwargs["litellm_call_id"],
+                user_id="test-user",
             )
 
             self.mock_langfuse_trace.generation.assert_called_once()
@@ -1159,7 +1161,7 @@ class TestSanitizeLangfuseModelParameters:
 
         body = CreateGenerationBody(model_parameters=sanitized)
         assert body.model_parameters is not None
-        assert body.model_parameters["temperature"] == 0.7
+        assert "response_format" in body.model_parameters
 
     def test_should_fail_without_sanitization(self):
         """Without sanitization, Langfuse rejects a dict in model_parameters."""
