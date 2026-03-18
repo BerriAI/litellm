@@ -515,3 +515,65 @@ async def test_langsmith_queue_logging():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_langsmith_prepare_log_data_populates_usage_metadata():
+    """outputs["usage_metadata"] must be present so LangSmith can show the Cost column."""
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.get_credentials_from_env(
+        langsmith_api_key="test-key",
+        langsmith_project="test-project",
+        langsmith_base_url="https://api.smith.langchain.com",
+    )
+    standard_logging_object = {
+        "id": "test-id",
+        "call_type": "completion",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "model_parameters": {},
+        "metadata": {},
+        "response": {
+            "id": "chatcmpl-test",
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "hello", "role": "assistant"},
+                }
+            ],
+            "usage": {"completion_tokens": 5, "prompt_tokens": 3, "total_tokens": 8},
+        },
+        "startTime": "2024-01-01T00:00:00Z",
+        "endTime": "2024-01-01T00:00:01Z",
+        "request_tags": [],
+        "error_str": None,
+        "status": "success",
+        "prompt_tokens": 3,
+        "completion_tokens": 5,
+        "total_tokens": 8,
+        "response_cost": 0.00015,
+    }
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": standard_logging_object,
+    }
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+    outputs = data["outputs"]
+    assert "usage_metadata" in outputs, (
+        "outputs must contain usage_metadata so LangSmith can display the Cost column"
+    )
+    usage_metadata = outputs["usage_metadata"]
+    assert usage_metadata["input_tokens"] == 3
+    assert usage_metadata["output_tokens"] == 5
+    assert usage_metadata["total_tokens"] == 8
+    assert usage_metadata["total_cost"] == pytest.approx(0.00015)
+    assert usage_metadata["input_cost"] == pytest.approx(0.00015)
+    assert usage_metadata["output_cost"] == 0.0
