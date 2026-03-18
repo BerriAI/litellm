@@ -1975,21 +1975,21 @@ def test_streaming_populates_hidden_params_in_metadata():
     """
     Regression test for LIT-1274: Streaming requests should populate hidden_params
     in litellm_params.metadata for OTEL/callback integrations.
-    
+
     This test verifies that when streaming completes, the success_handler calls
     _process_hidden_params_and_response_cost() which writes hidden_params to metadata.
     """
     import datetime
     from unittest.mock import patch
-    
+
     # Create logging object with stream=True
     logging_obj = _make_logging_obj(stream=True)
-    
+
     # Set up litellm_params with metadata
     logging_obj.model_call_details["litellm_params"] = {
         "metadata": {}
     }
-    
+
     # Create a complete streaming response with hidden_params
     complete_response = ModelResponse(
         id="resp-1",
@@ -2003,23 +2003,23 @@ def test_streaming_populates_hidden_params_in_metadata():
         "response_cost": 0.00015,
         "litellm_call_id": "test-123"
     }
-    
-    # Mock the streaming chunks
-    logging_obj.sync_streaming_chunks = [complete_response]
-    
+
     start_time = datetime.datetime.now()
     end_time = datetime.datetime.now()
-    
-    # Mock get_combined_callback_list to avoid callback execution
-    with patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
-        # Call success_handler which should populate metadata
+
+    with patch.object(
+        logging_obj,
+        "_process_hidden_params_and_response_cost",
+        wraps=logging_obj._process_hidden_params_and_response_cost,
+    ) as spy, patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
         logging_obj.success_handler(
             result=complete_response,
             start_time=start_time,
             end_time=end_time,
             cache_hit=False
         )
-    
+        spy.assert_called_once()
+
     # Assert that hidden_params was written to metadata
     assert "litellm_params" in logging_obj.model_call_details
     assert "metadata" in logging_obj.model_call_details["litellm_params"]
@@ -2038,22 +2038,22 @@ async def test_async_streaming_populates_hidden_params_in_metadata():
     """
     Regression test for LIT-1274: Async streaming requests should populate hidden_params
     in litellm_params.metadata for OTEL/callback integrations.
-    
+
     This test verifies that when async streaming completes, the async_success_handler calls
     _process_hidden_params_and_response_cost() which writes hidden_params to metadata.
     """
     import datetime
     from unittest.mock import patch
-    
+
     # Create logging object with stream=True
     logging_obj = _make_logging_obj(stream=True)
-    
+
     # Set up litellm_params with metadata
     logging_obj.model_call_details["litellm_params"] = {
         "metadata": {},
         "acompletion": True  # Mark as async
     }
-    
+
     # Create a complete streaming response with hidden_params
     complete_response = ModelResponse(
         id="resp-1",
@@ -2067,23 +2067,23 @@ async def test_async_streaming_populates_hidden_params_in_metadata():
         "response_cost": 0.00015,
         "litellm_call_id": "test-456"
     }
-    
-    # Mock the streaming chunks
-    logging_obj.streaming_chunks = [complete_response]
-    
+
     start_time = datetime.datetime.now()
     end_time = datetime.datetime.now()
-    
-    # Mock get_combined_callback_list to avoid callback execution
-    with patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
-        # Call async_success_handler which should populate metadata
+
+    with patch.object(
+        logging_obj,
+        "_process_hidden_params_and_response_cost",
+        wraps=logging_obj._process_hidden_params_and_response_cost,
+    ) as spy, patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
         await logging_obj.async_success_handler(
             result=complete_response,
             start_time=start_time,
             end_time=end_time,
             cache_hit=False
         )
-    
+        spy.assert_called_once()
+
     # Assert that hidden_params was written to metadata
     assert "litellm_params" in logging_obj.model_call_details
     assert "metadata" in logging_obj.model_call_details["litellm_params"]

@@ -1702,11 +1702,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     result=logging_result
                 )
         except litellm.NotFoundError:
-            # Unknown model in pricing map; keep the span but drop cost
+            # Defensive: _response_cost_calculator catches Exception internally and returns None,
+            # but guard here in case that changes in the future.
             verbose_logger.warning(
                 f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
             )
             self.model_call_details["response_cost"] = None
+
+        verbose_logger.debug(
+            f"Model={self.model}; cost={self.model_call_details.get('response_cost')}"
+        )
 
         # 3) Build & optionally emit the standard logging payload
         self.model_call_details["standard_logging_object"] = (
