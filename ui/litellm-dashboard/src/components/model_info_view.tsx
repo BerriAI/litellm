@@ -264,17 +264,26 @@ export default function ModelInfoView({
         delete updatedLitellmParams.litellm_credential_name;
       }
       
-      // check if guardrails / vector stores are attached, if yes, add it. else delete it to prevent auto-injection
-      if (values.guardrails.length > 0 && Array.isArray(values.guardrails)) {
+      // Only write array fields when non-empty; otherwise remove them so empty
+      // arrays are never injected into litellm_params.
+      // Array.isArray guard must come before .length to avoid TypeError when
+      // the value is null/undefined (e.g. model has no tags/guardrails key).
+      if (Array.isArray(values.tags) && values.tags.length > 0) {
+        updatedLitellmParams.tags = values.tags;
+      } else {
+        delete updatedLitellmParams.tags;
+      }
+
+      if (Array.isArray(values.guardrails) && values.guardrails.length > 0) {
         updatedLitellmParams.guardrails = values.guardrails;
       } else {
         delete updatedLitellmParams.guardrails;
       }
-      
-      if (values.vector_store_ids.length > 0 && Array.isArray(values.vector_store_ids)) {
-        updatedLitellmParams.vector_store_ids = values.vector_store_ids
+
+      if (Array.isArray(values.vector_store_ids) && values.vector_store_ids.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
       } else {
-        delete updatedLitellmParams.vector_store_ids; 
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
