@@ -18763,7 +18763,7 @@
     },
     "gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
-        "cache_read_input_token_cost_flex": 3.75e-08,
+        "cache_read_input_token_cost_flex": 1e-08,
         "cache_read_input_token_cost_batches": 3.8e-08,
         "input_cost_per_token": 7.5e-07,
         "input_cost_per_token_flex": 3.75e-07,
