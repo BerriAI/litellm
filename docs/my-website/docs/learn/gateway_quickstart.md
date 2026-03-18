@@ -125,6 +125,12 @@ If you need virtual keys, spend tracking, or the admin UI, add a database next.
 columns={3}
 items={[
   {
+    icon: "🖥️",
+    title: "Make LLM Requests",
+    description: "Point LiteLLM or OpenAI-compatible clients to the gateway.",
+    to: "/docs/proxy/user_keys",
+  },
+  {
     icon: "🎛️",
     title: "Model Config",
     description: "Add more models and gateway settings.",
@@ -153,12 +159,6 @@ items={[
     title: "Add Guardrails",
     description: "Add safety checks and policy enforcement.",
     to: "/docs/proxy/guardrails/quick_start",
-  },
-  {
-    icon: "🖥️",
-    title: "Connect SDKs",
-    description: "Point LiteLLM or OpenAI-compatible clients to the gateway.",
-    to: "/docs/providers/litellm_proxy",
   },
   {
     icon: "📊",
