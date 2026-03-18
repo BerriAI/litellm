@@ -858,6 +858,50 @@ def test_ensure_alternating_roles_three_consecutive_assistants():
     ]
 
 
+def test_ensure_alternating_roles_does_not_split_tool_call_chain():
+    messages = [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+
 def test_alternating_roles_e2e():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json
