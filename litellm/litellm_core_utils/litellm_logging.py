@@ -608,7 +608,16 @@ class Logging(LiteLLMLoggingBaseClass):
         if "litellm_metadata" in kwargs and isinstance(
             kwargs["litellm_metadata"], dict
         ):
-            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
+            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+            if "metadata" not in base_litellm_params:
+                base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+            else:
+                # Merge litellm_metadata into metadata without overwriting existing
+                # keys so API key fields are visible to callbacks even when
+                # Anthropic's native metadata is present (/v1/messages).
+                for key, value in kwargs["litellm_metadata"].items():
+                    if key not in base_litellm_params["metadata"]:
+                        base_litellm_params["metadata"][key] = value
 
         if litellm_params:
             base_litellm_params.update(litellm_params)

@@ -109,7 +109,7 @@ def get_litellm_params(
     # the request uses "litellm_metadata" (e.g. /v1/messages from Claude Code).
     _merged_metadata = metadata
     if litellm_metadata and isinstance(litellm_metadata, dict):
-        if not _merged_metadata:
+        if _merged_metadata is None:
             _merged_metadata = dict(litellm_metadata)
         else:
             _merged_metadata = dict(_merged_metadata)  # don't mutate caller's dict
