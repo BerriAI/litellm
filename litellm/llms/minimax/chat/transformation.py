@@ -17,6 +17,10 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     - China: https://api.minimaxi.com/v1
 
     Supported models:
+    - MiniMax-M2.7
+    - MiniMax-M2.7-lightning
+    - MiniMax-M2.5
+    - MiniMax-M2.5-lightning
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
     - MiniMax-M2
