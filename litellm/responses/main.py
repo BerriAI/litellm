@@ -37,6 +37,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    AllMessageValues,
     PromptObject,
     Reasoning,
     ResponseIncludable,
@@ -622,6 +623,41 @@ def responses(
             litellm_params.api_key = dynamic_api_key
         if dynamic_api_base is not None:
             litellm_params.api_base = dynamic_api_base
+
+        #########################################################
+        # PROMPT MANAGEMENT
+        #########################################################
+        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
+            litellm_logging_obj.should_run_prompt_management_hooks(
+                prompt_id=prompt_id, non_default_params=kwargs
+            )
+        ):
+            client_input: List[AllMessageValues] = (
+                [{"role": "user", "content": input}]
+                if isinstance(input, str)
+                else cast(List[AllMessageValues], list(input))
+            )
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = litellm_logging_obj.get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
+            input = cast(Union[str, ResponseInputParam], merged_input)
+            local_vars["input"] = input
+            # Apply prompt_template_optional_params (e.g. temperature, instructions)
+            # by updating kwargs so they flow into local_vars → response_api_optional_params
+            kwargs.update(merged_optional_params)
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
