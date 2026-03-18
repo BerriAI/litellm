@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import json
 import os
 import traceback
 from datetime import datetime
@@ -53,6 +54,41 @@ else:
     DynamicLoggingCache = Any
     StatefulTraceClient = Any
     Langfuse = Any
+
+
+def _sanitize_langfuse_model_parameters(
+    optional_params: dict,
+) -> dict:
+    """
+    Langfuse's CreateGenerationBody validates model_parameters as
+    Dict[str, MapValue] where MapValue = Union[str, None, int, bool, List[str]].
+
+    Complex values (dicts, Pydantic models, etc.) must be serialized to JSON
+    strings; otherwise the Pydantic v1 validator rejects the entire generation
+    body and the log entry is silently dropped.
+
+    See: https://github.com/BerriAI/litellm/issues/23979
+    """
+    for param, value in optional_params.items():
+        if value is None or isinstance(value, (str, int, bool, float)):
+            continue
+        try:
+            if isinstance(value, dict):
+                optional_params[param] = json.dumps(value)
+            elif isinstance(value, list):
+                optional_params[param] = json.dumps(value)
+            elif hasattr(value, "model_dump"):
+                optional_params[param] = json.dumps(value.model_dump())
+            elif hasattr(value, "dict"):
+                optional_params[param] = json.dumps(value.dict())
+            else:
+                optional_params[param] = str(value)
+        except Exception:
+            try:
+                optional_params[param] = str(value)
+            except Exception:
+                pass
+    return optional_params
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:
@@ -298,14 +334,7 @@ class LangFuseLogger:
             if tools is not None:
                 prompt["tools"] = tools
 
-            # langfuse only accepts str, int, bool, float for logging
-            for param, value in optional_params.items():
-                if not isinstance(value, (str, int, bool, float)):
-                    try:
-                        optional_params[param] = str(value)
-                    except Exception:
-                        # if casting value to str fails don't block logging
-                        pass
+            optional_params = _sanitize_langfuse_model_parameters(optional_params)
 
             input, output = self._get_langfuse_input_output_content(
                 kwargs=kwargs,

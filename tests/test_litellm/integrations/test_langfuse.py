@@ -365,6 +365,99 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
+    def test_log_langfuse_v2_response_format_json_schema(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/23979
+
+        When optional_params contains response_format with type json_schema,
+        the model_parameters passed to trace.generation() must contain only
+        Langfuse-compatible types (no raw dicts).
+        """
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ), patch.object(self.logger, "_supports_prompt", return_value=True):
+            response_obj = MagicMock()
+            response_obj.usage = MagicMock()
+            response_obj.usage.prompt_tokens = 10
+            response_obj.usage.completion_tokens = 20
+            response_obj.usage.total_tokens = 30
+            response_obj.usage.get = lambda key, default=None: default
+
+            kwargs = {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {
+                    "temperature": 0.7,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "test_schema",
+                            "strict": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {"name": {"type": "string"}},
+                                "required": ["name"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                },
+                "litellm_call_id": "test-call-json-schema",
+                "standard_logging_object": None,
+                "response_cost": 0.0,
+            }
+
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": '{"name": "test"}'},
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+
+            self.mock_langfuse_trace.generation.assert_called_once()
+            _, call_kwargs = self.mock_langfuse_trace.generation.call_args
+            model_params = call_kwargs.get("model_parameters", {})
+
+            for key, value in model_params.items():
+                self.assertTrue(
+                    value is None or isinstance(value, (str, int, bool, float)),
+                    f"model_parameters[{key!r}] has disallowed type "
+                    f"{type(value).__name__}: {value!r}",
+                )
+
+            import json
+
+            rf_value = model_params.get("response_format")
+            self.assertIsNotNone(rf_value)
+            self.assertIsInstance(rf_value, str)
+            parsed = json.loads(rf_value)
+            self.assertEqual(parsed["type"], "json_schema")
+            self.assertEqual(parsed["json_schema"]["name"], "test_schema")
+
     def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
         payload = {
             "id": "payload-id",
@@ -920,3 +1013,178 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
+
+
+class TestSanitizeLangfuseModelParameters:
+    """
+    Tests for _sanitize_langfuse_model_parameters, which ensures all values in
+    model_parameters are Langfuse-compatible (str, int, bool, float, None).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23979
+    """
+
+    def test_should_serialize_response_format_dict_to_json_string(self):
+        """The core bug: response_format as a nested dict must be serialized."""
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        params = {
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+        result = _sanitize_langfuse_model_parameters(params)
+
+        assert isinstance(result["response_format"], str)
+        assert result["temperature"] == 0.7
+        assert result["max_tokens"] == 100
+
+        import json
+
+        parsed = json.loads(result["response_format"])
+        assert parsed["type"] == "json_schema"
+        assert parsed["json_schema"]["name"] == "test_schema"
+
+    def test_should_preserve_primitive_types(self):
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        params = {
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "stream": True,
+            "model": "gpt-4",
+        }
+        result = _sanitize_langfuse_model_parameters(params)
+
+        assert result["temperature"] == 0.7
+        assert result["max_tokens"] == 100
+        assert result["stream"] is True
+        assert result["model"] == "gpt-4"
+
+    def test_should_preserve_none_values(self):
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        params = {"temperature": 0.7, "stop": None}
+        result = _sanitize_langfuse_model_parameters(params)
+
+        assert result["stop"] is None
+        assert result["temperature"] == 0.7
+
+    def test_should_serialize_list_to_json(self):
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        params = {"stop": ["END", "STOP"], "temperature": 0.5}
+        result = _sanitize_langfuse_model_parameters(params)
+
+        import json
+
+        assert isinstance(result["stop"], str)
+        assert json.loads(result["stop"]) == ["END", "STOP"]
+
+    def test_should_serialize_pydantic_v2_model(self):
+        from pydantic import BaseModel
+
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        class ResponseFormat(BaseModel):
+            type: str
+            json_schema: dict
+
+        rf = ResponseFormat(
+            type="json_schema",
+            json_schema={"name": "test", "schema": {"type": "object"}},
+        )
+        params = {"response_format": rf, "temperature": 0.5}
+        result = _sanitize_langfuse_model_parameters(params)
+
+        import json
+
+        assert isinstance(result["response_format"], str)
+        parsed = json.loads(result["response_format"])
+        assert parsed["type"] == "json_schema"
+
+    def test_should_handle_empty_dict(self):
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        result = _sanitize_langfuse_model_parameters({})
+        assert result == {}
+
+    def test_should_produce_valid_langfuse_model_parameters(self):
+        """End-to-end: sanitized params must pass Langfuse's Pydantic v1 validation."""
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        params = {
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test",
+                    "schema": {"type": "object"},
+                },
+            },
+            "stop": None,
+            "stream": True,
+        }
+        sanitized = _sanitize_langfuse_model_parameters(params)
+
+        from langfuse.api.resources.ingestion.types.create_generation_body import (
+            CreateGenerationBody,
+        )
+
+        body = CreateGenerationBody(model_parameters=sanitized)
+        assert body.model_parameters is not None
+        assert body.model_parameters["temperature"] == 0.7
+
+    def test_should_fail_without_sanitization(self):
+        """Without sanitization, Langfuse rejects a dict in model_parameters."""
+        from langfuse.api.resources.ingestion.types.create_generation_body import (
+            CreateGenerationBody,
+        )
+
+        params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "test"},
+            },
+        }
+        with pytest.raises(Exception):
+            CreateGenerationBody(model_parameters=params)
+
+    def test_should_fallback_to_str_for_non_json_serializable(self):
+        from litellm.integrations.langfuse.langfuse import (
+            _sanitize_langfuse_model_parameters,
+        )
+
+        class Custom:
+            def __str__(self):
+                return "custom-value"
+
+        params = {"custom_param": Custom()}
+        result = _sanitize_langfuse_model_parameters(params)
+        assert result["custom_param"] == "custom-value"
