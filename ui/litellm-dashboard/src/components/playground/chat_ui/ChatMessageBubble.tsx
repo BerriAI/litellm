@@ -21,7 +21,7 @@ interface ChatMessageBubbleProps {
   message: MessageType;
   /** Whether this is the last message in the chat history. */
   isLastMessage: boolean;
-  endpointType: string;
+  endpointType: EndpointType;
   /** MCP events to display on the last assistant message. */
   mcpEvents: MCPEvent[];
   /** Code interpreter result to display on the last assistant message. */
