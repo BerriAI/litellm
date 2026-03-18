@@ -272,7 +272,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             if response_format == LLMResponseFormat.ANTHROPIC:
                 # Skip blocking service if the response has no tool calls (text-only)
-                content = response.get("content", []) if isinstance(response, dict) else []
+                content = (response.get("content") or []) if isinstance(response, dict) else []
                 has_tools = any(
                     isinstance(b, dict) and b.get("type") == _BLOCK_TYPE_TOOL_USE
                     for b in content
@@ -860,7 +860,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         data_prefix = "data:"
         events: list[dict[str, Any]] = []
 
-        for line in raw_chunk.decode("utf-8").split("\n"):
+        try:
+            decoded = raw_chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            verbose_logger.warning("Skipping Anthropic SSE chunk with invalid UTF-8")
+            return events
+
+        for line in decoded.split("\n"):
             stripped_line = line.strip()
             if stripped_line.startswith(data_prefix):
                 json_payload = stripped_line[len(data_prefix) :].strip()
@@ -920,7 +926,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _anthropic_response_to_openai_dict(self, response: dict[str, Any]) -> dict[str, Any]:
         """Convert raw Anthropic /v1/messages response to OpenAI format for the blocking service."""
         anthropic_completion = {
-            "content": response.get("content", []),
+            "content": response.get("content") or [],
             "usage": {"input_tokens": 0, "output_tokens": 0},
         }
 
@@ -968,7 +974,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Preserve non-tool, non-text blocks (thinking, citations, etc.) from the original response.
         # Text and tool_use blocks are taken from the converted response since the blocking service
         # may have modified text (added explanation) and removed blocked tool calls.
-        original_content = original_response.get("content", [])
+        original_content = original_response.get("content") or []
         preserved_blocks = [
             block for block in original_content
             if not (isinstance(block, dict) and block.get("type") in _REPLACED_BLOCK_TYPES)
