@@ -7533,9 +7533,7 @@ def stream_chunk_builder(  # noqa: PLR0915
             # the final chunk.
             all_annotations: list = []
             for ac in annotation_chunks:
-                all_annotations.extend(
-                    ac["choices"][0]["delta"]["annotations"]
-                )
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
             response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [

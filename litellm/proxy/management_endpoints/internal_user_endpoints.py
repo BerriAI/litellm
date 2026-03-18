@@ -2142,8 +2142,7 @@ async def _resolve_org_filter_for_user_search(
     member_org_ids: List[str] = []
     if caller_user is not None:
         member_org_ids = [
-            m.organization_id
-            for m in (caller_user.organization_memberships or [])
+            m.organization_id for m in (caller_user.organization_memberships or [])
         ]
 
     if member_org_ids:
