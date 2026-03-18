@@ -1,8 +1,16 @@
-from litellm._redis import get_redis_url_from_environment, _get_redis_cluster_kwargs, get_redis_async_client
+import asyncio
 import os
+
 import pytest
-from unittest.mock import MagicMock, patch
 import redis.asyncio as async_redis
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+from litellm._redis import (
+    _get_redis_cluster_kwargs,
+    create_gcp_iam_redis_connect_func_async,
+    get_redis_async_client,
+    get_redis_url_from_environment,
+)
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
     """Test when REDIS_URL is directly provided"""
@@ -167,3 +175,99 @@ def test_get_redis_async_client_without_connection_pool():
         # Verify Redis was called without connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
         assert "connection_pool" not in call_kwargs, "connection_pool should not be in kwargs when not provided"
+
+
+def test_async_cluster_gcp_iam_uses_redis_connect_func():
+    """Async Redis cluster with GCP IAM should pass redis_connect_func (per-connection
+    token) instead of a static password, so tokens are refreshed on each connection."""
+    sync_connect_func = MagicMock()
+    sync_connect_func._gcp_service_account = (
+        "projects/-/serviceAccounts/sa@proj.iam.gserviceaccount.com"
+    )
+    sync_connect_func._gcp_ssl_ca_certs = "/path/to/ca.pem"
+
+    with patch("litellm._redis.async_redis.RedisCluster") as mock_cluster, \
+         patch("litellm._redis._get_redis_client_logic") as mock_logic:
+        mock_logic.return_value = {
+            "startup_nodes": [{"host": "node1", "port": "6379"}],
+            "redis_connect_func": sync_connect_func,
+            "password": "should-be-ignored",
+        }
+
+        get_redis_async_client()
+
+        call_kwargs = mock_cluster.call_args[1]
+        connect_func = call_kwargs.get("redis_connect_func")
+        assert connect_func is not None, "redis_connect_func must be passed to async RedisCluster"
+        assert asyncio.iscoroutinefunction(connect_func), (
+            "redis_connect_func should be async for async RedisCluster"
+        )
+        assert "password" not in call_kwargs or call_kwargs.get("password") is None or call_kwargs.get("password") == "should-be-ignored", (
+            "password may be present but the connect func handles auth"
+        )
+
+
+def test_async_cluster_no_gcp_iam_no_connect_func():
+    """Async Redis cluster without GCP IAM should not inject a redis_connect_func."""
+    with patch("litellm._redis.async_redis.RedisCluster") as mock_cluster, \
+         patch("litellm._redis._get_redis_client_logic") as mock_logic:
+        mock_logic.return_value = {
+            "startup_nodes": [{"host": "node1", "port": "6379"}],
+            "password": "static-password",
+        }
+
+        get_redis_async_client()
+
+        call_kwargs = mock_cluster.call_args[1]
+        assert "redis_connect_func" not in call_kwargs, (
+            "redis_connect_func should not be set without GCP IAM"
+        )
+        assert call_kwargs.get("password") == "static-password"
+
+
+@pytest.mark.asyncio
+async def test_async_connect_func_generates_fresh_token_per_call():
+    """Each invocation of the async connect func should call _generate_gcp_iam_access_token,
+    ensuring a fresh token even after the original has expired."""
+    service_account = "projects/-/serviceAccounts/sa@proj.iam.gserviceaccount.com"
+    connect_func = create_gcp_iam_redis_connect_func_async(
+        service_account=service_account
+    )
+
+    mock_conn = AsyncMock()
+    mock_conn._parser = MagicMock()
+    mock_conn.read_response = AsyncMock(return_value=b"OK")
+
+    with patch(
+        "litellm._redis._generate_gcp_iam_access_token",
+        return_value="token-1",
+    ) as mock_gen:
+        await connect_func(mock_conn)
+        assert mock_gen.call_count == 1
+
+        mock_gen.return_value = "token-2"
+        await connect_func(mock_conn)
+        assert mock_gen.call_count == 2
+
+    assert mock_conn.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_connect_func_auth_error():
+    """Async connect func should raise AuthenticationError on non-OK response."""
+    from redis.exceptions import AuthenticationError
+
+    connect_func = create_gcp_iam_redis_connect_func_async(
+        service_account="projects/-/serviceAccounts/sa@proj.iam.gserviceaccount.com"
+    )
+
+    mock_conn = AsyncMock()
+    mock_conn._parser = MagicMock()
+    mock_conn.read_response = AsyncMock(return_value=b"DENIED")
+
+    with patch(
+        "litellm._redis._generate_gcp_iam_access_token",
+        return_value="bad-token",
+    ):
+        with pytest.raises(AuthenticationError, match="GCP IAM authentication failed"):
+            await connect_func(mock_conn)

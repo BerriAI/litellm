@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import asyncio
 import inspect
 import json
 
@@ -178,6 +179,58 @@ def create_gcp_iam_redis_connect_func(
     return iam_connect
 
 
+def create_gcp_iam_redis_connect_func_async(
+    service_account: str,
+    ssl_ca_certs: Optional[str] = None,
+) -> Callable:
+    """
+    Creates an async Redis connection function for GCP IAM authentication.
+
+    Unlike setting a static password at client init time, this generates a fresh
+    IAM token per connection so that tokens don't expire when the cluster
+    discovers new nodes after the initial 1-hour token lifetime.
+
+    Args:
+        service_account: GCP service account in format
+            'projects/-/serviceAccounts/name@project.iam.gserviceaccount.com'
+        ssl_ca_certs: Path to SSL CA certificate file for secure connections
+
+    Returns:
+        An async connection function that can be passed as ``redis_connect_func``
+        to async Redis clients.
+    """
+
+    async def iam_connect_async(connection):
+        from redis.exceptions import (
+            AuthenticationError,
+            AuthenticationWrongNumberOfArgsError,
+        )
+        from redis.utils import str_if_bytes
+
+        connection._parser.on_connect(connection)
+
+        token = await asyncio.to_thread(
+            _generate_gcp_iam_access_token, service_account
+        )
+        await connection.send_command("AUTH", token, check_health=False)
+
+        try:
+            auth_response = await connection.read_response()
+        except AuthenticationWrongNumberOfArgsError:
+            if hasattr(connection, "password") and connection.password:
+                await connection.send_command(
+                    "AUTH", connection.password, check_health=False
+                )
+                auth_response = await connection.read_response()
+            else:
+                raise
+
+        if str_if_bytes(auth_response) != "OK":
+            raise AuthenticationError("GCP IAM authentication failed")
+
+    return iam_connect_async
+
+
 def get_redis_url_from_environment():
     if "REDIS_URL" in os.environ:
         return os.environ["REDIS_URL"]
@@ -261,8 +314,9 @@ def _get_redis_client_logic(**env_overrides):
         redis_kwargs["redis_connect_func"] = create_gcp_iam_redis_connect_func(
             service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
         )
-        # Store GCP service account in redis_connect_func for async cluster access
+        # Store GCP config on the func so the async path can build its own connect func
         redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
+        redis_kwargs["redis_connect_func"]._gcp_ssl_ca_certs = _gcp_ssl_ca_certs
 
         # Remove GCP-specific kwargs that shouldn't be passed to Redis client
         redis_kwargs.pop("gcp_service_account", None)
@@ -417,43 +471,23 @@ def get_redis_async_client(
             if arg in args:
                 cluster_kwargs[arg] = redis_kwargs[arg]
 
-        # Handle GCP IAM authentication for async clusters
-        redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
-        from litellm import get_secret_str
-
-        # Get GCP service account - first try from redis_connect_func, then from environment
-        gcp_service_account = None
+        # Handle GCP IAM authentication for async clusters: replace the sync
+        # redis_connect_func (set by _get_redis_client_logic) with an async
+        # version that generates a fresh IAM token per connection, avoiding
+        # auth failures after the 1-hour token lifetime.
+        redis_connect_func = cluster_kwargs.get("redis_connect_func")
         if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
             gcp_service_account = redis_connect_func._gcp_service_account
-        else:
-            gcp_service_account = redis_kwargs.get(
-                "gcp_service_account"
-            ) or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
-
-        verbose_logger.debug(
-            f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
-        )
-
-        # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
-        if redis_connect_func and gcp_service_account:
+            gcp_ssl_ca_certs = getattr(redis_connect_func, "_gcp_ssl_ca_certs", None)
             verbose_logger.debug(
-                "DEBUG: Generating IAM token for service account (value not logged for security reasons)"
+                "Setting up async GCP IAM redis_connect_func for Redis cluster "
+                "(per-connection token refresh)."
             )
-            try:
-                # Generate IAM access token using the helper function
-                access_token = _generate_gcp_iam_access_token(gcp_service_account)
-                cluster_kwargs["password"] = access_token
-                verbose_logger.debug(
-                    "DEBUG: Successfully generated GCP IAM access token for async Redis cluster"
+            cluster_kwargs["redis_connect_func"] = (
+                create_gcp_iam_redis_connect_func_async(
+                    service_account=gcp_service_account,
+                    ssl_ca_certs=gcp_ssl_ca_certs,
                 )
-            except Exception as e:
-                verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
-                from redis.exceptions import AuthenticationError
-
-                raise AuthenticationError("Failed to generate GCP IAM access token")
-        else:
-            verbose_logger.debug(
-                f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
             )
 
         new_startup_nodes: List[ClusterNode] = []
@@ -462,7 +496,6 @@ def get_redis_async_client(
             new_startup_nodes.append(ClusterNode(**item))
         cluster_kwargs.pop("startup_nodes", None)
 
-        # Create async RedisCluster with IAM token as password if available
         cluster_client = async_redis.RedisCluster(
             startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
         )
