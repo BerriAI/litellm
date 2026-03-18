@@ -297,6 +297,7 @@ def _insert_user_continue_message(
     i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
+        inserted_continue_message = False
         if (
             curr_message["role"] == "assistant"
             and _counts_for_alternation(curr_message)
@@ -308,9 +309,10 @@ def _insert_user_continue_message(
                     if previous_message["role"] == "assistant":
                         result_messages.insert(i, continue_message)
                         i += 2
+                        inserted_continue_message = True
                     break
                 j -= 1
-        if i < len(result_messages):
+        if not inserted_continue_message:
             i += 1
 
     # Handle final message
@@ -376,40 +378,6 @@ def _insert_assistant_continue_message(
                 modified_messages.append(continue_message)
 
     return modified_messages
-
-
-def strip_tool_messages_for_alternating_roles(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
-    """
-    Prepare history for strict user/assistant-only chat templates.
-
-    - Drop tool/function role messages
-    - Drop assistant tool-dispatch turns with no content
-    - Keep assistant content turns but remove tool metadata fields
-    """
-    cleaned_messages: List[AllMessageValues] = []
-
-    for message in messages:
-        role = message.get("role")
-        if role in ("tool", "function"):
-            continue
-
-        if role == "assistant":
-            assistant_message = message.copy()
-            assistant_message.pop("tool_calls", None)
-            assistant_message.pop("function_call", None)
-            assistant_message.pop("tool_call_id", None)
-
-            if assistant_message.get("content") is None:
-                continue
-
-            cleaned_messages.append(assistant_message)
-            continue
-
-        cleaned_messages.append(message)
-
-    return cleaned_messages
 
 
 def get_completion_messages(
