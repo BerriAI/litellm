@@ -216,10 +216,21 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
   // Extract dotprompt_content from litellm_params
   const dotpromptContent = apiResponse?.prompt_spec?.litellm_params?.dotprompt_content || "";
   
-  if (!dotpromptContent) {
-    throw new Error("No dotprompt_content found in API response");
+  // If dotprompt_content is available, use it
+  if (dotpromptContent) {
+    return parseDotpromptContent(dotpromptContent, apiResponse);
+  }
+  
+  // Fallback: try to construct from prompt_data
+  const promptData = apiResponse?.prompt_spec?.litellm_params?.prompt_data;
+  if (promptData) {
+    return parsePromptData(promptData, apiResponse);
   }
 
+  throw new Error("No dotprompt_content or prompt_data found in API response");
+};
+
+const parseDotpromptContent = (dotpromptContent: string, apiResponse: any): PromptType => {
   // Split into frontmatter and content
   const parts = dotpromptContent.split("---");
   if (parts.length < 3) {
@@ -246,6 +257,71 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
       parsedBody.messages.length > 0
         ? parsedBody.messages
         : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
+  };
+};
+
+const parsePromptData = (promptData: any, apiResponse: any): PromptType => {
+  // Handle nested structure: { prompt_id: { content, metadata } } or { content, metadata }
+  let content: string;
+  let metadata: any;
+  
+  if (promptData.content !== undefined) {
+    // Direct format: { content, metadata }
+    content = promptData.content || "";
+    metadata = promptData.metadata || {};
+  } else {
+    // Nested format: { prompt_id: { content, metadata } }
+    const keys = Object.keys(promptData);
+    if (keys.length > 0) {
+      const firstKey = keys[0];
+      const nestedData = promptData[firstKey];
+      content = nestedData?.content || "";
+      metadata = nestedData?.metadata || {};
+    } else {
+      content = "";
+      metadata = {};
+    }
+  }
+
+  // Strip version suffix from prompt name for display
+  const promptId = apiResponse?.prompt_spec?.prompt_id || "Unnamed Prompt";
+  const baseName = stripVersionFromPromptId(promptId) || promptId;
+
+  // Extract model from metadata
+  const model = metadata?.model || "gpt-4o";
+
+  // Extract config parameters from metadata
+  const config: { temperature?: number; max_tokens?: number; top_p?: number } = {};
+  if (metadata?.temperature !== undefined) config.temperature = metadata.temperature;
+  if (metadata?.max_tokens !== undefined) config.max_tokens = metadata.max_tokens;
+  if (metadata?.top_p !== undefined) config.top_p = metadata.top_p;
+
+  // Parse the content to extract messages
+  // Try to parse as role-prefixed format first, then fall back to simple content
+  const parsedBody = parseDotpromptBody(content);
+
+  // Extract tools from metadata
+  const tools: Tool[] = [];
+  if (metadata?.tools && Array.isArray(metadata.tools)) {
+    metadata.tools.forEach((tool: any) => {
+      tools.push({
+        name: tool?.function?.name || "Unnamed Tool",
+        description: tool?.function?.description || "",
+        json: JSON.stringify(tool, null, 2),
+      });
+    });
+  }
+
+  return {
+    name: baseName,
+    model,
+    config,
+    tools,
+    developerMessage: parsedBody.developerMessage,
+    messages:
+      parsedBody.messages.length > 0
+        ? parsedBody.messages
+        : [{ role: "user", content: content || "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
   };
 };
 
