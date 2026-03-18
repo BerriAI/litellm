@@ -730,6 +730,59 @@ class TestEmulatedFileSearchHandler:
         assert any(_get(a, "file_id") == "file-xyz" for a in annotations)
 
     @pytest.mark.asyncio
+    async def test_H11b_emulated_full_flow_primary_queries_schema(self):
+        """Primary path: provider returns queries (plural array) as defined in the tool schema."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        # Use the primary schema: queries (plural, list) instead of the backward-compat query (singular)
+        first_resp_plural = MagicMock()
+        first_resp_plural.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_plural",
+                "arguments": '{"queries": ["what is deep research?", "multi-step reasoning"], "vector_store_id": "vs_001"}',
+            }
+        ]
+        first_resp_plural.id = "resp_plural"
+        first_resp_plural.created_at = 1700000000
+        first_resp_plural.model = "claude-3-5-sonnet"
+        first_resp_plural.usage = None
+
+        final_resp = self._make_mock_responses_api_response(text="Deep research uses multiple queries.")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-multi"
+        search_result.filename = "multi.pdf"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "multi-query context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        with patch(
+            "litellm.responses.file_search.emulated_handler._call_aresponses",
+            new=AsyncMock(side_effect=[first_resp_plural, final_resp]),
+        ), patch(
+            "litellm.vector_stores.main.asearch",
+            new=AsyncMock(return_value=mock_search_response),
+        ):
+            result = await aresponses_with_emulated_file_search(
+                input="What is deep research?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_001"]}],
+            )
+
+        def _get(item, key):
+            return item[key] if isinstance(item, dict) else getattr(item, key, None)
+
+        assert _get(result.output[0], "type") == "file_search_call"
+        # Two queries were issued, both should appear in the output
+        assert len(_get(result.output[0], "queries")) == 2
+        assert _get(result.output[1], "type") == "message"
+
+    @pytest.mark.asyncio
     async def test_H12_emulated_flow_provider_answers_without_tool_call(self):
         """If provider answers directly (no tool call), still return OpenAI format."""
         from litellm.responses.file_search.emulated_handler import (
