@@ -124,7 +124,7 @@ MODEL_ID="gemini-2.0-flash-001"
 PROJECT_ID="YOUR_PROJECT_ID"
 
 curl -X POST \
-  "${LITELLM_PROXY_BASE_URL}/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent" \
+  "${LITELLM_PROXY_BASE_URL}/vertex_ai/v1/projects/${PROJECT_ID}/locations/global/publishers/google/models/${MODEL_ID}:generateContent" \
   -H "Authorization: Bearer sk-your-litellm-key" \
   -H "Content-Type: application/json" \
   -H "x-pass-X-Vertex-AI-LLM-Request-Type: shared" \
@@ -143,7 +143,7 @@ A: The service account or Application Default Credentials (ADC) user does not ha
 **Q: What should I do if I get a `429 Quota exceeded` error?**  
 A: This means you've hit the per-region QPM (queries per minute) or TPM (tokens per minute) quota. You can:
 - Request a quota increase from the [GCP Quotas console](https://console.cloud.google.com/iam-admin/quotas)
-- Add more regions to your LiteLLM configuration for load balancing (see the region balancing guide above)
+- Add more regions to your LiteLLM configuration for load balancing
 - Upgrade to [Provisioned Throughput](https://cloud.google.com/vertex-ai/generative-ai/docs/provisioned-throughput) for guaranteed capacity
 
 **Q: How do I fix the `VERTEXAI_PROJECT not set` error?**  
