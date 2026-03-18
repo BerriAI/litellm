@@ -406,7 +406,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.passthrough_guardrails_config: Optional[Dict[str, Any]] = None
 
         self.model_call_details: Dict[str, Any] = {
-            "litellm_trace_id": litellm_trace_id,
+            "litellm_trace_id": self.litellm_trace_id,
             "litellm_call_id": litellm_call_id,
             "input": _input,
             "litellm_params": litellm_params,
@@ -567,6 +567,42 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def update_from_kwargs(
+        self,
+        kwargs: Dict,
+        litellm_params: Optional[Dict] = None,
+        optional_params: Optional[Dict] = None,
+        model: Optional[str] = None,
+        user: Optional[str] = None,
+        **additional_params,
+    ):
+        """
+        Convenience wrapper around update_environment_variables that
+        automatically extracts metadata/litellm_metadata from kwargs,
+        so callers don't need to manually plumb them into litellm_params.
+        """
+        base_litellm_params: Dict[str, Any] = {}
+
+        if "metadata" in kwargs:
+            base_litellm_params["metadata"] = kwargs["metadata"]
+        if "litellm_metadata" in kwargs and isinstance(
+            kwargs["litellm_metadata"], dict
+        ):
+            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+            if "metadata" not in base_litellm_params:
+                base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+
+        if litellm_params:
+            base_litellm_params.update(litellm_params)
+
+        self.update_environment_variables(
+            litellm_params=base_litellm_params,
+            optional_params=optional_params or {},
+            model=model,
+            user=user,
+            **additional_params,
+        )
 
     def update_messages(self, messages: List[AllMessageValues]):
         """
@@ -2920,7 +2956,10 @@ class Logging(LiteLLMLoggingBaseClass):
                             callback_func=callback,
                         )
                     if (
-                        isinstance(callback, CustomLogger) and is_sync_request
+                        isinstance(callback, CustomLogger)
+                        and is_sync_request
+                        and self.call_type
+                        != CallTypes.pass_through.value
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
@@ -2950,7 +2989,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             user_id=kwargs.get("user", None),
                             status_message=str(exception),
                             level="ERROR",
-                            kwargs=self.model_call_details,
+                            kwargs=kwargs,
                         )
                         if _response is not None and isinstance(_response, dict):
                             _trace_id = _response.get("trace_id", None)
@@ -3868,11 +3907,20 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.focus.focus_logger import FocusLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, FocusLogger):
+                if type(callback) is FocusLogger:  # exact match; exclude subclasses like VantageLogger
                     return callback  # type: ignore
             focus_logger = FocusLogger()
             _in_memory_loggers.append(focus_logger)
             return focus_logger  # type: ignore
+        elif logging_integration == "vantage":
+            from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VantageLogger):
+                    return callback  # type: ignore
+            vantage_logger = VantageLogger()
+            _in_memory_loggers.append(vantage_logger)
+            return vantage_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -4241,7 +4289,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.focus.focus_logger import FocusLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, FocusLogger):
+                if type(callback) is FocusLogger:  # exact match; exclude subclasses like VantageLogger
+                    return callback
+        elif logging_integration == "vantage":
+            from litellm.integrations.vantage.vantage_logger import VantageLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VantageLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
@@ -4446,15 +4500,17 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
         if litellm_params.get(key) is not None:
             return True
 
-    # Check model_info
-    metadata: dict = litellm_params.get("metadata", {}) or {}
-    model_info: dict = metadata.get("model_info", {}) or {}
+    # Check model_info from metadata or litellm_metadata (generic_api_call routes
+    # like /responses and /messages store model_info under litellm_metadata)
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata: dict = litellm_params.get(metadata_key, {}) or {}
+        model_info: dict = metadata.get("model_info", {}) or {}
 
-    if model_info:
-        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
-        for key in matching_keys:
-            if model_info.get(key) is not None:
-                return True
+        if model_info:
+            matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+            for key in matching_keys:
+                if model_info.get(key) is not None:
+                    return True
 
     return False
 
@@ -5036,7 +5092,6 @@ class StandardLoggingPayloadSetup:
         dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
 
-
         # Note: we recommend using `litellm_session_id` for session tracking
         # `litellm_trace_id` is an internal litellm param
         if dynamic_litellm_session_id:
@@ -5346,6 +5401,23 @@ def get_standard_logging_object_payload(
         model_name = reconstruct_model_name(
             kwargs.get("model", "") or "", custom_llm_provider, metadata
         )
+        response_model_name: Optional[str] = None
+        if isinstance(final_response_obj, dict):
+            response_model_name = final_response_obj.get("model")
+
+        # For Azure Model Router, preserve the actual model in the top-level standard
+        # logging payload only when the user has opted in.
+        requested_model = kwargs.get("model")
+        if (
+            isinstance(requested_model, str)
+            and (
+                "model_router" in requested_model.lower()
+                or "model-router" in requested_model.lower()
+            )
+            and isinstance(response_model_name, str)
+            and response_model_name
+        ):
+            model_name = response_model_name
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),

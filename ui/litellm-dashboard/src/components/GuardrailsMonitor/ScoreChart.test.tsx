@@ -1,48 +1,54 @@
-import { render, screen } from "@testing-library/react";
-import { vi } from "vitest";
+import React from "react";
+import { describe, it, expect, vi } from "vitest";
+import { screen } from "@testing-library/react";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { ScoreChart } from "./ScoreChart";
 
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   return {
     ...actual,
-    BarChart: ({ data, categories }: { data: unknown[]; categories: string[] }) => (
-      <div data-testid="bar-chart" data-categories={categories.join(",")}>
-        {data.length} data points
+    BarChart: ({ data, categories }: { data: any[]; categories: string[] }) => (
+      <div data-testid="bar-chart">
+        {data.map((d, i) => (
+          <span key={i}>
+            {d.date}: {categories.map((c) => `${c}=${d[c]}`).join(", ")}
+          </span>
+        ))}
       </div>
     ),
   };
 });
 
 describe("ScoreChart", () => {
-  it("should render", () => {
-    render(<ScoreChart />);
+  it("should render the title", () => {
+    renderWithProviders(<ScoreChart />);
+
     expect(screen.getByText("Request Outcomes Over Time")).toBeInTheDocument();
   });
 
-  it("should show empty state when no data provided", () => {
-    render(<ScoreChart />);
+  it("should show empty state when no data is provided", () => {
+    renderWithProviders(<ScoreChart />);
+
     expect(screen.getByText("No chart data for this period")).toBeInTheDocument();
   });
 
   it("should show empty state when data is an empty array", () => {
-    render(<ScoreChart data={[]} />);
+    renderWithProviders(<ScoreChart data={[]} />);
+
     expect(screen.getByText("No chart data for this period")).toBeInTheDocument();
   });
 
-  it("should render chart when data is provided", () => {
+  it("should render the chart when data is provided", () => {
     const data = [
-      { date: "2025-01-01", passed: 100, blocked: 5 },
-      { date: "2025-01-02", passed: 120, blocked: 3 },
+      { date: "2026-03-01", passed: 10, blocked: 2 },
+      { date: "2026-03-02", passed: 15, blocked: 1 },
     ];
-    render(<ScoreChart data={data} />);
-    expect(screen.getByTestId("bar-chart")).toBeInTheDocument();
-    expect(screen.getByText("2 data points")).toBeInTheDocument();
-  });
 
-  it("should pass correct categories to the chart", () => {
-    const data = [{ date: "2025-01-01", passed: 100, blocked: 5 }];
-    render(<ScoreChart data={data} />);
-    expect(screen.getByTestId("bar-chart")).toHaveAttribute("data-categories", "passed,blocked");
+    renderWithProviders(<ScoreChart data={data} />);
+
+    expect(screen.queryByText("No chart data for this period")).not.toBeInTheDocument();
+    expect(screen.getByText(/2026-03-01/)).toBeInTheDocument();
+    expect(screen.getByText(/2026-03-02/)).toBeInTheDocument();
   });
 });

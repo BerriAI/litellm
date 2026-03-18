@@ -16,22 +16,22 @@ if TYPE_CHECKING:
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     """
     Determine which Azure AI OCR configuration to use based on the model name.
-    
+
     Azure AI supports multiple OCR services:
     - Azure Document Intelligence: azure_ai/doc-intelligence/<model>
     - Mistral OCR (via Azure AI): azure_ai/<model>
-    
+
     Args:
-        model: The model name (e.g., "azure_ai/doc-intelligence/prebuilt-read", 
+        model: The model name (e.g., "azure_ai/doc-intelligence/prebuilt-read",
                "azure_ai/pixtral-12b-2409")
-    
+
     Returns:
         OCR configuration instance for the specified model
-        
+
     Examples:
         >>> get_azure_ai_ocr_config("azure_ai/doc-intelligence/prebuilt-read")
         <AzureDocumentIntelligenceOCRConfig object>
-        
+
         >>> get_azure_ai_ocr_config("azure_ai/pixtral-12b-2409")
         <AzureAIOCRConfig object>
     """
@@ -46,8 +46,7 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
             f"Routing {model} to Azure Document Intelligence OCR config"
         )
         return AzureDocumentIntelligenceOCRConfig()
-    
+
     # Default to Mistral-based OCR for other azure_ai models
     verbose_logger.debug(f"Routing {model} to Azure AI (Mistral) OCR config")
     return AzureAIOCRConfig()
-

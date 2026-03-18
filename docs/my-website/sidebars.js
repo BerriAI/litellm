@@ -195,6 +195,19 @@ const sidebars = {
         "projects/openai-agents"
       ]
     },
+    {
+      type: "category",
+      label: "Manage with AI Agents",
+      link: {
+        type: "generated-index",
+        title: "Manage with AI Agents",
+        description: "Use AI agents to manage your LiteLLM deployment — create users, teams, keys, models, and more via natural language.",
+        slug: "/manage_with_ai_agents"
+      },
+      items: [
+        "tutorials/claude_code_skills",
+      ]
+    },
 
   ],
   // But you can create a sidebar manually
@@ -332,6 +345,7 @@ const sidebars = {
               label: "Setup & SSO",
               items: [
                 "proxy/admin_ui_sso",
+                "proxy/ui/ui_edit_logo",
                 "proxy/custom_sso",
                 "proxy/custom_root_ui",
                 "tutorials/scim_litellm",
@@ -617,6 +631,7 @@ const sidebars = {
             "mcp_openapi",
             "mcp_oauth",
             "mcp_aws_sigv4",
+            "mcp_zero_trust",
             "mcp_public_internet",
             "mcp_semantic_filter",
             "mcp_control",
@@ -669,6 +684,7 @@ const sidebars = {
         "rag_ingest",
         "rag_query",
         "realtime",
+        "proxy/realtime_webrtc",
         "rerank",
         "response_api",
         "response_api_compact",

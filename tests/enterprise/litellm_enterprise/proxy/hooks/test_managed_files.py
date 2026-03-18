@@ -1,4 +1,6 @@
+import base64
 import json
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -475,6 +477,81 @@ async def test_output_file_id_for_batch_retrieve():
     )
 
     assert not cast(LiteLLMBatch, response).output_file_id.startswith("file-")
+
+
+@pytest.mark.asyncio
+async def test_output_file_id_preserves_target_model_names_when_model_name_missing():
+    """
+    Regression test: when provider response does not include _hidden_params.model_name
+    (e.g. Vertex batch retrieve), unified output_file_id should still include
+    target_model_names from the managed input file ID.
+    """
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="batch_123",
+        completion_window="24h",
+        created_at=1750883933,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-provider-id",
+        object="batch",
+        status="completed",
+        output_file_id="file-provider-output-id",
+        request_counts=BatchRequestCounts(completed=1, failed=0, total=1),
+        usage=None,
+    )
+
+    # Build a valid managed input id string and base64 encode it.
+    managed_input_file_payload = (
+        "litellm_proxy:application/octet-stream;"
+        "unified_id,test-uuid;"
+        "target_model_names,gemini-2.5-pro;"
+        "llm_output_file_id,file-input-1;"
+        "llm_output_file_model_id,model-id-1"
+    )
+    managed_input_file_id = (
+        base64.urlsafe_b64encode(managed_input_file_payload.encode())
+        .decode()
+        .rstrip("=")
+    )
+
+    batch._hidden_params = {
+        "model_id": "model-id-1",
+        "unified_batch_id": "litellm_proxy;model_id:model-id-1;llm_batch_id:batch_123",
+        "unified_file_id": managed_input_file_id,
+        # Intentionally omit model_name to mimic Vertex issue.
+    }
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=AsyncMock()
+    )
+
+    provider_output_file = OpenAIFileObject(
+        id="file-provider-output-id",
+        object="file",
+        bytes=1,
+        created_at=1,
+        filename="predictions.jsonl",
+        purpose="batch_output",
+    )
+
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock) as mock_retrieve:
+        mock_retrieve.return_value = provider_output_file
+        response = await proxy_managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
+            response=batch,
+        )
+
+    decoded_output_file_id = _is_base64_encoded_unified_file_id(
+        cast(LiteLLMBatch, response).output_file_id
+    )
+    assert decoded_output_file_id
+    assert "target_model_names,gemini-2.5-pro" in cast(str, decoded_output_file_id)
 
 
 @pytest.mark.asyncio

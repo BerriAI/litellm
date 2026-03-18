@@ -34,7 +34,10 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
         )
         self.use_batched_logging = (
-            os.getenv("GCS_USE_BATCHED_LOGGING", str(GCS_DEFAULT_USE_BATCHED_LOGGING).lower()).lower() == "true"
+            os.getenv(
+                "GCS_USE_BATCHED_LOGGING", str(GCS_DEFAULT_USE_BATCHED_LOGGING).lower()
+            ).lower()
+            == "true"
         )
         self.flush_lock = asyncio.Lock()
         super().__init__(
@@ -112,9 +115,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def _drain_queue_batch(self) -> List[GCSLogQueueItem]:
         """
         Drain items from the queue (non-blocking), respecting batch_size limit.
-        
+
         This prevents unbounded queue growth when processing is slower than log accumulation.
-        
+
         Returns:
             List of items to process, up to batch_size items
         """
@@ -137,33 +140,45 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Extract a synchronous grouping key from kwargs to group items by GCS config.
         This allows us to batch items with the same bucket/credentials together.
-        
+
         Returns a string key that uniquely identifies the GCS config combination.
         This key may contain sensitive information (bucket names, paths) - use _sanitize_config_key()
         for logging purposes.
         """
-        standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params", None) or {}
-        
-        bucket_name = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME or "default"
-        path_service_account = standard_callback_dynamic_params.get("gcs_path_service_account", None) or self.path_service_account_json or "default"
-        
+        standard_callback_dynamic_params = (
+            kwargs.get("standard_callback_dynamic_params", None) or {}
+        )
+
+        bucket_name = (
+            standard_callback_dynamic_params.get("gcs_bucket_name", None)
+            or self.BUCKET_NAME
+            or "default"
+        )
+        path_service_account = (
+            standard_callback_dynamic_params.get("gcs_path_service_account", None)
+            or self.path_service_account_json
+            or "default"
+        )
+
         return f"{bucket_name}|{path_service_account}"
-    
+
     def _sanitize_config_key(self, config_key: str) -> str:
         """
         Create a sanitized version of the config key for logging.
         Uses a hash to avoid exposing sensitive bucket names or service account paths.
-        
+
         Returns a short hash prefix for safe logging.
         """
-        hash_obj = hashlib.sha256(config_key.encode('utf-8'))
+        hash_obj = hashlib.sha256(config_key.encode("utf-8"))
         return f"config-{hash_obj.hexdigest()[:8]}"
-    
-    def _group_items_by_config(self, items: List[GCSLogQueueItem]) -> Dict[str, List[GCSLogQueueItem]]:
+
+    def _group_items_by_config(
+        self, items: List[GCSLogQueueItem]
+    ) -> Dict[str, List[GCSLogQueueItem]]:
         """
         Group items by their GCS config (bucket + credentials).
         This ensures items with different configs are processed separately.
-        
+
         Returns a dict mapping config_key -> list of items with that config.
         """
         grouped: Dict[str, List[GCSLogQueueItem]] = {}
@@ -186,18 +201,20 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             lines.append(json_line)
         return "\n".join(lines)
 
-    async def _send_grouped_batch(self, items: List[GCSLogQueueItem], config_key: str) -> Tuple[int, int]:
+    async def _send_grouped_batch(
+        self, items: List[GCSLogQueueItem], config_key: str
+    ) -> Tuple[int, int]:
         """
         Send a batch of items that share the same GCS config.
-        
+
         Returns:
             (success_count, error_count)
         """
         if not items:
             return (0, 0)
-        
+
         first_kwargs = items[0]["kwargs"]
-        
+
         try:
             gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
                 first_kwargs
@@ -208,23 +225,25 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
-            
-            current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
+
+            current_date = self._get_object_date_from_datetime(
+                datetime.now(timezone.utc)
+            )
             batch_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
             object_name = self._generate_batch_object_name(current_date, batch_id)
             combined_payload = self._combine_payloads_to_ndjson(items)
-            
+
             await self._log_json_data_on_gcs(
                 headers=headers,
                 bucket_name=bucket_name,
                 object_name=object_name,
                 logging_payload=combined_payload,
             )
-            
+
             success_count = len(items)
             error_count = 0
             return (success_count, error_count)
-            
+
         except Exception as e:
             success_count = 0
             error_count = len(items)
@@ -255,13 +274,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
-            
+
             object_name = self._get_object_name(
                 kwargs=item["kwargs"],
                 logging_payload=item["payload"],
                 response_obj=item["response_obj"],
             )
-            
+
             await self._log_json_data_on_gcs(
                 headers=headers,
                 bucket_name=bucket_name,
@@ -289,7 +308,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
         if self.use_batched_logging:
             grouped_items = self._group_items_by_config(items_to_process)
-            
+
             for config_key, group_items in grouped_items.items():
                 await self._send_grouped_batch(group_items, config_key)
         else:
