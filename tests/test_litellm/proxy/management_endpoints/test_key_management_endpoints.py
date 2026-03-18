@@ -1338,19 +1338,12 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )  # Disable audit logs for simpler test
 
     # Mock get_key_object and _cache_key_object
-    async def mock_get_key_object(**kwargs):
-        return mock_key_object
-
-    async def mock_cache_key_object(**kwargs):
+    async def mock_delete_cache_key_object(**kwargs):
         pass
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_key_object",
-        mock_get_key_object,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._cache_key_object",
-        mock_cache_key_object,
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache_key_object,
     )
 
     # Create mock request and user auth
@@ -1375,11 +1368,9 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     assert result == mock_key_record
-    assert mock_key_object.blocked == False  # Should be updated to unblocked
 
     # Reset mocks for second test
     mock_prisma_client.db.litellm_verificationtoken.update.reset_mock()
-    mock_key_object.blocked = True  # Reset to blocked state
 
     # Test Case 2: Using already hashed token
     hashed_token_request = BlockKeyRequest(key=test_hashed_token)
@@ -1433,6 +1424,199 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
 
     assert exc_info.value.code == "400"
     assert "Invalid key format" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_block_key_nonexistent_key_returns_404(monkeypatch):
+    """
+    Test that block_key returns 404 (not misleading 401) when the key
+    doesn't exist in the database, even when the caller is authenticated
+    as a proxy admin.
+
+    Previously, block_key would call get_key_object() for cache refresh,
+    which raised a 401 ProxyException with 'Authentication Error' — making
+    it look like an auth failure when it was really a missing-key error.
+    """
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import block_key
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # find_unique returns None → key does not exist
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    def mock_hash_token(token):
+        return "abcd1234" * 8  # 64-char hex
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+    )
+
+    data = BlockKeyRequest(key="sk-does-not-exist-key")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await block_key(
+            data=data,
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "not found" in str(exc_info.value.message).lower()
+    # Must NOT contain "Authentication Error"
+    assert "Authentication Error" not in str(exc_info.value.message)
+    # update should never be called since the key doesn't exist
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unblock_key_nonexistent_key_returns_404(monkeypatch):
+    """
+    Test that unblock_key returns 404 (not misleading 401) when the key
+    doesn't exist in the database.
+    """
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        unblock_key,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # find_unique returns None → key does not exist
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    def mock_hash_token(token):
+        return "abcd1234" * 8
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+    )
+
+    data = BlockKeyRequest(key="sk-does-not-exist-key")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await unblock_key(
+            data=data,
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "not found" in str(exc_info.value.message).lower()
+    assert "Authentication Error" not in str(exc_info.value.message)
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_block_key_existing_key_succeeds(monkeypatch):
+    """
+    Test that block_key successfully blocks an existing key and
+    invalidates the cache entry.
+    """
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import block_key
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+    mock_key_record = MagicMock()
+    mock_key_record.token = test_hashed_token
+    mock_key_record.blocked = False
+    mock_key_record.model_dump_json.return_value = (
+        f'{{"token": "{test_hashed_token}", "blocked": false}}'
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_record
+    )
+    mock_updated_record = MagicMock()
+    mock_updated_record.token = test_hashed_token
+    mock_updated_record.blocked = True
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=mock_updated_record
+    )
+
+    def mock_hash_token(token):
+        if token.startswith("sk-"):
+            return test_hashed_token
+        return token
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    # Mock _delete_cache_key_object
+    async def mock_delete_cache_key_object(**kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache_key_object,
+    )
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+    )
+
+    data = BlockKeyRequest(key="sk-test123456789")
+
+    result = await block_key(
+        data=data,
+        http_request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+    )
+
+    # Verify the key was found and updated
+    mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once_with(
+        where={"token": test_hashed_token}
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once_with(
+        where={"token": test_hashed_token}, data={"blocked": True}
+    )
+    assert result == mock_updated_record
 
 
 @pytest.mark.asyncio
