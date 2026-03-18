@@ -156,7 +156,12 @@ const config = {
           }
 
           // Build categories sorted by year descending
-          const years = Object.keys(byYear).sort((a, b) => b - a);
+          const years = Object.keys(byYear).sort((a, b) => {
+            // Object.keys() returns strings; avoid numeric subtraction type errors.
+            const na = Number.parseInt(a, 10);
+            const nb = Number.parseInt(b, 10);
+            return nb - na;
+          });
           return years.map(year => ({
             type: 'category',
             label: String(year),
@@ -291,7 +296,11 @@ const config = {
             position: 'right',
             className: 'header-discord-link',
             'aria-label': 'Discord / Slack community',
-          }
+          },
+          {
+            type: 'search',
+            position: 'right',
+          },
         ],
       },
       footer: {

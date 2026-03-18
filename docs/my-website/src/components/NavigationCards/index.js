@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from '@docusaurus/Link';
 import styles from './styles.module.css';
 
 export default function NavigationCards({ items, columns = 2 }) {
@@ -11,9 +12,9 @@ export default function NavigationCards({ items, columns = 2 }) {
         const isExternal =
           item.to && (item.to.startsWith('http://') || item.to.startsWith('https://'));
         return (
-          <a
+          <Link
             key={i}
-            href={item.to}
+            to={item.to}
             className={styles.card}
             target={isExternal ? '_blank' : undefined}
             rel={isExternal ? 'noopener noreferrer' : undefined}
@@ -35,7 +36,7 @@ export default function NavigationCards({ items, columns = 2 }) {
             {isExternal && (
               <span className={styles.externalIcon}>↗</span>
             )}
-          </a>
+          </Link>
         );
       })}
     </div>
