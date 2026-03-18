@@ -903,6 +903,40 @@ def test_ensure_alternating_roles_does_not_split_tool_call_chain():
     ]
 
 
+def test_ensure_alternating_roles_trailing_tool_call_assistant():
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    # Backward compat: trailing assistant (even with tool_calls) gets user_continue
+    # appended, then assistant_continue bridges the user→user gap.
+    assert transformed_messages[-1] == {"role": "user", "content": "Please continue."}
+    assert transformed_messages[0] == {"role": "user", "content": "What's the weather?"}
+    assert transformed_messages[1]["role"] == "assistant"
+    assert transformed_messages[1].get("tool_calls") is not None
+
+
 def test_alternating_roles_e2e():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json

@@ -300,7 +300,6 @@ def _insert_user_continue_message(
         curr_message = result_messages[i]
         inserted_continue_message = False
         if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
-        ):
             j = i - 1
             while j >= 0:
                 previous_message = result_messages[j]
@@ -314,12 +313,9 @@ def _insert_user_continue_message(
         if not inserted_continue_message:
             i += 1
 
-    # Handle final message
-    if (
-        result_messages[-1]["role"] == "assistant"
-        and _counts_for_alternation(result_messages[-1])
-        and ensure_alternating_roles
-    ):
+    # Handle final message — append user_continue after any trailing assistant,
+    # including ones with tool_calls, to preserve backward compatibility.
+    if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
         result_messages.append(continue_message)
 
     return result_messages
