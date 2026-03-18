@@ -494,10 +494,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 },
             )
 
-        # Always scan statuses for the model saturation boundary condition
-        # (limit_remaining <= 0).  The rate limiter may report overall_code=OK
-        # in the same window tick that fills the last slot; we must still block
-        # that request so the counter stays accurate.
+        # Always enforce the model-saturation boundary, regardless of overall_code.
+        #
+        # Why not rely on overall_code == "OVER_LIMIT" alone?
+        # The read-only check (Phase 1) and the counter increment (Phase 3) are not
+        # atomic across concurrent requests.  When the last available slot is claimed
+        # between these two phases, the read-only snapshot can still show
+        # limit_remaining == 0 while overall_code reports "OK" (the limiter only flips
+        # to "OVER_LIMIT" after a successful increment pushes the counter past the
+        # threshold).  Blocking here closes that race window.
+        #
+        # Backward-compatibility note: this check fires whenever limit_remaining <= 0
+        # for a model_saturation_check entry, including when overall_code is "OK".
+        # Prior to this change, only overall_code == "OVER_LIMIT" triggered a block for
+        # that descriptor.  The tightening is intentional — it prevents the exact-boundary
+        # race — but callers that depended on the old behavior (allowing one extra request
+        # at the limit boundary) will observe stricter enforcement.
         for status in check_response["statuses"]:
             if (
                 status["descriptor_key"] == "model_saturation_check"

@@ -2835,3 +2835,104 @@ def test_combine_fallback_usage():
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_marker_triggers_fallback_in_router():
+    """
+    Verify the router-side _litellm_rate_limit_error consumption path.
+
+    When the pre-call hook sets the marker (disable_fallbacks=False), the router
+    must raise the error inside the try block so async_function_with_fallbacks_common_utils
+    runs the fallback logic and calls the fallback model.
+    """
+    primary = "primary-model"
+    fallback = "fallback-model"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": primary,
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-primary-key",
+                    "mock_response": "primary response",
+                },
+            },
+            {
+                "model_name": fallback,
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-fallback-key",
+                    "mock_response": "fallback response",
+                },
+            },
+        ],
+        fallbacks=[{primary: [fallback]}],
+    )
+
+    rate_limit_err = litellm.RateLimitError(
+        message="Model capacity reached for primary-model",
+        model=primary,
+        llm_provider="litellm_proxy",
+    )
+
+    # Inject the marker directly into kwargs, simulating what the pre-call hook does.
+    response = await router.acompletion(
+        model=primary,
+        messages=[{"role": "user", "content": "hello"}],
+        _litellm_rate_limit_error=rate_limit_err,
+    )
+
+    # The router must have fallen back to the fallback model.
+    assert response is not None
+    assert response.model is not None
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_marker_with_disable_fallbacks_raises_directly():
+    """
+    Verify the unexpected disable_fallbacks=True branch in the router.
+
+    When disable_fallbacks=True is set but the pre-call hook still placed the marker
+    (data/kwargs diverged), the router must raise the RateLimitError directly without
+    going through async_function_with_fallbacks_common_utils.
+    """
+    primary = "primary-model"
+    fallback = "fallback-model"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": primary,
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-primary-key",
+                    "mock_response": "primary response",
+                },
+            },
+            {
+                "model_name": fallback,
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-fallback-key",
+                    "mock_response": "fallback response",
+                },
+            },
+        ],
+        fallbacks=[{primary: [fallback]}],
+    )
+
+    rate_limit_err = litellm.RateLimitError(
+        message="Model capacity reached for primary-model",
+        model=primary,
+        llm_provider="litellm_proxy",
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(
+            model=primary,
+            messages=[{"role": "user", "content": "hello"}],
+            disable_fallbacks=True,
+            _litellm_rate_limit_error=rate_limit_err,
+        )
