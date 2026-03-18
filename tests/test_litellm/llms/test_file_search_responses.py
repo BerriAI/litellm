@@ -1,7 +1,5 @@
 """
-Unit tests for Phase 1: file_search / vector_store support in the Responses API.
-
-Test plan reference: ~/.gstack/projects/BerriAI-litellm/sameerkankute-res-test-plan-*.md
+Unit tests for file_search / vector_store support in the Responses API.
 
 Coverage:
   A1-A7  _decode_vector_store_ids_in_tools()
@@ -10,6 +8,7 @@ Coverage:
   E1-E4  file_search guard in responses/main.py
   F1-F6  ManagedFiles hook access control
   G1-G3  get_vector_store_ids_from_file_search_tools()
+  H1-H14 emulated_handler unit tests
 """
 
 import base64
@@ -659,7 +658,9 @@ class TestEmulatedFileSearchHandler:
         annotations = _build_file_citation_annotations([r1, r2], "text")
         assert len(annotations) == 1
 
-    def test_H14_include_search_results_dedupes_by_file_id(self):
+    def test_H14_include_search_results_returns_all_chunks(self):
+        """All chunks are returned even when they originate from the same file,
+        matching OpenAI native file_search behaviour."""
         from litellm.responses.file_search.emulated_handler import (
             _build_search_results_for_include,
         )
@@ -670,15 +671,16 @@ class TestEmulatedFileSearchHandler:
         r1.score = 0.9
         r1.attributes = {}
         r1.content = [{"type": "text", "text": "first hit"}]
-        r2.file_id = "file-abc"  # same file appears for a second query
+        r2.file_id = "file-abc"  # same file, different chunk from a second query
         r2.filename = "doc.pdf"
         r2.score = 0.85
         r2.attributes = {}
         r2.content = [{"type": "text", "text": "second hit"}]
 
         search_results = _build_search_results_for_include([r1, r2])
-        assert len(search_results) == 1
-        assert search_results[0]["file_id"] == "file-abc"
+        assert len(search_results) == 2, "Both chunks should be returned, not deduplicated"
+        assert search_results[0]["text"] == "first hit"
+        assert search_results[1]["text"] == "second hit"
 
     # --- End-to-end (mocked) ---
 
