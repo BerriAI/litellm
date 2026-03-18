@@ -3226,7 +3226,8 @@ async def _get_org_admin_org_ids(
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except Exception:
+    except ValueError:
+        # get_user_object raises ValueError when the user doesn't exist
         return None
 
     if caller_user is None:
@@ -3248,8 +3249,13 @@ async def _build_team_list_where_conditions(
     user_id: Optional[str],
     use_deleted_table: bool,
     org_admin_org_ids: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Build where conditions for team list query."""
+) -> Optional[Dict[str, Any]]:
+    """
+    Build where conditions for team list query.
+
+    Returns None when the query is guaranteed to yield no results (e.g. user
+    has no team memberships), allowing the caller to skip the DB round-trip.
+    """
     where_conditions: Dict[str, Any] = {}
 
     if team_id:
@@ -3263,39 +3269,50 @@ async def _build_team_list_where_conditions(
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
-    elif org_admin_org_ids is not None:
-        # Org admin without explicit org filter: scope to their orgs
+    elif org_admin_org_ids is not None and not user_id:
+        # Org admin without explicit org or user filter: scope to their orgs
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
-        try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User not found, passed user_id={user_id}"},
-            )
+        user_object = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
         if user_object is None:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
         user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        user_team_ids = user_object_correct_type.teams or []
 
         if use_deleted_table:
             where_conditions["members"] = {"has": user_id}
-        else:
-            if team_id is None:
-                where_conditions["team_id"] = {"in": user_object_correct_type.teams}
-            elif team_id in user_object_correct_type.teams:
-                where_conditions["team_id"] = team_id
+        elif org_admin_org_ids is not None:
+            # Org admin with user_id filter: show teams in their orgs
+            # OR teams the user is a direct member of (matches legacy
+            # _authorize_and_filter_teams behaviour).
+            # When team_id is also provided, the exact match is already in
+            # where_conditions and the org scope just needs to be added —
+            # no OR expansion needed.
+            if team_id is not None:
+                where_conditions["organization_id"] = {"in": org_admin_org_ids}
+            elif user_team_ids:
+                org_condition: Dict[str, Any] = {"organization_id": {"in": org_admin_org_ids}}
+                where_conditions["OR"] = [org_condition, {"team_id": {"in": user_team_ids}}]
             else:
-                raise HTTPException(
-                    status_code=404,
-                    detail={"error": f"User is not a member of team_id={team_id}"},
-                )
+                where_conditions["organization_id"] = {"in": org_admin_org_ids}
+        else:
+            if not user_team_ids:
+                return None  # no memberships — skip the DB query
+            elif team_id is not None:
+                # team_id exact-match already in where_conditions; verify membership
+                if team_id not in user_team_ids:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={"error": f"User is not a member of team_id={team_id}"},
+                    )
+            else:
+                where_conditions["team_id"] = {"in": user_team_ids}
 
     return where_conditions
 
@@ -3403,14 +3420,11 @@ async def list_team_v2(
                         "error": "You can only view teams within your organizations."
                     },
                 )
-            # Org admin scope replaces user_id scope — the org filter
-            # already returns all teams in their orgs, so we don't also
-            # restrict by the user's direct team memberships.
-            user_id = None
             verbose_proxy_logger.debug(
-                "list_team_v2: org admin access for user=%s, org_ids=%s",
+                "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
                 user_api_key_dict.user_id,
                 org_admin_org_ids,
+                user_id,
             )
         else:
             # Not an org admin — fall back to standard route check
@@ -3442,7 +3456,8 @@ async def list_team_v2(
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
-    # Build where conditions based on provided parameters
+    # Build where conditions based on provided parameters.
+    # Returns None when the query is guaranteed to yield no results.
     where_conditions = await _build_team_list_where_conditions(
         prisma_client=prisma_client,
         team_id=team_id,
@@ -3452,6 +3467,15 @@ async def list_team_v2(
         use_deleted_table=use_deleted_table,
         org_admin_org_ids=org_admin_org_ids,
     )
+
+    if where_conditions is None:
+        return {
+            "teams": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
 
     # Build order_by conditions
     valid_sort_columns = ["team_id", "team_alias", "created_at"]
