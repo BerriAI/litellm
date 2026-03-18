@@ -1,6 +1,7 @@
 import React from 'react';
 import clsx from 'clsx';
 import TOCItems from '@theme/TOCItems';
+import Link from '@docusaurus/Link';
 import styles from './styles.module.css';
 
 const LINK_CLASS_NAME = 'table-of-contents__link toc-highlight';
@@ -26,9 +27,9 @@ export default function TOC({ className, ...props }) {
           SSO/SAML, audit logs, spend tracking, multi-team management, and
           guardrails — built for production.
         </div>
-        <a href="/docs/enterprise" className={styles.promoButton}>
+        <Link to="/docs/enterprise" className={styles.promoButton}>
           Learn more →
-        </a>
+        </Link>
       </div>
     </div>
   );
