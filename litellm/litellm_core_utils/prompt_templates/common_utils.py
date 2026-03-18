@@ -287,11 +287,9 @@ def _insert_user_continue_message(
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
-    # Handle first counted message if it's an assistant message
-    if (
-        result_messages[0]["role"] == "assistant"
-        and _counts_for_alternation(result_messages[0])
-    ):
+    # Handle first message if it's an assistant message — always prepend
+    # user_continue regardless of tool_calls, to preserve backward compatibility.
+    if result_messages[0]["role"] == "assistant":
         result_messages.insert(0, continue_message)
 
     # Handle consecutive assistant messages in the counted sequence
