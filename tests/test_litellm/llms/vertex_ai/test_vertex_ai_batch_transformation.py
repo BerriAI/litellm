@@ -45,7 +45,7 @@ def test_output_file_id_falls_back_to_output_uri_prefix_with_predictions_jsonl()
 
 
 @pytest.mark.asyncio
-async def test_vertex_ai_cancel_batch():
+def test_vertex_ai_cancel_batch():
     """Test that vertex_ai cancel_batch calls the correct API endpoint"""
     handler = VertexAIBatchPrediction(gcs_bucket_name="test-bucket")
     
