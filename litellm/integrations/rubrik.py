@@ -285,10 +285,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # Skip blocking service if the response has no tool calls (text-only)
             choices = openai_dict.get("choices", [])
-            if choices:
-                message = choices[0].get("message", {})
-                if not message.get("tool_calls"):
-                    return response
+            if not choices:
+                return response
+            message = choices[0].get("message", {})
+            if not message.get("tool_calls"):
+                return response
 
             modified_openai_dict = await self._post_to_tool_blocking_service(openai_dict)
             try:
@@ -463,10 +464,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                         continue
                     # GPT-5 style: finish chunk has no allowed tools — fall through
                     # to finish_reason handling below so an explanation chunk is emitted.
-                    buffered_choice.delta.tool_calls = None
+                    buffered_chunk = buffered_chunk.model_copy()
+                    buffered_chunk.choices[0].delta.tool_calls = None
                 else:
-                    buffered_choice.delta.tool_calls = filtered_calls
-                    if buffered_choice.finish_reason:
+                    buffered_chunk = buffered_chunk.model_copy()
+                    buffered_chunk.choices[0].delta.tool_calls = filtered_calls
+                    if buffered_chunk.choices[0].finish_reason:
                         # GPT-5 style: finish chunk carries allowed tool calls —
                         # emit explanation before yielding the finish chunk.
                         if explanation:
@@ -591,9 +594,12 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     yield self._encode_anthropic_chunk_to_sse(explanation_chunk)
 
             # Adjust stop_reason if all tools were blocked
+            terminal_chunk = chunk
             if accumulated_tools and len(blocked_indices) == len(accumulated_tools):
-                chunk["delta"]["stop_reason"] = "end_turn"
-            yield self._encode_anthropic_chunk_to_sse(chunk)
+                terminal_chunk = dict(chunk)
+                terminal_chunk["delta"] = dict(chunk.get("delta", {}))
+                terminal_chunk["delta"]["stop_reason"] = "end_turn"
+            yield self._encode_anthropic_chunk_to_sse(terminal_chunk)
 
             # Successfully processed — clear buffer so fail-open guard doesn't re-emit
             buffered_chunks.clear()
