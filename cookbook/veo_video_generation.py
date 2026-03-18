@@ -78,7 +78,7 @@ class VeoVideoGenerator:
                 try:
                     error_data = e.response.json()
                     print(f"Error details: {json.dumps(error_data, indent=2)}")
-                except:
+                except json.JSONDecodeError:
                     print(f"Error response: {e.response.text}")
             return None
     
