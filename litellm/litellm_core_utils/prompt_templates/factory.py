@@ -2439,13 +2439,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
-                            user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                            _document_content_element = cast(
+                                AnthropicMessagesDocumentParam,
+                                add_cache_control_to_content(
+                                    anthropic_content_element=cast(AnthropicMessagesDocumentParam, m),
+                                    original_content_element=dict(m),
+                                ),
+                            )
+                            user_content.append(_document_content_element)
                         elif m.get("type", "") == "file":
-                            user_content.append(
+                            _file_content_element = (
                                 anthropic_process_openai_file_message(
                                     cast(ChatCompletionFileObject, m)
                                 )
                             )
+                            _file_content_element = add_cache_control_to_content(
+                                anthropic_content_element=cast(AnthropicMessagesDocumentParam, _file_content_element),
+                                original_content_element=dict(m),
+                            )
+                            user_content.append(cast(AnthropicMessagesDocumentParam,_file_content_element))
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2680,7 +2692,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
-                _content_list = assistant_content_block.get("content") if _content_is_list else None
+                _content_list = (
+                    assistant_content_block.get("content") if _content_is_list else None
+                )
                 _list_has_thinking = False
                 if _content_is_list and _content_list is not None:
                     for _item in _content_list:

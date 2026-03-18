@@ -398,6 +398,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
+
         try:
             from openai.types.responses.response_output_item import (
                 ResponseApplyPatchToolCall,
@@ -460,7 +461,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
 
-            elif ResponseApplyPatchToolCall is not None and isinstance(item, ResponseApplyPatchToolCall):
+            elif ResponseApplyPatchToolCall is not None and isinstance(
+                item, ResponseApplyPatchToolCall
+            ):
                 from litellm.responses.litellm_completion_transformation.transformation import (
                     LiteLLMCompletionResponsesConfig,
                 )

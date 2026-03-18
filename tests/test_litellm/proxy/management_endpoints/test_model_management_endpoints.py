@@ -453,6 +453,111 @@ class TestClearCache:
             )
 
 
+class TestUpdatePublicModelGroups:
+    """Test that update_public_model_groups correctly sets litellm.public_model_groups
+    even when get_config() overwrites it with stale DB values."""
+
+    @pytest.mark.asyncio
+    async def test_public_model_groups_set_after_get_config(self):
+        """
+        Regression test: get_config() internally calls _update_config_from_db which
+        sets litellm.public_model_groups to the old DB value. The endpoint must set
+        the in-memory value AFTER get_config() so the new value is not overwritten.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_public_model_groups,
+            UpdatePublicModelGroupsRequest,
+        )
+
+        old_db_models = ["db-model-1", "db-model-2"]
+        new_models = ["db-model-1", "db-model-2", "config-model-1", "config-model-2"]
+
+        # Simulate get_config() overwriting litellm.public_model_groups with old DB value
+        async def mock_get_config(*args, **kwargs):
+            # This simulates _update_config_from_db calling setattr(litellm, "public_model_groups", old_value)
+            litellm.public_model_groups = old_db_models
+            return {"litellm_settings": {"public_model_groups": old_db_models}}
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = mock_get_config
+        mock_proxy_config.save_config = AsyncMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        request = UpdatePublicModelGroupsRequest(model_groups=new_models)
+
+        original_value = getattr(litellm, "public_model_groups", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ), patch(
+                "litellm.proxy.proxy_server.store_model_in_db",
+                True,
+            ):
+                result = await update_public_model_groups(
+                    request=request,
+                    user_api_key_dict=admin_user,
+                )
+
+            # After the endpoint completes, the in-memory value must reflect
+            # the NEW models, not the stale DB value
+            assert litellm.public_model_groups == new_models
+            assert result["public_model_groups"] == new_models
+        finally:
+            litellm.public_model_groups = original_value
+
+    @pytest.mark.asyncio
+    async def test_useful_links_set_after_get_config(self):
+        """
+        Regression test: same stale-overwrite bug as public_model_groups applies
+        to update_useful_links / public_model_groups_links.
+        """
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_useful_links,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            UpdateUsefulLinksRequest,
+        )
+
+        old_links = {"Old Doc": "https://old.example.com"}
+        new_links = {"New Doc": "https://new.example.com", "API Ref": "https://api.example.com"}
+
+        async def mock_get_config(*args, **kwargs):
+            litellm.public_model_groups_links = old_links
+            return {"litellm_settings": {"public_model_groups_links": old_links}}
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.get_config = mock_get_config
+        mock_proxy_config.save_config = AsyncMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        request = UpdateUsefulLinksRequest(useful_links=new_links)
+
+        original_value = getattr(litellm, "public_model_groups_links", None)
+        try:
+            with patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ):
+                result = await update_useful_links(
+                    request=request,
+                    user_api_key_dict=admin_user,
+                )
+
+            assert litellm.public_model_groups_links == new_links
+            assert result["useful_links"] == new_links
+        finally:
+            litellm.public_model_groups_links = original_value
+
+
 class TestTeamModelUpdate:
     """Test team model update handles team_id consistently with model creation"""
 

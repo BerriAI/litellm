@@ -205,7 +205,7 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
 
         return metadata
 
-    def _delete_file(self, file_id, label, max_retries=9, retry_delay=20):
+    def _delete_file(self, file_id, label, max_retries=10, retry_delay=5):
         print(f"\nDeleting {label}: {self.shorten_id(file_id)}")
         for attempt in range(max_retries):
             try:
@@ -235,7 +235,7 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
     # Tests
     # ------------------------------------------------------------------
 
-    @pytest.mark.flaky(reruns=5)
+    @pytest.mark.flaky(reruns=2)
     @pytest.mark.parametrize(
         "model_name",
         get_batch_model_names(),

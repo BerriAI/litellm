@@ -150,6 +150,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             headers=headers,
         )
 
+        self._remove_scope_from_cache_control(anthropic_messages_request)
+
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
 
         anthropic_messages_request.pop(

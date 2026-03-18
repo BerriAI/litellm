@@ -2187,6 +2187,7 @@ class CreateVideoRequest(TypedDict, total=False):
         model: Optional[str] - The video generation model to use (defaults to sora-2)
         seconds: Optional[str] - Clip duration in seconds (defaults to 4 seconds)
         size: Optional[str] - Output resolution formatted as width x height (defaults to 720x1280)
+        characters: Optional[List[Dict[str, str]]] - Character references to include in generation
         user: Optional[str] - A unique identifier representing your end-user
         extra_headers: Optional[Dict[str, str]] - Additional headers
         extra_body: Optional[Dict[str, str]] - Additional body parameters
@@ -2198,6 +2199,7 @@ class CreateVideoRequest(TypedDict, total=False):
     model: Optional[str]
     seconds: Optional[str]
     size: Optional[str]
+    characters: Optional[List[Dict[str, str]]]
     user: Optional[str]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
