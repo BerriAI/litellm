@@ -265,7 +265,7 @@ export default function ModelInfoView({
       }
       
       // check if guardrails / vector stores are attached, if yes, add it. else delete it to prevent auto-injection
-      if (values.guardrails > 0 && Array.isArray(values.guardrails)) {
+      if (values.guardrails.length > 0 && Array.isArray(values.guardrails)) {
         updatedLitellmParams.guardrails = values.guardrails;
       } else {
         delete updatedLitellmParams.guardrails;
