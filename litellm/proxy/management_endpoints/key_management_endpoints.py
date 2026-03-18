@@ -1662,16 +1662,23 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    existing_key_row = await prisma_client.get_data(
-        token=token,
-        table_name="key",
-        query_type="find_unique",
+    from litellm.proxy.proxy_server import hash_token
+
+    if token.startswith("sk-"):
+        hashed_token = hash_token(token=token)
+    else:
+        hashed_token = token
+
+    existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
     )
 
     if existing_key_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Key not found: {token}"},
+        raise ProxyException(
+            message=f"Key not found. Passed key={token}",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
 
     return existing_key_row
@@ -2112,14 +2119,23 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        existing_key_row = await prisma_client.get_data(
-            token=data.key, table_name="key", query_type="find_unique"
+        from litellm.proxy.proxy_server import hash_token
+
+        if data.key.startswith("sk-"):
+            hashed_token = hash_token(token=data.key)
+        else:
+            hashed_token = data.key
+
+        existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_token}
         )
 
         if existing_key_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Team not found, passed team_id={data.team_id}"},
+            raise ProxyException(
+                message=f"Key not found. Passed key={data.key}",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
             )
 
         await _validate_update_key_data(
