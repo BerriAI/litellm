@@ -858,7 +858,13 @@ async def new_team(  # noqa: PLR0915
 
         # Apply defaults from litellm.default_team_params for any fields
         # not explicitly provided in the request.
-        for field in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "team_member_permissions"):
+        for field in (
+            "max_budget",
+            "budget_duration",
+            "tpm_limit",
+            "rpm_limit",
+            "team_member_permissions",
+        ):
             if getattr(data, field, None) is None:
                 default_value = _get_default_team_param(field)
                 if default_value is not None:

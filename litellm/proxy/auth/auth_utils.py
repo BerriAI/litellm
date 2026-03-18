@@ -680,7 +680,7 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
 
     if customer_headers_mappings:
         return customer_headers_mappings
-    
+
     return None
 
 
@@ -754,15 +754,11 @@ def get_end_user_id_from_request_body(
                     user_id_str = str(header_value)
                     if user_id_str.strip():
                         return user_id_str
-                    
+
         elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_str = (
-                        str(header_value)
-                        if header_value is not None
-                        else ""
-                    )
+                    user_id_str = str(header_value) if header_value is not None else ""
                     if user_id_str.strip():
                         return user_id_str
 
