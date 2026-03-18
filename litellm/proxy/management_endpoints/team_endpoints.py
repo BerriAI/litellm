@@ -3272,7 +3272,12 @@ async def _build_team_list_where_conditions(
     if organization_id:
         where_conditions["organization_id"] = organization_id
     elif org_admin_org_ids is not None and not user_id:
-        # Org admin without explicit org or user filter: scope to their orgs
+        # Org admin without explicit org or user filter: scope to their orgs.
+        # NOTE: when user_id is provided, no org filter is applied — the
+        # query returns all teams the target user belongs to across all
+        # organisations.  This matches the legacy /team/list behaviour in
+        # _authorize_and_filter_teams which fetches direct-membership teams
+        # without an org constraint.
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
