@@ -66,23 +66,6 @@ else:
     PrismaClient = Any
 
 
-async def get_managed_vector_store_rows_by_uuids(
-    uuids: List[str],
-    prisma_client: Any,
-) -> List[Any]:
-    """
-    Fetch managed vector store rows by their internal UUIDs.
-
-    Standalone helper following the same pattern as get_team_object /
-    get_key_object so that callers on the hot request path use a named,
-    importable function rather than an inline prisma_client.db.* call.
-    """
-    return await prisma_client.db.litellm_managedvectorstorestable.find_many(
-        where={"vector_store_id": {"in": uuids}},
-        take=len(uuids),
-    )
-
-
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(
@@ -773,7 +756,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from litellm.llms.base_llm.managed_resources.utils import (
             extract_unified_uuid_from_unified_id,
         )
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import (
+            get_managed_vector_store_rows_by_uuids,
+        )
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if not vector_store_ids or prisma_client is None:
             return
@@ -791,6 +781,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         rows = await get_managed_vector_store_rows_by_uuids(
             uuids=list(uuid_to_unified.keys()),
             prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         found_uuids = {row.vector_store_id for row in rows}

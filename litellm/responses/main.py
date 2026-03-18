@@ -732,7 +732,7 @@ def responses(
                 aresponses_with_emulated_file_search,
             )
 
-            _internal_skip = {"litellm_logging_obj", "litellm_call_id", "aresponses"}
+            _internal_skip = {"litellm_call_id", "aresponses"}
             emulated_kwargs = {
                 "include": include,
                 "instructions": instructions,

@@ -1798,6 +1798,7 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
+        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
 
         try:
             if logging_obj is None:
@@ -1944,20 +1945,23 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
+            # Internal sub-calls (e.g. emulated file-search steps) share the
+            # parent's logging obj; skip here so only the outer call bills once.
+            if not _is_litellm_internal_call:
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
+                logging_obj.handle_sync_success_callbacks_for_async_calls(
                     result=result,
                     start_time=start_time,
                     end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
                 )
-            )
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
@@ -1985,7 +1989,7 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
-            if logging_obj:
+            if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
