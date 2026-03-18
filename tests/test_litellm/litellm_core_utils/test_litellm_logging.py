@@ -1969,3 +1969,68 @@ def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():
     assert metadata is not None
     assert metadata.get("user_api_key_hash") == "sk-hashed-empty-test"
     assert metadata.get("user_api_key_team_id") == "team-empty-test"
+
+
+def test_failure_handler_skips_sync_callbacks_for_pass_through_requests(logging_obj):
+    """Ensure sync failure callbacks are skipped for pass-through endpoint requests.
+
+    Regression test for duplicate Datadog/Arize logs on pass-through endpoint failures.
+    The async_failure_handler fires async_log_failure_event; the sync failure_handler
+    must NOT also fire log_failure_event for pass-through requests.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import CallTypes
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.call_type = CallTypes.pass_through.value
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_failure_event = MagicMock()
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.failure_handler(
+            exception=Exception("test error"),
+            traceback_exception="",
+        )
+
+    dummy_logger.log_failure_event.assert_not_called()
+
+
+@pytest.mark.parametrize("call_type", ["completion", "acompletion"])
+def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
+    logging_obj, call_type
+):
+    """Ensure sync failure callbacks still fire for normal (non-pass-through) requests."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.call_type = call_type
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_failure_event = MagicMock()
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.failure_handler(
+            exception=Exception("test error"),
+            traceback_exception="",
+        )
+
+    dummy_logger.log_failure_event.assert_called_once()
