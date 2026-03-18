@@ -313,7 +313,7 @@ const sidebars = {
                 "mcp_guardrail",
                 {
                   type: "link",
-                  label: "MCP Troubleshooting Guide →",
+                  label: "MCP Troubleshooting Guide",
                   href: "/docs/mcp_troubleshoot"
                 },
               ],
