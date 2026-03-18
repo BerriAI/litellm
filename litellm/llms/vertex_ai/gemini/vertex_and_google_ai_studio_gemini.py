@@ -498,9 +498,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[
-                ChatCompletionToolParamFunctionChunk
-            ] = None
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -632,15 +632,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools_list.append(search_tool)
         if googleSearchRetrieval is not None:
             retrieval_tool = Tools()
-            retrieval_tool[
-                VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
-            ] = googleSearchRetrieval
+            retrieval_tool[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = (
+                googleSearchRetrieval
+            )
             _tools_list.append(retrieval_tool)
         if enterpriseWebSearch is not None:
             enterprise_tool = Tools()
-            enterprise_tool[
-                VertexToolName.ENTERPRISE_WEB_SEARCH.value
-            ] = enterpriseWebSearch
+            enterprise_tool[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = (
+                enterpriseWebSearch
+            )
             _tools_list.append(enterprise_tool)
         if code_execution is not None:
             code_tool = Tools()
@@ -1087,16 +1087,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_description="thinking_budget",
                     )
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                effort_value, model
+                            )
                         )
                     else:
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                effort_value, model
+                            )
                         )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -1105,11 +1105,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     param_name="thinking",
                     param_description="thinking_budget",
                 )
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value),
-                    model=model,
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._map_thinking_param(
+                        cast(AnthropicThinkingParam, value),
+                        model=model,
+                    )
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -1468,10 +1468,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
+                        _tool_response_chunk["id"] = (
+                            _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                         )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
@@ -2281,28 +2281,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = grounding_metadata
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
 
-            model_response._hidden_params[
-                "vertex_ai_url_context_metadata"
-            ] = url_context_metadata
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params[
-                "vertex_ai_safety_results"
-            ] = safety_ratings  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params[
-                "vertex_ai_citation_metadata"
-            ] = citation_metadata  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD TRAFFIC TYPE ##
             traffic_type = completion_response.get("usageMetadata", {}).get(
@@ -2924,9 +2924,183 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
 
+        # State for partialArgs accumulation (streamFunctionCallArguments)
+        self._partial_args_obj: Dict[str, Any] = {}
+        self._partial_fc_name: Optional[str] = None
+        self._partial_fc_signature: Optional[str] = None
+        self._partial_fc_active: bool = False
+
+    def _preprocess_partial_args(self, chunk: dict) -> dict:
+        """
+        Pre-process streaming chunks to accumulate partialArgs into complete args.
+
+        When streamFunctionCallArguments is enabled, Gemini sends functionCall
+        parts with partialArgs (jsonPath-addressed incremental values) instead of
+        complete args. This method accumulates them and replaces with complete args
+        when the stream ends (willContinue=false).
+
+        Supports: https://github.com/BerriAI/litellm/issues/22206
+        """
+        import re
+
+        candidates = chunk.get("candidates", [])
+        if not candidates:
+            return chunk
+
+        candidate = candidates[0]
+        content = candidate.get("content")
+        if not content or "parts" not in content:
+            return chunk
+
+        new_parts = []
+        for part in content["parts"]:
+            fc = part.get("functionCall")
+            if not fc:
+                new_parts.append(part)
+                continue
+
+            partial_args = fc.get("partialArgs")
+            will_continue = fc.get("willContinue", False)
+            name = fc.get("name", "")
+
+            # Case 1: Normal functionCall with complete args — pass through
+            if partial_args is None and "args" in fc:
+                new_parts.append(part)
+                self._partial_fc_active = False
+                continue
+
+            # Case 2: Start of partialArgs stream (has name)
+            if name and not self._partial_fc_active:
+                self._partial_fc_active = True
+                self._partial_fc_name = name
+                self._partial_fc_signature = part.get("thoughtSignature")
+                self._partial_args_obj = {}
+
+            # Case 3: Accumulate partialArgs
+            if partial_args is not None:
+                for pa in partial_args:
+                    json_path = pa.get("jsonPath", "")
+                    if not json_path:
+                        continue
+                    path_segments = self._parse_json_path(json_path)
+                    if not path_segments:
+                        continue
+
+                    sv = pa.get("stringValue")
+                    bv = pa.get("boolValue")
+                    iv = pa.get("intValue")
+                    dv = pa.get("doubleValue")
+
+                    if sv is not None:
+                        if sv:
+                            self._append_nested(
+                                self._partial_args_obj, path_segments, sv
+                            )
+                    elif bv is not None:
+                        self._set_nested(self._partial_args_obj, path_segments, bv)
+                    elif iv is not None:
+                        self._set_nested(self._partial_args_obj, path_segments, iv)
+                    elif dv is not None:
+                        self._set_nested(self._partial_args_obj, path_segments, dv)
+
+            # Case 4: Stream ended — emit complete functionCall
+            if not will_continue and self._partial_fc_active:
+                completed_part: Dict[str, Any] = {
+                    "functionCall": {
+                        "name": self._partial_fc_name or "",
+                        "args": self._partial_args_obj,
+                    }
+                }
+                if self._partial_fc_signature:
+                    completed_part["thoughtSignature"] = self._partial_fc_signature
+                new_parts.append(completed_part)
+                self._partial_fc_active = False
+                self._partial_args_obj = {}
+                self._partial_fc_name = None
+                self._partial_fc_signature = None
+                continue
+
+            # Case 5: Empty functionCall with willContinue=true — skip (intermediate state)
+            # Don't append anything, just continue accumulating
+
+        # Replace parts in chunk
+        chunk = dict(chunk)
+        candidates_copy = list(chunk["candidates"])
+        candidates_copy[0] = dict(candidates_copy[0])
+        candidates_copy[0]["content"] = dict(candidates_copy[0]["content"])
+        candidates_copy[0]["content"]["parts"] = new_parts
+        chunk["candidates"] = candidates_copy
+        return chunk
+
+    @staticmethod
+    def _parse_json_path(json_path: str) -> List[Union[str, int]]:
+        """Parse jsonPath like '$.field[0].sub' into ['field', 0, 'sub']."""
+        if not json_path or json_path == "$":
+            return []
+        path = json_path.lstrip("$").lstrip(".")
+        if not path:
+            return []
+        import re
+
+        segments: List[Union[str, int]] = []
+        for m in re.finditer(r"([^.\[\]]+)|\[(\d+)\]", path):
+            if m.group(1):
+                segments.append(m.group(1))
+            elif m.group(2):
+                segments.append(int(m.group(2)))
+        return segments
+
+    @staticmethod
+    def _set_nested(obj: dict, path: List[Union[str, int]], value: Any) -> None:
+        """Set a value at a nested path, auto-creating intermediate structures."""
+        current: Any = obj
+        for i, seg in enumerate(path[:-1]):
+            nxt = path[i + 1]
+            if isinstance(seg, int):
+                while len(current) <= seg:
+                    current.append({} if isinstance(nxt, str) else [])
+                current = current[seg]
+            else:
+                if seg not in current:
+                    current[seg] = [] if isinstance(nxt, int) else {}
+                current = current[seg]
+        final = path[-1]
+        if isinstance(final, int):
+            while len(current) <= final:
+                current.append(None)
+            current[final] = value
+        else:
+            current[final] = value
+
+    @staticmethod
+    def _append_nested(obj: dict, path: List[Union[str, int]], value: str) -> None:
+        """Append a string at a nested path (for streaming accumulation)."""
+        current: Any = obj
+        for i, seg in enumerate(path[:-1]):
+            nxt = path[i + 1]
+            if isinstance(seg, int):
+                while len(current) <= seg:
+                    current.append({} if isinstance(nxt, str) else [])
+                current = current[seg]
+            else:
+                if seg not in current:
+                    current[seg] = [] if isinstance(nxt, int) else {}
+                current = current[seg]
+        final = path[-1]
+        if isinstance(final, int):
+            while len(current) <= final:
+                current.append("")
+            current[final] = (current[final] or "") + value
+        else:
+            current[final] = current.get(final, "") + value
+
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
+
+            # Pre-process partialArgs before standard parsing
+            chunk = self._preprocess_partial_args(chunk)
+
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore

@@ -128,6 +128,7 @@ class Retrieval(TypedDict):
 class FunctionCallingConfig(TypedDict, total=False):
     mode: Literal["ANY", "AUTO", "NONE"]
     allowed_function_names: List[str]
+    streamFunctionCallArguments: bool  # Enable streaming tool arguments via partialArgs
 
 
 HarmCategory = Literal[
