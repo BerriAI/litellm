@@ -82,17 +82,18 @@ class VectorStorePreCallHook(CustomLogger):
             prisma_client = None
             try:
                 from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
                 prisma_client = _prisma_client
             except ImportError:
                 pass
 
             # Use database fallback to ensure synchronization across instances
-            vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
-                await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
-                    non_default_params=non_default_params, 
-                    tools=tools,
-                    prisma_client=prisma_client
-                )
+            vector_stores_to_run: List[
+                LiteLLM_ManagedVectorStore
+            ] = await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+                non_default_params=non_default_params,
+                tools=tools,
+                prisma_client=prisma_client,
             )
 
             if not vector_stores_to_run:
@@ -111,7 +112,6 @@ class VectorStorePreCallHook(CustomLogger):
             all_search_results: List[VectorStoreSearchResponse] = []
 
             for vector_store_to_run in vector_stores_to_run:
-
                 # Get vector store id from the vector store config
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
@@ -147,9 +147,9 @@ class VectorStorePreCallHook(CustomLogger):
 
             # Store search results as-is (already in OpenAI-compatible format)
             if litellm_logging_obj and all_search_results:
-                litellm_logging_obj.model_call_details["search_results"] = (
-                    all_search_results
-                )
+                litellm_logging_obj.model_call_details[
+                    "search_results"
+                ] = all_search_results
 
             return model, modified_messages, non_default_params
 
@@ -208,9 +208,9 @@ class VectorStorePreCallHook(CustomLogger):
         Returns:
             Modified list of messages with context appended
         """
-        search_response_data: Optional[List[VectorStoreSearchResult]] = (
-            search_response.get("data")
-        )
+        search_response_data: Optional[
+            List[VectorStoreSearchResult]
+        ] = search_response.get("data")
         if not search_response_data:
             return messages
 
@@ -268,9 +268,9 @@ class VectorStorePreCallHook(CustomLogger):
             )
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: Optional[List[VectorStoreSearchResponse]] = (
-                litellm_logging_obj.model_call_details.get("search_results")
-            )
+            search_results: Optional[
+                List[VectorStoreSearchResponse]
+            ] = litellm_logging_obj.model_call_details.get("search_results")
 
             verbose_logger.debug(f"Search results found: {search_results is not None}")
 
@@ -328,9 +328,9 @@ class VectorStorePreCallHook(CustomLogger):
             )
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: Optional[List[VectorStoreSearchResponse]] = (
-                request_data.get("search_results")
-            )
+            search_results: Optional[
+                List[VectorStoreSearchResponse]
+            ] = request_data.get("search_results")
 
             verbose_logger.debug(
                 f"Search results found for streaming chunk: {search_results is not None}"

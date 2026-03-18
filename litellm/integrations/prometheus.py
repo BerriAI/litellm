@@ -1417,7 +1417,9 @@ class PrometheusLogger(CustomLogger):
                 _sanitize_prometheus_label_value(user_api_team),
                 _sanitize_prometheus_label_value(user_api_team_alias),
                 _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
+                _sanitize_prometheus_label_value(
+                    standard_logging_payload.get("model_id", "")
+                ),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:

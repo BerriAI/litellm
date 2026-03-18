@@ -44,19 +44,25 @@ def create_skill_zip(skill_name: str, unique_suffix: Optional[str] = None):
     skill_dir = test_dir / skill_name
 
     # Create a zip file containing the skill directory
+    # When unique_suffix is set, folder name must match skill name in SKILL.md (Anthropic requirement)
+    zip_folder_name = f"{skill_name}-{unique_suffix}" if unique_suffix else skill_name
     zip_path = test_dir / f"{skill_name}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(skill_dir, arcname=skill_name)
-
         if unique_suffix is not None:
-            # Rewrite SKILL.md with a unique name to avoid API conflicts
+            # Rewrite SKILL.md with a unique name and use matching folder name
             skill_md = (skill_dir / "SKILL.md").read_text()
             skill_md = skill_md.replace(
                 f"name: {skill_name}",
-                f"name: {skill_name}-{unique_suffix}",
+                f"name: {zip_folder_name}",
             )
-            zf.writestr(f"{skill_name}/SKILL.md", skill_md)
+            zf.writestr(f"{zip_folder_name}/SKILL.md", skill_md)
+            # Add any other files in the skill dir (e.g. subdirs) under the new folder name
+            for f in skill_dir.rglob("*"):
+                if f.is_file() and f.name != "SKILL.md":
+                    rel = f.relative_to(skill_dir)
+                    zf.write(f, arcname=f"{zip_folder_name}/{rel}")
         else:
+            zf.write(skill_dir, arcname=skill_name)
             zf.write(skill_dir / "SKILL.md", arcname=f"{skill_name}/SKILL.md")
 
     try:
@@ -268,17 +274,11 @@ class BaseSkillsAPITest(ABC):
         print(f"Deleted skill response: {response}")
 
 
-class TestAnthropicSkillsAPI(BaseSkillsAPITest):
-    """
-    Test Anthropic Skills API implementation.
-    """
-
-    def get_custom_llm_provider(self) -> str:
-        return "anthropic"
-
-    def get_api_key(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_KEY")
-
-    def get_api_base(self) -> Optional[str]:
-        return os.environ.get("ANTHROPIC_API_BASE")
+# Live integration tests for the Anthropic Skills API are not run in CI because
+# the Skills API requires beta access (anthropic-beta: skills-2025-10-02) that
+# is not available on the standard API key used in CI.
+#
+# Transformation logic (URL construction, headers, request/response parsing) is
+# covered by unit tests in:
+#   tests/test_litellm/test_anthropic_skills_transformation.py
 

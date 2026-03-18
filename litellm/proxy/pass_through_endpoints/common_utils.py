@@ -14,4 +14,3 @@ def get_litellm_virtual_key(request: Request) -> str:
     if litellm_api_key:
         return f"Bearer {litellm_api_key}"
     return request.headers.get("Authorization", "")
-

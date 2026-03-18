@@ -1,115 +1,123 @@
-import { render, screen } from "@testing-library/react";
+import React from "react";
+import { describe, it, expect, vi } from "vitest";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithProviders } from "../../tests/test-utils";
 import { HelpLink, HelpIcon, DocsMenu } from "./HelpLink";
 
 describe("HelpLink", () => {
-  it("should render", () => {
-    render(<HelpLink href="https://docs.example.com" />);
-    expect(screen.getByRole("link")).toBeInTheDocument();
-  });
+  it("should render with default children and open in new tab", () => {
+    renderWithProviders(<HelpLink href="https://docs.example.com" />);
 
-  it("should display default 'Learn more' text when no children provided", () => {
-    render(<HelpLink href="https://docs.example.com" />);
-    expect(screen.getByText("Learn more")).toBeInTheDocument();
-  });
-
-  it("should display custom children text", () => {
-    render(<HelpLink href="https://docs.example.com">Custom docs link</HelpLink>);
-    expect(screen.getByText("Custom docs link")).toBeInTheDocument();
-  });
-
-  it("should open in a new tab with noopener noreferrer", () => {
-    render(<HelpLink href="https://docs.example.com" />);
-    const link = screen.getByRole("link");
+    const link = screen.getByRole("link", { name: /learn more/i });
+    expect(link).toHaveAttribute("href", "https://docs.example.com");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("should have accessible screen reader text", () => {
-    render(<HelpLink href="https://docs.example.com" />);
+  it("should render custom children text", () => {
+    renderWithProviders(
+      <HelpLink href="https://docs.example.com">Custom docs link</HelpLink>
+    );
+
+    expect(screen.getByText("Custom docs link")).toBeInTheDocument();
+  });
+
+  it("should include a screen-reader-only label for accessibility", () => {
+    renderWithProviders(<HelpLink href="https://docs.example.com" />);
+
     expect(screen.getByText("(opens in a new tab)")).toBeInTheDocument();
   });
 });
 
 describe("HelpIcon", () => {
-  it("should render", () => {
-    render(<HelpIcon content="Some help text" />);
+  it("should render a help button with accessible label", () => {
+    renderWithProviders(<HelpIcon content="Some help text" />);
+
     expect(screen.getByRole("button", { name: /help information/i })).toBeInTheDocument();
   });
 
-  it("should show tooltip content on mouse enter", async () => {
+  it("should show tooltip content on hover", async () => {
     const user = userEvent.setup();
-    render(<HelpIcon content="Helpful tooltip text" />);
-    await user.hover(screen.getByRole("button", { name: /help information/i }));
-    expect(screen.getByText("Helpful tooltip text")).toBeInTheDocument();
-  });
+    renderWithProviders(<HelpIcon content="Tooltip help text" />);
 
-  it("should hide tooltip content on mouse leave", async () => {
-    const user = userEvent.setup();
-    render(<HelpIcon content="Helpful tooltip text" />);
-    const button = screen.getByRole("button", { name: /help information/i });
-    await user.hover(button);
-    await user.unhover(button);
-    expect(screen.queryByText("Helpful tooltip text")).not.toBeInTheDocument();
+    await user.hover(screen.getByRole("button", { name: /help information/i }));
+
+    expect(screen.getByText("Tooltip help text")).toBeInTheDocument();
   });
 
   it("should show learn more link when learnMoreHref is provided", async () => {
     const user = userEvent.setup();
-    render(<HelpIcon content="Help text" learnMoreHref="https://docs.example.com" />);
+    renderWithProviders(
+      <HelpIcon
+        content="Help text"
+        learnMoreHref="https://docs.example.com"
+        learnMoreText="Read docs"
+      />
+    );
+
     await user.hover(screen.getByRole("button", { name: /help information/i }));
-    expect(screen.getByText("Learn more")).toBeInTheDocument();
+
+    const link = screen.getByRole("link", { name: /read docs/i });
+    expect(link).toHaveAttribute("href", "https://docs.example.com");
   });
 
-  it("should use custom learnMoreText when provided", async () => {
+  it("should not show learn more link when learnMoreHref is not provided", async () => {
     const user = userEvent.setup();
-    render(
-      <HelpIcon content="Help text" learnMoreHref="https://docs.example.com" learnMoreText="Read docs" />,
-    );
+    renderWithProviders(<HelpIcon content="Help text" />);
+
     await user.hover(screen.getByRole("button", { name: /help information/i }));
-    expect(screen.getByText("Read docs")).toBeInTheDocument();
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });
 
 describe("DocsMenu", () => {
   const items = [
     { label: "Custom pricing", href: "https://docs.example.com/pricing" },
-    { label: "Spend tracking", href: "https://docs.example.com/spend" },
+    { label: "Cost tracking", href: "https://docs.example.com/cost" },
   ];
 
-  it("should render", () => {
-    render(<DocsMenu items={items} />);
+  it("should render the menu button with default text", () => {
+    renderWithProviders(<DocsMenu items={items} />);
+
     expect(screen.getByRole("button", { name: /docs/i })).toBeInTheDocument();
   });
 
-  it("should show menu items when clicked", async () => {
+  it("should show menu items when button is clicked", async () => {
     const user = userEvent.setup();
-    render(<DocsMenu items={items} />);
+    renderWithProviders(<DocsMenu items={items} />);
+
     await user.click(screen.getByRole("button", { name: /docs/i }));
+
     expect(screen.getByText("Custom pricing")).toBeInTheDocument();
-    expect(screen.getByText("Spend tracking")).toBeInTheDocument();
+    expect(screen.getByText("Cost tracking")).toBeInTheDocument();
   });
 
-  it("should hide menu items when clicked again", async () => {
+  it("should close the menu when an item is clicked", async () => {
     const user = userEvent.setup();
-    render(<DocsMenu items={items} />);
-    const button = screen.getByRole("button", { name: /docs/i });
-    await user.click(button);
-    await user.click(button);
-    expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
+    renderWithProviders(<DocsMenu items={items} />);
+
+    await user.click(screen.getByRole("button", { name: /docs/i }));
+    await user.click(screen.getByText("Custom pricing"));
+
+    expect(screen.queryByText("Cost tracking")).not.toBeInTheDocument();
   });
 
-  it("should set aria-expanded correctly", async () => {
+  it("should set aria-expanded correctly based on menu state", async () => {
     const user = userEvent.setup();
-    render(<DocsMenu items={items} />);
+    renderWithProviders(<DocsMenu items={items} />);
+
     const button = screen.getByRole("button", { name: /docs/i });
     expect(button).toHaveAttribute("aria-expanded", "false");
+
     await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "true");
   });
 
   it("should close menu when clicking outside", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <div>
         <DocsMenu items={items} />
         <button>Outside</button>
@@ -119,10 +127,5 @@ describe("DocsMenu", () => {
     expect(screen.getByText("Custom pricing")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /outside/i }));
     expect(screen.queryByText("Custom pricing")).not.toBeInTheDocument();
-  });
-
-  it("should display custom children text", () => {
-    render(<DocsMenu items={items}>Help</DocsMenu>);
-    expect(screen.getByText("Help")).toBeInTheDocument();
   });
 });

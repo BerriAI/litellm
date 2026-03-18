@@ -45,7 +45,8 @@ async def test_global_redaction_on():
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    response = standard_logging_payload["response"]
+    assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     print(
         "logged standard logging payload",
@@ -75,7 +76,8 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
     )
 
     if turn_off_message_logging is True:
-        assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+        response = standard_logging_payload["response"]
+        assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
         assert (
             standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
         )
@@ -108,7 +110,8 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
         json.dumps(standard_logging_payload, indent=2),
     )
     if turn_off_message_logging is True:
-        assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+        response = standard_logging_payload["response"]
+        assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
         assert (
             standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
         )
@@ -390,7 +393,8 @@ async def test_redaction_with_streaming_response():
     assert standard_logging_payload is not None
     
     # Verify that redaction worked without pickle errors
-    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    response = standard_logging_payload["response"]
+    assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     print(
         "logged standard logging payload for streaming with coroutine handling",
@@ -477,5 +481,6 @@ async def test_redaction_with_metadata_completion_api():
     
     # Verify the helper function works correctly - with get_metadata_variable_name_from_kwargs,
     # the system checks the appropriate field for headers
-    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    response = standard_logging_payload["response"]
+    assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"

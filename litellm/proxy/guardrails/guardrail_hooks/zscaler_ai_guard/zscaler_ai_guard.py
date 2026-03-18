@@ -42,17 +42,29 @@ class ZscalerAIGuard(CustomGuardrail):
             "ZSCALER_AI_GUARD_URL",
             "https://api.us1.zseclipse.net/v1/detection/execute-policy",
         )
-        self.policy_id = policy_id if policy_id is not None else int(os.getenv("ZSCALER_AI_GUARD_POLICY_ID", -1))
+        self.policy_id = (
+            policy_id
+            if policy_id is not None
+            else int(os.getenv("ZSCALER_AI_GUARD_POLICY_ID", -1))
+        )
         self.api_key = api_key or os.getenv("ZSCALER_AI_GUARD_API_KEY")
-        self.send_user_api_key_alias = send_user_api_key_alias if send_user_api_key_alias is not None else os.getenv(
-            "SEND_USER_API_KEY_ALIAS", "False"
-        ).lower() in ("true", "1")
-        self.send_user_api_key_user_id = send_user_api_key_user_id if send_user_api_key_user_id is not None else os.getenv(
-            "SEND_USER_API_KEY_USER_ID", "False"
-        ).lower() in ("true", "1")
-        self.send_user_api_key_team_id = send_user_api_key_team_id if send_user_api_key_team_id is not None else os.getenv(
-            "SEND_USER_API_KEY_TEAM_ID", "False"
-        ).lower() in ("true", "1")
+        self.send_user_api_key_alias = (
+            send_user_api_key_alias
+            if send_user_api_key_alias is not None
+            else os.getenv("SEND_USER_API_KEY_ALIAS", "False").lower() in ("true", "1")
+        )
+        self.send_user_api_key_user_id = (
+            send_user_api_key_user_id
+            if send_user_api_key_user_id is not None
+            else os.getenv("SEND_USER_API_KEY_USER_ID", "False").lower()
+            in ("true", "1")
+        )
+        self.send_user_api_key_team_id = (
+            send_user_api_key_team_id
+            if send_user_api_key_team_id is not None
+            else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower()
+            in ("true", "1")
+        )
 
         verbose_proxy_logger.debug(
             f"""send_user_api_key_alias: {self.send_user_api_key_alias}, 
@@ -65,7 +77,9 @@ class ZscalerAIGuard(CustomGuardrail):
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 
     @staticmethod
-    def _resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
+    def _resolve_metadata_value(
+        request_data: Optional[dict], key: str
+    ) -> Optional[str]:
         """
         Resolve metadata value from request_data, checking both metadata locations.
 
@@ -157,17 +171,20 @@ class ZscalerAIGuard(CustomGuardrail):
 
             kwargs = {}
             if self.send_user_api_key_alias:
-                kwargs["user_api_key_alias"] = self._resolve_metadata_value(
-                    request_data, "user_api_key_alias"
-                ) or "N/A"
+                kwargs["user_api_key_alias"] = (
+                    self._resolve_metadata_value(request_data, "user_api_key_alias")
+                    or "N/A"
+                )
             if self.send_user_api_key_team_id:
-                kwargs["user_api_key_team_id"] = self._resolve_metadata_value(
-                    request_data, "user_api_key_team_id"
-                ) or "N/A"
+                kwargs["user_api_key_team_id"] = (
+                    self._resolve_metadata_value(request_data, "user_api_key_team_id")
+                    or "N/A"
+                )
             if self.send_user_api_key_user_id:
-                kwargs["user_api_key_user_id"] = self._resolve_metadata_value(
-                    request_data, "user_api_key_user_id"
-                ) or "N/A"
+                kwargs["user_api_key_user_id"] = (
+                    self._resolve_metadata_value(request_data, "user_api_key_user_id")
+                    or "N/A"
+                )
             verbose_proxy_logger.debug(f"inside apply_guardrail kwargs: {kwargs}")
 
             zscaler_ai_guard_result = None
@@ -184,7 +201,9 @@ class ZscalerAIGuard(CustomGuardrail):
                     content=concatenated_text,
                     **kwargs,
                 )
-                verbose_proxy_logger.debug(f"response from zscaler ai guards: {zscaler_ai_guard_result}")
+                verbose_proxy_logger.debug(
+                    f"response from zscaler ai guards: {zscaler_ai_guard_result}"
+                )
             if (
                 zscaler_ai_guard_result
                 and zscaler_ai_guard_result.get("action") == "BLOCK"

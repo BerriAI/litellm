@@ -86,7 +86,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
             if not isinstance(server_url, str):
                 continue
             if server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
-                name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):]
+                name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) :]
                 if name:
                     server_names.add(name)
         return server_names
@@ -98,8 +98,8 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if not tools or not isinstance(tools, list):
             return set()
 
-        requested_servers = (
-            MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
+        requested_servers = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(
+            tools
         )
         if not requested_servers:
             return set()

@@ -52,26 +52,26 @@ class A2ACompletionBridgeHandler:
         if custom_llm_provider == "pydantic_ai_agents":
             if api_base is None:
                 raise ValueError("api_base is required for Pydantic AI agents")
-            
+
             verbose_logger.info(
                 f"Pydantic AI: Routing to Pydantic AI agent at {api_base}"
             )
-            
+
             # Send request directly to Pydantic AI agent
             response_data = await PydanticAITransformation.send_non_streaming_request(
                 api_base=api_base,
                 request_id=request_id,
                 params=params,
             )
-            
+
             return response_data
-        
+
         # Extract message from params
         message = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -98,7 +98,8 @@ class A2ACompletionBridgeHandler:
         }
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
-            k: v for k, v in litellm_params.items()
+            k: v
+            for k, v in litellm_params.items()
             if k not in ("model", "custom_llm_provider")
         }
         completion_params.update(litellm_params_to_add)
@@ -107,9 +108,11 @@ class A2ACompletionBridgeHandler:
         response = await litellm.acompletion(**completion_params)
 
         # Transform response to A2A format
-        a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
-            response=response,
-            request_id=request_id,
+        a2a_response = (
+            A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
+                response=response,
+                request_id=request_id,
+            )
         )
 
         verbose_logger.info(f"A2A completion bridge completed: request_id={request_id}")
@@ -146,27 +149,27 @@ class A2ACompletionBridgeHandler:
         if custom_llm_provider == "pydantic_ai_agents":
             if api_base is None:
                 raise ValueError("api_base is required for Pydantic AI agents")
-            
+
             verbose_logger.info(
                 f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}"
             )
-            
+
             # Get non-streaming response first
             response_data = await PydanticAITransformation.send_non_streaming_request(
                 api_base=api_base,
                 request_id=request_id,
                 params=params,
             )
-            
+
             # Convert to fake streaming
             async for chunk in PydanticAITransformation.fake_streaming_from_response(
                 response_data=response_data,
                 request_id=request_id,
             ):
                 yield chunk
-            
+
             return
-        
+
         # Extract message from params
         message = params.get("message", {})
 
@@ -177,8 +180,8 @@ class A2ACompletionBridgeHandler:
         )
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -205,7 +208,8 @@ class A2ACompletionBridgeHandler:
         }
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
-            k: v for k, v in litellm_params.items()
+            k: v
+            for k, v in litellm_params.items()
             if k not in ("model", "custom_llm_provider")
         }
         completion_params.update(litellm_params_to_add)
@@ -244,9 +248,11 @@ class A2ACompletionBridgeHandler:
 
         # Emit artifact update with accumulated content
         if accumulated_text:
-            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                ctx=ctx,
-                text=accumulated_text,
+            artifact_event = (
+                A2ACompletionBridgeTransformation.create_artifact_update_event(
+                    ctx=ctx,
+                    text=accumulated_text,
+                )
             )
             yield artifact_event
 

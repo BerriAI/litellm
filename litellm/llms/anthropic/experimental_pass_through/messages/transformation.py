@@ -50,6 +50,38 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
+    def _remove_scope_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `scope` field from cache_control blocks.
+
+        Some providers (Vertex AI, Azure AI Foundry) do not support the `scope`
+        field in cache_control (e.g. "global" for cross-request caching).
+        Processes both `system` and `messages` content blocks.
+        """
+
+        def _sanitize(cache_control: Any) -> None:
+            if isinstance(cache_control, dict):
+                cache_control.pop("scope", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize(item["cache_control"])
+
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        _process_content_list(content)
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
@@ -165,15 +197,21 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 anthropic_messages_optional_request_params.pop("system", None)
 
         # Transform context_management from OpenAI format to Anthropic format if needed
-        context_management_param = anthropic_messages_optional_request_params.get("context_management")
+        context_management_param = anthropic_messages_optional_request_params.get(
+            "context_management"
+        )
         if context_management_param is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-            
-            transformed_context_management = AnthropicConfig.map_openai_context_management_to_anthropic(
-                context_management_param
+
+            transformed_context_management = (
+                AnthropicConfig.map_openai_context_management_to_anthropic(
+                    context_management_param
+                )
             )
             if transformed_context_management is not None:
-                anthropic_messages_optional_request_params["context_management"] = transformed_context_management
+                anthropic_messages_optional_request_params[
+                    "context_management"
+                ] = transformed_context_management
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")

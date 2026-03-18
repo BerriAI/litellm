@@ -21,7 +21,6 @@ class LeastBusyLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache):
         self.router_cache = router_cache
 
-
     def log_pre_api_call(self, model, messages, kwargs):
         """
         Log when a model is being used.

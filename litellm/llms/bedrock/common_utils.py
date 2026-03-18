@@ -455,7 +455,7 @@ def get_bedrock_base_model(model: str) -> str:
     stripped = model
     for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
         if stripped.startswith(rp):
-            stripped = stripped[len(rp):]
+            stripped = stripped[len(rp) :]
             break
     if stripped.startswith("nova-2/"):
         return "amazon.nova-2-custom"
@@ -638,7 +638,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock = model.replace("bedrock/", "", 1)
-        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+        if _model_after_bedrock.startswith(
+            "nova-2/"
+        ) or _model_after_bedrock.startswith("nova/"):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)

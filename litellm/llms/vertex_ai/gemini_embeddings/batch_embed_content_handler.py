@@ -40,37 +40,37 @@ class GoogleBatchEmbeddings(VertexLLM):
     ) -> Dict[str, Dict[str, str]]:
         """
         Resolve Gemini file references (files/...) to get mime_type and uri.
-        
+
         Args:
             input: EmbeddingInput that may contain file references
             api_key: Gemini API key
             sync_handler: HTTP client
-        
+
         Returns:
             Dict mapping file name to {mime_type, uri}
         """
         input_list = [input] if isinstance(input, str) else input
         resolved_files: Dict[str, Dict[str, str]] = {}
-        
+
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
                 url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
                 headers = {"x-goog-api-key": api_key}
                 response = sync_handler.get(url=url, headers=headers)
-                
+
                 if response.status_code != 200:
                     raise Exception(
                         f"Error fetching file {element}: {response.status_code} {response.text}"
                     )
-                
+
                 file_data = response.json()
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),
                 }
-        
+
         return resolved_files
-    
+
     async def _async_resolve_file_references(
         self,
         input: EmbeddingInput,
@@ -79,37 +79,37 @@ class GoogleBatchEmbeddings(VertexLLM):
     ) -> Dict[str, Dict[str, str]]:
         """
         Async version of _resolve_file_references.
-        
+
         Args:
             input: EmbeddingInput that may contain file references
             api_key: Gemini API key
             async_handler: Async HTTP client
-        
+
         Returns:
             Dict mapping file name to {mime_type, uri}
         """
         input_list = [input] if isinstance(input, str) else input
         resolved_files: Dict[str, Dict[str, str]] = {}
-        
+
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
                 url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
                 headers = {"x-goog-api-key": api_key}
                 response = await async_handler.get(url=url, headers=headers)
-                
+
                 if response.status_code != 200:
                     raise Exception(
                         f"Error fetching file {element}: {response.status_code} {response.text}"
                     )
-                
+
                 file_data = response.json()
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),
                 }
-        
+
         return resolved_files
-    
+
     def batch_embeddings(
         self,
         model: str,
@@ -153,6 +153,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         is_multimodal = _is_multimodal_input(input)
         use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        mode: Literal["embedding", "batch_embedding"]
         if use_embed_content:
             mode = "embedding"
         else:
@@ -200,6 +201,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
 
         ### TRANSFORMATION (sync path) ###
+        request_data: Any
         if use_embed_content:
             resolved_files = {}
             if api_key:
@@ -238,7 +240,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response = response.json()
-        
+
         if use_embed_content:
             return process_embed_content_response(
                 input=input,
@@ -327,7 +329,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response = response.json()
-        
+
         if use_embed_content:
             return process_embed_content_response(
                 input=input,

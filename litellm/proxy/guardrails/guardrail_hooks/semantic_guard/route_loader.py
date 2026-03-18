@@ -52,14 +52,18 @@ class SemanticGuardRouteLoader:
     def load_custom_routes_file(file_path: str) -> List[Dict[str, Any]]:
         """Load custom routes from a YAML file."""
         if not os.path.exists(file_path):
-            raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")
+            raise ValueError(
+                f"SemanticGuard: custom routes file not found: {file_path}"
+            )
         with open(file_path, "r") as f:
             data = yaml.safe_load(f)
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             return [data]
-        raise ValueError(f"SemanticGuard: invalid custom routes file format in {file_path}")
+        raise ValueError(
+            f"SemanticGuard: invalid custom routes file format in {file_path}"
+        )
 
     @classmethod
     def build_routes(

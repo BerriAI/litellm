@@ -7,6 +7,7 @@ Moonshot AI is an OpenAI-compatible provider with minor customizations.
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -405,3 +406,148 @@ class TestMoonshotConfig:
         # Content should be flattened to a plain string
         assert isinstance(result["messages"][0]["content"], str)
         assert result["messages"][0]["content"] == "Hello, how are you?"
+
+    # ------------------------------------------------------------------ #
+    # Tests for fill_reasoning_content                                     #
+    # ------------------------------------------------------------------ #
+
+    def test_reasoning_content_space_injected_when_absent(self):
+        """Assistant tool-call message with no reasoning_content gets a space injected."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 22°C"},
+        ]
+
+        result = config.fill_reasoning_content(messages)
+
+        assert result[1].get("reasoning_content") == " "
+        # Non-assistant messages are untouched
+        assert "reasoning_content" not in result[0]
+        assert "reasoning_content" not in result[2]
+
+    def test_empty_tool_calls_list_not_injected(self):
+        """Assistant message with tool_calls: [] should not get reasoning_content injected."""
+        config = MoonshotChatConfig()
+
+        original_msg = {
+            "role": "assistant",
+            "content": "Here is the answer.",
+            "tool_calls": [],
+        }
+        messages = [original_msg]
+
+        result = config.fill_reasoning_content(messages)
+
+        assert "reasoning_content" not in result[0]
+        assert result[0] is original_msg
+
+    def test_existing_reasoning_content_not_overwritten(self):
+        """Message that already has reasoning_content is passed through unchanged."""
+        config = MoonshotChatConfig()
+
+        original_msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+            ],
+            "reasoning_content": "<actual thinking>",
+        }
+        messages = [original_msg]
+
+        result = config.fill_reasoning_content(messages)
+
+        assert result[0].get("reasoning_content") == "<actual thinking>"
+        # Same object — no copy was made
+        assert result[0] is original_msg
+
+    def test_provider_specific_fields_reasoning_content_promoted(self):
+        """reasoning_content stored in provider_specific_fields is promoted to top level."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                ],
+                "provider_specific_fields": {"reasoning_content": "stored thinking"},
+            }
+        ]
+
+        result = config.fill_reasoning_content(messages)
+
+        assert result[0].get("reasoning_content") == "stored thinking"
+        # The promoted key must be removed from provider_specific_fields to
+        # avoid sending the value twice in the serialised request body
+        assert "reasoning_content" not in (result[0].get("provider_specific_fields") or {})
+
+    def test_reasoning_model_fill_called_from_transform_request(self):
+        """transform_request injects reasoning_content end-to-end for reasoning models."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "Call a tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                ],
+            },
+        ]
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.transform_request(
+                model="kimi-k2-thinking",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        assert result["messages"][1].get("reasoning_content") == " "
+
+    def test_non_reasoning_model_messages_untouched(self):
+        """For non-reasoning models, transform_request leaves messages unchanged."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                ],
+            },
+        ]
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            result = config.transform_request(
+                model="moonshot-v1-8k",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        # reasoning_content must not have been injected
+        for msg in result["messages"]:
+            assert "reasoning_content" not in msg

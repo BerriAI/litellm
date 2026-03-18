@@ -1611,9 +1611,8 @@ class OpenTelemetry(CustomLogger):
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
             response_id = (
-                (response_obj.get("id") if response_obj else None)
-                or standard_logging_payload.get("id")
-            )
+                response_obj.get("id") if response_obj else None
+            ) or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
                     span=span,

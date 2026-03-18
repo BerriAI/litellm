@@ -60,6 +60,7 @@ from ...anthropic.chat.transformation import AnthropicConfig
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
+
 def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
@@ -330,8 +331,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         if "reasoning_effort" in non_default_params and "claude" in model:
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=non_default_params.get("reasoning_effort"),
-                model=model
+                reasoning_effort=non_default_params.get("reasoning_effort"), model=model
             )
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens

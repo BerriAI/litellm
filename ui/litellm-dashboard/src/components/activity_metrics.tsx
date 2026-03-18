@@ -362,7 +362,7 @@ export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
-  key: "models" | "api_keys" | "mcp_servers",
+  key: "models" | "api_keys" | "mcp_servers" | "entities",
   teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
@@ -371,7 +371,11 @@ export const processActivityData = (
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
-          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams) : model,
+          label: key === "api_keys"
+            ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams)
+            : key === "entities"
+              ? ((modelData as any).metadata?.agent_name || (modelData as any).metadata?.team_alias || model)
+              : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,

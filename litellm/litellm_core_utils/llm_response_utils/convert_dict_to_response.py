@@ -471,7 +471,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     if hidden_params is None:
         hidden_params = {}
-    
+
     # Preserve existing additional_headers if they contain important provider headers
     # For responses API, additional_headers may already be set with LLM provider headers
     existing_additional_headers = hidden_params.get("additional_headers", {})
@@ -482,7 +482,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
         # Merge new headers with existing ones
         if existing_additional_headers:
             additional_headers.update(existing_additional_headers)
-    
+
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
@@ -596,9 +596,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -654,7 +654,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if "id" in response_object:
                 # Preserve the auto-generated id from ModelResponse.__init__
                 # when the provider returns a falsy id (None, "")
-                model_response_object.id = response_object["id"] or model_response_object.id
+                model_response_object.id = (
+                    response_object["id"] or model_response_object.id
+                )
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
@@ -785,7 +787,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = response_object["_audio_transcription_duration"]
+                model_response_object._hidden_params[
+                    "audio_transcription_duration"
+                ] = response_object["_audio_transcription_duration"]
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers

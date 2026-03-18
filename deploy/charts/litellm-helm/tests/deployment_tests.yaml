@@ -306,3 +306,16 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources
           value: {}
+  - it: should be able to set minReadySeconds
+    template: deployment.yaml
+    set:
+      deploymentMinReadySeconds: 5
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 5
+  - it: should have minReadySeconds absent when deploymentMinReadySeconds is not set
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.minReadySeconds

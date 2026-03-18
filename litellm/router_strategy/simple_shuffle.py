@@ -43,7 +43,9 @@ def simple_shuffle(
     for weight_by in ["weight", "rpm", "tpm"]:
         weight = healthy_deployments[0].get("litellm_params").get(weight_by, None)
         if weight is not None:
-            weights = [m["litellm_params"].get(weight_by, 0) for m in healthy_deployments]
+            weights = [
+                m["litellm_params"].get(weight_by, 0) for m in healthy_deployments
+            ]
             verbose_router_logger.debug(f"\nweight {weights}")
             total_weight = sum(weights)
             weights = [weight / total_weight for weight in weights]
@@ -56,7 +58,6 @@ def simple_shuffle(
                 f"get_available_deployment for model: {model}, Selected deployment: {llm_router_instance.print_deployment(deployment) or deployment[0]} for model: {model}"
             )
             return deployment or deployment[0]
-
 
     ############## No RPM/TPM passed, we do a random pick #################
     item = random.choice(healthy_deployments)

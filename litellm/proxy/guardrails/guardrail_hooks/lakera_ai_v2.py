@@ -358,9 +358,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         # when some choices have null content (e.g. tool-call-only).
         response_messages: List[AllMessageValues] = []
         choice_indices: List[int] = []
-        response_dict = (
-            response.model_dump() if hasattr(response, "model_dump") else {}
-        )
+        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
         for i, choice in enumerate(response_dict.get("choices", [])):
             msg = choice.get("message")
             if not msg:
@@ -395,7 +393,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 for idx, msg in enumerate(assistant_messages):
                     if idx < len(choice_indices):
                         choice_idx = choice_indices[idx]
-                        response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
+                        response_dict["choices"][choice_idx]["message"][
+                            "content"
+                        ] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(
                     request_data=data, guardrail_name=self.guardrail_name
                 )

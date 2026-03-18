@@ -260,6 +260,9 @@ if TYPE_CHECKING:
     )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.llms.base_llm.realtime.http_transformation import (
+        BaseRealtimeHTTPConfig,
+    )
     from litellm.proxy._types import AllowedModelRegion
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
@@ -1143,7 +1146,9 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
-        if "litellm_metadata" in kwargs and isinstance(kwargs["litellm_metadata"], dict):
+        if "litellm_metadata" in kwargs and isinstance(
+            kwargs["litellm_metadata"], dict
+        ):
             litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
             # For endpoints like /v1/messages that use "litellm_metadata" instead
             # of "metadata" (to avoid conflicting with provider API metadata fields),
@@ -7940,6 +7945,7 @@ class ProviderConfigManager:
             LlmProviders.VERTEX_AI_BETA: (lambda: litellm.VertexGeminiConfig(), False),
             LlmProviders.CLOUDFLARE: (lambda: litellm.CloudflareChatConfig(), False),
             LlmProviders.SAGEMAKER_CHAT: (lambda: litellm.SagemakerChatConfig(), False),
+            LlmProviders.SAGEMAKER_NOVA: (lambda: litellm.SagemakerNovaConfig(), False),
             LlmProviders.SAGEMAKER: (lambda: litellm.SagemakerConfig(), False),
             LlmProviders.FIREWORKS_AI: (lambda: litellm.FireworksAIConfig(), False),
             LlmProviders.FRIENDLIAI: (lambda: litellm.FriendliaiChatConfig(), False),
@@ -8135,6 +8141,8 @@ class ProviderConfigManager:
             if provider_config is None:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
+
+        return None
 
     @staticmethod
     def get_provider_embedding_config(
@@ -8348,7 +8356,9 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         # Resolve provider string for JSON lookup
-        provider_str = provider.value if isinstance(provider, LlmProviders) else str(provider)
+        provider_str = (
+            provider.value if isinstance(provider, LlmProviders) else str(provider)
+        )
 
         # Try to convert to enum for Python class lookup first.
         # Python classes take priority over JSON (they have custom overrides).
@@ -8369,7 +8379,9 @@ class ProviderConfigManager:
             return result
 
         # Fall back to JSON providers (generic OpenAI-compatible)
-        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+        if JSONProviderRegistry.exists(
+            provider_str
+        ) and JSONProviderRegistry.supports_responses_api(provider_str):
             provider_config = JSONProviderRegistry.get(provider_str)
             if provider_config is not None:
                 return create_responses_config_class(provider_config)()
@@ -8392,11 +8404,6 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and (
-                "o_series" in model.lower()
-                or (supports_reasoning(model) and not is_gpt_model)
-            )
-
             is_o_series = model and (
                 "o_series" in model.lower()
                 or (supports_reasoning(model) and not is_gpt_model)
@@ -8585,6 +8592,12 @@ class ProviderConfigManager:
             from litellm.llms.manus.files.transformation import ManusFilesConfig
 
             return ManusFilesConfig()
+        elif LlmProviders.ANTHROPIC == provider:
+            from litellm.llms.anthropic.files.transformation import (
+                AnthropicFilesConfig,
+            )
+
+            return AnthropicFilesConfig()
         return None
 
     @staticmethod
@@ -8844,6 +8857,30 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        return None
+
+    @staticmethod
+    def get_provider_realtime_http_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseRealtimeHTTPConfig"]:
+        """
+        Return the HTTP transformation config for realtime HTTP endpoints
+        (POST /realtime/client_secrets and POST /realtime/calls).
+        """
+
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.realtime.http_transformation import (
+                OpenAIRealtimeHTTPConfig,
+            )
+
+            return OpenAIRealtimeHTTPConfig()
+        if LlmProviders.AZURE == provider:
+            from litellm.llms.azure.realtime.http_transformation import (
+                AzureRealtimeHTTPConfig,
+            )
+
+            return AzureRealtimeHTTPConfig()
         return None
 
     @staticmethod
