@@ -24,6 +24,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    AsyncIterator,
     Callable,
     Dict,
     Generator,
@@ -400,9 +401,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal[
-            "local", "redis", "redis-semantic", "s3", "disk"
-        ] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
+            "local"  # default to an in-memory cache
+        )
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -450,9 +451,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[
-            str, PatternMatchRouter
-        ] = {}  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
+            {}
+        )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
 
@@ -638,9 +639,9 @@ class Router:
                     )
                 )
 
-        self.model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
-        ] = model_group_retry_policy
+        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
+            model_group_retry_policy
+        )
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -2021,7 +2022,10 @@ class Router:
 
     async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[ModelResponse, CustomStreamWrapper,]:
+    ) -> Union[
+        ModelResponse,
+        CustomStreamWrapper,
+    ]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -3786,6 +3790,14 @@ class Router:
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
+        # Save kwargs for streaming fallback before they get mutated by deployment resolution.
+        # original_generic_function is a named param (not in **kwargs), so we must
+        # explicitly include it for the fallback path to be able to re-invoke the LLM call.
+        input_kwargs_for_streaming_fallback = kwargs.copy()
+        input_kwargs_for_streaming_fallback["model"] = model
+        input_kwargs_for_streaming_fallback["original_generic_function"] = (
+            original_generic_function
+        )
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
@@ -3852,6 +3864,23 @@ class Router:
                 f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
             )
 
+            # Wrap streaming responses with mid-stream fallback detection.
+            # For anthropic_messages (and other generic streaming endpoints),
+            # the response is an AsyncIterator that yields raw SSE bytes.
+            # Without this wrapper, mid-stream errors (e.g. Anthropic returning
+            # an "overloaded" SSE error event after HTTP 200) pass through
+            # silently to the client with no fallback attempt.
+            if hasattr(response, "__aiter__") and not isinstance(
+                response, (dict, list, str)
+            ):
+                llm_provider = data.get("custom_llm_provider", "")
+                response = await self._ageneric_streaming_iterator(
+                    streaming_response=response,
+                    model=model,
+                    llm_provider=llm_provider,
+                    initial_kwargs=input_kwargs_for_streaming_fallback,
+                )
+
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -3860,6 +3889,184 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
+
+    async def _ageneric_streaming_iterator(  # noqa: PLR0915
+        self,
+        streaming_response: Any,
+        model: str,
+        llm_provider: str,
+        initial_kwargs: dict,
+    ) -> AsyncIterator:
+        """
+        Wraps a generic streaming response (e.g. from anthropic_messages) with
+        mid-stream error detection and fallback support.
+
+        Monitors SSE chunks for provider error events in the SSE stream
+        (e.g. Anthropic's overloaded_error, internal_server_error) and triggers
+        the router's fallback system when detected.
+
+        Mirrors the pattern from ``_acompletion_streaming_iterator`` /
+        ``FallbackStreamWrapper`` used for the OpenAI chat path.
+        """
+        from litellm.exceptions import (
+            InternalServerError,
+            ServiceUnavailableError,
+        )
+
+        async def stream_with_error_detection():
+            """Async generator that detects SSE error events and triggers fallback."""
+            fallback_response = None
+            # Track whether we've seen an "event: error" line in a previous chunk
+            # but haven't yet found its "data:" line (handles TCP frame splitting).
+            pending_error_event = False
+            try:
+                async for chunk in streaming_response:
+                    # Check if this chunk contains an SSE error event
+                    error_info = _detect_sse_error_event(chunk, pending_error_event)
+                    if error_info is not None:
+                        error_type, error_message = error_info
+                        pending_error_event = False
+                        verbose_router_logger.warning(
+                            "_ageneric_streaming_iterator: detected mid-stream SSE error: "
+                            "type=%s, message=%s",
+                            error_type,
+                            error_message,
+                        )
+                        # Raise an exception so the fallback system can catch it
+                        if "overloaded" in error_type.lower():
+                            raise ServiceUnavailableError(
+                                message=f"Mid-stream SSE error: {error_message}",
+                                model=model,
+                                llm_provider=llm_provider,
+                            )
+                        else:
+                            raise InternalServerError(
+                                message=f"Mid-stream SSE error: {error_message}",
+                                model=model,
+                                llm_provider=llm_provider,
+                            )
+                    # Track "event: error" seen without data in same chunk
+                    chunk_str = (
+                        chunk.decode("utf-8")
+                        if isinstance(chunk, bytes)
+                        else str(chunk)
+                    )
+                    if "event: error" in chunk_str:
+                        pending_error_event = True
+                    yield chunk
+            except (ServiceUnavailableError, InternalServerError) as e:
+                verbose_router_logger.info(
+                    "_ageneric_streaming_iterator: mid-stream error detected for model=%s, "
+                    "attempting fallback. Error: %s",
+                    model,
+                    str(e),
+                )
+                # Attempt fallback using the router's fallback system
+                fallbacks = initial_kwargs.get("fallbacks", self.fallbacks)
+                model_group = initial_kwargs.get("model", model)
+                initial_kwargs["original_function"] = (
+                    self._ageneric_api_call_with_fallbacks_helper
+                )
+                self._update_kwargs_before_fallbacks(
+                    model=model_group,
+                    kwargs=initial_kwargs,
+                    metadata_variable_name="litellm_metadata",
+                )
+                try:
+                    fallback_response = (
+                        await self.async_function_with_fallbacks_common_utils(
+                            e=e,
+                            disable_fallbacks=initial_kwargs.get(
+                                "disable_fallbacks", False
+                            ),
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=None,
+                            content_policy_fallbacks=None,
+                            model_group=model_group,
+                            args=(),
+                            kwargs=initial_kwargs,
+                        )
+                    )
+                    # If fallback returns a streaming response, yield its chunks
+                    if hasattr(fallback_response, "__aiter__"):
+                        async for fallback_chunk in fallback_response:
+                            yield fallback_chunk
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        "_ageneric_streaming_iterator: fallback also failed: %s",
+                        fallback_error,
+                    )
+                    raise fallback_error
+            finally:
+                # Close the underlying streams to release HTTP connections back to
+                # the connection pool, even on client disconnect. Shield from anyio
+                # cancellation so the awaits can complete. Mirrors the cleanup in
+                # _acompletion_streaming_iterator.
+                with anyio.CancelScope(shield=True):
+                    if hasattr(streaming_response, "aclose"):
+                        try:
+                            await streaming_response.aclose()
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "_ageneric_streaming_iterator: error closing streaming_response: %s",
+                                exc,
+                            )
+                    if fallback_response is not None and hasattr(
+                        fallback_response, "aclose"
+                    ):
+                        try:
+                            await fallback_response.aclose()
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "_ageneric_streaming_iterator: error closing fallback_response: %s",
+                                exc,
+                            )
+
+        def _detect_sse_error_event(
+            chunk: bytes,
+            pending_error_event: bool = False,
+        ) -> Optional[Tuple[str, str]]:
+            """
+            Parse an SSE chunk to detect provider error events.
+
+            Anthropic SSE error events look like::
+
+                event: error
+                data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+            Handles the case where ``event: error`` and ``data: ...`` arrive in
+            separate TCP frames by accepting ``pending_error_event`` state.
+
+            Returns ``(error_type, error_message)`` if an error is detected,
+            ``None`` otherwise.
+            """
+            try:
+                chunk_str = (
+                    chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+                )
+                has_event_error = "event: error" in chunk_str or pending_error_event
+                if not has_event_error:
+                    return None
+                # Extract the data line(s)
+                for line in chunk_str.split("\n"):
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                            if data.get("type") == "error" and "error" in data:
+                                error_obj = data["error"]
+                                return (
+                                    error_obj.get("type", "unknown_error"),
+                                    error_obj.get("message", "Unknown error"),
+                                )
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                return None
+            except Exception:
+                return None
+
+        return stream_with_error_detection()
 
     def _generic_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
@@ -4246,9 +4453,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params[
-                "model_file_id_mapping"
-            ] = model_file_id_mapping
+            returned_response._hidden_params["model_file_id_mapping"] = (
+                model_file_id_mapping
+            )
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -5275,11 +5482,11 @@ class Router:
 
             if isinstance(e, litellm.ContextWindowExceededError):
                 if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Optional[
-                        List[str]
-                    ] = self._get_fallback_model_group_from_fallbacks(
-                        fallbacks=context_window_fallbacks,
-                        model_group=model_group,
+                    context_window_fallback_model_group: Optional[List[str]] = (
+                        self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=context_window_fallbacks,
+                            model_group=model_group,
+                        )
                     )
                     if context_window_fallback_model_group is None:
                         raise original_exception
@@ -5311,11 +5518,11 @@ class Router:
                     e.message += "\n{}".format(error_message)
             elif isinstance(e, litellm.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
-                    content_policy_fallback_model_group: Optional[
-                        List[str]
-                    ] = self._get_fallback_model_group_from_fallbacks(
-                        fallbacks=content_policy_fallbacks,
-                        model_group=model_group,
+                    content_policy_fallback_model_group: Optional[List[str]] = (
+                        self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                        )
                     )
                     if content_policy_fallback_model_group is None:
                         raise original_exception
@@ -5537,9 +5744,9 @@ class Router:
         )
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
-        _metadata[
-            "max_retries"
-        ] = num_retries  # Updated after overrides in exception handler
+        _metadata["max_retries"] = (
+            num_retries  # Updated after overrides in exception handler
+        )
         try:
             self._handle_mock_testing_rate_limit_error(
                 model_group=model_group, kwargs=kwargs
@@ -6658,26 +6865,26 @@ class Router:
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-        auto_router_config_path: Optional[
-            str
-        ] = deployment.litellm_params.auto_router_config_path
+        auto_router_config_path: Optional[str] = (
+            deployment.litellm_params.auto_router_config_path
+        )
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
                 "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        default_model: Optional[
-            str
-        ] = deployment.litellm_params.auto_router_default_model
+        default_model: Optional[str] = (
+            deployment.litellm_params.auto_router_default_model
+        )
         if default_model is None:
             raise ValueError(
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[
-            str
-        ] = deployment.litellm_params.auto_router_embedding_model
+        embedding_model: Optional[str] = (
+            deployment.litellm_params.auto_router_embedding_model
+        )
         if embedding_model is None:
             raise ValueError(
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
@@ -6720,13 +6927,13 @@ class Router:
             ComplexityRouter,
         )
 
-        complexity_router_config: Optional[
-            dict
-        ] = deployment.litellm_params.complexity_router_config
+        complexity_router_config: Optional[dict] = (
+            deployment.litellm_params.complexity_router_config
+        )
 
-        default_model: Optional[
-            str
-        ] = deployment.litellm_params.complexity_router_default_model
+        default_model: Optional[str] = (
+            deployment.litellm_params.complexity_router_default_model
+        )
 
         # If no default model specified, try to get from config tiers
         if default_model is None and complexity_router_config:
@@ -7337,9 +7544,9 @@ class Router:
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
-            credentials[
-                "custom_llm_provider"
-            ] = deployment.litellm_params.custom_llm_provider
+            credentials["custom_llm_provider"] = (
+                deployment.litellm_params.custom_llm_provider
+            )
         elif "/" in deployment.litellm_params.model:
             # Extract provider from "provider/model" format
             credentials["custom_llm_provider"] = deployment.litellm_params.model.split(
