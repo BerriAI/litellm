@@ -3,18 +3,9 @@ slug: claude-code-beta-headers-incident
 title: "Incident Report: Invalid beta headers with Claude Code"
 date: 2026-02-16T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - sameer
+  - ishaan-alt
+  - krrish
 tags: [incident-report, anthropic, stability]
 hide_table_of_contents: false
 ---
@@ -173,5 +164,5 @@ curl -X POST "https://your-proxy-url/reload/anthropic_beta_headers" \
 
 ## Related documentation
 
-- [Managing Anthropic Beta Headers](../proxy/sync_anthropic_beta_headers.md) - Complete configuration guide
+- [Managing Anthropic Beta Headers](../../docs/proxy/sync_anthropic_beta_headers) - Complete configuration guide
 - [`anthropic_beta_headers_config.json`](https://github.com/BerriAI/litellm/blob/main/litellm/anthropic_beta_headers_config.json) - Current configuration file
