@@ -253,22 +253,32 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+      if (values.input_cost != null && values.input_cost !== "") {
+        updatedLitellmParams.input_cost_per_token = values.input_cost / 1_000_000;
+      } else {
+        delete updatedLitellmParams.input_cost_per_token;
+      }
+      if (values.output_cost != null && values.output_cost !== "") {
+        updatedLitellmParams.output_cost_per_token = values.output_cost / 1_000_000;
+      } else {
+        delete updatedLitellmParams.output_cost_per_token;
+      }
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      if (Array.isArray(values.guardrails) && values.guardrails.length > 0) {
         updatedLitellmParams.guardrails = values.guardrails;
+      } else {
+        delete updatedLitellmParams.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      if (Array.isArray(values.vector_store_ids) && values.vector_store_ids.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
@@ -628,12 +638,12 @@ export default function ModelInfoView({
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
                       ? localModelData.model_info.access_groups
                       : [],
-                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
+                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails) && localModelData.litellm_params.guardrails.length > 0
                       ? localModelData.litellm_params.guardrails
-                      : [],
-                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
+                      : undefined,
+                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids) && localModelData.litellm_params.vector_store_ids.length > 0
                       ? localModelData.litellm_params.vector_store_ids
-                      : [],
+                      : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
