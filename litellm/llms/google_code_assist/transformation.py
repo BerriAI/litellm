@@ -4,6 +4,7 @@ import copy
 import httpx
 from typing import Any, List, Optional
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse
 from ..vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -127,6 +128,20 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
             generation_config["thinkingConfig"] = {
                 "includeThoughts": base_params.pop("include_thoughts")
             }
+        elif "thinkingConfig" in optional_params:
+            generation_config["thinkingConfig"] = optional_params["thinkingConfig"]
+        elif "include_thoughts" in optional_params:
+            generation_config["thinkingConfig"] = {
+                "includeThoughts": optional_params["include_thoughts"]
+            }
+
+        if (
+            "thinkingConfig" in optional_params
+            and "thinkingConfig" not in generation_config
+        ):
+            verbose_logger.warning(
+                "google_code_assist: `thinkingConfig` was provided but not mapped into generationConfig."
+            )
 
         vertex_request = {
             "contents": contents,

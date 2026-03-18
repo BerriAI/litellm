@@ -1074,6 +1074,58 @@ def test_get_token_url():
     pass
 
 
+def test_get_token_and_url_gemini_raises_if_no_api_key_and_no_oauth_token():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    with patch(
+        "litellm.llms.gemini.common_utils.get_gemini_oauth_token", return_value=None
+    ):
+        with pytest.raises(ValueError, match="Missing gemini_api_key"):
+            vertex_llm._get_token_and_url(
+                auth_header=None,
+                vertex_project="",
+                vertex_location="",
+                vertex_credentials="",
+                gemini_api_key=None,
+                custom_llm_provider="gemini",
+                should_use_v1beta1_features=False,
+                api_base=None,
+                model="gemini-2.5-pro",
+                stream=False,
+            )
+
+
+def test_get_token_and_url_gemini_uses_prefetched_auth_data_without_lookup():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    with patch("litellm.llms.gemini.common_utils.get_gemini_oauth_token") as mock_get:
+        auth_header, _ = vertex_llm._get_token_and_url(
+            auth_header=None,
+            vertex_project="",
+            vertex_location="",
+            vertex_credentials="",
+            gemini_api_key=None,
+            gemini_auth_data={"token": "oauth-token", "project_id": "my-project"},
+            custom_llm_provider="gemini",
+            should_use_v1beta1_features=False,
+            api_base=None,
+            model="gemini-2.5-pro",
+            stream=False,
+        )
+
+    assert auth_header == {
+        "Authorization": "Bearer oauth-token",
+        "x-goog-user-project": "my-project",
+    }
+    mock_get.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_vertex_ai_token_counter_routes_partner_models():
     """

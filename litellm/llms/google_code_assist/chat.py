@@ -7,6 +7,10 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, AsyncHTTPHandler
 from .transformation import GoogleCodeAssistConfig, GoogleCodeAssistError
 
+_CODE_ASSIST_BASE_URL = "https://cloudcode-pa.googleapis.com"
+_CODE_ASSIST_GENERATE_URL = f"{_CODE_ASSIST_BASE_URL}/v1internal:generateContent"
+_CODE_ASSIST_LOAD_URL = f"{_CODE_ASSIST_BASE_URL}/v1internal:loadCodeAssist"
+
 
 class GoogleCodeAssistChat:
     """
@@ -65,7 +69,7 @@ class GoogleCodeAssistChat:
             )
 
             # 4. Call Completion API
-            url = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+            url = _CODE_ASSIST_GENERATE_URL
             headers = self._get_headers(token)
 
             response = client.post(
@@ -133,7 +137,7 @@ class GoogleCodeAssistChat:
                 data = self.config.transform_request(
                     model, messages, optional_params, litellm_params
                 )
-                url = "https://cloudcode-pa.googleapis.com/v1internal:generateContent"
+                url = _CODE_ASSIST_GENERATE_URL
                 headers = self._get_headers(token)
 
                 response = await async_handler.post(url=url, headers=headers, json=data)
@@ -165,7 +169,7 @@ class GoogleCodeAssistChat:
         self, client, token: str, initial_project_id: Optional[str]
     ) -> Optional[str]:
         """Performs the loadCodeAssist handshake to establish session context."""
-        load_url = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        load_url = _CODE_ASSIST_LOAD_URL
         load_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -197,7 +201,7 @@ class GoogleCodeAssistChat:
         initial_project_id: Optional[str],
     ) -> Optional[str]:
         """Async version of loadCodeAssist handshake for non-blocking async calls."""
-        load_url = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        load_url = _CODE_ASSIST_LOAD_URL
         load_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
