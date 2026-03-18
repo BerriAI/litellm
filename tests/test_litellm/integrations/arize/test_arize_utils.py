@@ -374,3 +374,41 @@ def test_construct_dynamic_arize_headers():
         "arize-space-id": "test_space_key",
         "api_key": "test_api_key"
     }
+
+
+def test_set_usage_outputs_chat_completions_details():
+    """Regression test for #23990: _set_usage_outputs must read
+    completion_tokens_details (Chat Completions API) in addition to
+    output_tokens_details (Responses API)."""
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+
+    span = MagicMock()
+    usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "completion_tokens_details": {
+            "reasoning_tokens": 20,
+            "audio_tokens": 5,
+        },
+        "prompt_tokens_details": {
+            "cached_tokens": 30,
+            "audio_tokens": 3,
+        },
+    }
+
+    _set_usage_outputs(span, usage)
+
+    set_calls = {
+        call.args[1]: call.args[2]
+        for call in span.set_attribute.call_args_list
+        if len(call.args) >= 3
+    }
+
+    assert set_calls.get(SpanAttributes.LLM_TOKEN_COUNT_TOTAL) == 150
+    assert set_calls.get(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION) == 50
+    assert set_calls.get(SpanAttributes.LLM_TOKEN_COUNT_PROMPT) == 100
+    assert set_calls.get(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING) == 20
+    assert set_calls.get(SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ) == 30
