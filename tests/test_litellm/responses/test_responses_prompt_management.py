@@ -158,7 +158,7 @@ class TestResponsesAPIPromptManagement:
         ]
         # Simulate get_chat_completion_prompt returning merged optional params
         # that include a template-defined temperature
-        merged_kwargs = {"temperature": 0.2, "prompt_id": "t", "litellm_logging_obj": None}
+        merged_kwargs = {"temperature": 0.2}
 
         logging_obj = MagicMock()
         logging_obj.__class__ = LiteLLMLoggingObj
@@ -209,3 +209,68 @@ class TestResponsesAPIPromptManagement:
         # The model passed to the downstream handler should be the overridden one
         handler_call_kwargs = mock_handler.call_args.kwargs
         assert handler_call_kwargs.get("model") == "openai/gpt-4o-mini"
+
+    def test_non_message_input_items_filtered(self):
+        """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
+        filtered out before being passed to the prompt hook, avoiding malformed merges."""
+        template_messages: List[AllMessageValues] = [
+            {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
+        ]
+        mixed_input = [
+            {"role": "user", "content": "Hello"},
+            {"type": "function_call_output", "call_id": "abc", "output": "42"},
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=template_messages + [{"role": "user", "content": "Hello"}],  # type: ignore[operator]
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3]:
+            import litellm
+            litellm.responses(
+                input=mixed_input,  # type: ignore[arg-type]
+                model="gpt-4o",
+                prompt_id="filter-test",
+                litellm_logging_obj=logging_obj,
+            )
+
+        call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
+        passed_messages = call_kwargs["messages"]
+        assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
+        assert len(passed_messages) == 1
+
+    def test_model_override_re_resolves_provider(self):
+        """[G] When the prompt template overrides the model to a different provider,
+        custom_llm_provider is re-resolved so downstream routing uses the correct provider."""
+        template_messages: List[AllMessageValues] = [
+            {"role": "user", "content": "Hi"},  # type: ignore[list-item]
+        ]
+        logging_obj = _make_logging_obj(
+            merged_model="anthropic/claude-3-5-sonnet",
+            merged_messages=template_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with (
+            patch(
+                "litellm.responses.main.litellm.get_llm_provider",
+                side_effect=[
+                    ("gpt-4o", "openai", None, None),
+                    ("claude-3-5-sonnet", "anthropic", None, None),
+                ],
+            ),
+            patches[1],
+            patches[2],
+            patches[3] as mock_handler,
+        ):
+            import litellm
+            litellm.responses(
+                input="Hi",
+                model="gpt-4o",
+                prompt_id="cross-provider",
+                litellm_logging_obj=logging_obj,
+            )
+
+        handler_call_kwargs = mock_handler.call_args.kwargs
+        assert handler_call_kwargs.get("custom_llm_provider") == "anthropic"

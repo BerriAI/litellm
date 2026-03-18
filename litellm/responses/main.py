@@ -464,6 +464,49 @@ async def aresponses(
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
 
+        #########################################################
+        # ASYNC PROMPT MANAGEMENT
+        #########################################################
+        litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id, non_default_params=kwargs
+        ):
+            if isinstance(input, str):
+                client_input: List[AllMessageValues] = [
+                    {"role": "user", "content": input}
+                ]
+            else:
+                client_input = [
+                    item  # type: ignore[misc]
+                    for item in input
+                    if isinstance(item, dict) and "role" in item
+                ]
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
+            input = cast(Union[str, ResponseInputParam], merged_input)
+            if "/" in model:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model
+                )
+                local_vars["custom_llm_provider"] = custom_llm_provider
+            for k, v in merged_optional_params.items():
+                if k in local_vars:
+                    local_vars[k] = v
+
         func = partial(
             responses,
             input=input,
@@ -633,11 +676,16 @@ def responses(
         if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=kwargs
         ):
-            client_input: List[AllMessageValues] = (
-                [{"role": "user", "content": input}]
-                if isinstance(input, str)
-                else cast(List[AllMessageValues], list(input))
-            )
+            if isinstance(input, str):
+                client_input: List[AllMessageValues] = [
+                    {"role": "user", "content": input}
+                ]
+            else:
+                client_input = [
+                    item  # type: ignore[misc]
+                    for item in input
+                    if isinstance(item, dict) and "role" in item
+                ]
             (
                 model,
                 merged_input,
@@ -654,6 +702,11 @@ def responses(
             input = cast(Union[str, ResponseInputParam], merged_input)
             local_vars["input"] = input
             local_vars["model"] = model
+            if "/" in model:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model
+                )
+                local_vars["custom_llm_provider"] = custom_llm_provider
             for k, v in merged_optional_params.items():
                 local_vars[k] = v
 
