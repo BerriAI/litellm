@@ -271,6 +271,7 @@ class GenericStreamingChunk(TypedDict, total=False):
     finish_reason: Required[str]
     usage: Required[Optional[ChatCompletionUsageBlock]]
     index: int
+    reasoning_content: Optional[str]
 
     # use this dict if you want to return any provider specific fields in the response
     provider_specific_fields: Optional[Dict[str, Any]]
