@@ -299,9 +299,7 @@ def _insert_user_continue_message(
     while i < len(result_messages):
         curr_message = result_messages[i]
         inserted_continue_message = False
-        if (
-            curr_message["role"] == "assistant"
-            and _counts_for_alternation(curr_message)
+        if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
         ):
             j = i - 1
             while j >= 0:
