@@ -8,6 +8,7 @@ from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
 async def run_gemini_acompletion_with_code_assist_fallback(
     primary_call: Awaitable[Any],
     fallback_kwargs: Dict[str, Any],
+    auto_fallback_to_google_code_assist: bool = False,
 ) -> Any:
     """
     Execute Gemini async completion and fallback to Google Code Assist when
@@ -16,6 +17,9 @@ async def run_gemini_acompletion_with_code_assist_fallback(
     try:
         return await primary_call
     except Exception as e:
+        if not auto_fallback_to_google_code_assist:
+            raise e
+
         if not should_fallback_to_google_code_assist(e):
             raise e
 
@@ -29,6 +33,7 @@ async def run_gemini_acompletion_with_code_assist_fallback(
 def run_gemini_completion_with_code_assist_fallback(
     primary_call: Callable[[], Any],
     fallback_kwargs: Dict[str, Any],
+    auto_fallback_to_google_code_assist: bool = False,
 ) -> Any:
     """
     Execute Gemini sync completion and fallback to Google Code Assist when
@@ -37,6 +42,9 @@ def run_gemini_completion_with_code_assist_fallback(
     try:
         return primary_call()
     except Exception as e:
+        if not auto_fallback_to_google_code_assist:
+            raise e
+
         if not should_fallback_to_google_code_assist(e):
             raise e
 

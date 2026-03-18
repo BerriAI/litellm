@@ -324,7 +324,11 @@ def get_gemini_oauth_token() -> Optional[dict]:  # noqa: PLR0915
                             continue
                         token = creds_data.get("access_token")
                         if not token and "token" in creds_data:
-                            token = creds_data["token"].get("accessToken")
+                            token_field = creds_data["token"]
+                            if isinstance(token_field, dict):
+                                token = token_field.get("accessToken")
+                            elif isinstance(token_field, str):
+                                token = token_field
 
                         if token:
                             result = {"token": token}

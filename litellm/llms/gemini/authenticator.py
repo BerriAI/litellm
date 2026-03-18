@@ -233,8 +233,9 @@ class GeminiAuthenticator:
         )
         webbrowser.open(auth_url)
 
-        # Wait for callback
-        server.handle_request()
+        # Wait for callback; browsers may hit non-callback paths first (e.g. /favicon.ico).
+        while auth_code is None and error is None:
+            server.handle_request()
         server.server_close()
 
         if error:

@@ -374,7 +374,7 @@ def _get_gemini_url(
     params = []
     if gemini_api_key and not gemini_oauth_token:
         params.append(f"key={gemini_api_key}")
-    if stream:
+    if mode == "chat" and stream:
         params.append("alt=sse")
 
     if params:

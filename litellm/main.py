@@ -3476,6 +3476,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "logging_obj": logging,
                         "logger_fn": logger_fn,
                     },
+                    auto_fallback_to_google_code_assist=litellm.auto_fallback_to_google_code_assist,
                 )
             else:
                 response = run_gemini_completion_with_code_assist_fallback(
@@ -3510,6 +3511,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "logging_obj": logging,
                         "logger_fn": logger_fn,
                     },
+                    auto_fallback_to_google_code_assist=litellm.auto_fallback_to_google_code_assist,
                 )
 
         elif custom_llm_provider == "vertex_ai":
