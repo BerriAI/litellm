@@ -166,6 +166,7 @@ from .litellm_core_utils.fallback_utils import (
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     get_completion_messages,
+    strip_tool_messages_for_alternating_roles,
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
@@ -1298,6 +1299,9 @@ def completion(  # type: ignore # noqa: PLR0915
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     litellm_system_prompt = kwargs.get("litellm_system_prompt", None)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
+    if ensure_alternating_roles:
+        messages = strip_tool_messages_for_alternating_roles(messages=messages)
+
     messages = get_completion_messages(
         messages=messages,
         ensure_alternating_roles=ensure_alternating_roles or False,
