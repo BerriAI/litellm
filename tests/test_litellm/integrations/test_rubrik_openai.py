@@ -127,6 +127,69 @@ async def create_tool_call_stream(
     )
 
 
+async def create_gpt5_style_stream(
+    full_args: str,
+) -> AsyncGenerator[ModelResponseStream, None]:
+    """GPT-5 style stream: tool header, arguments fragment, then finish chunk repeating the full tool call."""
+    # Chunk 1: tool call header with empty arguments
+    yield ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            index=0,
+                            id="call_refund",
+                            type="function",
+                            function=Function(name="refund_order", arguments=""),
+                        )
+                    ]
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+    # Chunk 2: arguments fragment
+    yield ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            index=0,
+                            id=None,
+                            type=None,
+                            function=Function(name=None, arguments=full_args),
+                        )
+                    ]
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+    # Chunk 3: finish chunk that also repeats the complete tool call (GPT-5 style)
+    yield ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            index=0,
+                            id=None,
+                            type=None,
+                            function=Function(name=None, arguments=full_args),
+                        )
+                    ]
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+    )
+
+
 def create_blocking_mock_post(
     block_all: bool = True, explanation: str = "Tools blocked by policy"
 ) -> tuple:
@@ -1081,69 +1144,10 @@ class TestAsyncPostCallStreamingIteratorHook:
         mock_client.post = mock_post
         handler.tool_blocking_client = mock_client
 
-        async def stream_with_repeated_finish():
-            # Chunk 1: tool call header with empty arguments
-            yield ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0,
-                        delta=Delta(
-                            tool_calls=[
-                                ChatCompletionDeltaToolCall(
-                                    index=0,
-                                    id="call_refund",
-                                    type="function",
-                                    function=Function(name="refund_order", arguments=""),
-                                )
-                            ]
-                        ),
-                        finish_reason=None,
-                    )
-                ],
-            )
-            # Chunk 2: arguments fragment
-            yield ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0,
-                        delta=Delta(
-                            tool_calls=[
-                                ChatCompletionDeltaToolCall(
-                                    index=0,
-                                    id=None,
-                                    type=None,
-                                    function=Function(name=None, arguments=full_args),
-                                )
-                            ]
-                        ),
-                        finish_reason=None,
-                    )
-                ],
-            )
-            # Chunk 3: finish chunk that also repeats the complete tool call (GPT-5 style)
-            yield ModelResponseStream(
-                choices=[
-                    StreamingChoices(
-                        index=0,
-                        delta=Delta(
-                            tool_calls=[
-                                ChatCompletionDeltaToolCall(
-                                    index=0,
-                                    id=None,
-                                    type=None,
-                                    function=Function(name=None, arguments=full_args),
-                                )
-                            ]
-                        ),
-                        finish_reason="tool_calls",
-                    )
-                ],
-            )
-
         chunks = []
         async for chunk in handler.async_post_call_streaming_iterator_hook(
             user_api_key_dict={},
-            response=stream_with_repeated_finish(),
+            response=create_gpt5_style_stream(full_args),
             request_data=create_openai_request_data(),
         ):
             chunks.append(chunk)
@@ -1159,6 +1163,32 @@ class TestAsyncPostCallStreamingIteratorHook:
         # Plugin replays all buffered chunks when all tools are allowed
         assert len(chunks) == 3  # 3 original chunks replayed
         assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+    async def test_streaming_finish_chunk_with_tool_calls_all_blocked(self, handler):
+        """
+        Regression test: when a GPT-5 style finish chunk carries tool_calls and ALL tools
+        are blocked, the plugin must still emit an explanation chunk with finish_reason="stop".
+        """
+        full_args = '{"order_id":"ORD-12345","reason":"Item arrived damaged"}'
+        explanation = "Tool blocked by policy"
+        mock_post, request_data = create_blocking_mock_post(block_all=True, explanation=explanation)
+
+        mock_client = AsyncMock()
+        mock_client.post = mock_post
+        handler.tool_blocking_client = mock_client
+
+        chunks = []
+        async for chunk in handler.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=create_gpt5_style_stream(full_args),
+            request_data=create_openai_request_data(),
+        ):
+            chunks.append(chunk)
+
+        # Exactly 1 chunk: the explanation with finish_reason="stop"
+        assert len(chunks) == 1
+        assert chunks[0].choices[0].finish_reason == "stop"
+        assert explanation in chunks[0].choices[0].delta.content
 
 
 @pytest.fixture

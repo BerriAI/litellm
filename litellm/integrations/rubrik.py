@@ -188,7 +188,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                                 standard_logging_payload["messages"],
                             ]
                 except Exception as e:
-                    verbose_logger.debug(f"Error adding system prompt to messages: {e}")
+                    verbose_logger.warning(f"Error adding system prompt to messages: {e}")
 
             self.log_queue.append(standard_logging_payload)
 
@@ -459,10 +459,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     if tc.index in allowed_indices
                 ]
                 if not filtered_calls:
+                    if not buffered_choice.finish_reason:
+                        continue
+                    # GPT-5 style: finish chunk has no allowed tools — fall through
+                    # to finish_reason handling below so an explanation chunk is emitted.
+                    buffered_choice.delta.tool_calls = None
+                else:
+                    buffered_choice.delta.tool_calls = filtered_calls
+                    yield buffered_chunk
                     continue
-                buffered_choice.delta.tool_calls = filtered_calls
-                yield buffered_chunk
-                continue
 
             if not buffered_choice.finish_reason:
                 # Non-tool-call, non-finish chunk - just yield
@@ -969,7 +974,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             response=ModelResponse(**openai_dict),
         )
 
-        new_content = anthropic_response.get("content", []) or []
+        new_content = anthropic_response.get("content") or []
 
         # Preserve non-tool, non-text blocks (thinking, citations, etc.) from the original response.
         # Text and tool_use blocks are taken from the converted response since the blocking service
