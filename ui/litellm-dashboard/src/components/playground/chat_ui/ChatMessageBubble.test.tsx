@@ -180,6 +180,22 @@ describe("ChatMessageBubble", () => {
     expect(screen.getByTestId("mcp-events-display")).toHaveTextContent("1 events");
   });
 
+  it("should show MCP events on the last assistant message for CHAT endpoint", () => {
+    const mcpEvents = [{ type: "tool_call", item_id: "1" }];
+
+    render(
+      <ChatMessageBubble
+        {...defaultProps}
+        isLastMessage={true}
+        endpointType={EndpointType.CHAT}
+        mcpEvents={mcpEvents as any}
+        message={{ role: "assistant", content: "response" }}
+      />,
+    );
+
+    expect(screen.getByTestId("mcp-events-display")).toHaveTextContent("1 events");
+  });
+
   it("should not show MCP events when isLastMessage is false", () => {
     const mcpEvents = [{ type: "tool_call", item_id: "1" }];
 
