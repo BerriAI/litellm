@@ -326,45 +326,25 @@ def _insert_assistant_continue_message(
 ) -> List[AllMessageValues]:
     """
     Add assistant continuation messages between consecutive user messages.
-    Skips tool messages and assistant messages with tool calls in the
-    alternation check, matching strict templates like llama.cpp.
 
-    Args:
-        messages: List of message dictionaries
-        assistant_continue_message: Optional custom assistant message
-        ensure_alternating_roles: Whether to enforce alternating roles
-
-    Returns:
-        Modified list of messages with inserted assistant messages
+    Only checks directly adjacent messages to preserve backward compatibility.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
+
     continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-    insert_before_indexes = set()
-
-    for i, message in enumerate(messages):
-        if message.get("role") != "user":
-            continue
-
-        next_counted_index = i + 1
-        while next_counted_index < len(messages) and not _counts_for_alternation(
-            messages[next_counted_index]
-        ):
-            next_counted_index += 1
-
-        if (
-            next_counted_index < len(messages)
-            and messages[next_counted_index].get("role") == "user"
-        ):
-            # Insert before the next counted user turn.
-            # This avoids splitting assistant tool-call -> tool chains.
-            insert_before_indexes.add(next_counted_index)
 
     modified_messages: List[AllMessageValues] = []
-    for idx, message in enumerate(messages):
-        if idx in insert_before_indexes:
+    for i, message in enumerate(messages):
+        if (
+            i < len(messages) - 1
+            and message.get("role") == "user"
+            and messages[i + 1].get("role") == "user"
+        ):
+            modified_messages.append(message)
             modified_messages.append(continue_message)
-        modified_messages.append(message)
+        else:
+            modified_messages.append(message)
 
     return modified_messages
 

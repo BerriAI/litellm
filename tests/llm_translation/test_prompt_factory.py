@@ -860,6 +860,7 @@ def test_ensure_alternating_roles_three_consecutive_assistants():
 
 
 def test_ensure_alternating_roles_does_not_split_tool_call_chain():
+    """Tool-call chains [user, assistant(tc), tool, user] are preserved as-is."""
     messages = [
         {"role": "user", "content": "Search for X"},
         {
@@ -898,7 +899,6 @@ def test_ensure_alternating_roles_does_not_split_tool_call_chain():
             ],
         },
         {"role": "tool", "tool_call_id": "c1", "content": "results"},
-        {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "Thanks, now do Y"},
     ]
 
@@ -945,7 +945,6 @@ def test_ensure_alternating_roles_trailing_tool_call_assistant():
                 }
             ],
         },
-        {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "Please continue."},
     ]
 
