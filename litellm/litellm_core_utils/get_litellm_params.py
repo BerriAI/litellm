@@ -104,6 +104,19 @@ def get_litellm_params(
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
     # Build base dict with explicit parameters (always included)
+    # Merge litellm_metadata into metadata so callbacks (e.g. Langfuse)
+    # that read from litellm_params["metadata"] see API key fields even when
+    # the request uses "litellm_metadata" (e.g. /v1/messages from Claude Code).
+    _merged_metadata = metadata
+    if litellm_metadata and isinstance(litellm_metadata, dict):
+        if _merged_metadata is None:
+            _merged_metadata = dict(litellm_metadata)
+        else:
+            _merged_metadata = dict(_merged_metadata)  # don't mutate caller's dict
+            for k, v in litellm_metadata.items():
+                if k not in _merged_metadata:
+                    _merged_metadata[k] = v
+
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -116,7 +129,7 @@ def get_litellm_params(
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
         "aembedding": aembedding,
-        "metadata": metadata,
+        "metadata": _merged_metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
