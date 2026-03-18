@@ -53,6 +53,15 @@ class GeminiAuthenticator:
             )
         return client_id, client_secret
 
+    @staticmethod
+    def _get_access_token_or_raise(creds: Dict[str, Any], source: str) -> str:
+        token = creds.get("access_token")
+        if not token or not isinstance(token, str):
+            raise Exception(
+                f"OAuth login failed: missing access_token in {source} response."
+            )
+        return token
+
     def get_token(self) -> str:
         """
         Get the OAuth token, refreshing if necessary.
@@ -88,7 +97,7 @@ class GeminiAuthenticator:
         verbose_logger.info("Starting Gemini OAuth login flow...")
         creds = self._login()
         self._write_oauth_creds(creds)
-        return creds.get("access_token")
+        return self._get_access_token_or_raise(creds, "authorization_code")
 
     def _refresh_token(self, refresh_token: str) -> str:
         """Refresh the access token using the refresh token."""
@@ -118,7 +127,7 @@ class GeminiAuthenticator:
 
         self._write_oauth_creds(creds)
 
-        return creds.get("access_token")
+        return self._get_access_token_or_raise(creds, "refresh_token")
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
@@ -234,9 +243,23 @@ class GeminiAuthenticator:
         webbrowser.open(auth_url)
 
         # Wait for callback; browsers may hit non-callback paths first (e.g. /favicon.ico).
-        while auth_code is None and error is None:
-            server.handle_request()
-        server.server_close()
+        # Use a bounded loop so headless/CI environments fail fast instead of hanging forever.
+        loopback_timeout_s = float(
+            os.getenv("GEMINI_OAUTH_LOOPBACK_TIMEOUT_SECONDS", "120")
+        )
+        loopback_timeout_s = max(loopback_timeout_s, 1.0)
+        deadline = time.monotonic() + loopback_timeout_s
+        server.timeout = 1.0
+        try:
+            while auth_code is None and error is None:
+                server.handle_request()
+                if time.monotonic() >= deadline:
+                    raise Exception(
+                        "OAuth login timed out. Re-run `litellm-proxy gemini login` "
+                        f"and complete the browser flow within {int(loopback_timeout_s)} seconds."
+                    )
+        finally:
+            server.server_close()
 
         if error:
             raise Exception(f"OAuth login failed: {error}")

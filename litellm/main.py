@@ -3703,7 +3703,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logger_fn=logger_fn,
                 )
             else:
-                model_response = google_code_assist_chat.completion(
+                response = google_code_assist_chat.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -3713,7 +3713,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     logger_fn=logger_fn,
                 )
-                response = model_response
 
         elif custom_llm_provider == "predibase":
             tenant_id = (

@@ -97,6 +97,7 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
 
         # Create a copy to avoid mutating the original list
         messages_copy = copy.deepcopy(messages)
+        model_name = model.split("/")[-1]
 
         # Separate system instruction
         system_instruction, filtered_messages = _transform_system_message(
@@ -105,14 +106,14 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
 
         # Convert the rest of messages
         contents = _gemini_convert_messages_with_history(
-            messages=filtered_messages, model=model
+            messages=filtered_messages, model=model_name
         )
 
         # 2. Build vertex-style nested request
         generation_config = {}
         # Handle parameter mapping
         base_params = self.map_openai_params(
-            {}, optional_params.copy(), model, messages
+            {}, optional_params.copy(), model_name, messages
         )
 
         for key in ["temperature", "topP", "topK", "maxOutputTokens", "stopSequences"]:
@@ -125,12 +126,6 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         elif "include_thoughts" in base_params:
             generation_config["thinkingConfig"] = {
                 "includeThoughts": base_params.pop("include_thoughts")
-            }
-        elif "thinkingConfig" in optional_params:
-            generation_config["thinkingConfig"] = optional_params["thinkingConfig"]
-        elif "include_thoughts" in optional_params:
-            generation_config["thinkingConfig"] = {
-                "includeThoughts": optional_params["include_thoughts"]
             }
 
         vertex_request = {
@@ -149,7 +144,6 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
 
         # 3. Wrap in Code Assist envelope (matches verified gemini-cli structure)
         user_prompt_id = f"litellm-{uuid.uuid4()}"
-        model_name = model.split("/")[-1]
 
         ca_request = {
             "model": model_name,
