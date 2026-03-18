@@ -54,7 +54,10 @@ describe("GuardrailConfig", () => {
       customCodeSwitch = container.querySelector('[role="switch"]');
       container = container.parentElement;
     }
-    await user.click(customCodeSwitch!);
+    if (!customCodeSwitch) {
+      throw new Error("Could not find the Custom Code Override switch via DOM traversal");
+    }
+    await user.click(customCodeSwitch);
     expect(screen.getByPlaceholderText(/async def evaluate/)).toBeInTheDocument();
   });
 
@@ -82,7 +85,7 @@ describe("GuardrailConfig", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<GuardrailConfig {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: /re-run on failing logs/i }));
-    act(() => { vi.advanceTimersByTime(2500); });
+    await act(async () => { vi.advanceTimersByTime(2500); });
     expect(screen.getByText(/7\/10 would now pass/)).toBeInTheDocument();
   });
 
