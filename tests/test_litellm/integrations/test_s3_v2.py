@@ -687,6 +687,24 @@ def test_get_logging_id_normal_id_unchanged():
     assert result == "time-17-40-11-901585_chatcmpl-abc123"
 
 
+def test_get_logging_id_bucket_only_uri_does_not_leak_bucket_name():
+    """s3://my-bucket with no object key must not leak the bucket name into the log path."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {"id": "s3://my-bucket"}
+    result = get_logging_id(start_time, response_obj)
+    assert "my-bucket" not in result, "Bucket name must not appear in log ID"
+    assert "://" not in result
+
+
+def test_get_logging_id_none_id_does_not_raise():
+    """None id must not raise and must return a usable (non-None) string."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {"id": None}
+    result = get_logging_id(start_time, response_obj)
+    assert result is not None
+    assert result.startswith("time-17-40-11-901585_")
+
+
 def test_get_logging_id_s3_uri_safe_for_url_path():
     """The sanitized log ID must be embeddable in an S3 object key URL without creating a malformed path."""
     start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
