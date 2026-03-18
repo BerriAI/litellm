@@ -704,7 +704,7 @@ Error: cannot create subdirectories in ".../prometheus.yml": not a directory
 Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time.
 
 Fix it:
-
+Then create the file (see [Step 2.3 — Create `prometheus.yml`](#23--create-prometheusyml)) and run `docker compose up` again.
 ```bash
 rm -rf prometheus.yml
 ```
