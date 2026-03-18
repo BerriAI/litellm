@@ -137,7 +137,7 @@ class AzureAIAgentsHandler:
 
         result: List[Dict[str, Any]] = []
         for ann in raw_annotations:
-            ann_type = ann.get("type", "url_citation")
+            ann_type = ann.get("type")
             if ann_type == "url_citation":
                 url_citation = dict(ann.get("url_citation", {}))
                 # Azure puts start/end_index at annotation level; OpenAI
