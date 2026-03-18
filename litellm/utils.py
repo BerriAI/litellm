@@ -7401,9 +7401,13 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
 
 def get_logging_id(start_time, response_obj):
     try:
-        response_id = (
-            "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + response_obj.get("id")
-        )
+        raw_id = response_obj.get("id") or ""
+        # Batch API IDs may be S3 URIs (e.g. "s3://bucket/key"). Strip the scheme and bucket, keeping only the object key to use as the log ID.
+        if "://" in raw_id:
+            safe_id = raw_id.split("://", 1)[1].split("/", 1)[-1].replace("/", "-")
+        else:
+            safe_id = raw_id
+        response_id = "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + safe_id
         return response_id
     except Exception:
         return None

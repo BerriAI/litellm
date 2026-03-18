@@ -6,6 +6,7 @@ import pytest
 
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_logging_id
 
 
 class TestS3V2UnitTests:
@@ -659,6 +660,42 @@ async def test_strip_base64_recursive_redaction():
             # "[base64_redacted]" is fine, but raw base64 is not
             assert "base64," not in s, f"Found real base64 blob in: {s}"
 
+
+
+# --------------------------------------------------------------
+# Tests for get_logging_id S3 URI sanitization (issue #23904)
+# --------------------------------------------------------------
+def test_get_logging_id_strips_s3_uri_scheme_and_bucket():
+    """Bedrock batch file IDs are S3 URIs — they must not appear verbatim in log paths."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {
+        "id": "s3://bucket-int/litellm-bedrock-files-us.anthropic.claude-sonnet-4-5-20250929-v1-0-29ea93-452e-8a2f.jsonl"
+    }
+    result = get_logging_id(start_time, response_obj)
+    assert "://" not in result, "S3 URI scheme must be stripped from log ID"
+    assert result.startswith("time-17-40-11-901585_")
+    # Bucket name should be gone; object key should be present
+    assert "bucket-int" not in result
+    assert "litellm-bedrock-files-us.anthropic.claude-sonnet-4-5-20250929-v1-0-29ea93-452e-8a2f.jsonl" in result
+
+
+def test_get_logging_id_normal_id_unchanged():
+    """Normal completion IDs must pass through without modification."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {"id": "chatcmpl-abc123"}
+    result = get_logging_id(start_time, response_obj)
+    assert result == "time-17-40-11-901585_chatcmpl-abc123"
+
+
+def test_get_logging_id_s3_uri_safe_for_url_path():
+    """The sanitized log ID must be embeddable in an S3 object key URL without creating a malformed path."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {"id": "s3://my-bucket/subdir/file.jsonl"}
+    result = get_logging_id(start_time, response_obj)
+    # Simulate how s3_v2 embeds this in a URL
+    url = f"https://my-log-bucket.s3.us-east-1.amazonaws.com/LiteLLMAPPLogs/2026-03-09/{result}.json"
+    assert "s3://" not in url
+    assert url.count("://") == 1, "URL must contain exactly one scheme separator"
 
 
 # --------------------------------------------------------------
