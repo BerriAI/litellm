@@ -1951,8 +1951,9 @@ def client(original_function):  # noqa: PLR0915
                 # SLO is built.  Store a closure the proxy will call after
                 # post_call_success_hook so guardrail_information is in metadata.
                 # Only create_task is deferred; sync callbacks fire immediately
-                # to preserve existing behavior for billing/rate-limiting.
+                # (below, outside the if/else) for billing/rate-limiting.
                 def _enqueue_deferred_logging() -> None:
+                    # Must be called from within a running event loop.
                     asyncio.create_task(
                         _client_async_logging_helper(
                             logging_obj=logging_obj,
@@ -1964,11 +1965,6 @@ def client(original_function):  # noqa: PLR0915
                     )
 
                 logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
-                logging_obj.handle_sync_success_callbacks_for_async_calls(
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
             else:
                 asyncio.create_task(
                     _client_async_logging_helper(
@@ -1979,11 +1975,13 @@ def client(original_function):  # noqa: PLR0915
                         is_completion_with_fallbacks=is_completion_with_fallbacks,
                     )
                 )
-                logging_obj.handle_sync_success_callbacks_for_async_calls(
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+
+            # Sync callbacks always fire immediately regardless of deferral
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)

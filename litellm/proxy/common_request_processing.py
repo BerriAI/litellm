@@ -930,7 +930,11 @@ class ProxyBaseLLMRequestProcessing:
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
-        if self._has_post_call_guardrails():
+        # Only for non-streaming: streaming returns early in wrapper_async
+        # before the closure-storage point, so the flag would be unused.
+        if self._has_post_call_guardrails() and not self._is_streaming_request(
+            data=self.data, is_streaming_request=is_streaming_request
+        ):
             logging_obj._defer_async_logging = True  # type: ignore
 
         tasks = []
@@ -1253,10 +1257,8 @@ class ProxyBaseLLMRequestProcessing:
         false-positives are harmless.
         """
         for cb in litellm.callbacks:
-            if (
-                not isinstance(cb, str)
-                and isinstance(cb, CustomGuardrail)
-                and cb._event_hook_is_event_type(GuardrailEventHooks.post_call)
+            if isinstance(cb, CustomGuardrail) and cb._event_hook_is_event_type(
+                GuardrailEventHooks.post_call
             ):
                 return True
         return False

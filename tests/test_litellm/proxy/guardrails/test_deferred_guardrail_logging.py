@@ -109,6 +109,34 @@ class TestHasPostCallGuardrails:
         with patch("litellm.callbacks", ["langfuse", CustomLogger()]):
             assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is False
 
+    def test_returns_true_for_list_with_post_call(self):
+        """event_hook as a list containing post_call should trigger deferral."""
+
+        class ListGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="list-post",
+                    default_on=True,
+                    event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+                )
+
+        with patch("litellm.callbacks", [ListGuardrail()]):
+            assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is True
+
+    def test_returns_false_for_list_without_post_call(self):
+        """event_hook as a list without post_call should not trigger deferral."""
+
+        class ListGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="list-pre",
+                    default_on=True,
+                    event_hook=[GuardrailEventHooks.pre_call],
+                )
+
+        with patch("litellm.callbacks", [ListGuardrail()]):
+            assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is False
+
 
 # ---------------------------------------------------------------------------
 # 2. Deferral mechanism: flag → closure stored, create_task skipped
