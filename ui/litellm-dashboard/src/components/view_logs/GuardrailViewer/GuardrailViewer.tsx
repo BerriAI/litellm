@@ -78,8 +78,8 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
 ]);
 
 /**
- * Extracts a plain string from guardrail_mode, which may be a string,
- * an array of strings, an object with a "default" key, or null.
+ * Extracts a plain string from guardrail_mode for display purposes.
+ * Returns the first mode when multiple are present.
  */
 const resolveMode = (mode: GuardrailInformation["guardrail_mode"]): string | null => {
   if (mode == null) return null;
@@ -91,6 +91,25 @@ const resolveMode = (mode: GuardrailInformation["guardrail_mode"]): string | nul
     if (Array.isArray(def)) return def[0] ?? null;
   }
   return null;
+};
+
+/**
+ * Checks whether guardrail_mode includes the given target stage.
+ * Handles arrays (multi-stage guardrails) by checking all elements.
+ */
+const modeMatches = (
+  mode: GuardrailInformation["guardrail_mode"],
+  target: string,
+): boolean => {
+  if (mode == null) return false;
+  if (typeof mode === "string") return mode === target;
+  if (Array.isArray(mode)) return mode.includes(target);
+  if (typeof mode === "object" && "default" in mode) {
+    const def = mode.default;
+    if (typeof def === "string") return def === target;
+    if (Array.isArray(def)) return (def as string[]).includes(target);
+  }
+  return false;
 };
 
 const formatMode = (mode: GuardrailInformation["guardrail_mode"]): string => {
@@ -317,13 +336,13 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     // Request received
     items.push({ type: "request", label: "Request received", offsetMs: 0 });
 
-    // Pre-call guardrails
-    const preCalls = sorted.filter((e) => resolveMode(e.guardrail_mode) === "pre_call");
-    const postCalls = sorted.filter((e) => {
-      const m = resolveMode(e.guardrail_mode);
-      return m === "post_call" || m === "logging_only";
-    });
-    const duringCalls = sorted.filter((e) => resolveMode(e.guardrail_mode) === "during_call");
+    // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
+    // place the entry in every matching bucket.
+    const preCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call"));
+    const postCalls = sorted.filter(
+      (e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only"),
+    );
+    const duringCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call"));
 
     for (const e of preCalls) {
       const offsetMs = Math.round((e.end_time - baseTime) * 1000);
