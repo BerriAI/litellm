@@ -22,6 +22,7 @@ from typing import Any, AsyncGenerator, cast
 import httpx
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -100,7 +101,7 @@ class LLMResponseFormat(Enum):
     UNKNOWN = "unknown"
 
 
-class RubrikLogger(CustomBatchLogger):
+class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
         _flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=_flush_lock)
