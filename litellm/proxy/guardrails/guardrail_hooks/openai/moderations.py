@@ -255,9 +255,11 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         Follows the Model Armor pattern (model_armor.py:325-360).
         """
-        metadata = (
-            (request_data.get("metadata") or {}) if isinstance(request_data, dict) else {}
-        )
+        if isinstance(request_data, dict):
+            metadata = request_data.get("metadata") or {}
+            request_data["metadata"] = metadata  # anchor so pop() mutates the real dict
+        else:
+            metadata = {}
 
         # .pop() cleans up the internal key so it doesn't leak to downstream
         # loggers. Falls back to "allow" when no moderation call was made
@@ -294,9 +296,11 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             else "guardrail_failed_to_respond"
         )
 
-        metadata = (
-            (request_data.get("metadata") or {}) if isinstance(request_data, dict) else {}
-        )
+        if isinstance(request_data, dict):
+            metadata = request_data.get("metadata") or {}
+            request_data["metadata"] = metadata  # anchor so pop() mutates the real dict
+        else:
+            metadata = {}
 
         # Use the stashed moderation response if available, fall back to exception
         guardrail_response: Union[dict, Exception, str] = metadata.pop(
