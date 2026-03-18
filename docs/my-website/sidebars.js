@@ -528,6 +528,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "tutorials/vertex_ai_pay_go",
             "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
