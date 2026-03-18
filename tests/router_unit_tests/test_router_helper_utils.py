@@ -1568,6 +1568,43 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
     print("✓ _handle_clientside_credential test passed!")
 
 
+def test_sync_generic_api_call_preserves_requested_model_group_in_logs():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-sonnet-4-6",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-west-2",
+                },
+            }
+        ]
+    )
+
+    captured_kwargs = {}
+
+    def mock_original_function(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"status": "ok"}
+
+    response = router._generic_api_call_with_fallbacks(
+        model="claude-sonnet-4-6",
+        original_function=mock_original_function,
+    )
+
+    assert response == {"status": "ok"}
+    assert captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
+    assert (
+        captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
+    )
+    assert (
+        captured_kwargs["litellm_metadata"]["deployment"]
+        == "bedrock/global.anthropic.claude-sonnet-4-6"
+    )
+
+
 @pytest.mark.parametrize(
     "function_name, expected_metadata_key",
     [
