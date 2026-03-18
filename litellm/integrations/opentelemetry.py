@@ -834,12 +834,16 @@ class OpenTelemetry(CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
+        provider = (
+            params.get("custom_llm_provider")
+            or kwargs.get("custom_llm_provider")
+            or "Unknown"
+        )
 
         common_attrs = {
             "gen_ai.operation.name": "chat",
             "gen_ai.system": provider,
-            "gen_ai.request.model": kwargs.get("model"),
+            "gen_ai.request.model": kwargs.get("model") or "Unknown",
             "gen_ai.framework": "litellm",
         }
 
@@ -1087,8 +1091,10 @@ class OpenTelemetry(CustomLogger):
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
-        provider = (kwargs.get("litellm_params") or {}).get(
-            "custom_llm_provider", "Unknown"
+        provider = (
+            (kwargs.get("litellm_params") or {}).get("custom_llm_provider")
+            or kwargs.get("custom_llm_provider")
+            or "Unknown"
         )
 
         # per-message events
