@@ -138,14 +138,13 @@ const sidebars = {
         },
         "tutorials/opencode_integration",
         "tutorials/openclaw_integration",
-        "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
-        "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex",
-        "tutorials/retool_assist"
+        "tutorials/retool_assist",
+        "tutorials/cost_tracking_coding"
       ]
     },
     {
@@ -162,6 +161,7 @@ const sidebars = {
         "tutorials/claude_agent_sdk",
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
+        "tutorials/google_genai_sdk",
         "tutorials/livekit_xai_realtime",
         { type: "doc", id: "tutorials/instructor", label: "Instructor with LiteLLM" },
         { type: "doc", id: "langchain/langchain", label: "LangChain with LiteLLM" },
@@ -1085,6 +1085,7 @@ const sidebars = {
             "projects/Codium PR Agent",
             "projects/Prompt2Model",
             "projects/SalesGPT",
+            "projects/Softgen",
             "projects/Quivr",
             "projects/Langstream",
             "projects/Otter",
@@ -1339,78 +1340,91 @@ const learnSidebar = {
         },
         {
           type: "category",
-          label: "Provider Tutorials",
+          label: "Python SDK",
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Provider Tutorials",
-            description: "Set up Azure OpenAI, HuggingFace, TogetherAI, local models, and more",
+            title: "Python SDK",
+            description: "Tutorials using only the Python SDK — no proxy server required",
+            slug: "/tutorials/python_sdk"
+          },
+          items: [
+            "tutorials/gradio_integration",
+            "tutorials/provider_specific_params",
+            "tutorials/model_fallbacks",
+            "tutorials/fallbacks",
+          ],
+        },
+        {
+          type: "category",
+          label: "Provider Setup",
+          collapsed: true,
+          link: {
+            type: "generated-index",
+            title: "Provider Setup",
+            description: "Connect LiteLLM to Azure OpenAI, HuggingFace, TogetherAI, local models, and more",
             slug: "/tutorials/provider_tutorials"
           },
           items: [
             "tutorials/azure_openai",
             "tutorials/TogetherAI_liteLLM",
-            "tutorials/huggingface_codellama",
             "tutorials/huggingface_tutorial",
+            "tutorials/huggingface_codellama",
             "tutorials/finetuned_chat_gpt",
-            "tutorials/gradio_integration",
-            "tutorials/compare_llms",
-            "tutorials/litellm_Test_Multiple_Providers",
             "tutorials/oobabooga",
           ],
         },
         {
           type: "category",
-          label: "Proxy & Gateway",
+          label: "Proxy: Admin & Access",
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Proxy & Gateway",
-            description: "Access control, SSO, SCIM, tag management, and prompt caching",
-            slug: "/tutorials/proxy_gateway"
+            title: "Proxy: Admin & Access",
+            description: "User and team management, SSO, SCIM, and routing rules",
+            slug: "/tutorials/proxy_admin_access"
           },
           items: [
             "tutorials/default_team_self_serve",
             "tutorials/msft_sso",
             "tutorials/scim_litellm",
             "tutorials/tag_management",
-            "tutorials/prompt_caching",
-            "tutorials/anthropic_file_usage",
           ],
         },
         {
           type: "category",
-          label: "Observability & Safety",
+          label: "Proxy: Features & Safety",
           collapsed: true,
           link: {
             type: "generated-index",
-            title: "Observability & Safety",
-            description: "Logging, guardrails, PII masking, and evaluation suites",
-            slug: "/tutorials/observability_safety"
+            title: "Proxy: Features & Safety",
+            description: "Prompt caching, passthrough APIs, realtime, guardrails, and PII masking",
+            slug: "/tutorials/proxy_features_safety"
+          },
+          items: [
+            "tutorials/prompt_caching",
+            "tutorials/anthropic_file_usage",
+            "tutorials/gemini_realtime_with_audio",
+            "tutorials/litellm_proxy_aporia",
+            "tutorials/presidio_pii_masking",
+          ],
+        },
+        {
+          type: "category",
+          label: "Observability & Evaluation",
+          collapsed: true,
+          link: {
+            type: "generated-index",
+            title: "Observability & Evaluation",
+            description: "Logging, monitoring, benchmarking, and evaluation suites",
+            slug: "/tutorials/observability_evaluation"
           },
           items: [
             "tutorials/elasticsearch_logging",
-            "tutorials/litellm_proxy_aporia",
-            "tutorials/presidio_pii_masking",
+            "tutorials/compare_llms",
+            "tutorials/litellm_Test_Multiple_Providers",
             "tutorials/eval_suites",
             "tutorials/lm_evaluation_harness",
-          ],
-        },
-        {
-          type: "category",
-          label: "Advanced Features",
-          collapsed: true,
-          link: {
-            type: "generated-index",
-            title: "Advanced Features",
-            description: "Model fallbacks, provider-specific params, and realtime audio",
-            slug: "/tutorials/advanced_features"
-          },
-          items: [
-            "tutorials/model_fallbacks",
-            "tutorials/fallbacks",
-            "tutorials/provider_specific_params",
-            "tutorials/gemini_realtime_with_audio",
           ],
         },
       ],

@@ -127,7 +127,7 @@ items={[
 Use these when you already know the type of doc you want.
 
 <NavigationCards
-columns={3}
+columns={2}
 items={[
   {
     icon: "📚",
@@ -140,12 +140,6 @@ items={[
     title: "Tutorials",
     description: "Step-by-step integrations.",
     to: "/docs/tutorials",
-  },
-  {
-    icon: "🌐",
-    title: "Providers",
-    description: "Provider-specific auth and params.",
-    to: "/docs/providers",
   },
 ]}
 />
