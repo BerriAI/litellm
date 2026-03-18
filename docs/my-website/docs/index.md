@@ -401,22 +401,16 @@ LiteLLM is a unified gateway for **LLMs, agents, and MCP** — you don't need a 
 columns={2}
 items={[
 {
-icon: "🤖",
-title: "Agent & MCP Gateway",
-description: "What you need to know about adopting A2A or multi-MCP with LiteLLM.",
-to: "./agent_mcp_gateway",
-},
-{
 icon: "🔗",
 title: "A2A Agents",
 description: "Add and invoke A2A agents via the LiteLLM gateway.",
-to: "./a2a",
+to: "/docs/a2a",
 },
 {
 icon: "🛠️",
 title: "MCP Gateway",
 description: "Central MCP endpoint with per-key access control.",
-to: "./mcp",
+to: "/docs/mcp",
 },
 ]}
 />
@@ -430,7 +424,7 @@ columns={3}
 items={[
 {
 icon: "🔀",
-title: "Router & Fallbacks",
+title: "Routing & Load Balancing",
 description: "Load balance across deployments and set automatic fallbacks.",
 to: "/docs/routing-load-balancing",
 },
