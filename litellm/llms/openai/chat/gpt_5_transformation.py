@@ -3,7 +3,7 @@
 from typing import Optional, Union
 
 import litellm
-from litellm.utils import _get_model_cost_key, _supports_factory
+from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -125,20 +125,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         supported (i.e. this method returns False = not disabled).
 
         Use this for opt-out checks where unknown models should be allowed through.
-        Normalizes the model via get_llm_provider so provider-prefixed names
-        (e.g. openai/gpt-5.4-mini) resolve correctly.
         """
-        try:
-            normalized_model, _, _, _ = litellm.get_llm_provider(
-                model=model, custom_llm_provider=None
-            )
-            key = f"supports_{level}_reasoning_effort"
-            cost_key = _get_model_cost_key(normalized_model)
-            entry = litellm.model_cost.get(cost_key or normalized_model) or {}
-            val = entry.get(key)
-            return val is False
-        except Exception:
-            return False
+        return _is_explicitly_disabled_factory(
+            model=model,
+            custom_llm_provider=None,
+            key=f"supports_{level}_reasoning_effort",
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):
@@ -245,6 +237,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
+                    optional_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
