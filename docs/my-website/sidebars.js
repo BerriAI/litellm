@@ -796,6 +796,7 @@ const sidebars = {
           label: "Google AI Studio",
           items: [
             "providers/gemini",
+            "providers/google_code_assist",
             "providers/gemini/videos",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",

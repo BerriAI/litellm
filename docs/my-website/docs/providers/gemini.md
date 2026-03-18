@@ -34,6 +34,26 @@ import os
 os.environ["GEMINI_API_KEY"] = "your-api-key"
 ```
 
+## OAuth Authentication (Optional)
+
+You can also authenticate Gemini requests with OAuth credentials.
+
+```bash
+export GEMINI_OAUTH_CLIENT_ID="<your-google-oauth-client-id>"
+export GEMINI_OAUTH_CLIENT_SECRET="<your-google-oauth-client-secret>"
+litellm-proxy gemini login
+```
+
+LiteLLM then reads OAuth credentials from:
+
+1. `GEMINI_OAUTH_TOKEN`
+2. `GEMINI_CREDENTIALS_PATH`
+3. `~/.config/litellm/gemini_oauth/oauth_creds.json`
+4. `~/.gemini/oauth_creds.json`
+5. `~/.config/gcloud/application_default_credentials.json`
+
+For Google Code Assist-specific usage, see [Google Code Assist](./google_code_assist.md).
+
 ## Sample Usage
 ```python
 from litellm import completion
@@ -2459,4 +2479,3 @@ LiteLLM automatically calculates costs using `output_cost_per_image_token` from 
 ```
 
 For more details, see [Google's Gemini pricing documentation](https://ai.google.dev/gemini-api/docs/pricing).
-

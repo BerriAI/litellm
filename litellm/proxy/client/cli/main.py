@@ -12,6 +12,7 @@ from .commands.chat import chat
 from .commands.credentials import credentials
 from .commands.http import http
 from .commands.keys import keys
+from .commands.gemini import gemini
 
 # local imports
 from .commands.models import models
@@ -105,6 +106,7 @@ cli.add_command(chat)
 cli.add_command(http)
 # Add the keys command group
 cli.add_command(keys)
+cli.add_command(gemini)
 # Add the teams command group
 cli.add_command(teams)
 # Add the users command group

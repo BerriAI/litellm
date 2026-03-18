@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -152,6 +153,121 @@ def encode_unserializable_types(
 
 def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
+
+
+def should_fallback_to_google_code_assist(error: Exception) -> bool:
+    """
+    Returns True if the error indicates missing OAuth scope for Gemini calls.
+    """
+    return "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in str(error)
+
+
+def get_gemini_oauth_token() -> Optional[dict]:  # noqa: PLR0915
+    """
+    Returns the Gemini OAuth token and metadata.
+    Check:
+    1. GEMINI_OAUTH_TOKEN env var
+    2. GEMINI_CREDENTIALS_PATH env var
+    3. ~/.config/litellm/gemini_oauth/oauth_creds.json
+    4. ~/.gemini/oauth_creds.json (gemini-cli default)
+    5. ~/.config/gcloud/application_default_credentials.json (Standard ADC)
+    """
+    import json
+    import time
+    from pathlib import Path
+
+    def _is_expired(creds_data: dict) -> bool:
+        expires_at = creds_data.get("expires_at")
+        if isinstance(expires_at, (int, float)):
+            return expires_at <= (time.time() + 60)
+
+        expiry = creds_data.get("expiry") or creds_data.get("expires_on")
+        if isinstance(expiry, str):
+            try:
+                expires_dt = datetime.datetime.fromisoformat(
+                    expiry.replace("Z", "+00:00")
+                )
+                return expires_dt.timestamp() <= (time.time() + 60)
+            except Exception:
+                return False
+
+        return False
+
+    # 1. Check GEMINI_OAUTH_TOKEN
+    token = get_secret_str("GEMINI_OAUTH_TOKEN")
+    if token:
+        return {"token": token}
+
+    # 2. Check GEMINI_CREDENTIALS_PATH or default paths
+    paths_to_check = []
+    env_path = get_secret_str("GEMINI_CREDENTIALS_PATH")
+    if env_path:
+        paths_to_check.append(Path(env_path).expanduser())
+
+    paths_to_check.extend(
+        [
+            Path("~/.config/litellm/gemini_oauth/oauth_creds.json").expanduser(),
+            Path("~/.gemini/oauth_creds.json").expanduser(),
+            Path("~/.config/gcloud/application_default_credentials.json").expanduser(),
+        ]
+    )
+
+    for creds_path in paths_to_check:
+        if creds_path.exists():
+            try:
+                # Try to use google-auth if available
+                try:
+                    from google.oauth2 import credentials
+                    from google.auth.transport.requests import Request
+
+                    creds = credentials.Credentials.from_authorized_user_file(
+                        str(creds_path)
+                    )
+                    if not creds.valid:
+                        verbose_logger.debug(
+                            f"Refreshing Gemini token for {creds_path}"
+                        )
+                        creds.refresh(Request())
+                    if creds.token:
+                        result = {"token": creds.token}
+                        # Extract project ID if present
+                        with open(creds_path, "r") as f:
+                            creds_data = json.load(f)
+                            project_id = creds_data.get(
+                                "quota_project_id"
+                            ) or creds_data.get("project_id")
+                            if project_id:
+                                result["project_id"] = project_id
+                        return result
+                except Exception:
+                    # Fallback to manual reading
+                    with open(creds_path, "r") as f:
+                        creds_data = json.load(f)
+                        if _is_expired(creds_data):
+                            verbose_logger.warning(
+                                "Gemini OAuth token appears expired in %s. "
+                                "Run `litellm-proxy gemini login` to refresh credentials.",
+                                creds_path,
+                            )
+                            continue
+                        token = creds_data.get("access_token")
+                        if not token and "token" in creds_data:
+                            token = creds_data["token"].get("accessToken")
+
+                        if token:
+                            result = {"token": token}
+                            project_id = creds_data.get(
+                                "quota_project_id"
+                            ) or creds_data.get("project_id")
+                            if project_id:
+                                result["project_id"] = project_id
+                            return result
+            except Exception as e:
+                verbose_logger.error(
+                    f"Error reading Gemini credentials from {creds_path}: {e}"
+                )
+
+    return None
 
 
 class GoogleAIStudioTokenCounter(BaseTokenCounter):

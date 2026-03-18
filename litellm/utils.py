@@ -7981,6 +7981,10 @@ class ProviderConfigManager:
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
+            LlmProviders.GOOGLE_CODE_ASSIST: (
+                lambda: ProviderConfigManager._get_google_code_assist_config(),
+                False,
+            ),
             LlmProviders.AI21: (lambda: litellm.AI21ChatConfig(), False),
             LlmProviders.AI21_CHAT: (lambda: litellm.AI21ChatConfig(), False),
             LlmProviders.AZURE_TEXT: (lambda: litellm.AzureOpenAITextConfig(), False),
@@ -8099,6 +8103,15 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_google_code_assist_config() -> BaseConfig:
+        """Get Google Code Assist config."""
+        from litellm.llms.google_code_assist.transformation import (
+            GoogleCodeAssistConfig,
+        )
+
+        return GoogleCodeAssistConfig()
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
