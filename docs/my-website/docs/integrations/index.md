@@ -73,7 +73,7 @@ items={[
 ]}
 />
 
-[View all observability integrations →](/docs/observability_integrations)
+[View all observability integrations →](/docs/integrations/observability_integrations)
 
 ---
 

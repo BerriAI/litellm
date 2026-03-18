@@ -164,12 +164,6 @@ title: "Choose A Provider",
 description: "Find provider-specific auth, model naming, and params.",
 to: "/docs/providers",
 },
-{
-icon: "🖥️",
-title: "Use Gateway",
-description: "Send requests through a shared LiteLLM gateway.",
-to: "/docs/learn/gateway_quickstart",
-},
 ]}
 />
 
