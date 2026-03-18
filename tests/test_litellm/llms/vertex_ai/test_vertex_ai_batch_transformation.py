@@ -101,7 +101,7 @@ async def test_litellm_cancel_batch_vertex_ai():
     mock_response.id = "batch_123"
     mock_response.status = "cancelling"
     
-    with patch.object(litellm.batches.main, "vertex_ai_batches_instance") as mock_instance:
+    with patch("litellm.batches.main.vertex_ai_batches_instance") as mock_instance:
         mock_instance.cancel_batch.return_value = mock_response
         
         response = litellm.cancel_batch(
