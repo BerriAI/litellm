@@ -405,14 +405,15 @@ async def aresponses_with_emulated_file_search(
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
 
-    # 2. First provider call — provider will call the file_search function
+    # 2. First provider call — provider will call the file_search function.
+    # Pass no-log=True so this internal sub-call does not fire its own billing/
     first_response: ResponsesAPIResponse = cast(
         ResponsesAPIResponse,
         await _call_aresponses(
             input=input,
             model=model,
             tools=transformed_tools or None,
-            **kwargs,
+            **{**kwargs, "no-log": True},
         ),
     )
 
@@ -514,14 +515,15 @@ async def aresponses_with_emulated_file_search(
         + tool_results
     )
 
-    # 6. Follow-up call — provider writes the final answer given search results
+    # 6. Follow-up call — provider writes the final answer given search results.
+    # Suppress callbacks here too; cost is accumulated into the synthesized
     final_response: ResponsesAPIResponse = cast(
         ResponsesAPIResponse,
         await _call_aresponses(
             input=follow_up_input,
             model=model,
             tools=None,  # no tools needed for the answer step
-            **kwargs,
+            **{**kwargs, "no-log": True},
         ),
     )
 
