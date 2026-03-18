@@ -384,11 +384,18 @@ class MCPJWTSigner(CustomGuardrail):
     # ------------------------------------------------------------------
 
     async def _get_oidc_discovery(self) -> Dict[str, Any]:
-        """Lazily fetch and cache the OIDC discovery document."""
+        """Lazily fetch and cache the OIDC discovery document.
+
+        Only caches when the doc contains a 'jwks_uri' so that a transient or
+        malformed response (missing the key) doesn't permanently disable JWT
+        verification until proxy restart.
+        """
         if self._oidc_discovery_doc is None and self.access_token_discovery_uri:
-            self._oidc_discovery_doc = await _fetch_oidc_discovery(
-                self.access_token_discovery_uri
-            )
+            doc = await _fetch_oidc_discovery(self.access_token_discovery_uri)
+            if "jwks_uri" in doc:
+                self._oidc_discovery_doc = doc
+            else:
+                return doc
         return self._oidc_discovery_doc or {}
 
     async def _verify_incoming_jwt(self, raw_token: str) -> Dict[str, Any]:

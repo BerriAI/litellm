@@ -12,7 +12,7 @@ Tests cover:
 import base64
 import time
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
@@ -747,3 +747,291 @@ async def test_sub_resolved_from_user_api_key_dict_jwt_claims():
     token = result["extra_headers"]["Authorization"].removeprefix("Bearer ")
     payload = _decode_unverified(token)
     assert payload["sub"] == "idp-alice"
+
+
+# ---------------------------------------------------------------------------
+# FR-5: _fetch_jwks, _get_oidc_discovery, _verify_incoming_jwt,
+#        _introspect_opaque_token
+# ---------------------------------------------------------------------------
+
+import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as _signer_mod
+
+
+def _make_httpx_response(json_body: dict, status_code: int = 200):
+    """Build a minimal fake httpx Response object."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = json_body
+    mock_resp.raise_for_status = MagicMock()
+    if status_code >= 400:
+        from httpx import HTTPStatusError, Request, Response
+
+        mock_resp.raise_for_status.side_effect = HTTPStatusError(
+            "error", request=MagicMock(), response=MagicMock()
+        )
+    return mock_resp
+
+
+# --- _fetch_jwks ---
+
+
+@pytest.mark.asyncio
+async def test_fetch_jwks_returns_keys_and_caches():
+    """_fetch_jwks returns keys from the remote JWKS URI and caches the result."""
+    _signer_mod._jwks_cache.clear()
+
+    fake_keys = [{"kty": "RSA", "kid": "k1", "n": "abc", "e": "AQAB"}]
+    fake_resp = _make_httpx_response({"keys": fake_keys})
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=fake_resp)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        keys = await _signer_mod._fetch_jwks("https://idp.example.com/jwks")
+
+    assert keys == fake_keys
+    assert "https://idp.example.com/jwks" in _signer_mod._jwks_cache
+    _signer_mod._jwks_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_fetch_jwks_uses_cache_on_second_call():
+    """_fetch_jwks returns the cached value without a second HTTP call."""
+    _signer_mod._jwks_cache.clear()
+    fake_keys = [{"kty": "RSA", "kid": "k1"}]
+    _signer_mod._jwks_cache["https://idp.example.com/jwks"] = (
+        fake_keys,
+        time.time(),
+    )
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        keys = await _signer_mod._fetch_jwks("https://idp.example.com/jwks")
+
+    mock_client.get.assert_not_called()
+    assert keys == fake_keys
+    _signer_mod._jwks_cache.clear()
+
+
+# --- _get_oidc_discovery ---
+
+
+@pytest.mark.asyncio
+async def test_get_oidc_discovery_caches_when_jwks_uri_present():
+    """_get_oidc_discovery caches the doc when jwks_uri is in the response."""
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration"
+    )
+    signer._oidc_discovery_doc = None  # ensure fresh
+
+    discovery_doc = {
+        "issuer": "https://idp.example.com",
+        "jwks_uri": "https://idp.example.com/jwks",
+    }
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value=discovery_doc,
+    ):
+        result = await signer._get_oidc_discovery()
+
+    assert result["jwks_uri"] == "https://idp.example.com/jwks"
+    assert signer._oidc_discovery_doc == discovery_doc
+
+
+@pytest.mark.asyncio
+async def test_get_oidc_discovery_does_not_cache_when_jwks_uri_absent():
+    """_get_oidc_discovery does NOT cache a doc that is missing jwks_uri."""
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration"
+    )
+    signer._oidc_discovery_doc = None
+
+    bad_doc = {"issuer": "https://idp.example.com"}  # no jwks_uri
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value=bad_doc,
+    ) as mock_fetch:
+        result1 = await signer._get_oidc_discovery()
+        result2 = await signer._get_oidc_discovery()
+
+    # Returns the bad doc each time without caching it
+    assert "jwks_uri" not in result1
+    assert signer._oidc_discovery_doc is None  # never cached
+    assert mock_fetch.call_count == 2  # retried on second call
+
+
+# --- _verify_incoming_jwt ---
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_returns_payload_on_valid_token():
+    """_verify_incoming_jwt decodes and returns claims from a valid JWT."""
+    # Build a signer to get a real RSA key pair; use its key to mint the "incoming" JWT
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+        verify_audience="api://test",
+        verify_issuer="https://idp.example.com",
+    )
+    # Mint a JWT with signer's own key — we'll pretend it came from the IdP
+    now = int(time.time())
+    incoming_claims = {
+        "sub": "idp-user-42",
+        "iss": "https://idp.example.com",
+        "aud": "api://test",
+        "iat": now,
+        "exp": now + 300,
+    }
+    incoming_token = jwt.encode(incoming_claims, signer._private_key, algorithm="RS256", headers={"kid": signer._kid})
+
+    # Build a JWKS from the same public key so verification passes
+    jwks = signer.get_jwks()
+
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=jwks["keys"],
+        ):
+            payload = await signer._verify_incoming_jwt(incoming_token)
+
+    assert payload["sub"] == "idp-user-42"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_raises_on_expired_token():
+    """_verify_incoming_jwt raises PyJWTError on an expired token."""
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+    )
+    expired_claims = {
+        "sub": "idp-user",
+        "iss": "https://idp.example.com",
+        "aud": "api://test",
+        "iat": int(time.time()) - 600,
+        "exp": int(time.time()) - 300,  # expired
+    }
+    expired_token = jwt.encode(expired_claims, signer._private_key, algorithm="RS256")
+    jwks = signer.get_jwks()
+
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=jwks["keys"],
+        ):
+            with pytest.raises(jwt.PyJWTError):
+                await signer._verify_incoming_jwt(expired_token)
+
+
+# --- _introspect_opaque_token ---
+
+
+@pytest.mark.asyncio
+async def test_introspect_opaque_token_returns_claims_when_active():
+    """_introspect_opaque_token returns the introspection payload for active tokens."""
+    signer = _make_signer(
+        token_introspection_endpoint="https://idp.example.com/introspect"
+    )
+
+    introspection_response = {
+        "active": True,
+        "sub": "service-account",
+        "scope": "read write",
+    }
+    fake_resp = _make_httpx_response(introspection_response)
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=fake_resp)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        result = await signer._introspect_opaque_token("opaque-token-abc")
+
+    assert result["sub"] == "service-account"
+    assert result["active"] is True
+
+
+@pytest.mark.asyncio
+async def test_introspect_opaque_token_raises_on_inactive_token():
+    """_introspect_opaque_token raises ExpiredSignatureError when active=false."""
+    signer = _make_signer(
+        token_introspection_endpoint="https://idp.example.com/introspect"
+    )
+
+    fake_resp = _make_httpx_response({"active": False})
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=fake_resp)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        with pytest.raises(jwt.ExpiredSignatureError):
+            await signer._introspect_opaque_token("opaque-token-xyz")
+
+
+@pytest.mark.asyncio
+async def test_introspect_opaque_token_raises_without_endpoint_configured():
+    """_introspect_opaque_token raises ValueError when no endpoint is set."""
+    signer = _make_signer()  # no token_introspection_endpoint
+
+    with pytest.raises(ValueError, match="token_introspection_endpoint"):
+        await signer._introspect_opaque_token("some-token")
+
+
+# --- FR-5 end-to-end hook path ---
+
+
+@pytest.mark.asyncio
+async def test_hook_raises_401_when_jwt_verification_fails():
+    """async_pre_call_hook raises HTTP 401 when incoming JWT verification fails."""
+    from fastapi import HTTPException
+
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration"
+    )
+
+    with patch.object(
+        signer,
+        "_verify_incoming_jwt",
+        new_callable=AsyncMock,
+        side_effect=jwt.InvalidSignatureError("bad signature"),
+    ):
+        with patch.object(
+            signer,
+            "_get_oidc_discovery",
+            new_callable=AsyncMock,
+            return_value={"jwks_uri": "https://idp.example.com/jwks"},
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await signer.async_pre_call_hook(
+                    user_api_key_dict=_make_user_api_key_dict(),
+                    cache=MagicMock(),
+                    data={"mcp_tool_name": "tool", "incoming_bearer_token": "hdr.pld.sig"},
+                    call_type="call_mcp_tool",
+                )
+
+    assert exc_info.value.status_code == 401
