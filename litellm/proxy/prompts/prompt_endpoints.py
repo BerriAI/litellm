@@ -581,6 +581,25 @@ async def get_prompt_info(
         # If content extraction fails, continue without content
         pass
 
+    # Fallback: if no content was extracted from the callback, read dotprompt_content
+    # from the prompt spec (populated when prompts are saved via Prompt Studio UI or
+    # PUT /prompts/{id}). Fixes #23935 — editor opened blank after saving via UI.
+    if prompt_template is None:
+        stored_content = getattr(prompt_spec.litellm_params, "dotprompt_content", None)
+        if stored_content is None and prompt_spec.litellm_params:
+            # Also check prompt_data for content
+            prompt_data = getattr(prompt_spec.litellm_params, "prompt_data", None)
+            if isinstance(prompt_data, dict):
+                stored_content = prompt_data.get("content")
+            elif hasattr(prompt_data, "content"):
+                stored_content = prompt_data.content
+        if stored_content:
+            prompt_template = PromptTemplateBase(
+                litellm_prompt_id=prompt_spec.prompt_id,
+                content=stored_content,
+                metadata={},
+            )
+
     # Create response with content
     return PromptInfoResponse(
         prompt_spec=prompt_spec_response,
