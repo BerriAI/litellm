@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -5,6 +6,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     Union,
 )
@@ -121,10 +123,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if isinstance(response, litellm.ModelResponse):
             return get_content_from_model_response(response)
 
-        # For non-ModelResponse types (e.g., TTS, images), return empty string
-        # These response types are not text-based and shouldn't be processed by text guardrails
-        verbose_proxy_logger.debug(
-            "Model Armor: Skipping non-ModelResponse type: %s", type(response).__name__
+        # For non-ModelResponse types (embeddings, images, TTS, etc.), return empty
+        # string to signal that post-call scanning is not applicable.  These response
+        # types carry vectors or binary data rather than human-readable text.
+        # NOTE: the guardrail is intentionally NOT added to applied_guardrails here;
+        # post-call scanning genuinely did not run for this response type.
+        verbose_proxy_logger.warning(
+            "Model Armor post-call: skipping for %s response type (not text-scannable)",
+            type(response).__name__,
         )
         return ""
 
@@ -322,6 +328,80 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Fallback: if Model Armor put sanitized text at the root, use it
         return armor_response.get("sanitizedText") or armor_response.get("text")
 
+    def _extract_request_content(self, data: dict) -> Tuple[Optional[str], str]:
+        """
+        Extract scannable text content from a request, trying messages, input, and prompt.
+
+        Returns (content, source) where source is one of "messages", "input", "prompt".
+        Returns (None, "") if no content is found in any field.
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        # Standard chat completions use "messages"
+        messages = data.get("messages")
+        if messages:
+            content = get_last_user_message(messages)
+            if content:
+                return content, "messages"
+
+        # Embeddings use "input" — may be a plain string or list of strings
+        raw_input = data.get("input")
+        if raw_input:
+            if isinstance(raw_input, str):
+                return raw_input, "input"
+            if isinstance(raw_input, list) and raw_input:
+                # Concatenate all strings in the list for scanning
+                joined = "".join(
+                    item for item in raw_input if isinstance(item, str)
+                )
+                if joined:
+                    return joined, "input"
+
+        # Image-generation requests use "prompt"
+        prompt = data.get("prompt")
+        if prompt and isinstance(prompt, str):
+            return prompt, "prompt"
+
+        return None, ""
+
+    def _update_request_content(
+        self, data: dict, source: str, sanitized: str
+    ) -> dict:
+        """
+        Write sanitized content back to the correct field in the request data.
+
+        Uses `source` (as returned by `_extract_request_content`) to determine
+        which field to update: "messages", "input", or "prompt".
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            set_last_user_message,
+        )
+
+        if source == "messages":
+            messages = data.get("messages", [])
+            data["messages"] = set_last_user_message(messages, sanitized)
+        elif source == "input":
+            # Preserve list structure if original was a list — replace first element
+            # or replace the whole value if it was a plain string.
+            raw_input = data.get("input")
+            if isinstance(raw_input, list):
+                # Replace the first string element with the sanitized text so the
+                # list length and non-string entries remain intact.
+                new_input = list(raw_input)
+                for i, item in enumerate(new_input):
+                    if isinstance(item, str):
+                        new_input[i] = sanitized
+                        break
+                data["input"] = new_input
+            else:
+                data["input"] = sanitized
+        elif source == "prompt":
+            data["prompt"] = sanitized
+
+        return data
+
     def _process_response(
         self,
         response: Optional[dict],
@@ -378,20 +458,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        messages = data.get("messages")
-        if not messages:
-            verbose_proxy_logger.warning(
-                "Model Armor: not running guardrail. No messages in data"
-            )
-            return data
-
-        # Extract content from messages using helper from common_utils
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            get_last_user_message,
-        )
-
-        content = get_last_user_message(messages)
+        content, content_source = self._extract_request_content(data)
         if not content:
+            verbose_proxy_logger.warning(
+                "Model Armor: not running guardrail. No scannable content found in "
+                "messages, input, or prompt fields"
+            )
             return data
 
         # Make Model Armor request
@@ -441,17 +513,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     },
                 )
 
-            # If mask_request_content is enabled, update messages with sanitized content
+            # If mask_request_content is enabled, update the correct field with
+            # sanitized content.  The field to update depends on what we scanned:
+            # "messages" → set_last_user_message, "input" / "prompt" → direct replace.
             if self.mask_request_content:
                 sanitized_content = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
-                    # Use the helper to set the last user message with sanitized content
-                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                        set_last_user_message,
-                    )
-
-                    data["messages"] = set_last_user_message(
-                        messages, sanitized_content
+                    data = self._update_request_content(
+                        data, content_source, sanitized_content
                     )
 
         except HTTPException:
@@ -484,20 +553,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        messages = data.get("messages")
-        if not messages:
-            verbose_proxy_logger.warning(
-                "Model Armor: not running guardrail. No messages in data"
-            )
-            return data
-
-        # Extract content from messages
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            get_last_user_message,
-        )
-
-        content = get_last_user_message(messages)
+        content, content_source = self._extract_request_content(data)
         if not content:
+            verbose_proxy_logger.warning(
+                "Model Armor: not running guardrail. No scannable content found in "
+                "messages, input, or prompt fields"
+            )
             return data
 
         # Make Model Armor request
@@ -538,16 +599,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     },
                 )
 
-            # If mask_request_content is enabled, update messages with sanitized content
+            # If mask_request_content is enabled, update the correct field with
+            # sanitized content.  The field to update depends on what we scanned:
+            # "messages" → set_last_user_message, "input" / "prompt" → direct replace.
             if self.mask_request_content:
                 sanitized_content = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
-                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                        set_last_user_message,
-                    )
-
-                    data["messages"] = set_last_user_message(
-                        messages, sanitized_content
+                    data = self._update_request_content(
+                        data, content_source, sanitized_content
                     )
 
         except HTTPException:
@@ -691,12 +750,25 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
             if content:
                 try:
+                    from litellm.proxy.common_utils.callback_utils import (
+                        add_guardrail_to_applied_guardrails_header,
+                    )
+
+                    # Record start time so we can log guardrail latency.
+                    # async_post_call_streaming_iterator_hook is an async generator
+                    # and cannot be decorated with @log_guardrail_information, so we
+                    # manually capture timing here.
+                    _start_time = datetime.now()
+
                     # Check with Model Armor
                     armor_response = await self.make_model_armor_request(
                         content=content,
                         source="model_response",
                         request_data=request_data,
                     )
+
+                    _end_time = datetime.now()
+                    _duration = (_end_time - _start_time).total_seconds()
 
                     # Attach Model Armor response & status to this request's metadata to avoid race conditions
                     if isinstance(request_data, dict):
@@ -708,12 +780,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                             else "success"
                         )
 
-                    # Add guardrail to applied_guardrails BEFORE potential blocking
-                    # This ensures guardrail is recorded even when it blocks the request
-                    from litellm.proxy.common_utils.callback_utils import (
-                        add_guardrail_to_applied_guardrails_header,
+                    # Record standard logging information (latency, response, status)
+                    # so this hook is visible in observability backends just like the
+                    # non-streaming post-call hook.
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_json_response=armor_response,
+                        request_data=request_data,
+                        guardrail_status=metadata.get("_model_armor_status", "success"),
+                        start_time=_start_time.timestamp(),
+                        end_time=_end_time.timestamp(),
+                        duration=_duration,
+                        event_type=GuardrailEventHooks.post_call,
                     )
 
+                    # Add guardrail to applied_guardrails BEFORE potential blocking
+                    # This ensures guardrail is recorded even when it blocks the request
                     add_guardrail_to_applied_guardrails_header(
                         request_data=request_data, guardrail_name=self.guardrail_name
                     )

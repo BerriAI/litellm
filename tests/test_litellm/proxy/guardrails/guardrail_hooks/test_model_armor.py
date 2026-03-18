@@ -1606,3 +1606,340 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
             )
 
         assert "API Error" in str(exc_info.value)
+
+
+# ===== EMBEDDING / IMAGE / MULTI-MODALITY COVERAGE TESTS =====
+
+@pytest.mark.asyncio
+async def test_model_armor_pre_call_hook_embeddings_input():
+    """Pre-call hook calls Model Armor with embedding input text (clean response)."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Model Armor returns a clean (no match) response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND"
+        }
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
+        data = {
+            "model": "text-embedding-ada-002",
+            "input": "sensitive text about credit card 4111-1111-1111-1111",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=data,
+            call_type="embedding",
+        )
+
+        # Model Armor was called (not silently skipped)
+        mock_post.assert_called_once()
+        # The request body must contain the embedding input text
+        call_json = mock_post.call_args[1]["json"]
+        assert call_json["userPromptData"]["text"] == "sensitive text about credit card 4111-1111-1111-1111"
+        # Input unchanged for clean response (no sanitization configured)
+        assert result["input"] == "sensitive text about credit card 4111-1111-1111-1111"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_pre_call_hook_embeddings_input_masked():
+    """Pre-call hook sanitizes embedding input when mask_request_content=True."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        mask_request_content=True,
+    )
+
+    # Model Armor returns SDP deidentify match with sanitized text
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {
+                            "matchState": "MATCH_FOUND",
+                            "data": {
+                                "text": "sensitive text about credit card [REDACTED]"
+                            },
+                        }
+                    }
+                }
+            },
+        }
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+        data = {
+            "model": "text-embedding-ada-002",
+            "input": "sensitive text about credit card 4111-1111-1111-1111",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        result = await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=data,
+            call_type="embedding",
+        )
+
+        # The input field must be updated with the sanitized text
+        assert result["input"] == "sensitive text about credit card [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_pre_call_hook_image_prompt():
+    """Pre-call hook calls Model Armor with image prompt and blocks RAI match."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Model Armor returns RAI MATCH_FOUND → should block
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                    }
+                }
+            },
+        }
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+        data = {
+            "model": "dall-e-3",
+            "prompt": "draw a picture of something violent",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=mock_cache,
+                data=data,
+                call_type="image_generation",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "Content blocked by Model Armor" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_model_armor_post_call_skips_embedding_response():
+    """Post-call hook does NOT call Model Armor for EmbeddingResponse (not text-scannable)."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock()) as mock_post:
+        embedding_response = litellm.EmbeddingResponse(
+            model="text-embedding-ada-002",
+            data=[{"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"}],
+            usage={"prompt_tokens": 5, "total_tokens": 5},
+        )
+
+        request_data = {
+            "model": "text-embedding-ada-002",
+            "input": "some text",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        # Should complete without error
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=embedding_response,
+        )
+
+        # Model Armor API must NOT have been called for a non-text response
+        mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_armor_post_call_skips_image_response():
+    """Post-call hook does NOT call Model Armor for ImageResponse (not text-scannable)."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock()) as mock_post:
+        image_response = litellm.ImageResponse(
+            created=1234567890,
+            data=[{"url": "https://example.com/image.png"}],
+        )
+
+        request_data = {
+            "model": "dall-e-3",
+            "prompt": "a cat",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=image_response,
+        )
+
+        # Model Armor API must NOT have been called for a non-text response
+        mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_armor_post_call_completions_actually_called():
+    """Post-call hook IS called for chat completions (regression guard)."""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Clean Model Armor response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND"
+        }
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
+        llm_response = litellm.ModelResponse()
+        llm_response.choices = [
+            litellm.Choices(
+                message=litellm.Message(content="Hello! How can I help you?")
+            )
+        ]
+
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=llm_response,
+        )
+
+        # Model Armor API MUST have been called for a text completion
+        mock_post.assert_called_once()
+        # The request must have been a model_response sanitization call
+        call_url = mock_post.call_args[1]["url"]
+        assert "sanitizeModelResponse" in call_url
+
+
+@pytest.mark.asyncio
+async def test_applied_guardrails_not_inflated_for_embeddings():
+    """
+    applied_guardrails is only populated by guardrails that actually executed.
+
+    After the fix to _process_guardrail_metadata (Bug 3), requesting an embedding
+    with a guardrail configured must NOT result in the guardrail appearing in
+    applied_guardrails unless the guardrail's pre-call hook actually ran and
+    called add_guardrail_to_applied_guardrails_header itself.
+
+    This test verifies that when the guardrail DOES run for an embedding input,
+    applied_guardrails contains exactly that guardrail (added by the hook, not by
+    the now-removed _process_guardrail_metadata inflation logic).
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Clean Model Armor response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+        data = {
+            "model": "text-embedding-ada-002",
+            "input": "hello world",
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=data,
+            call_type="embedding",
+        )
+
+    # The guardrail ran for the embedding, so it must be in applied_guardrails
+    applied = data["metadata"].get("applied_guardrails", [])
+    assert "model-armor-test" in applied, f"expected model-armor-test in {applied}"
+
+    # Crucially: only guardrails that actually executed should appear.
+    # Any phantom entries from the old _process_guardrail_metadata inflation would
+    # show up here if the bug were still present — this assertion catches that.
+    assert applied == ["model-armor-test"], (
+        f"applied_guardrails was inflated beyond what actually ran: {applied}"
+    )
