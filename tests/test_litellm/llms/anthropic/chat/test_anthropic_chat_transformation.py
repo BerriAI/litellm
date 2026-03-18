@@ -650,6 +650,37 @@ def test_get_supported_params_thinking():
     assert "thinking" in params
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        # Claude 3.7
+        "claude-3-7-sonnet-20250219",
+        "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # Claude Sonnet 4.x
+        "claude-sonnet-4-20250514",
+        "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+        "claude-sonnet-4-5-20250929",
+        "bedrock/claude-sonnet-4-5-20250929-v1:0",
+        "claude-sonnet-4-6",
+        "bedrock/anthropic.claude-sonnet-4-6",
+        # Claude Opus 4.x
+        "claude-opus-4-20250514",
+        "bedrock/anthropic.claude-opus-4-20250514-v1:0",
+        "claude-opus-4-6",
+        "bedrock/anthropic.claude-opus-4-6-v1:0",
+        # Claude Haiku 4.x
+        "claude-haiku-4-5-20251001",
+        "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+    ],
+)
+def test_thinking_params_supported_for_all_claude_4x_models(model):
+    """All Claude 3.7+ models should support thinking and reasoning_effort params."""
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model=model)
+    assert "thinking" in params, f"thinking not in supported params for {model}"
+    assert "reasoning_effort" in params, f"reasoning_effort not in supported params for {model}"
+
+
 def test_anthropic_memory_tool_auto_adds_beta_header():
     """
     Tests that LiteLLM automatically adds the required 'anthropic-beta' header
