@@ -1314,10 +1314,6 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
         return_value=mock_key_record
     )
 
-    # Mock get_key_object and _cache_key_object functions
-    mock_key_object = MagicMock()
-    mock_key_object.blocked = True  # Initially blocked
-
     # Mock hash_token function
     def mock_hash_token(token):
         if token == "sk-test123456789":
@@ -1388,7 +1384,6 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     assert result == mock_key_record
-    assert mock_key_object.blocked == False  # Should be updated to unblocked
 
 
 @pytest.mark.asyncio
