@@ -3262,11 +3262,7 @@ async def _build_team_list_where_conditions(
         }
 
     if organization_id:
-        # If a list is passed (org admin viewing multiple orgs), use IN
-        if isinstance(organization_id, list):
-            where_conditions["organization_id"] = {"in": organization_id}
-        else:
-            where_conditions["organization_id"] = organization_id
+        where_conditions["organization_id"] = organization_id
     elif org_admin_org_ids is not None:
         # Org admin without explicit org filter: scope to their orgs
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
@@ -3302,27 +3298,6 @@ async def _build_team_list_where_conditions(
                 )
 
     return where_conditions
-
-
-def _convert_teams_to_response(
-    teams: List[Any], use_deleted_table: bool
-) -> List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
-    """Convert Prisma models to Pydantic models."""
-    team_list: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
-    if teams:
-        for team in teams:
-            # Convert Prisma model to dict (supports both Pydantic v1 and v2)
-            try:
-                team_dict = team.model_dump()
-            except Exception:
-                # Fallback for Pydantic v1 compatibility
-                team_dict = team.dict()
-            if use_deleted_table:
-                # Use deleted team type to preserve deleted_at, deleted_by, etc.
-                team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
-            else:
-                team_list.append(LiteLLM_TeamTable(**team_dict))
-    return team_list
 
 
 @router.get(
@@ -3409,31 +3384,15 @@ async def list_team_v2(
     org_admin_org_ids: Optional[List[str]] = None
 
     if not is_proxy_admin:
-        # First check if the standard route check passes (user querying own data)
-        passes_route_check = allowed_route_check_inside_route(
-            user_api_key_dict=user_api_key_dict, requested_user_id=user_id
-        )
-
-        if not passes_route_check:
-            # Standard check failed — see if the caller is an org admin
-            if user_api_key_dict.user_id:
-                org_admin_org_ids = await _get_org_admin_org_ids(
-                    user_id=user_api_key_dict.user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-
-            if org_admin_org_ids is None:
-                # Not an org admin either — reject
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "error": "Only admin users can query all teams/other teams. Your user role={}".format(
-                            user_api_key_dict.user_role
-                        )
-                    },
-                )
+        # Always check org admin status so that even own-queries see
+        # the full set of organisation teams, not just direct memberships.
+        if user_api_key_dict.user_id:
+            org_admin_org_ids = await _get_org_admin_org_ids(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         if org_admin_org_ids is not None:
             # Org admin: validate org_id filter if provided
@@ -3444,12 +3403,28 @@ async def list_team_v2(
                         "error": "You can only view teams within your organizations."
                     },
                 )
+            # Org admin scope replaces user_id scope — the org filter
+            # already returns all teams in their orgs, so we don't also
+            # restrict by the user's direct team memberships.
+            user_id = None
             verbose_proxy_logger.debug(
                 "list_team_v2: org admin access for user=%s, org_ids=%s",
                 user_api_key_dict.user_id,
                 org_admin_org_ids,
             )
-        elif not is_proxy_admin:
+        else:
+            # Not an org admin — fall back to standard route check
+            if not allowed_route_check_inside_route(
+                user_api_key_dict=user_api_key_dict, requested_user_id=user_id
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "Only admin users can query all teams/other teams. Your user role={}".format(
+                            user_api_key_dict.user_role
+                        )
+                    },
+                )
             # Regular user — auto-inject caller's user_id
             if user_id is None:
                 user_id = user_api_key_dict.user_id
