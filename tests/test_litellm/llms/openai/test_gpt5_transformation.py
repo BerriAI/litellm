@@ -324,6 +324,28 @@ def test_gpt5_4_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+def test_gpt5_4_mini_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """gpt-5.4-mini supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-mini",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_4_nano_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """gpt-5.4-nano supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.4-nano",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
 def test_gpt5_4_allows_reasoning_effort_minimal(config: OpenAIConfig):
     """gpt-5.4 supports reasoning_effort='minimal'."""
     params = config.map_openai_params(
@@ -364,6 +386,17 @@ def test_gpt5_4_nano_rejects_reasoning_effort_minimal(config: OpenAIConfig):
             non_default_params={"reasoning_effort": "minimal"},
             optional_params={},
             model="gpt-5.4-nano",
+            drop_params=False,
+        )
+
+
+def test_gpt5_4_mini_provider_prefixed_rejects_minimal(config: OpenAIConfig):
+    """openai/gpt-5.4-mini correctly rejects minimal (model lookup normalizes prefix)."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="openai/gpt-5.4-mini",
             drop_params=False,
         )
 
@@ -414,12 +447,16 @@ def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
 
     Models with supports_minimal_reasoning_effort=false → disabled.
     Models with supports_minimal_reasoning_effort=true (or missing) → not disabled.
+    Provider-prefixed models (openai/gpt-5.4-mini) are normalized before lookup.
     """
     assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
         "gpt-5.4-mini", "minimal"
     )
     assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
         "gpt-5.4-nano", "minimal"
+    )
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "openai/gpt-5.4-mini", "minimal"
     )
     assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
         "gpt-5.4", "minimal"
