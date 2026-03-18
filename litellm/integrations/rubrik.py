@@ -810,7 +810,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return None
 
         message = choices[0].get("message", {})
-        returned_tool_calls = message.get("tool_calls", [])
+        returned_tool_calls = message.get("tool_calls") or []
         blocking_explanation = message.get("content", "")
 
         allowed_ids = {tc["id"] for tc in returned_tool_calls if tc.get("id")}
