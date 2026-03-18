@@ -167,6 +167,7 @@ async def test_add_shared_session_concurrent_recreation_uses_lock():
         with patch.object(
             proxy_server_module,
             "_initialize_shared_aiohttp_session",
+            new_callable=AsyncMock,
             side_effect=mock_init,
         ):
             # Launch 5 concurrent calls
