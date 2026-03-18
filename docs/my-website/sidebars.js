@@ -658,9 +658,22 @@ const sidebars = {
         "vector_stores/create",
         "vector_stores/search",
         {
-          type: "link",
+          type: "category",
           label: "/mcp - Model Context Protocol",
-          href: "/docs/mcp",
+          items: [
+            "mcp",
+            "mcp_usage",
+            "mcp_openapi",
+            "mcp_oauth",
+            "mcp_aws_sigv4",
+            "mcp_zero_trust",
+            "mcp_public_internet",
+            "mcp_semantic_filter",
+            "mcp_control",
+            "mcp_cost",
+            "mcp_guardrail",
+            "mcp_troubleshoot",
+          ]
         },
         {
           type: "category",

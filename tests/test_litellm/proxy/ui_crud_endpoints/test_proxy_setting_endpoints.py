@@ -111,6 +111,37 @@ class TestProxySettingEndpoints:
         assert "user_role" in data["field_schema"]["properties"]
         assert "description" in data["field_schema"]["properties"]["user_role"]
 
+    def test_get_internal_user_settings_fresh_db_defaults_to_viewer(
+        self, mock_auth, monkeypatch
+    ):
+        """
+        On a fresh DB with no saved settings, the GET endpoint should return
+        INTERNAL_USER_VIEW_ONLY as the default role — matching the runtime
+        fallback in SSO/SCIM/JWT provisioning paths.
+        """
+        # Simulate fresh DB: no default_internal_user_params in config
+        empty_config = {
+            "litellm_settings": {},
+            "general_settings": {},
+            "environment_variables": {},
+        }
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        async def mock_get_config():
+            return empty_config
+
+        monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+        response = client.get("/get/internal_user_settings")
+        assert response.status_code == 200
+
+        values = response.json()["values"]
+        assert values["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, (
+            f"Fresh DB should default to INTERNAL_USER_VIEW_ONLY, got {values['user_role']}. "
+            "The Pydantic default must match the runtime fallback."
+        )
+
     def test_update_internal_user_settings(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException, status
@@ -123,30 +124,99 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
-def add_shared_session_to_data(data: dict) -> None:
+_shared_session_lock: Optional[asyncio.Lock] = None
+
+
+def _get_shared_session_lock() -> asyncio.Lock:
+    """Lazily create the shared session lock (must be called within a running event loop).
+
+    WARNING: Do not reset _shared_session_lock to None while any coroutine may be
+    executing the session-recovery path; doing so breaks the double-checked locking
+    guarantee and can cause duplicate session creation.
+    """
+    global _shared_session_lock
+    if _shared_session_lock is None:
+        _shared_session_lock = asyncio.Lock()
+    return _shared_session_lock
+
+
+async def add_shared_session_to_data(data: dict) -> None:
     """
     Add shared aiohttp session for connection reuse (prevents cold starts).
+    If the session was closed (e.g. due to network interruption or idle timeout),
+    automatically recreates it so connection pooling is restored.
+    Uses an asyncio.Lock to prevent race conditions where multiple concurrent
+    requests could each create a new session, leaking intermediate ones.
     Silently continues without session reuse if import fails or session is unavailable.
 
     Args:
         data: Dictionary to add the shared session to
     """
     try:
+        import litellm.proxy.proxy_server as proxy_server
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.proxy_server import shared_aiohttp_session
 
-        if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
-            data["shared_session"] = shared_aiohttp_session
+        session = proxy_server.shared_aiohttp_session
+
+        if session is not None and not session.closed:
+            data["shared_session"] = session
             verbose_proxy_logger.info(
-                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(shared_aiohttp_session)})"
+                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(session)})"
             )
+        elif session is not None and session.closed:
+            # Session was created at startup but has since closed — recreate it
+            # Use lock to prevent concurrent recreation (avoids session/connector leak)
+            lock = _get_shared_session_lock()
+            async with lock:
+                # Double-check under lock — another coroutine may have already recreated it
+                session = proxy_server.shared_aiohttp_session
+                if session is not None and not session.closed:
+                    data["shared_session"] = session
+                    return
+
+                # session could be None here (if another coroutine set it to None)
+                # or closed — either way we need to recreate
+                if session is not None:
+                    verbose_proxy_logger.warning(
+                        f"SESSION REUSE: Shared aiohttp session is closed (ID: {id(session)}), recreating..."
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
+                    )
+                try:
+                    new_session = (
+                        await proxy_server._initialize_shared_aiohttp_session()
+                    )
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "SESSION REUSE: Exception during shared session recreation"
+                    )
+                    new_session = None
+                if new_session is not None:
+                    proxy_server.shared_aiohttp_session = new_session
+                    data["shared_session"] = new_session
+                else:
+                    verbose_proxy_logger.info(
+                        "SESSION REUSE: Failed to recreate shared session, continuing without session reuse"
+                    )
         else:
             verbose_proxy_logger.info(
                 "SESSION REUSE: No shared session available for this request"
             )
     except Exception:
-        # Silently continue without session reuse if import fails or session unavailable
-        pass
+        # Continue without session reuse — this outer handler covers import failures
+        # and other unexpected errors to avoid breaking the request path.
+        # Inner recovery logic has its own specific exception handling.
+        try:
+            from litellm._logging import verbose_proxy_logger
+
+            verbose_proxy_logger.debug(
+                "SESSION REUSE: Unexpected error in session setup, continuing without reuse",
+                exc_info=True,
+            )
+        except Exception:
+            pass
 
 
 async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
@@ -248,7 +318,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     """
     Common helper to route the request
     """
-    add_shared_session_to_data(data)
+    await add_shared_session_to_data(data)
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []

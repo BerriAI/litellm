@@ -388,6 +388,65 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     assert custom_model_id not in (selected_model_no_custom or "")
 
 
+def test_per_request_custom_pricing_with_router():
+    """When custom pricing is passed as per-request kwargs (not in model_list),
+    _select_model_name_for_cost_calc should fall back to the model name
+    (where register_model stored the pricing) instead of the router_model_id
+    (which has no pricing data).
+
+    Regression test for the bug where response._hidden_params["response_cost"]
+    returned 0.0 for per-request custom pricing via Router.
+    """
+    from litellm import Router
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "test_api_key",
+                },
+            },
+        ]
+    )
+
+    # Get the deployment's model_id (hash) that the router registered
+    deployment = router.model_list[0]
+    router_model_id = deployment["model_info"]["id"]
+
+    # The router registered this hash in model_cost but without custom pricing
+    assert router_model_id in litellm.model_cost
+    entry = litellm.model_cost[router_model_id]
+    # No custom pricing was set in model_list, so these should be None
+    assert entry.get("input_cost_per_token") is None
+
+    # Now simulate what completion() does: register custom pricing under the model name
+    litellm.register_model(
+        {
+            "openai/gpt-3.5-turbo": {
+                "input_cost_per_token": 2.0,
+                "output_cost_per_token": 2.0,
+                "litellm_provider": "openai",
+            }
+        }
+    )
+
+    # _select_model_name_for_cost_calc should pick the model name (which has pricing),
+    # NOT the router_model_id (which has no pricing)
+    selected = _select_model_name_for_cost_calc(
+        model="openai/gpt-3.5-turbo",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="openai",
+        router_model_id=router_model_id,
+    )
+    assert selected is not None
+    assert router_model_id not in selected
+    assert "gpt-3.5-turbo" in selected
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
