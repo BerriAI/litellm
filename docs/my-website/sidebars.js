@@ -636,6 +636,7 @@ const sidebars = {
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
+            "mcp_zero_trust",
             "mcp_troubleshoot",
           ]
         },
