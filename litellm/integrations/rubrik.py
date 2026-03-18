@@ -579,6 +579,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     continue
 
                 if buffered_chunk.get("type") in _CONTENT_BLOCK_EVENTS:
+                    buffered_chunk = dict(buffered_chunk)  # shallow copy to avoid mutating the buffer
                     if buffered_chunk.get("type") == _EVENT_CONTENT_BLOCK_START:
                         replay_index_base += 1
                     buffered_chunk["index"] = replay_index_base

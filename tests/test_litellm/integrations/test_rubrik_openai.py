@@ -17,6 +17,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
     Function,
+    ModelResponse,
     ModelResponseStream,
     StreamingChoices,
 )
@@ -1266,9 +1267,8 @@ class TestAsyncPostCallStreamingIteratorHook:
 
 @pytest.fixture
 def mock_response_no_tools():
-    """Create a mock response without tool calls."""
-    mock_response = Mock()
-    response_dict: Dict[str, Any] = {
+    """Create a real ModelResponse without tool calls to exercise the model_validate path."""
+    return ModelResponse(**{
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "created": 1677652288,
@@ -1283,21 +1283,13 @@ def mock_response_no_tools():
                 "finish_reason": "stop",
             },
         ],
-    }
-    mock_response.model_dump = Mock(return_value=response_dict)
-    mock_response.dict = Mock(return_value=response_dict)
-
-    for key, value in response_dict.items():
-        setattr(mock_response, key, value)
-
-    return mock_response
+    })
 
 
 @pytest.fixture
 def mock_response_with_tools():
-    """Create a mock response with tool calls."""
-    mock_response = Mock()
-    response_dict: Dict[str, Any] = {
+    """Create a real ModelResponse with tool calls to exercise the model_validate path."""
+    return ModelResponse(**{
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "created": 1677652288,
@@ -1330,11 +1322,4 @@ def mock_response_with_tools():
                 "finish_reason": "tool_calls",
             },
         ],
-    }
-    mock_response.model_dump = Mock(return_value=response_dict)
-    mock_response.dict = Mock(return_value=response_dict)
-
-    for key, value in response_dict.items():
-        setattr(mock_response, key, value)
-
-    return mock_response
+    })
