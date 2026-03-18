@@ -151,10 +151,38 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ```json
 {
-  "id": "chatcmpl-abc123",
+  "id": "chatcmpl-abcd",
+  "created": 1773817678,
+  "model": "gpt-4o",
   "object": "chat.completion",
-  "choices": [{"message": {"role": "assistant", "content": "Hello! How can I help you?"}, "finish_reason": "stop"}],
-  "usage": {"prompt_tokens": 10, "completion_tokens": 9, "total_tokens": 19}
+  "system_fingerprint": "fp_6b1ef07cda",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Hello! How can I assist you today?",
+        "role": "assistant",
+        "annotations": []
+      }
+    }
+  ],
+  "usage": {
+    "completion_tokens": 9,
+    "prompt_tokens": 9,
+    "total_tokens": 18,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": "default"
 }
 ```
 
@@ -202,8 +230,6 @@ You can read more about how model resolution works in the [Model Configuration](
     - **`api_key`** (`str`) - The API key required for authentication. It can be retrieved from an environment variable using `os.environ/`.
     - **`api_base`** (`str`) - The API base for your azure deployment.
     - **`api_version`** (`str`) - The API Version to use when calling Azure's OpenAI API. Get the latest Inference API version [here](https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation?source=recommendations#latest-preview-api-releases).
-
----
 
 
 ---
