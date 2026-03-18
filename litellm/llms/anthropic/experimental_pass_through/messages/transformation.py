@@ -165,6 +165,41 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         return headers, api_base
 
+    def _sanitize_empty_text_content_blocks(
+        self, messages: List[Dict]
+    ) -> List[Dict]:
+        """
+        Remove empty text content blocks from messages.
+
+        Claude's API returns assistant messages with empty text blocks
+        ({"type": "text", "text": ""}) alongside tool_use blocks, but rejects
+        them when sent back: '400: text content blocks must be non-empty'.
+        """
+        result = []
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                result.append(message)
+                continue
+
+            filtered_content = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and (not block.get("text") or not str(block["text"]).strip())
+                )
+            ]
+
+            if filtered_content != content:
+                if not filtered_content:
+                    filtered_content = [{"type": "text", "text": "..."}]
+                result.append({**message, "content": filtered_content})
+            else:
+                result.append(message)
+        return result
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -179,6 +214,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         This takes in a request in the Anthropic /v1/messages API spec -> transforms it to /v1/messages API spec (i.e) no transformation is needed
         """
+        messages = self._sanitize_empty_text_content_blocks(messages)
         max_tokens = anthropic_messages_optional_request_params.pop("max_tokens", None)
         if max_tokens is None:
             raise AnthropicError(
