@@ -10,6 +10,10 @@ describe("GuardrailConfig", () => {
     provider: "bedrock",
   };
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("should render", () => {
     render(<GuardrailConfig {...defaultProps} />);
     expect(screen.getByText("Parameters")).toBeInTheDocument();
@@ -39,10 +43,16 @@ describe("GuardrailConfig", () => {
   it("should show custom code textarea when custom code override is toggled on", async () => {
     const user = userEvent.setup();
     render(<GuardrailConfig {...defaultProps} />);
-    const switches = screen.getAllByRole("switch");
-    // The second switch is the custom code override toggle
-    const customCodeSwitch = switches[1];
-    await user.click(customCodeSwitch);
+    // Walk up from "Custom Code Override" heading to find the enclosing section,
+    // then locate the switch within it
+    const heading = screen.getByText("Custom Code Override");
+    let container = heading.parentElement;
+    let customCodeSwitch: Element | null = null;
+    while (container && !customCodeSwitch) {
+      customCodeSwitch = container.querySelector('[role="switch"]');
+      container = container.parentElement;
+    }
+    await user.click(customCodeSwitch!);
     expect(screen.getByPlaceholderText(/async def evaluate/)).toBeInTheDocument();
   });
 
@@ -63,7 +73,6 @@ describe("GuardrailConfig", () => {
     render(<GuardrailConfig {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: /re-run on failing logs/i }));
     expect(screen.getByText(/Running on 10 samples/)).toBeInTheDocument();
-    vi.useRealTimers();
   });
 
   it("should show success message after re-run completes", async () => {
@@ -73,7 +82,6 @@ describe("GuardrailConfig", () => {
     await user.click(screen.getByRole("button", { name: /re-run on failing logs/i }));
     act(() => { vi.advanceTimersByTime(2500); });
     expect(screen.getByText(/7\/10 would now pass/)).toBeInTheDocument();
-    vi.useRealTimers();
   });
 
   it("should display the Revert and Save buttons", () => {

@@ -31,7 +31,7 @@ describe("ExportTypeSelector", () => {
 
   it("should have the correct radio checked based on value prop", () => {
     render(<ExportTypeSelector value="daily_with_models" onChange={vi.fn()} entityType="team" />);
-    const radios = screen.getAllByRole("radio");
-    expect(radios[2]).toBeChecked();
+    const modelRadio = screen.getByRole("radio", { name: /by team and model/i });
+    expect(modelRadio).toBeChecked();
   });
 });
