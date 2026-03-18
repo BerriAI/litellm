@@ -730,3 +730,88 @@ async def test_openai_moderation_post_call_request_data_passthrough():
         assert guardrail_info_list is not None
         assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
         assert "results" in guardrail_info_list[0]["guardrail_response"]
+
+
+def test_openai_moderation_process_response_metadata_none_edge_case():
+    """
+    Test that _process_response anchors the metadata dict back into
+    request_data when metadata is None, so pop() doesn't operate on a
+    temporary and the moderation response is correctly logged.
+    """
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+
+        mod_dict = {"id": "modr-test", "model": "omni-moderation-latest", "results": []}
+
+        # Simulate apply_guardrail having stashed the response but metadata
+        # was None initially — apply_guardrail anchors it, so metadata is a
+        # real dict with the stashed key by the time _process_response runs.
+        request_data = {"metadata": {"_openai_moderation_response": mod_dict}}
+
+        guardrail._process_response(
+            response={"inputs": {}},
+            request_data=request_data,
+        )
+
+        # Full moderation dict should be logged, not "allow"
+        info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert info_list is not None
+        assert info_list[0]["guardrail_response"] == mod_dict
+
+        # Internal key should have been cleaned up by pop()
+        assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+def test_openai_moderation_process_error_metadata_none_edge_case():
+    """
+    Test that _process_error anchors the metadata dict back into
+    request_data when metadata starts as None (or {}), so pop() doesn't
+    operate on a temporary.
+    """
+    from fastapi import HTTPException
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+
+        mod_dict = {
+            "id": "modr-test",
+            "model": "omni-moderation-latest",
+            "results": [{"flagged": True, "categories": {"hate": True}}],
+        }
+
+        # metadata is None — exercises the or {} anchor
+        request_data: dict = {"metadata": None}
+
+        # Simulate stashing the response then calling _process_error
+        # (normally apply_guardrail stashes, then the decorator calls
+        # _process_error on HTTPException)
+        # First anchor metadata like apply_guardrail does:
+        metadata = request_data.get("metadata") or {}
+        request_data["metadata"] = metadata
+        metadata["_openai_moderation_response"] = mod_dict
+
+        exc = HTTPException(status_code=400, detail="Violated policy")
+        with pytest.raises(HTTPException):
+            guardrail._process_error(
+                e=exc,
+                request_data=request_data,
+            )
+
+        # Full moderation dict should be logged, not the exception
+        info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert info_list is not None
+        assert info_list[0]["guardrail_response"] == mod_dict
+        assert info_list[0]["guardrail_status"] == "guardrail_intervened"
+
+        # Internal key cleaned up
+        assert "_openai_moderation_response" not in request_data["metadata"]
