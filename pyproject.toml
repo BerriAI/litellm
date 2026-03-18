@@ -167,6 +167,7 @@ langfuse = "^2.45.0"
 fastapi-offline = "^1.7.3"
 fakeredis = "^2.27.1"
 pytest-rerunfailures = "^14.0"
+parameterized = "^0.9.0"
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"
