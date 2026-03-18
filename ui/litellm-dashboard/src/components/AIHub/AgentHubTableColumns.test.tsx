@@ -22,9 +22,17 @@ const mockAgent: AgentHubData = {
   is_public: true,
 };
 
-function TestTable({ data, publicPage = false }: { data: AgentHubData[]; publicPage?: boolean }) {
-  const showModal = vi.fn();
-  const copyToClipboard = vi.fn();
+function TestTable({
+  data,
+  publicPage = false,
+  showModal = vi.fn(),
+  copyToClipboard = vi.fn(),
+}: {
+  data: AgentHubData[];
+  publicPage?: boolean;
+  showModal?: ReturnType<typeof vi.fn>;
+  copyToClipboard?: ReturnType<typeof vi.fn>;
+}) {
   const columns = getAgentHubTableColumns(showModal, copyToClipboard, publicPage);
   const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
 
