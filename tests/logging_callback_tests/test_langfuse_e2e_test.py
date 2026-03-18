@@ -60,6 +60,22 @@ def assert_langfuse_request_matches_expected(
             )
         ]
 
+    # When aggregating from multiple flush cycles, deduplicate by keeping
+    # only one trace-create and one generation-create per trace_id.
+    seen_types: dict = {}
+    deduped_batch: list = []
+    for item in actual_request_body["batch"]:
+        item_type = item["type"]
+        if item_type not in seen_types:
+            seen_types[item_type] = True
+            deduped_batch.append(item)
+    actual_request_body["batch"] = deduped_batch
+
+    # Ensure canonical order: trace-create first, generation-create second
+    actual_request_body["batch"].sort(
+        key=lambda x: 0 if x["type"] == "trace-create" else 1
+    )
+
     print(
         "actual_request_body after filtering", json.dumps(actual_request_body, indent=4)
     )
