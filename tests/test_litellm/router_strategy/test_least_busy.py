@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 from collections import Counter
 
@@ -24,6 +25,7 @@ class TestLeastBusyTieBreaking:
     """Tests that least-busy strategy distributes requests across tied deployments."""
 
     def test_should_randomly_distribute_when_all_counts_are_zero(self):
+        random.seed(42)
         cache = DualCache()
         handler = LeastBusyLoggingHandler(router_cache=cache)
         deployments = [_make_deployment(i) for i in range(3)]
@@ -44,6 +46,7 @@ class TestLeastBusyTieBreaking:
             )
 
     def test_should_randomly_distribute_when_counts_are_tied(self):
+        random.seed(42)
         cache = DualCache()
         handler = LeastBusyLoggingHandler(router_cache=cache)
         deployments = [_make_deployment(i) for i in range(2)]
@@ -64,6 +67,15 @@ class TestLeastBusyTieBreaking:
             assert count > 40, (
                 f"Deployment {dep_id} selected only {count}/200 times — distribution is too skewed"
             )
+
+    def test_should_return_none_when_no_healthy_deployments(self):
+        cache = DualCache()
+        handler = LeastBusyLoggingHandler(router_cache=cache)
+
+        result = handler._get_available_deployments(
+            healthy_deployments=[], all_deployments={}
+        )
+        assert result is None
 
     def test_should_pick_unique_minimum(self):
         cache = DualCache()

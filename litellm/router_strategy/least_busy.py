@@ -193,9 +193,11 @@ class LeastBusyLoggingHandler(CustomLogger):
         self,
         healthy_deployments: list,
         all_deployments: dict,
-    ):
+    ) -> Optional[dict]:
         """
-        Helper to get deployments using least busy strategy
+        Helper to get deployments using least busy strategy.
+        Returns None when no healthy deployments are available, consistent
+        with other routing strategies (lowest_tpm, lowest_latency).
         """
         healthy_ids = set()
         for d in healthy_deployments:
@@ -216,14 +218,14 @@ class LeastBusyLoggingHandler(CustomLogger):
                 min_deployment_ids.append(k)
 
         if not min_deployment_ids:
-            raise ValueError("No healthy deployments available")
+            return None
 
         chosen_id = random.choice(min_deployment_ids)
         for m in healthy_deployments:
             if m["model_info"]["id"] == chosen_id:
                 return m
 
-        raise ValueError(f"Chosen deployment id {chosen_id!r} not found in healthy_deployments")
+        return None
 
     def get_available_deployments(
         self,
