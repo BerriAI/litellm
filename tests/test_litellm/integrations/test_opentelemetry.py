@@ -421,12 +421,12 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.tracer = MagicMock()
 
         # Mock the dynamic header extraction and tracer creation
-        with (
-            patch.object(
-                otel, "_get_dynamic_otel_headers_from_kwargs"
-            ) as mock_get_headers,
-            patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
-        ):
+        with patch.object(
+            otel, "_get_dynamic_otel_headers_from_kwargs"
+        ) as mock_get_headers, patch.object(
+            otel, "_get_tracer_with_dynamic_headers"
+        ) as mock_get_tracer:
+
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -2173,9 +2173,9 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
     ):
         """
         If ignore_context_propagation is True, _handle_success should ignore any parent span
-        and create a root-level error span. This could be useful for langfuse_otel where
+        and create a root-level span. This could be useful for langfuse_otel where
         _handle_success may ignore parent spans from other providers and create a root-level
-        error span (symmetric with _handle_failure).
+        span (symmetric with _handle_failure).
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -2210,13 +2210,12 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
-            match handle_method:
-                case "_handle_success":
-                    otel._handle_success(kwargs, None, start, end)
-                case "_handle_failure":
-                    otel._handle_failure(kwargs, None, start, end)
-                case _:
-                    self.fail(f"Invalid handle_method: {handle_method}")
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         other_span.end()
 
@@ -2236,6 +2235,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
     ):
         """
         For default otel callbacks, _handle_success should use parent spans normally.
+        (symmetric with _handle_failure)
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -2266,13 +2266,12 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
-            match handle_method:
-                case "_handle_success":
-                    otel._handle_success(kwargs, None, start, end)
-                case "_handle_failure":
-                    otel._handle_failure(kwargs, None, start, end)
-                case _:
-                    self.fail(f"Invalid handle_method: {handle_method}")
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         parent_span.end()
 
@@ -2290,8 +2289,8 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         self, handle_method: str
     ):
         """
-        For otel callbacks with context propagation enabled, _handle__handle_success should
-        use parent spans normally.
+        For otel callbacks with context propagation enabled, _handle_success should
+        use parent spans normally. (symmetric with _handle_failure)
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -2325,13 +2324,12 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
-            match handle_method:
-                case "_handle_success":
-                    otel._handle_success(kwargs, None, start, end)
-                case "_handle_failure":
-                    otel._handle_failure(kwargs, None, start, end)
-                case _:
-                    self.fail(f"Invalid handle_method: {handle_method}")
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         parent_span.end()
 

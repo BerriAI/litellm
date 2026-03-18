@@ -100,7 +100,6 @@ litellm_settings:
 callback_settings:
   otel:
     message_logging: boolean # OTEL logging callback specific settings
-    ignore_context_propagation: boolean # if true, spans created by the OTEL callback will not have parent spans from other providers, even if OTEL context propagation is enabled. This can help prevent issues with incorrect parent-child relationships in spans when multiple providers are used.
 
 general_settings:
   completion_model: string
