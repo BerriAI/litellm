@@ -1211,14 +1211,15 @@ class TestMCPServerManager:
         assert server.has_client_credentials is True
 
     @pytest.mark.asyncio
-    async def test_pkce_creds_without_explicit_token_url_stays_3lo(self):
+    async def test_client_creds_without_explicit_token_url_stays_3lo(self):
         """
-        Regression test for: MCP OAuth 3LO fails when token_url is auto-discovered.
+        Regression test: client_id + client_secret without oauth2_flow=client_credentials
+        must stay in the 3LO (authorization_code) path.
 
-        When client_id + client_secret are configured but token_url is absent (3LO intent),
-        auto-discovered token_url must NOT be stored on the server — otherwise
-        has_client_credentials returns True and incorrectly triggers the
-        client_credentials (2LO) grant, leaving the tool set empty
+        - has_client_credentials must be False (no explicit opt-in via oauth2_flow)
+        - token_url MUST be populated from discovery so exchange_token_with_server()
+          can complete the auth-code exchange (raises HTTP 400 if token_url is None)
+        - authorization_url and scopes must also be populated from discovery
         """
         manager = MCPServerManager()
 
@@ -1239,22 +1240,25 @@ class TestMCPServerManager:
                     "auth_type": MCPAuth.oauth2,
                     "client_id": "my-client-id",
                     "client_secret": "my-client-secret",
-                    # Intentionally no token_url — signals 3LO (user-authorised) flow
+                    # No oauth2_flow — signals 3LO (user-authorised) flow
                 }
             }
 
             await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
-        # token_url must NOT be populated from discovery when PKCE creds are present
-        assert server.token_url is None, (
-            "Auto-discovered token_url should not be set when client_id+client_secret "
-            "are configured without an explicit token_url (3LO intent)"
-        )
         assert server.has_client_credentials is False, (
-            "has_client_credentials must be False for 3LO servers so the "
-            "client_credentials grant is not triggered"
+            "has_client_credentials must be False when oauth2_flow is not set to "
+            "client_credentials — presence of client_id/secret alone is ambiguous"
         )
+        # token_url must be populated from discovery so the 3LO auth-code exchange works
+        assert server.token_url == "https://discovered.example.com/token", (
+            "Auto-discovered token_url must be preserved for 3LO servers — "
+            "exchange_token_with_server() raises HTTP 400 if token_url is None"
+        )
+        # authorization_url and scopes must also survive from discovery
+        assert server.authorization_url == "https://discovered.example.com/auth"
+        assert server.scopes == ["read"]
         assert server.needs_user_oauth_token is True
 
     @pytest.mark.asyncio
@@ -1284,7 +1288,8 @@ class TestMCPServerManager:
                     "auth_type": MCPAuth.oauth2,
                     "client_id": "my-client-id",
                     "client_secret": "my-client-secret",
-                    "token_url": "https://explicit.example.com/token",  # 2LO intent
+                    "token_url": "https://explicit.example.com/token",
+                    "oauth2_flow": "client_credentials",  # explicit 2LO opt-in
                 }
             }
 

@@ -299,15 +299,17 @@ class MCPServerManager:
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
             _explicit_token_url = server_config.get("token_url")
-            _has_client_creds = bool(
-                server_config.get("client_id") and server_config.get("client_secret")
+            # Use the same signal as MCPServer.has_client_credentials: explicit opt-in
+            # via oauth2_flow="client_credentials".  Presence of client_id/client_secret
+            # alone is ambiguous — both 2LO and 3LO flows use them.
+            _is_client_credentials_flow = (
+                server_config.get("oauth2_flow") == "client_credentials"
             )
             _discovered_token_url = mcp_oauth_metadata.token_url if mcp_oauth_metadata else None
-            if not _explicit_token_url and _has_client_creds and _discovered_token_url:
+            if not _explicit_token_url and _is_client_credentials_flow and _discovered_token_url:
                 verbose_logger.warning(
                     "MCP server '%s': auto-discovered token_url '%s' ignored because "
-                    "client_id + client_secret are set without an explicit token_url, "
-                    "which signals a 3LO (authorization_code) flow. "
+                    "oauth2_flow=client_credentials is set without an explicit token_url. "
                     "Set token_url explicitly in config to use 2LO (client_credentials).",
                     server_id,
                     _discovered_token_url,
