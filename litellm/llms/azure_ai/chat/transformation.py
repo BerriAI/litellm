@@ -11,12 +11,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
@@ -64,12 +66,21 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        if api_base and self._should_use_api_key_header(api_base):
-            headers["api-key"] = api_key
+        if api_key:
+            if api_base and self._should_use_api_key_header(api_base):
+                headers["api-key"] = api_key
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
         else:
-            headers["Authorization"] = f"Bearer {api_key}"
+            # No api_key provided — fall back to Azure AD token-based auth
+            litellm_params_obj = GenericLiteLLMParams(
+                **(litellm_params if isinstance(litellm_params, dict) else {})
+            )
+            headers = BaseAzureLLM._base_validate_azure_environment(
+                headers=headers, litellm_params=litellm_params_obj
+            )
 
-        headers["Content-Type"] = "application/json"  # tell Azure AI Studio to expect JSON
+        headers["Content-Type"] = "application/json"
 
         return headers
 
@@ -79,7 +90,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         parsed_url = urlparse(api_base)
         host = parsed_url.hostname
-        if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
+        if host and (
+            host.endswith(".services.ai.azure.com")
+            or host.endswith(".openai.azure.com")
+        ):
             return True
         return False
 
@@ -126,9 +140,13 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path="/models/chat/completions"
+            )
         else:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path="/chat/completions"
+            )
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
@@ -198,7 +216,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         dynamic_api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
 
         if self._is_azure_openai_model(model=model, api_base=api_base):
-            verbose_logger.debug("Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(model))
+            verbose_logger.debug(
+                "Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(
+                    model
+                )
+            )
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
@@ -214,7 +236,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        return super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
 
     def transform_response(
         self,
@@ -253,30 +277,47 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         if should_drop_params and "Extra inputs are not permitted" in error_text:
             return True
-        elif "unknown field: parameter index is not a valid field" in error_text:  # remove index from tool calls
+        elif (
+            "unknown field: parameter index is not a valid field" in error_text
+        ):  # remove index from tool calls
             return True
         elif (
-            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in error_text
+            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value
+            in error_text
         ):  # remove extra-parameters from tool calls
             return True
-        return super().should_retry_llm_api_inside_llm_translation_on_http_error(e=e, litellm_params=litellm_params)
+        return super().should_retry_llm_api_inside_llm_translation_on_http_error(
+            e=e, litellm_params=litellm_params
+        )
 
     @property
     def max_retry_on_unprocessable_entity_error(self) -> int:
         return 2
 
-    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict
+    ) -> dict:
         _messages = cast(Optional[List[AllMessageValues]], request_data.get("messages"))
-        if "unknown field: parameter index is not a valid field" in e.response.text and _messages is not None:
+        if (
+            "unknown field: parameter index is not a valid field" in e.response.text
+            and _messages is not None
+        ):
             litellm.remove_index_from_tool_calls(
                 messages=_messages,
             )
-        elif AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value in e.response.text:
-            request_data = self._drop_extra_params_from_request_data(request_data, e.response.text)
+        elif (
+            AzureFoundryErrorStrings.SET_EXTRA_PARAMETERS_TO_PASS_THROUGH.value
+            in e.response.text
+        ):
+            request_data = self._drop_extra_params_from_request_data(
+                request_data, e.response.text
+            )
         data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
 
-    def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
+    def _drop_extra_params_from_request_data(
+        self, request_data: dict, error_text: str
+    ) -> dict:
         params_to_drop = self._extract_params_to_drop_from_error_text(error_text)
         if params_to_drop:
             for param in params_to_drop:
@@ -284,7 +325,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                     request_data.pop(param, None)
         return request_data
 
-    def _extract_params_to_drop_from_error_text(self, error_text: str) -> Optional[List[str]]:
+    def _extract_params_to_drop_from_error_text(
+        self, error_text: str
+    ) -> Optional[List[str]]:
         """
         Error text looks like this"
             "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.

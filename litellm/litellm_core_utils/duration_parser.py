@@ -8,8 +8,9 @@ duration_in_seconds is used in diff parts of the code base, example
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
@@ -63,12 +64,10 @@ def duration_in_seconds(duration: str) -> int:
         now = time.time()
         current_time = datetime.fromtimestamp(now)
 
-        if current_time.month == 12:
-            target_year = current_time.year + 1
-            target_month = 1
-        else:
-            target_year = current_time.year
-            target_month = current_time.month + value
+        # Calculate target month and year, handling overflow past December
+        total_months = current_time.month - 1 + value  # 0-indexed months
+        target_year = current_time.year + total_months // 12
+        target_month = total_months % 12 + 1  # back to 1-indexed
 
         # Determine the day to set for next month
         target_day = current_time.day
@@ -116,7 +115,7 @@ def get_next_standardized_reset_time(
     - Next reset time at a standardized interval in the specified timezone
     """
     # Set up timezone and normalize current time
-    current_time, timezone = _setup_timezone(current_time, timezone_str)
+    current_time, tz = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
     value, unit = _parse_duration(duration)
@@ -131,7 +130,7 @@ def get_next_standardized_reset_time(
 
     # Handle different time units
     if unit == "d":
-        return _handle_day_reset(current_time, base_midnight, value, timezone)
+        return _handle_day_reset(current_time, base_midnight, value, tz)
     elif unit == "h":
         return _handle_hour_reset(current_time, base_midnight, value)
     elif unit == "m":
@@ -147,22 +146,13 @@ def get_next_standardized_reset_time(
 
 def _setup_timezone(
     current_time: datetime, timezone_str: str = "UTC"
-) -> Tuple[datetime, timezone]:
+) -> Tuple[datetime, tzinfo]:
     """Set up timezone and normalize current time to that timezone."""
     try:
         if timezone_str is None:
-            tz = timezone.utc
+            tz: tzinfo = timezone.utc
         else:
-            # Map common timezone strings to their UTC offsets
-            timezone_map = {
-                "US/Eastern": timezone(timedelta(hours=-4)),  # EDT
-                "US/Pacific": timezone(timedelta(hours=-7)),  # PDT
-                "Asia/Kolkata": timezone(timedelta(hours=5, minutes=30)),  # IST
-                "Asia/Bangkok": timezone(timedelta(hours=7)),  # ICT (Indochina Time)
-                "Europe/London": timezone(timedelta(hours=1)),  # BST
-                "UTC": timezone.utc,
-            }
-            tz = timezone_map.get(timezone_str, timezone.utc)
+            tz = ZoneInfo(timezone_str)
     except Exception:
         # If timezone is invalid, fall back to UTC
         tz = timezone.utc
@@ -190,7 +180,7 @@ def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
 
 
 def _handle_day_reset(
-    current_time: datetime, base_midnight: datetime, value: int, timezone: timezone
+    current_time: datetime, base_midnight: datetime, value: int, tz: tzinfo
 ) -> datetime:
     """Handle day-based reset times."""
     # Handle zero value - immediate expiration
@@ -215,7 +205,7 @@ def _handle_day_reset(
                 minute=0,
                 second=0,
                 microsecond=0,
-                tzinfo=timezone,
+                tzinfo=tz,
             )
         else:
             next_reset = datetime(
@@ -226,7 +216,7 @@ def _handle_day_reset(
                 minute=0,
                 second=0,
                 microsecond=0,
-                tzinfo=timezone,
+                tzinfo=tz,
             )
         return next_reset
     else:  # Custom day value - next interval is value days from current

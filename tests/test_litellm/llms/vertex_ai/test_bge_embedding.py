@@ -193,7 +193,7 @@ def test_vertex_ai_bge_psc_endpoint_url_construction():
     client = HTTPHandler()
     
     def mock_auth_token(*args, **kwargs):
-        return "fake-token", "gen-lang-client-0682925754"
+        return "test-token-123", "test-gcp-project-id-123"
     
     with patch.object(client, "post") as mock_post, patch(
         "litellm.llms.vertex_ai.vertex_embeddings.embedding_handler.VertexEmbedding._ensure_access_token",
@@ -212,7 +212,7 @@ def test_vertex_ai_bge_psc_endpoint_url_construction():
             model="vertex_ai/bge/378943383978115072",
             input=["The food was delicious and the waiter.."],
             api_base="http://10.128.16.2",
-            vertex_project="gen-lang-client-0682925754",
+            vertex_project="test-gcp-project-id-123",
             vertex_location="us-central1",
             client=client,
             use_psc_endpoint_format=True  # Enable PSC endpoint format for this test
@@ -239,7 +239,7 @@ def test_vertex_ai_bge_psc_endpoint_url_construction():
         print("="*50 + "\n")
         
         # Verify the URL is constructed correctly
-        expected_url = "http://10.128.16.2/v1/projects/gen-lang-client-0682925754/locations/us-central1/endpoints/378943383978115072:predict"
+        expected_url = "http://10.128.16.2/v1/projects/test-gcp-project-id-123/locations/us-central1/endpoints/378943383978115072:predict"
         assert api_url_called == expected_url, f"Expected URL: {expected_url}, Got: {api_url_called}"
         
         # Verify bge/ prefix is NOT in the URL

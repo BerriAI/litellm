@@ -1,9 +1,9 @@
-import { PencilAltIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
-import { Button, Icon } from "@tremor/react";
+import { Button } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table, Tooltip } from "antd";
+import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
+import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { AlertingObject } from "./types";
 
 type LoggingCallbacksProps = {
@@ -79,31 +79,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       align: "right",
       render: (_: unknown, record: CallbackRow) => (
         <div className="flex justify-end gap-2">
-          <Tooltip title="Test Callback">
-            <Icon
-              icon={PlayIcon}
-              size="sm"
-              className="cursor-pointer text-indigo-600 hover:text-indigo-700"
-              onClick={() => onTest(record)}
-            />
-          </Tooltip>
-
-          <Tooltip title="Edit Callback">
-            <Icon
-              icon={PencilAltIcon}
-              size="sm"
-              className="cursor-pointer text-indigo-600 hover:text-indigo-700"
-              onClick={() => onEdit(record)}
-            />
-          </Tooltip>
-          <Tooltip title="Delete Callback">
-            <Icon
-              icon={TrashIcon}
-              size="sm"
-              className="cursor-pointer text-indigo-600 hover:text-red-600"
-              onClick={() => onDelete(record)}
-            />
-          </Tooltip>
+          <TableIconActionButton variant="Test" tooltipText="Test Callback" onClick={() => onTest(record)} />
+          <TableIconActionButton variant="Edit" tooltipText="Edit Callback" onClick={() => onEdit(record)} />
+          <TableIconActionButton variant="Delete" tooltipText="Delete Callback" onClick={() => onDelete(record)} />
         </div>
       ),
       width: 240,

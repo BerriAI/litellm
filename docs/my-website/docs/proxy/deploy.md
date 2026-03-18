@@ -4,6 +4,10 @@ import Image from '@theme/IdealImage';
 
 # Docker, Helm, Terraform
 
+:::info No Limits on LiteLLM OSS
+There are **no limits** on the number of users, keys, or teams you can create on LiteLLM OSS.
+:::
+
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
 > Note: Production requires at least 4 CPU cores and 8 GB RAM.
@@ -196,6 +200,7 @@ Example `requirements.txt`
 
 ```shell
 litellm[proxy]==1.57.3 # Specify the litellm version you want to use
+litellm-enterprise
 prometheus_client
 langfuse
 prisma
@@ -358,6 +363,26 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 
 ### Deploy with Database
 ##### Docker, Kubernetes, Helm Chart
+
+:::warning High Traffic Deployments (1000+ RPS)
+
+If you expect high traffic (1000+ requests per second), **Redis is required** to prevent database connection exhaustion and deadlocks.
+
+Add this to your config:
+```yaml
+general_settings:
+  use_redis_transaction_buffer: true
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: your-redis-host
+```
+
+See [Resolve DB Deadlocks](/docs/proxy/db_deadlocks) for details.
+
+:::
 
 Requirements:
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 

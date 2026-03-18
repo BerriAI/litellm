@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_HealthCheckTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_HealthCheckTable" (
     "health_check_id" TEXT NOT NULL,
     "model_name" TEXT NOT NULL,
     "model_id" TEXT,
@@ -18,11 +18,11 @@ CREATE TABLE "LiteLLM_HealthCheckTable" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_HealthCheckTable_model_name_idx" ON "LiteLLM_HealthCheckTable"("model_name");
+CREATE INDEX IF NOT EXISTS "LiteLLM_HealthCheckTable_model_name_idx" ON "LiteLLM_HealthCheckTable"("model_name");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_HealthCheckTable_checked_at_idx" ON "LiteLLM_HealthCheckTable"("checked_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_HealthCheckTable_checked_at_idx" ON "LiteLLM_HealthCheckTable"("checked_at");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_HealthCheckTable_status_idx" ON "LiteLLM_HealthCheckTable"("status");
+CREATE INDEX IF NOT EXISTS "LiteLLM_HealthCheckTable_status_idx" ON "LiteLLM_HealthCheckTable"("status");
 

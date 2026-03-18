@@ -108,6 +108,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_detector_server(
         self,
         contents: List[str],
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[List[IBMDetectorDetection]]:
         """
@@ -142,7 +143,6 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
@@ -172,6 +172,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json
@@ -192,6 +193,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -199,6 +201,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_orchestrator(
         self,
         content: str,
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[IBMDetectorDetection]:
         """
@@ -258,6 +261,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json.get("detections", [])
@@ -278,6 +282,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -472,6 +477,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -500,6 +506,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.pre_call,
                         )
 
                         verbose_proxy_logger.debug(
@@ -557,6 +564,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.during_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -585,6 +593,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.during_call,
                         )
 
                         verbose_proxy_logger.debug(
@@ -673,6 +682,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -702,6 +712,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.post_call,
                         )
 
                         verbose_proxy_logger.debug(

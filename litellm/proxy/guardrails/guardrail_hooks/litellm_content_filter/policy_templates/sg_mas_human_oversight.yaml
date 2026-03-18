@@ -1,0 +1,89 @@
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Human Oversight & Control
+# Blocks requests to build or deploy fully automated financial AI
+# systems for consequential decisions without human-in-the-loop.
+# Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
+category_name: "sg_mas_human_oversight"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks fully automated financial AI decisions without human oversight for consequential actions"
+default_action: "BLOCK"
+
+identifier_words:
+  # Financial products & decisions
+  - "loan approval"
+  - "loan rejection"
+  - "credit approval"
+  - "credit denial"
+  - "insurance claim"
+  - "insurance payout"
+  - "account closure"
+  - "account freeze"
+  - "margin call"
+  - "trade execution"
+  - "fund transfer"
+  - "payment block"
+
+  # Customer impact actions
+  - "customer onboarding"
+  - "KYC rejection"
+  - "AML flag"
+  - "suspicious transaction"
+  - "fraud flag"
+
+additional_block_words:
+  # Full automation
+  - "fully automated"
+  - "fully autonomous"
+  - "no human review"
+  - "no human oversight"
+  - "without human"
+  - "without review"
+  - "without approval"
+  - "auto-approve"
+  - "auto-reject"
+  - "auto-deny"
+  - "auto-execute"
+  - "automatic decision"
+  - "remove human"
+  - "eliminate human"
+  - "bypass review"
+  - "skip review"
+
+  # Speed over safety
+  - "instant decision"
+  - "real-time decision"
+  - "zero-touch"
+  - "straight-through processing"
+
+always_block_keywords:
+  - keyword: "fully automated loan approval without human"
+    severity: "high"
+  - keyword: "auto-reject credit application"
+    severity: "high"
+  - keyword: "remove human oversight from trading"
+    severity: "high"
+  - keyword: "fully autonomous insurance claim decision"
+    severity: "high"
+  - keyword: "bypass review for account closure"
+    severity: "high"
+  - keyword: "eliminate human from KYC decision"
+    severity: "high"
+  - keyword: "auto-execute margin call without review"
+    severity: "high"
+  - keyword: "zero-touch fraud decision"
+    severity: "high"
+
+exceptions:
+  - "human in the loop"
+  - "human on the loop"
+  - "add human review"
+  - "with human review"
+  - "manual review"
+  - "escalation"
+  - "appeals process"
+  - "override mechanism"
+  - "explain what"
+  - "explain how"
+  - "what is"
+  - "research"
+  - "improve oversight"
+  - "compliance"
+  - "governance"

@@ -135,6 +135,81 @@ curl --location --request POST 'http://localhost:4000/v1/videos/video_id/remix' 
 }'
 ```
 
+### Character, Edit, and Extension Routes
+
+OpenAI video routes supported by LiteLLM proxy:
+
+- `POST /v1/videos/characters`
+- `GET /v1/videos/characters/{character_id}`
+- `POST /v1/videos/edits`
+- `POST /v1/videos/extensions`
+
+#### `target_model_names` support on character creation
+
+`POST /v1/videos/characters` supports `target_model_names` for model-based routing (same behavior as video create).
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/characters' \
+--header 'Authorization: Bearer sk-1234' \
+-F 'name=hero' \
+-F 'target_model_names=gpt-4' \
+-F 'video=@/path/to/character.mp4'
+```
+
+When `target_model_names` is used, LiteLLM returns an encoded character ID:
+
+```json
+{
+  "id": "character_...",
+  "object": "character",
+  "created_at": 1712697600,
+  "name": "hero"
+}
+```
+
+Use that encoded ID directly on get:
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/characters/character_...' \
+--header 'Authorization: Bearer sk-1234'
+```
+
+#### Encoded and non-encoded video IDs for edit/extension
+
+Both routes accept either plain or encoded `video.id`:
+
+- `POST /v1/videos/edits`
+- `POST /v1/videos/extensions`
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/edits' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "prompt": "Make this brighter",
+  "video": { "id": "video_..." }
+}'
+```
+
+```bash
+curl --location 'http://localhost:4000/v1/videos/extensions' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+  "prompt": "Continue this scene",
+  "seconds": "4",
+  "video": { "id": "video_..." }
+}'
+```
+
+#### `custom_llm_provider` input sources
+
+For these routes, `custom_llm_provider` may be supplied via:
+
+- header: `custom-llm-provider`
+- query: `?custom_llm_provider=...`
+- body: `custom_llm_provider` (and `extra_body.custom_llm_provider` where supported)
+
 Test OpenAI video generation request
 
 ```bash

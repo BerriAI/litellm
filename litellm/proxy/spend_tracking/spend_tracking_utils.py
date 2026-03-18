@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
@@ -10,12 +11,23 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+)
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -26,8 +38,22 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
-def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
-    if _master_key is None:
+def _get_max_string_length_prompt_in_db() -> int:
+    """
+    Resolve prompt truncation threshold at runtime so values loaded later via
+    proxy config environment_variables are honored.
+    """
+    max_length_str = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
+    if max_length_str is None:
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+    try:
+        return int(max_length_str)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+
+
+def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    if _master_key is None or api_key is None:
         return False
 
     ## string comparison
@@ -55,12 +81,15 @@ def _get_spend_logs_metadata(
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
+    litellm_overhead_time_ms: Optional[float] = None,
+    cost_breakdown: Optional[CostBreakdown] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_project_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -78,6 +107,10 @@ def _get_spend_logs_metadata(
             usage_object=None,
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
+            litellm_overhead_time_ms=None,
+            attempted_retries=None,
+            max_retries=None,
+            cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -87,21 +120,21 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata[key]
-            for key in SpendLogsMetadata.__annotations__.keys()
-            if key in metadata
+            key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+    clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
+    clean_metadata["cost_breakdown"] = cost_breakdown
 
     return clean_metadata
 
@@ -298,6 +331,12 @@ def get_logging_payload(  # noqa: PLR0915
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
+    # Extract overhead from hidden_params if available
+    litellm_overhead_time_ms = None
+    if standard_logging_payload is not None:
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -336,10 +375,20 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
-            else None
+            else (
+                metadata.get("standard_logging_guardrail_information", None)
+                if metadata is not None
+                else None
+            )
         ),
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        litellm_overhead_time_ms=litellm_overhead_time_ms,
+        cost_breakdown=(
+            standard_logging_payload.get("cost_breakdown", None)
             if standard_logging_payload is not None
             else None
         ),
@@ -373,7 +422,10 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
-    agent_id: Optional[str] = kwargs.get("agent_id")
+    agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
+    custom_llm_provider = kwargs.get("custom_llm_provider")
+    raw_model = cast(str, kwargs.get("model") or "")
+    model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
@@ -384,7 +436,7 @@ def get_logging_payload(  # noqa: PLR0915
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
             completionStartTime=_ensure_datetime_utc(completion_start_time),
-            model=kwargs.get("model", "") or "",
+            model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
             organization_id=metadata.get("user_api_key_org_id") or "",
@@ -408,14 +460,17 @@ def get_logging_payload(  # noqa: PLR0915
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            response=_get_response_for_spend_logs_payload(
+                payload=standard_logging_payload, kwargs=kwargs
+            ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params
+                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
             ),
+            request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
@@ -430,7 +485,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values
-        
+
         return payload
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -463,6 +518,14 @@ def _get_session_id_for_spend_log(
 
     # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
+
+
+def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> Optional[int]:
+    """Compute request duration in milliseconds from start and end times."""
+    try:
+        return int((end_time - start_time).total_seconds() * 1000)
+    except Exception:
+        return None
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
@@ -551,21 +614,37 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
+    if _should_store_prompts_and_responses_in_spend_logs():
+        if standard_logging_payload is not None:
+            call_type = standard_logging_payload.get("call_type", "")
+            if call_type == "_arealtime":
+                messages = standard_logging_payload.get("messages")
+                if messages is not None:
+                    try:
+                        return json.dumps(messages, default=str)
+                    except Exception:
+                        return "{}"
     return "{}"
 
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
+    max_string_length_prompt_in_db: Optional[int] = None,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.constants import (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    )
 
     if visited is None:
         visited = set()
+    if max_string_length_prompt_in_db is None:
+        max_string_length_prompt_in_db = _get_max_string_length_prompt_in_db()
 
     # Get the object's memory address to track visited objects
     obj_id = id(request_body)
@@ -575,27 +654,29 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: Any) -> Any:
         if isinstance(value, dict):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db
+            )
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+            if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
                 end_ratio = 0.65
 
                 # Calculate character distribution
-                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
-                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+                start_chars = int(max_string_length_prompt_in_db * start_ratio)
+                end_chars = int(max_string_length_prompt_in_db * end_ratio)
 
                 # Ensure we don't exceed the total limit
                 total_keep = start_chars + end_chars
-                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
-                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+                if total_keep > max_string_length_prompt_in_db:
+                    end_chars = max_string_length_prompt_in_db - start_chars
 
                 # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                if len(value) <= max_string_length_prompt_in_db:
                     return value
 
                 # Calculate how many characters are being skipped
@@ -604,7 +685,8 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
                     f"{value[-end_chars:]}"
                 )
                 return truncated_value
@@ -614,12 +696,79 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+def _convert_to_json_serializable_dict(
+    obj: Any, visited: Optional[set] = None, max_depth: int = 20
+) -> Any:
+    """
+    Convert object to JSON-serializable dict, handling Pydantic models safely.
+
+    This avoids pickle-based deepcopy which fails on Pydantic v2 models
+    containing _thread.RLock objects.
+
+    Args:
+        obj: Object to convert (dict, list, Pydantic model, or primitive)
+        visited: Set of object IDs to track circular references
+        max_depth: Maximum recursion depth to prevent infinite recursion
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if max_depth <= 0:
+        # Return a placeholder if max depth is exceeded
+        return "<max_depth_exceeded>"
+
+    if visited is None:
+        visited = set()
+
+    # Get the object's memory address to track visited objects
+    obj_id = id(obj)
+    if obj_id in visited:
+        # Circular reference detected, return placeholder
+        return "<circular_reference>"
+
+    # Only track mutable objects (dict, list, objects with __dict__)
+    if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
+        visited.add(obj_id)
+
+    try:
+        if isinstance(obj, BaseModel):
+            # Use Pydantic's model_dump() instead of pickle
+            result = obj.model_dump()
+            # Recursively process the dumped dict
+            return _convert_to_json_serializable_dict(result, visited, max_depth - 1)
+        elif isinstance(obj, dict):
+            return {
+                k: _convert_to_json_serializable_dict(v, visited, max_depth - 1)
+                for k, v in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [
+                _convert_to_json_serializable_dict(item, visited, max_depth - 1)
+                for item in obj
+            ]
+        elif hasattr(obj, "__dict__"):
+            # Handle objects with __dict__ attribute
+            return _convert_to_json_serializable_dict(
+                obj.__dict__, visited, max_depth - 1
+            )
+        else:
+            # Primitives (str, int, float, bool, None) pass through
+            return obj
+    finally:
+        # Remove from visited set when done processing this object
+        if obj_id in visited:
+            visited.remove(obj_id)
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
+    kwargs: Optional[dict] = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+
+    If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request = cast(
@@ -627,8 +776,40 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+
+            if kwargs is not None:
+                realtime_tools = kwargs.get("realtime_tools")
+                if realtime_tools:
+                    _request_body = dict(_request_body)
+                    _request_body["tools"] = realtime_tools
+
+            # Apply message redaction if turn_off_message_logging is enabled
+            if kwargs is not None:
+                from litellm.litellm_core_utils.redact_messages import (
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
+
+                # Build model_call_details dict to check redaction settings
+                model_call_details = {
+                    "litellm_params": litellm_params,
+                    "standard_callback_dynamic_params": kwargs.get(
+                        "standard_callback_dynamic_params"
+                    ),
+                }
+
+                # If redaction is enabled, convert to serializable dict before redacting
+                if should_redact_message_logging(model_call_details=model_call_details):
+                    _request_body = _convert_to_json_serializable_dict(_request_body)
+                    perform_redaction(model_call_details=_request_body, result=None)
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
+            if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
+                verbose_proxy_logger.info(
+                    "Spend Log: request body was truncated before storing in DB. %s",
+                    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+                )
             return _request_body_json_str
     return "{}"
 
@@ -660,6 +841,7 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
+    kwargs: Optional[dict] = None,
 ) -> str:
     if payload is None:
         return "{}"
@@ -667,6 +849,34 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
+
+        if kwargs is not None:
+            realtime_tool_calls = kwargs.get("realtime_tool_calls")
+            if realtime_tool_calls and isinstance(response_obj, dict):
+                response_obj = dict(response_obj)
+                response_obj["tool_calls"] = realtime_tool_calls
+
+        # Apply message redaction if turn_off_message_logging is enabled
+        if kwargs is not None:
+            from litellm.litellm_core_utils.redact_messages import (
+                perform_redaction,
+                should_redact_message_logging,
+            )
+
+            litellm_params = kwargs.get("litellm_params", {})
+            model_call_details = {
+                "litellm_params": litellm_params,
+                "standard_callback_dynamic_params": kwargs.get(
+                    "standard_callback_dynamic_params"
+                ),
+            }
+
+            # If redaction is enabled, convert to serializable dict before redacting
+            if should_redact_message_logging(model_call_details=model_call_details):
+                response_obj = _convert_to_json_serializable_dict(response_obj)
+                response_obj = perform_redaction(
+                    model_call_details={}, result=response_obj
+                )
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}
@@ -677,8 +887,15 @@ def _get_response_for_spend_logs_payload(
         if sanitized_response is None:
             return "{}"
         if isinstance(sanitized_response, str):
-            return sanitized_response
-        return safe_dumps(sanitized_response)
+            result_str = sanitized_response
+        else:
+            result_str = safe_dumps(sanitized_response)
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in result_str:
+            verbose_proxy_logger.info(
+                "Spend Log: response was truncated before storing in DB. %s",
+                LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+            )
+        return result_str
     return "{}"
 
 
@@ -686,10 +903,19 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
-    return (
-        general_settings.get("store_prompts_in_spend_logs") is True
-        or get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
-    )
+    # Check general_settings (from DB or proxy_config.yaml)
+    store_prompts_value = general_settings.get("store_prompts_in_spend_logs")
+
+    # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
+    if store_prompts_value is True:
+        return True
+    elif isinstance(store_prompts_value, str):
+        # Case-insensitive string comparison
+        if store_prompts_value.lower() == "true":
+            return True
+
+    # Also check environment variable
+    return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
 
 
 def _get_status_for_spend_log(

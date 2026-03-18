@@ -2,7 +2,7 @@ import httpx
 import json
 import pytest
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
@@ -54,9 +54,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "created_at" in response and isinstance(
         response["created_at"], int
     ), "Response should have an integer 'created_at' field"
-    assert "output" in response and isinstance(
-        response["output"], list
-    ), "Response should have a list 'output' field"
+    if response.get("status") == "completed":
+        assert "output" in response and isinstance(
+            response["output"], list
+        ), "Response should have a list 'output' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -73,7 +74,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),
-        "reasoning": dict,
+        "reasoning": (dict, type(None)),
         "status": str,
         "text": dict,
         "truncation": (str, type(None)),
@@ -91,7 +92,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
             ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
 
     # Check if output has at least one item
-    if final_chunk is True:
+    if final_chunk is True and response.get("status") == "completed":
         assert (
             len(response["output"]) > 0
         ), "Response 'output' field should have at least one item"
@@ -111,6 +112,10 @@ class BaseResponsesAPITest(ABC):
 
     def get_base_completion_reasoning_call_args(self) -> dict:
         """Must return the base completion reasoning call args"""
+        return None
+
+    def get_advanced_model_for_shell_tool(self) -> Optional[str]:
+        """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
         return None
 
     @pytest.mark.parametrize("sync_mode", [True, False])
@@ -170,48 +175,57 @@ class BaseResponsesAPITest(ABC):
                 elif event.type == "response.completed":
                     response_completed_event = event
 
-        # assert the delta chunks content had len(collected_content_string) > 0
-        # this content is typically rendered on chat ui's
-        assert len(collected_content_string) > 0
-
         # assert the response completed event is not None
         assert response_completed_event is not None
 
         # assert the response completed event has a response
         assert response_completed_event.response is not None
 
-        # assert the response completed event includes the usage
-        assert response_completed_event.response.usage is not None
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without content yet - this is valid behavior
+        response_status = response_completed_event.response.status
+        if response_status in ["running", "pending"]:
+            # Running/pending state is acceptable - task started successfully
+            print(f"Response is in '{response_status}' state - async agent API behavior")
+            assert response_completed_event.response.id is not None
+        else:
+            # For completed responses, validate content and usage
+            # assert the delta chunks content had len(collected_content_string) > 0
+            # this content is typically rendered on chat ui's
+            assert len(collected_content_string) > 0
 
-        # basic test assert the usage seems reasonable
-        print(
-            "response_completed_event.response.usage=",
-            response_completed_event.response.usage,
-        )
-        assert (
-            response_completed_event.response.usage.input_tokens > 0
-            and response_completed_event.response.usage.input_tokens < 100
-        )
-        assert (
-            response_completed_event.response.usage.output_tokens > 0
-            and response_completed_event.response.usage.output_tokens < 2000
-        )
-        assert (
-            response_completed_event.response.usage.total_tokens > 0
-            and response_completed_event.response.usage.total_tokens < 2000
-        )
+            # assert the response completed event includes the usage
+            assert response_completed_event.response.usage is not None
 
-        # total tokens should be the sum of input and output tokens
-        assert (
-            response_completed_event.response.usage.total_tokens
-            == response_completed_event.response.usage.input_tokens
-            + response_completed_event.response.usage.output_tokens
-        )
+            # basic test assert the usage seems reasonable
+            print(
+                "response_completed_event.response.usage=",
+                response_completed_event.response.usage,
+            )
+            assert (
+                response_completed_event.response.usage.input_tokens > 0
+                and response_completed_event.response.usage.input_tokens < 100
+            )
+            assert (
+                response_completed_event.response.usage.output_tokens > 0
+                and response_completed_event.response.usage.output_tokens < 2000
+            )
+            assert (
+                response_completed_event.response.usage.total_tokens > 0
+                and response_completed_event.response.usage.total_tokens < 2000
+            )
 
-        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
-        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
-        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
-        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+            # total tokens should be the sum of input and output tokens
+            assert (
+                response_completed_event.response.usage.total_tokens
+                == response_completed_event.response.usage.input_tokens
+                + response_completed_event.response.usage.output_tokens
+            )
+
+            # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+            assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+            assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+            print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
         
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False
@@ -450,7 +464,13 @@ class BaseResponsesAPITest(ABC):
         # Additional assertions specific to tool calls
         assert response is not None
         assert "output" in response
-        assert len(response["output"]) > 0
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without output yet - this is valid behavior
+        if response.get("status") in ["running", "pending"]:
+            print(f"Response is in '{response.get('status')}' state - async agent API behavior")
+            assert response.get("id") is not None
+        else:
+            assert len(response["output"]) > 0
 
     @pytest.mark.asyncio
     async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):
@@ -653,7 +673,7 @@ class BaseResponsesAPITest(ABC):
     async def test_cancel_responses_invalid_response_id(self, sync_mode):
         """Test cancel_responses with invalid response ID should raise appropriate error"""
         base_completion_call_args = self.get_base_completion_call_args()
-        
+
         if sync_mode:
             with pytest.raises(Exception):
                 litellm.cancel_responses(
@@ -664,3 +684,135 @@ class BaseResponsesAPITest(ABC):
                 await litellm.acancel_responses(
                     response_id="invalid_response_id_12345", **base_completion_call_args
                 )
+
+    @pytest.mark.asyncio
+    async def test_responses_api_context_management_server_side_compaction(self):
+        """
+        E2E test for server-side compaction (context_management) on OpenAI Responses API.
+        Passes context_management with compact_threshold; validates that the request is
+        accepted and returns a valid response. Compaction may not run for short inputs.
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = base_completion_call_args.get("model") or ""
+        # Azure does not support compaction context_management (only clear_tool_results)
+        if "azure/" in str(model):
+            pytest.skip(
+                "context_management compaction is not supported on Azure"
+            )
+        if "openai/" not in str(model):
+            pytest.skip(
+                "context_management server-side compaction e2e is only run for OpenAI"
+            )
+        context_management = [{"type": "compaction", "compact_threshold": 200000}]
+        try:
+            response = await litellm.aresponses(
+                input="Short ping to verify context_management is accepted.",
+                max_output_tokens=20,
+                context_management=context_management,
+                **base_completion_call_args,
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.get("id") is not None
+        assert response.get("status") is not None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shell_tool(self):
+        """
+        E2E test for Shell tool on OpenAI Responses API.
+        Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
+        validates that the request is accepted and returns a valid response.
+        Only runs for OpenAI/Azure (Responses API with shell support).
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
+            "model"
+        ) or ""
+        if "openai/" not in str(model) and "azure/" not in str(model):
+            pytest.skip(
+                "Shell tool e2e is only run for OpenAI/Azure Responses API"
+            )
+        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
+        input_msg = "List files in /mnt/data and show python --version."
+        try:
+            response = await litellm.aresponses(
+                **{**base_completion_call_args, "model": model},
+                input=input_msg,
+                max_output_tokens=256,
+                tools=tools,
+                tool_choice="auto",
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        except litellm.BadRequestError as e:
+            if "shell" in str(e).lower() and "not supported" in str(e).lower():
+                pytest.skip(
+                    "Shell tool is not supported for this model (e.g. gpt-4o); use a model that supports shell"
+                )
+            raise
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.get("id") is not None
+        assert response.get("status") is not None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shell_tool_streaming_sees_shell_output(self):
+        """
+        E2E streaming call with Shell tool; validate we can see shell output in the stream.
+
+        Calls aresponses(..., tools=[shell], stream=True), then iterates the stream and
+        asserts at least one event is shell-related or response output contains shell_call.
+        Skips when model does not support shell (e.g. gpt-4o).
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        model = self.get_advanced_model_for_shell_tool() or base_completion_call_args.get(
+            "model"
+        ) or "openai/gpt-5.2"
+        if "openai/" not in str(model):
+            pytest.skip(
+                "Shell tool streaming e2e is only run for OpenAI/Azure Responses API"
+            )
+        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
+        input_msg = "List files in /mnt/data and run python --version."
+
+        stream = await litellm.aresponses(
+            **{**base_completion_call_args, "model": model},
+            input=input_msg,
+            max_output_tokens=512,
+            tools=tools,
+            tool_choice="auto",
+            stream=True,
+        )
+
+
+        event_types_seen = []
+        output_items_with_shell = []
+
+        async for event in stream:
+            print("event=", json.dumps(event, indent=4, default=str))
+            event_type = getattr(event, "type", None) or (
+                event.get("type") if isinstance(event, dict) else None
+            )
+            if event_type is not None:
+                event_types_seen.append(str(event_type))
+            if "shell" in str(event_type or "").lower():
+                output_items_with_shell.append(event_type)
+            response_obj = getattr(event, "response", None) or (
+                event.get("response") if isinstance(event, dict) else None
+            )
+            if response_obj is not None:
+                output = getattr(response_obj, "output", None) or (
+                    response_obj.get("output") if isinstance(response_obj, dict) else None
+                )
+                if isinstance(output, list):
+                    for item in output:
+                        item_type = getattr(item, "type", None) or (
+                            item.get("type") if isinstance(item, dict) else None
+                        )
+                        if item_type and "shell" in str(item_type).lower():
+                            output_items_with_shell.append(item_type)
+
+        assert len(event_types_seen) > 0, "Expected at least one stream event"
+        assert len(output_items_with_shell) > 0, (
+            f"Expected to see shell output in stream; event types seen: {event_types_seen!r}"
+        )

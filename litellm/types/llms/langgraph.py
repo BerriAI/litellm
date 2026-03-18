@@ -65,4 +65,3 @@ class LangGraphParsedResponse(TypedDict):
     content: str
     role: str
     usage: Optional[Dict[str, int]]
-

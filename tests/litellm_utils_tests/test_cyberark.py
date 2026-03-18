@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from litellm._uuid import uuid
 
 # Set up environment variables for testing
-os.environ["CYBERARK_API_KEY"] = "2syke5r262b6je2f4et1x3jptmry3frfx83t65e6417zad632e5qq8a"
+os.environ["CYBERARK_API_KEY"] = "test-cyberark-api-key-909"
 os.environ["CYBERARK_API_BASE"] = "http://0.0.0.0:8080"
 os.environ["CYBERARK_ACCOUNT"] = "default"
 os.environ["CYBERARK_USERNAME"] = "admin"

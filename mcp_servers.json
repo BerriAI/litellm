@@ -14,5 +14,10 @@
     "linear": {
         "sse_url": "https://mcp.linear.app/sse",
         "description": "The Linear MCP server provides programmatic access to Linear's issue tracking capabilities."
+    },
+    "scrapegraph": {
+        "http_url": "https://smithery.ai/api/mcp/scrapegraph-mcp",
+        "sse_url": "https://smithery.ai/api/mcp/scrapegraph-mcp/sse",
+        "description": "The ScrapeGraph MCP server provides programmatic access to ScrapeGraph AI's web scraping capabilities, including smart scraping, web crawling, search scraping, and agentic scraping workflows."
     }
 }

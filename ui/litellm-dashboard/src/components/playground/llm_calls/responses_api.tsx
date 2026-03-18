@@ -3,7 +3,8 @@ import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import type { MCPEvent } from "../../mcp_tools/types";
+import { MCPServer } from "../../mcp_tools/types";
 import {
   CodeInterpreterResult,
   CodeInterpreterState,
@@ -26,12 +27,16 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTools?: string[],
+  policies?: string[],
+  selectedMCPServers?: string[],
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void,
   onMCPEvent?: (event: MCPEvent) => void,
   codeInterpreterEnabled?: boolean,
   onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
+  customBaseUrl?: string,
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -47,7 +52,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -86,15 +91,34 @@ export async function makeOpenAIResponsesRequest(
     // Build tools array
     const tools: any[] = [];
 
-    // Add MCP tools if selected
-    if (selectedMCPTools && selectedMCPTools.length > 0) {
-      tools.push({
-        type: "mcp",
-        server_label: "litellm",
-        server_url: `litellm_proxy/mcp`,
-        require_approval: "never",
-        allowed_tools: selectedMCPTools,
-      });
+    // Add MCP servers if selected
+    if (selectedMCPServers && selectedMCPServers.length > 0) {
+      if (selectedMCPServers.includes("__all__")) {
+        // All MCP Servers selected
+        tools.push({
+          type: "mcp",
+          server_label: "litellm",
+          server_url: `${proxyBaseUrl}/mcp`,
+          require_approval: "never",
+        });
+      } else {
+        // Individual servers selected - create one entry per server
+        selectedMCPServers.forEach((serverId) => {
+          const server = mcpServers?.find((s) => s.server_id === serverId);
+          // Use server_name for both routing and labelling. server_name is the
+          // unique registered identifier; aliases can collide across servers.
+          const routeName = server?.server_name || serverId;
+          const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+
+          tools.push({
+            type: "mcp",
+            server_label: routeName, // unique per request — collisions cause silent tool-routing failures
+            server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
+            require_approval: "never",
+            ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+          });
+        });
+      }
     }
 
     // Add code_interpreter tool if enabled (OpenAI auto-creates container)
@@ -116,6 +140,7 @@ export async function makeOpenAIResponsesRequest(
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
+        ...(policies ? { policies } : {}),
         ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       },
       { signal },
@@ -174,8 +199,7 @@ export async function makeOpenAIResponsesRequest(
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
           const delta = event.delta;
           console.log("Text delta", delta);
-          // skip pure whitespace/newlines
-          if (delta.trim().length > 0) {
+          if (delta.length > 0) {
             updateTextUI("assistant", delta, selectedModel);
 
             // Calculate time to first token

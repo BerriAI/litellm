@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 
 :::info
 - ✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
-- Who is Enterprise for? Companies giving access to 100+ users **OR** 10+ AI use-cases. If you're not sure, [get in touch with us](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) to discuss your needs.
+- Who is Enterprise for? Companies giving access to 100+ users **OR** 10+ AI use-cases. If you're not sure, [get in touch with us](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions) to discuss your needs.
 :::
 
 For companies that need SSO, user management and professional support for LiteLLM Proxy
@@ -36,7 +36,7 @@ Manage Yourself - you can deploy our Docker Image or build a custom image from o
 
 ### What’s the cost of the Self-Managed Enterprise edition?
 
-Self-Managed Enterprise deployments require our team to understand your exact needs. [Get in touch with us to learn more](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Self-Managed Enterprise deployments require our team to understand your exact needs. [Get in touch with us to learn more](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 
 ### How does deployment with Enterprise License work? 
@@ -74,6 +74,18 @@ You can find [supported data regions litellm here](../docs/data_security#support
 
 ## Frequently Asked Questions
 
+### How to set up and verify your Enterprise License
+
+1. Add your license key to the environment:
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+2. Restart LiteLLM Proxy.
+
+3. Open `http://<your-proxy-host>:<port>/` — the Swagger page should show **"Enterprise Edition"** in the description. If it doesn't, check that the key is correct, unexpired, and that the proxy was fully restarted.
+
 ### SLA's + Professional Support
 
 Professional Support can assist with LLM/Provider integrations, deployment, upgrade management, and LLM Provider troubleshooting.  We can’t solve your own infrastructure-related issues but we will guide you to fix them.
@@ -94,7 +106,7 @@ Professional Support can assist with LLM/Provider integrations, deployment, upgr
 
 Pricing is based on usage. We can figure out a price that works for your team, on the call. 
 
-[**Contact Us to learn more**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[**Contact Us to learn more**](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 
 

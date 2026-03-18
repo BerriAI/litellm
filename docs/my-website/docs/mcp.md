@@ -17,9 +17,14 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 ## Overview
 | Feature | Description |
 |---------|-------------|
-| MCP Operations | • List Tools<br/>• Call Tools |
+| MCP Operations | • List Tools<br/>• Call Tools <br/>• Prompts <br/>• Resources |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
+
+:::caution MCP protocol update
+Starting in LiteLLM v1.80.18, the LiteLLM MCP protocol version is `2025-11-25`.<br/> 
+LiteLLM namespaces multiple MCP servers by prefixing each tool name with its MCP server name, so newly created servers now must use names that comply with SEP-986—noncompliant names cannot be added anymore. Existing servers that still violate SEP-986 only emit warnings today, but future MCP-side rollouts may block those names entirely, so we recommend updating any legacy server names proactively before MCP enforcement makes them unusable.
+:::
 
 ## Adding your MCP
 
@@ -59,6 +64,8 @@ model_list:
 **See all available object types:** [Config Settings - supported_db_objects](./proxy/config_settings.md#general_settings---reference)
 
 If `supported_db_objects` is not set, all object types are loaded from the database (default behavior).
+
+For diagnosing connectivity problems after setup, see the [MCP Troubleshooting Guide](./mcp_troubleshoot.md).
 
 <Tabs>
 <TabItem value="ui" label="LiteLLM UI">
@@ -108,6 +115,37 @@ For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport t
 />
 
 <br/>
+<br/>
+
+### OAuth Configuration & Overrides
+
+LiteLLM attempts [OAuth 2.0 Authorization Server Discovery](https://datatracker.ietf.org/doc/html/rfc8414) by default. When you create an MCP server in the UI and set `Authentication: OAuth`, LiteLLM will locate the provider metadata, dynamically register a client, and perform PKCE-based authorization without you providing any additional details.
+
+**Customize the OAuth flow when needed:**
+
+<Image 
+  img={require('../img/mcp_oauth.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+- **Provide explicit client credentials** – If the MCP provider does not offer dynamic client registration or you prefer to manage the client yourself, fill in `client_id`, `client_secret`, and the desired `scopes`.
+- **Override discovery URLs** – In some environments, LiteLLM might not be able to reach the provider's metadata endpoints. Use the optional `authorization_url`, `token_url`, and `registration_url` fields to point LiteLLM directly to the correct endpoints.
+
+<br/>
+
+### AWS SigV4 Authentication
+
+For MCP servers hosted on [AWS Bedrock AgentCore](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html), select **AWS SigV4** as the authentication type. LiteLLM will sign every outgoing MCP request with your AWS credentials using [Signature Version 4](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html).
+
+<Image
+  img={require('../img/mcp_aws_sigv4_ui.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+Fill in your AWS region, service name (defaults to `bedrock-agentcore`), and optionally your AWS access key and secret. If credentials are omitted, LiteLLM falls back to the boto3 credential chain (IAM roles, environment variables, etc.).
+
+[**See full SigV4 setup guide**](./mcp_aws_sigv4.md)
+
 <br/>
 
 ### Static Headers
@@ -182,6 +220,7 @@ mcp_servers:
   - `http` - Streamable HTTP transport
   - `stdio` - Standard Input/Output transport
 - **Command**: The command to execute for stdio transport (required for stdio)
+- **allow_all_keys**: Set to `true` to make the server available to every LiteLLM API key, even if the key/team doesn't list the server in its MCP permissions.
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
@@ -193,6 +232,7 @@ mcp_servers:
   | `bearer_token` | `Authorization: Bearer <auth_value>` |
   | `basic` | `Authorization: Basic <auth_value>` |
   | `authorization` | `Authorization: <auth_value>` |
+  | `aws_sigv4` | Per-request AWS SigV4 signature ([details](./mcp_aws_sigv4.md)) |
 
 - **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
 - **Static Headers**: Optional map of header key/value pairs to include every request to the MCP server.
@@ -232,6 +272,16 @@ mcp_servers:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # AWS SigV4 for Bedrock AgentCore MCP servers
+  agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_region_name: us-east-1
+    aws_service_name: bedrock-agentcore
 
   # Example with extra headers forwarding
   github_mcp:
@@ -309,183 +359,25 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+
 ## Converting OpenAPI Specs to MCP Servers
 
-LiteLLM can automatically convert OpenAPI specifications into MCP servers, allowing you to expose any REST API as MCP tools. This is useful when you have existing APIs with OpenAPI/Swagger documentation and want to make them available as MCP tools.
+LiteLLM can convert OpenAPI specifications into MCP servers, exposing any REST API as MCP tools without writing custom server code.
 
-**Benefits:**
+See the **[MCP from OpenAPI Specs guide](./mcp_openapi.md)** for full setup, usage examples, and how to override tool names and descriptions.
 
-- **Rapid Integration**: Convert existing APIs to MCP tools without writing custom MCP server code
-- **Automatic Tool Generation**: LiteLLM automatically generates MCP tools from your OpenAPI spec
-- **Unified Interface**: Use the same MCP interface for both native MCP servers and OpenAPI-based APIs
-- **Easy Testing**: Test and iterate on API integrations quickly
+## MCP OAuth
 
-**Configuration:**
+LiteLLM supports OAuth 2.0 for MCP servers -- both interactive (PKCE) flows for user-facing clients and machine-to-machine (M2M) `client_credentials` for backend services.
 
-Add your OpenAPI-based MCP server to your `config.yaml`:
+See the **[MCP OAuth guide](./mcp_oauth.md)** for setup instructions, sequence diagrams, and a test server.
 
-```yaml title="config.yaml - OpenAPI to MCP" showLineNumbers
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: sk-xxxxxxx
-
-mcp_servers:
-  # OpenAPI Spec Example - Petstore API
-  petstore_mcp:
-    url: "https://petstore.swagger.io/v2"
-    spec_path: "/path/to/openapi.json"
-    auth_type: "none"
-  
-  # OpenAPI Spec with API Key Authentication
-  my_api_mcp:
-    url: "http://0.0.0.0:8090"
-    spec_path: "/path/to/openapi.json"
-    auth_type: "api_key"
-    auth_value: "your-api-key-here"
-  
-  # OpenAPI Spec with Bearer Token
-  secured_api_mcp:
-    url: "https://api.example.com"
-    spec_path: "/path/to/openapi.json" 
-    auth_type: "bearer_token"
-    auth_value: "your-bearer-token"
-```
-
-**Configuration Parameters:**
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `url` | Yes | The base URL of your API endpoint |
-| `spec_path` | Yes | Path or URL to your OpenAPI specification file (JSON or YAML) |
-| `auth_type` | No | Authentication type: `none`, `api_key`, `bearer_token`, `basic`, `authorization` |
-| `auth_value` | No | Authentication value (required if `auth_type` is set) |
-| `authorization_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
-| `token_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
-| `registration_url` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM auto-discovers it. |
-| `scopes` | No | For `auth_type: oauth2`. Optional override; if omitted LiteLLM uses the scopes advertised by the server. |
-| `description` | No | Optional description for the MCP server |
-| `allowed_tools` | No | List of specific tools to allow (see [MCP Tool Filtering](#mcp-tool-filtering)) |
-| `disallowed_tools` | No | List of specific tools to block (see [MCP Tool Filtering](#mcp-tool-filtering)) |
-
-### Usage Example
-
-Once configured, you can use the OpenAPI-based MCP server just like any other MCP server:
-
-<Tabs>
-<TabItem value="fastmcp" label="Python FastMCP">
-
-```python title="Using OpenAPI-based MCP Server" showLineNumbers
-from fastmcp import Client
-import asyncio
-
-# Standard MCP configuration
-config = {
-    "mcpServers": {
-        "petstore": {
-            "url": "http://localhost:4000/petstore_mcp/mcp",
-            "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
-            }
-        }
-    }
-}
-
-# Create a client that connects to the server
-client = Client(config)
-
-async def main():
-    async with client:
-        # List available tools generated from OpenAPI spec
-        tools = await client.list_tools()
-        print(f"Available tools: {[tool.name for tool in tools]}")
-
-        # Example: Get a pet by ID (from Petstore API)
-        response = await client.call_tool(
-            name="getpetbyid", 
-            arguments={"petId": "1"}
-        )
-        print(f"Response:\n{response}\n")
-
-        # Example: Find pets by status
-        response = await client.call_tool(
-            name="findpetsbystatus", 
-            arguments={"status": "available"}
-        )
-        print(f"Response:\n{response}\n")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-</TabItem>
-
-<TabItem value="cursor" label="Cursor IDE">
-
-```json title="Cursor MCP Configuration for OpenAPI Server" showLineNumbers
-{
-  "mcpServers": {
-    "Petstore": {
-      "url": "http://localhost:4000/petstore_mcp/mcp",
-      "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
-      }
-    }
-  }
-}
-```
-
-</TabItem>
-
-<TabItem value="openai" label="OpenAI Responses API">
-
-```bash title="Using OpenAPI MCP Server with OpenAI" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer $OPENAI_API_KEY" \
---data '{
-    "model": "gpt-4o",
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "petstore",
-            "server_url": "http://localhost:4000/petstore_mcp/mcp",
-            "require_approval": "never",
-            "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
-            }
-        }
-    ],
-    "input": "Find all available pets in the petstore",
-    "tool_choice": "required"
-}'
-```
-
-</TabItem>
-</Tabs>
-
-**How It Works**
-
-1. **Spec Loading**: LiteLLM loads your OpenAPI specification from the provided `spec_path`
-2. **Tool Generation**: Each API endpoint in the spec becomes an MCP tool
-3. **Parameter Mapping**: OpenAPI parameters are automatically mapped to MCP tool parameters
-4. **Request Handling**: When a tool is called, LiteLLM converts the MCP request to the appropriate HTTP request
-5. **Response Translation**: API responses are converted back to MCP format
-
-**OpenAPI Spec Requirements**
-
-Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
-- **Supported versions**: OpenAPI 3.0.x, OpenAPI 3.1.x, Swagger 2.0
-- **Required fields**: `paths`, `info` sections should be properly defined
-- **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
-- **Parameters**: Request parameters should be properly documented with types and descriptions
-
-## MCP Oauth
+<details>
+<summary>Detailed OAuth reference (click to expand)</summary>
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
-This configuration is currently available on the config.yaml, with UI support coming soon.
+You can configure this either in `config.yaml` or directly from the LiteLLM UI (MCP Servers → Authentication → OAuth).
 
 ```yaml
 mcp_servers:
@@ -563,6 +455,8 @@ sequenceDiagram
 
 See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
 
+</details>
+
 
 ## Forwarding Custom Headers to MCP Servers
 
@@ -607,7 +501,7 @@ import asyncio
 config = {
     "mcpServers": {
         "mcp_group": {
-            "url": "http://localhost:4000/mcp",
+            "url": "http://localhost:4000/mcp/",
             "headers": {
                 "x-mcp-servers": "dev_group", # assume this gives access to github, zapier and deepwiki
                 "x-litellm-api-key": "Bearer sk-1234",
@@ -746,8 +640,152 @@ curl --location 'http://localhost:4000/github_mcp/mcp' \
 3. **Header Forwarding**: LiteLLM automatically forwards matching headers to the backend MCP server
 4. **Authentication**: The backend MCP server receives both the configured auth headers and the custom headers
 
----
 
+### Passing Request Headers to STDIO env Vars
+
+If your stdio MCP server needs per-request credentials, you can map HTTP headers from the client request directly into the environment for the launched stdio process. Reference the header name in the env value using the `${X-HEADER_NAME}` syntax. LiteLLM will read that header from the incoming request and set the env var before starting the command.
+
+```json title="Forward X-GITHUB_PERSONAL_ACCESS_TOKEN header to stdio env" showLineNumbers
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${X-GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCESS_TOKEN` header, the proxy forwards that value into the stdio process as the `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable.
+
+## Control MCP Access for End Users
+
+Control which MCP servers end users of your AI application can access (e.g. users of an internal chat UI). Pass the customer ID in the `x-litellm-end-user-id` header to:
+- Enforce object permissions (limit which MCP servers they can access)
+- Apply customer-specific budgets
+- Track spend per customer
+
+**FastMCP Client Example:**
+
+```python title="Track customer spend with x-litellm-end-user-id" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# MCP client configuration with customer tracking
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/github_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-litellm-end-user-id": "customer_123",  # 👈 CUSTOMER ID
+                "Authorization": "Bearer gho_token"
+            }
+        }
+    }
+}
+
+client = Client(config)
+
+async def main():
+    async with client:
+        # All MCP calls will be tracked under customer_123
+        tools = await client.list_tools()
+        result = await client.call_tool(tools[0].name, {})
+        print(f"Tool result: {result}")
+
+asyncio.run(main())
+```
+
+**Cursor IDE Example:**
+
+```json title="Cursor config with customer tracking" showLineNumbers
+{
+  "mcpServers": {
+    "GitHub": {
+      "url": "http://localhost:4000/github_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-litellm-end-user-id": "customer_123"
+      }
+    }
+  }
+}
+```
+
+**What happens:**
+- Customer-specific object permissions are enforced (only allowed MCP servers are accessible)
+- Customer budgets are applied
+- All tool calls are tracked under `customer_123`
+
+[Learn more about customer management →](./proxy/customers)
+
+## Calling the Proxy's /v1/responses Endpoint
+
+When calling your LiteLLM Proxy's `/v1/responses` endpoint to use MCP tools, **always use `server_url: "litellm_proxy"`** in the tools array. This tells the proxy to use its configured MCP servers.
+
+:::important Do not use the full proxy URL
+Using `server_url: "https://your-proxy.com/mcp"` is incorrect when the request is already going to the proxy. The proxy needs the literal value `litellm_proxy` to route to its configured MCP servers.
+:::
+
+```bash title="Correct: Using litellm_proxy" showLineNumbers
+curl --location 'https://your-proxy.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never"
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+### Sending Custom Headers to MCP Servers
+
+To pass custom headers (e.g., API keys, auth tokens) to specific MCP servers, use either:
+
+**Option 1: Request headers** – Add `x-mcp-{server_alias}-{header_name}` to your request headers. The proxy forwards these to the matching MCP server.
+
+```bash
+# Send Authorization header to the "weather2" MCP server
+--header 'x-mcp-weather2-authorization: Bearer your-token'
+
+# Send custom header to the "github" MCP server  
+--header 'x-mcp-github-x-api-key: your-api-key'
+```
+
+**Option 2: Headers in tool config** – Include a `headers` object in the tool definition. These are merged with request headers.
+
+```json
+{
+    "type": "mcp",
+    "server_label": "litellm",
+    "server_url": "litellm_proxy",
+    "require_approval": "never",
+    "headers": {
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-servers": "Zapier_MCP,dev-group",
+        "x-mcp-weather2-authorization": "Bearer your-weather-api-token"
+    }
+}
+```
 
 ## Using your MCP with client side credentials
 
@@ -1431,3 +1469,17 @@ async with stdio_client(server_params) as (read, write):
 
 </TabItem>
 </Tabs>
+
+## FAQ
+
+**Q: How do I use OAuth2 client_credentials (machine-to-machine) with MCP servers behind LiteLLM?**
+
+LiteLLM supports automatic token management for the `client_credentials` grant. Configure `client_id`, `client_secret`, and `token_url` on your MCP server and LiteLLM will fetch, cache, and refresh tokens automatically. See the [MCP OAuth M2M guide](./mcp_oauth.md#machine-to-machine-m2m-auth) for setup instructions.
+
+**Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
+
+The UI keeps only transient state in `sessionStorage` so the OAuth redirect flow can finish; the token is not persisted in the server or database.
+
+**Q: I'm seeing MCP connection errors—what should I check?**
+
+Walk through the [MCP Troubleshooting Guide](./mcp_troubleshoot.md) for step-by-step isolation (Client → LiteLLM vs. LiteLLM → MCP), log examples, and verification methods like MCP Inspector and `curl`.

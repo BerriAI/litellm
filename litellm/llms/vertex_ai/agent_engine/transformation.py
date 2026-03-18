@@ -23,6 +23,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -119,7 +120,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
         # Get project and location from litellm_params or environment
         vertex_project = self.safe_get_vertex_ai_project(litellm_params)
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
+        vertex_location = (
+            self.safe_get_vertex_ai_location(litellm_params) or "us-central1"
+        )
 
         # Build the full resource path if only engine_id was provided
         if not resource_path.startswith("projects/"):
@@ -130,8 +133,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 )
             resource_path = f"projects/{vertex_project}/locations/{vertex_location}/reasoningEngines/{engine_id}"
 
-        # Build the base URL
-        base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+        base_url = get_vertex_base_url(vertex_location)
 
         # Always use :streamQuery endpoint for actual queries
         # The :query endpoint only supports session management methods
@@ -156,7 +158,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             project_id=vertex_project,
         )
 
-        verbose_logger.debug(f"Vertex Agent Engine: Authenticated for project {project_id}")
+        verbose_logger.debug(
+            f"Vertex Agent Engine: Authenticated for project {project_id}"
+        )
 
         return {
             "Authorization": f"Bearer {access_token}",
@@ -300,7 +304,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """
         try:
             content_type = raw_response.headers.get("content-type", "").lower()
-            verbose_logger.debug(f"Vertex Agent Engine response Content-Type: {content_type}")
+            verbose_logger.debug(
+                f"Vertex Agent Engine response Content-Type: {content_type}"
+            )
 
             # Parse the SSE response
             response_text = raw_response.text
@@ -340,7 +346,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(f"Error processing Vertex Agent Engine response: {str(e)}")
+            verbose_logger.error(
+                f"Error processing Vertex Agent Engine response: {str(e)}"
+            )
             raise VertexAgentEngineError(
                 message=f"Error processing response: {str(e)}",
                 status_code=raw_response.status_code,
@@ -398,7 +406,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
             )
 
         # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+        completion_stream = self.get_streaming_response(
+            model=model, raw_response=response
+        )
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -505,4 +515,3 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
     ) -> bool:
         """Agent Engine always returns SSE streams, so we use real streaming."""
         return False
-

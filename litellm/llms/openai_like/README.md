@@ -10,8 +10,9 @@ Instead of creating a full Python module for simple OpenAI-compatible providers,
 
 - `providers.json` - Configuration file for all JSON-based providers
 - `json_loader.py` - Loads and parses the JSON configuration
-- `dynamic_config.py` - Generates Python config classes from JSON
-- `chat/` - Existing OpenAI-like chat completion handlers
+- `dynamic_config.py` - Generates Python config classes from JSON (chat + responses)
+- `chat/` - OpenAI-like chat completion handlers
+- `responses/` - OpenAI-like Responses API handlers
 
 ## Adding a New Provider
 
@@ -96,6 +97,32 @@ response = litellm.completion(
 )
 ```
 
+## Responses API Support
+
+Providers that support the OpenAI Responses API (`/v1/responses`) can declare it via `supported_endpoints`:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com/v1",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  }
+}
+```
+
+This enables `litellm.responses(model="your_provider/model-name", ...)` with zero Python code.
+The provider inherits all request/response handling from OpenAI's Responses API config.
+
+If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
+
+### How It Works
+
+1. `json_loader.py` checks `supported_endpoints` for `/v1/responses`
+2. `dynamic_config.py` generates a responses config class (inherits from `OpenAIResponsesAPIConfig`)
+3. `ProviderConfigManager.get_provider_responses_api_config()` returns the generated config
+4. Request/response transformation is inherited from OpenAI — no custom code needed
+
 ## Benefits
 
 - **Simple**: 2-5 lines of JSON vs 100+ lines of Python
@@ -112,6 +139,10 @@ Use a Python config class if you need:
 - Provider-specific streaming logic
 - Advanced tool calling transformations
 
+For providers that are *mostly* OpenAI-compatible but need small overrides (e.g. preset model handling),
+you can inherit from `OpenAIResponsesAPIConfig` and override only what's needed — see
+`litellm/llms/perplexity/responses/transformation.py` for a minimal example (~40 lines).
+
 ## Implementation Details
 
 ### How It Works
@@ -125,5 +156,6 @@ Use a Python config class if you need:
 
 The JSON system is integrated at:
 - `litellm/litellm_core_utils/get_llm_provider_logic.py` - Provider resolution
-- `litellm/utils.py` - ProviderConfigManager
+- `litellm/utils.py` - ProviderConfigManager (chat + responses)
+- `litellm/responses/main.py` - Responses API routing
 - `litellm/constants.py` - openai_compatible_providers list

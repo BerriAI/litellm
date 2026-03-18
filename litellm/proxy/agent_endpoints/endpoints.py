@@ -8,14 +8,19 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List, Optional
+import asyncio
+import os
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
     AgentMakePublicResponse,
@@ -23,13 +28,71 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
-
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 
 router = APIRouter()
+
+
+def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Raises HTTP 403 if the caller does not have permission to create, update,
+    or delete agents.  Only PROXY_ADMIN users are allowed to perform these
+    write operations.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
+)
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0")
+)
+
+
+async def _check_agent_url_health(
+    agent: AgentResponse,
+) -> Dict[str, Any]:
+    """
+    Perform a GET request against the agent's URL and return the health result.
+
+    Returns a dict with ``agent_id``, ``healthy`` (bool), and an optional
+    ``error`` message.
+    """
+    url = (agent.agent_card_params or {}).get("url")
+    if not url:
+        return {"agent_id": agent.agent_id, "healthy": True}
+
+    try:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.AgentHealthCheck,
+            params={"timeout": AGENT_HEALTH_CHECK_TIMEOUT_SECONDS},
+        )
+        response = await client.get(url)
+        if response.status_code >= 500:
+            return {
+                "agent_id": agent.agent_id,
+                "healthy": False,
+                "error": f"HTTP {response.status_code}",
+            }
+        return {"agent_id": agent.agent_id, "healthy": True}
+    except Exception as exc:
+        return {
+            "agent_id": agent.agent_id,
+            "healthy": False,
+            "error": str(exc),
+        }
 
 
 @router.get(
@@ -40,6 +103,10 @@ router = APIRouter()
 )
 async def get_agents(
     request: Request,
+    health_check: bool = Query(
+        False,
+        description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -50,9 +117,18 @@ async def get_agents(
       -H "Authorization: Bearer your-key" \
     ```
 
+    Pass `?health_check=true` to filter out agents whose URL is unreachable:
+    ```
+    curl -X GET "http://localhost:4000/v1/agents?health_check=true" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+    ```
+
     Returns: List[AgentResponse]
 
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
@@ -60,7 +136,7 @@ async def get_agents(
 
     try:
         returned_agents: List[AgentResponse] = []
-        
+
         # Admin users get all agents
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -72,7 +148,7 @@ async def get_agents(
             allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
                 user_api_key_auth=user_api_key_dict
             )
-            
+
             # If no restrictions (empty list), return all agents
             if len(allowed_agent_ids) == 0:
                 returned_agents = global_agent_registry.get_agent_list()
@@ -80,18 +156,70 @@ async def get_agents(
                 # Filter agents by allowed IDs
                 all_agents = global_agent_registry.get_agent_list()
                 returned_agents = [
-                    agent for agent in all_agents
-                    if agent.agent_id in allowed_agent_ids
+                    agent for agent in all_agents if agent.agent_id in allowed_agent_ids
                 ]
+
+        # Fetch current spend from DB for all returned agents
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is not None:
+            agent_ids = [agent.agent_id for agent in returned_agents]
+            if agent_ids:
+                db_agents = await prisma_client.db.litellm_agentstable.find_many(
+                    where={"agent_id": {"in": agent_ids}},
+                )
+                spend_map = {a.agent_id: a.spend for a in db_agents}
+                for agent in returned_agents:
+                    if agent.agent_id in spend_map:
+                        agent.spend = spend_map[agent.agent_id]
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params[
+                "is_public"
+            ] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
+
+        if health_check:
+            agents_with_url = [
+                agent
+                for agent in returned_agents
+                if (agent.agent_card_params or {}).get("url")
+            ]
+            agents_without_url = [
+                agent
+                for agent in returned_agents
+                if not (agent.agent_card_params or {}).get("url")
+            ]
+            try:
+                health_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_check_agent_url_health(agent) for agent in agents_with_url]
+                    ),
+                    timeout=AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "Agent health check gather timed out after %s seconds",
+                    AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+                )
+                health_results = [
+                    {
+                        "agent_id": agent.agent_id,
+                        "healthy": False,
+                        "error": "Health check timed out",
+                    }
+                    for agent in agents_with_url
+                ]
+            healthy_ids = {
+                result["agent_id"] for result in health_results if result["healthy"]
+            }
+            returned_agents = [
+                agent for agent in agents_with_url if agent.agent_id in healthy_ids
+            ] + agents_without_url
 
         return returned_agents
     except HTTPException:
@@ -163,7 +291,11 @@ async def create_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -215,7 +347,10 @@ async def create_agent(
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
-async def get_agent_by_id(agent_id: str):
+async def get_agent_by_id(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get a specific agent by ID
 
@@ -225,6 +360,8 @@ async def get_agent_by_id(agent_id: str):
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -233,11 +370,29 @@ async def get_agent_by_id(agent_id: str):
     try:
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
-            agent = await prisma_client.db.litellm_agentstable.find_unique(
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": agent_id},
+                include={"object_permission": True},
+            )
+            if agent_row is not None:
+                agent_dict = agent_row.model_dump()
+                if agent_row.object_permission is not None:
+                    try:
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.model_dump()
+                    except Exception:
+                        agent_dict[
+                            "object_permission"
+                        ] = agent_row.object_permission.dict()
+                agent = AgentResponse(**agent_dict)  # type: ignore
+        else:
+            # Agent found in memory — refresh spend from DB
+            db_row = await prisma_client.db.litellm_agentstable.find_unique(
                 where={"agent_id": agent_id}
             )
-            if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+            if db_row is not None:
+                agent.spend = db_row.spend
 
         if agent is None:
             raise HTTPException(
@@ -294,7 +449,11 @@ async def update_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(
@@ -383,7 +542,11 @@ async def patch_agent(
         }'
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(
@@ -435,7 +598,10 @@ async def patch_agent(
     tags=["Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_agent(agent_id: str):
+async def delete_agent(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete an agent
 
@@ -452,7 +618,11 @@ async def delete_agent(agent_id: str):
     }
     ```
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -709,6 +879,7 @@ async def make_agents_public(
         verbose_proxy_logger.exception(f"Error making agent public: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get(
     "/agent/daily/activity",
     tags=["Agent Management"],
@@ -729,6 +900,8 @@ async def get_agent_daily_activity(
     """
     Get daily activity for specific agents or all accessible agents.
     """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:

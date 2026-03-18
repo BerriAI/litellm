@@ -1,6 +1,5 @@
 import React from "react";
-import { Form, Select, Typography } from "antd";
-import { TextInput } from "@tremor/react";
+import { Form, Select, Typography, Input, Button } from "antd";
 import NumericalInput from "../shared/numerical_input";
 
 const { Title } = Typography;
@@ -95,17 +94,18 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
                   <Select.Option value={false}>False</Select.Option>
                 </Select>
               ) : (
-                <TextInput placeholder={`Enter ${entry.key} value`} type="text" />
+                <Input placeholder={`Enter ${entry.key} value`} />
               )}
             </Form.Item>
           </div>
-          <button
-            type="button"
-            className="text-red-500 hover:text-red-700 text-sm"
+          <Button
+            type="text"
+            danger
+            size="small"
             onClick={() => removeEntry(entry.id, entry.key)}
           >
             Remove
-          </button>
+          </Button>
         </div>
       ))}
 
@@ -198,9 +198,9 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
           ) : field.type === "number" ? (
             <NumericalInput step={1} width={400} placeholder={field.description} />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <TextInput placeholder={field.description} type="password" />
+            <Input.Password placeholder={field.description} />
           ) : (
-            <TextInput placeholder={field.description} type="text" />
+            <Input placeholder={field.description} />
           )}
         </Form.Item>
       </div>

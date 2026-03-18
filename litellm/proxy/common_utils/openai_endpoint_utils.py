@@ -61,6 +61,7 @@ def get_custom_llm_provider_from_request_query(request: Request) -> Optional[str
         return request.query_params["custom_llm_provider"]
     return None
 
+
 def get_custom_llm_provider_from_request_headers(request: Request) -> Optional[str]:
     """
     Get the `custom_llm_provider` from the request header `custom-llm-provider`

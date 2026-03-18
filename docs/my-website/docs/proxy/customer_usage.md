@@ -22,19 +22,22 @@ Customer Usage enables you to track spend and usage for individual customers (en
 
 ## How to Track Spend
 
-Track customer spend by including a `user` field in your API requests. The customer ID will be automatically tracked and associated with all spend from that request.
+Track customer spend by including a `user` field in your API requests or by passing a customer ID header. The customer ID will be automatically tracked and associated with all spend from that request.
 
-### Example using cURL
+<Tabs>
+<TabItem value="body" label="Request Body" default>
+
+### Using Request Body
 
 Make a `/chat/completions` call with the `user` field containing your customer ID:
 
-```bash showLineNumbers title="Track spend with customer ID"
+```bash showLineNumbers title="Track spend with customer ID in body"
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
-  --header 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
+  --header 'Authorization: Bearer sk-1234' \
   --data '{
     "model": "gpt-3.5-turbo",
-    "user": "customer-123", # 👈 CUSTOMER ID
+    "user": "customer-123",
     "messages": [
       {
         "role": "user",
@@ -44,7 +47,49 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   }'
 ```
 
-The customer ID (`customer-123`) will be automatically upserted into the database with the new spend. If the customer ID already exists, spend will be incremented.
+</TabItem>
+<TabItem value="header" label="Request Header">
+
+### Using Request Headers
+
+You can also pass the customer ID via HTTP headers. This is useful for tools that support custom headers but don't allow modifying the request body (like Claude Code with `ANTHROPIC_CUSTOM_HEADERS`).
+
+LiteLLM automatically recognizes these standard headers (no configuration required):
+- `x-litellm-customer-id`
+- `x-litellm-end-user-id`
+
+```bash showLineNumbers title="Track spend with customer ID in header"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'x-litellm-customer-id: customer-123' \
+  --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ]
+  }'
+```
+
+#### Using with Claude Code
+
+Claude Code supports custom headers via the `ANTHROPIC_CUSTOM_HEADERS` environment variable. Set it to pass your customer ID:
+
+```bash title="Configure Claude Code with customer tracking"
+export ANTHROPIC_BASE_URL="http://0.0.0.0:4000/v1/messages"
+export ANTHROPIC_API_KEY="sk-1234"
+export ANTHROPIC_CUSTOM_HEADERS="x-litellm-customer-id: my-customer-id"
+```
+
+Now all requests from Claude Code will automatically track spend under `my-customer-id`.
+
+</TabItem>
+</Tabs>
+
+The customer ID will be automatically upserted into the database with the new spend. If the customer ID already exists, spend will be incremented.
 
 ### Example using OpenWebUI
 

@@ -145,11 +145,9 @@ def completion(  # noqa: PLR0915
 
             json_obj = json.loads(vertex_credentials)
 
-            creds = (
-                google.oauth2.service_account.Credentials.from_service_account_info(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
         else:
             creds, _ = google.auth.default(quota_project_id=vertex_project)
@@ -247,7 +245,7 @@ def completion(  # noqa: PLR0915
             instances = [optional_params.copy()]
             instances[0]["prompt"] = prompt
             instances = [
-                json_format.ParseDict(instance_dict, Value())
+                json_format.ParseDict(instance_dict, Value())  # type: ignore[misc]
                 for instance_dict in instances
             ]
             # Will determine the API used based on async parameter
@@ -375,7 +373,7 @@ def completion(  # noqa: PLR0915
             )
             llm_model = aiplatform.gapic.PredictionServiceClient(
                 client_options=client_options,
-                credentials=creds,
+                credentials=creds,  # type: ignore[arg-type]
             )
             request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options}, credentials=...)\n"
             endpoint_path = llm_model.endpoint_path(
@@ -441,7 +439,7 @@ def completion(  # noqa: PLR0915
         model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response.choices[0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(  # type: ignore[assignment]
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(
@@ -614,7 +612,7 @@ async def async_completion(  # noqa: PLR0915
         model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response.choices[0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(  # type: ignore[assignment]
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(

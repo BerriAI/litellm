@@ -285,7 +285,7 @@ async def test_async_ollama_ssl_verify(stream):
     
     # create aiohttp transport with ssl_verify=False
     import aiohttp
-    aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False))
+    aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
     print("aiohttp_session ssl=", aiohttp_session.connector._ssl)
 
     assert litellm_created_session.connector._ssl is False

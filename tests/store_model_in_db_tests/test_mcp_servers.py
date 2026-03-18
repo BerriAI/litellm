@@ -139,7 +139,7 @@ async def test_create_mcp_server_direct():
         mock_get_prisma.return_value = mock_prisma
 
         # Mock server manager
-        mock_manager.add_update_server = mock.AsyncMock()
+        mock_manager.add_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         # Set up test data
@@ -195,7 +195,7 @@ async def test_create_mcp_server_direct():
         # Verify mocks were called
         mock_get_server.assert_called_once_with(mock_prisma, server_id)
         mock_create.assert_called_once()
-        mock_manager.add_update_server.assert_called_once_with(expected_response)
+        mock_manager.add_server.assert_called_once_with(expected_response)
 
 
 @pytest.mark.asyncio
@@ -379,7 +379,7 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_prisma = mock.Mock()
         mock_get_prisma.return_value = mock_prisma
 
-        mock_manager.add_update_server = mock.AsyncMock()
+        mock_manager.update_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         server_id = str(uuid.uuid4())
@@ -417,7 +417,7 @@ async def test_edit_mcp_server_redacts_credentials():
 
         mock_validate.assert_called_once()
         mock_update.assert_awaited_once()
-        mock_manager.add_update_server.assert_called_once_with(updated_server)
+        mock_manager.update_server.assert_called_once_with(updated_server)
         mock_manager.reload_servers_from_database.assert_awaited_once()
 def test_validate_mcp_server_name_direct():
     """

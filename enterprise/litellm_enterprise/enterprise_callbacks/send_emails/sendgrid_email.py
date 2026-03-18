@@ -27,7 +27,8 @@ class SendGridEmailLogger(BaseEmailLogger):
     - SENDGRID_API_KEY
     """
 
-    def __init__(self):
+    def __init__(self, internal_usage_cache=None, **kwargs):
+        super().__init__(internal_usage_cache=internal_usage_cache, **kwargs)
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )

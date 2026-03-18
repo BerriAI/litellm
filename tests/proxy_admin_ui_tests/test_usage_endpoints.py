@@ -132,6 +132,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_view_daily_spend_ui(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -176,6 +177,7 @@ async def test_view_daily_spend_ui(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_global_spend_models(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -268,6 +270,7 @@ async def test_global_spend_models(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_global_spend_keys(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)

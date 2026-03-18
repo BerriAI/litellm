@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
 from litellm.proxy._types import BaseDailySpendTransaction
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     BaseUpdateQueue,
@@ -53,9 +54,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
 
     def __init__(self):
         super().__init__()
-        self.update_queue: asyncio.Queue[Dict[str, BaseDailySpendTransaction]] = (
-            asyncio.Queue()
-        )
+        self.update_queue: asyncio.Queue[
+            Dict[str, BaseDailySpendTransaction]
+        ] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
 
     async def add_update(self, update: Dict[str, BaseDailySpendTransaction]):
         """Enqueue an update."""
@@ -72,9 +73,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         Combine all updates in the queue into a single update.
         This is used to reduce the size of the in-memory queue.
         """
-        updates: List[Dict[str, BaseDailySpendTransaction]] = (
-            await self.flush_all_updates_from_in_memory_queue()
-        )
+        updates: List[
+            Dict[str, BaseDailySpendTransaction]
+        ] = await self.flush_all_updates_from_in_memory_queue()
         aggregated_updates = self.get_aggregated_daily_spend_update_transactions(
             updates
         )
@@ -85,6 +86,11 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
     ) -> Dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
         updates = await self.flush_all_updates_from_in_memory_queue()
+        if len(updates) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - flushed %d daily spend update items from in-memory queue",
+                len(updates),
+            )
         aggregated_daily_spend_update_transactions = (
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 updates

@@ -64,7 +64,12 @@ describe("LoginPage", () => {
 
   it("should render", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null },
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
       isLoading: false,
     });
     (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
@@ -84,7 +89,12 @@ describe("LoginPage", () => {
   it("should call router.replace to dashboard when jwt is valid", async () => {
     const validToken = "valid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null },
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
       isLoading: false,
     });
     (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
@@ -105,7 +115,12 @@ describe("LoginPage", () => {
   it("should call router.push to SSO when jwt is invalid and auto_redirect_to_sso is true", async () => {
     const invalidToken = "invalid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { auto_redirect_to_sso: true, server_root_path: "/", proxy_base_url: null },
+      data: {
+        auto_redirect_to_sso: true,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+      },
       isLoading: false,
     });
     (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
@@ -126,7 +141,12 @@ describe("LoginPage", () => {
   it("should not call router when jwt is invalid and auto_redirect_to_sso is false", async () => {
     const invalidToken = "invalid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { auto_redirect_to_sso: false, server_root_path: "/", proxy_base_url: null },
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
       isLoading: false,
     });
     (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
@@ -150,7 +170,12 @@ describe("LoginPage", () => {
   it("should send user to dashboard when jwt is valid even if auto_redirect_to_sso is true", async () => {
     const validToken = "valid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { auto_redirect_to_sso: true, server_root_path: "/", proxy_base_url: null },
+      data: {
+        auto_redirect_to_sso: true,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+      },
       isLoading: false,
     });
     (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
@@ -168,5 +193,89 @@ describe("LoginPage", () => {
     });
 
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("should show alert when admin_ui_disabled is true", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        admin_ui_disabled: true,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
+      isLoading: false,
+    });
+    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText("Admin UI Disabled")).toBeInTheDocument();
+    });
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("should show Login with SSO button when sso_configured is true", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+  });
+
+  it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
+      isLoading: false,
+    });
+    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+    });
+
+    const ssoButton = screen.getByRole("button", { name: "Login with SSO" });
+    expect(ssoButton).toBeInTheDocument();
+    expect(ssoButton).toBeDisabled();
   });
 });

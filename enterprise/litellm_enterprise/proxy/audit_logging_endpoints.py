@@ -1,13 +1,13 @@
 """
 AUDIT LOGGING
 
-All /audit logging endpoints. Attempting to write these as CRUD endpoints. 
+All /audit logging endpoints. Attempting to write these as CRUD endpoints.
 
 GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +20,27 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+
+def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
+    """
+    Build an OR condition that matches a value inside a JSON column at the
+    given key, checking both before_value and updated_values.
+
+    Uses Prisma's JSON path filtering (PostgreSQL only).
+
+    Example result (team_id="t1"):
+      {"OR": [
+          {"before_value":    {"path": ["team_id"], "string_contains": "t1"}},
+          {"updated_values":  {"path": ["team_id"], "string_contains": "t1"}},
+      ]}
+    """
+    return {
+        "OR": [
+            {"before_value": {"path": [json_key], "string_contains": value}},
+            {"updated_values": {"path": [json_key], "string_contains": value}},
+        ]
+    }
 
 
 @router.get(
@@ -49,6 +70,14 @@ async def get_audit_logs(
     ),
     start_date: Optional[str] = Query(None, description="Filter logs after this date"),
     end_date: Optional[str] = Query(None, description="Filter logs before this date"),
+    object_team_id: Optional[str] = Query(
+        None,
+        description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
+    ),
+    object_key_hash: Optional[str] = Query(
+        None,
+        description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
+    ),
     # Sorting parameters
     sort_by: Optional[str] = Query(
         None,
@@ -60,6 +89,9 @@ async def get_audit_logs(
     Get all audit logs with filtering and pagination.
 
     Returns a paginated response of audit logs matching the specified filters.
+
+    Note: object_team_id and object_key_hash use Prisma JSON path filtering,
+    which requires PostgreSQL.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -82,18 +114,29 @@ async def get_audit_logs(
     if object_id:
         where_conditions["object_id"] = object_id
     if start_date or end_date:
-        date_filter = {}
+        date_filter: Dict[str, Any] = {}
         if start_date:
             date_filter["gte"] = start_date
         if end_date:
             date_filter["lte"] = end_date
         where_conditions["updated_at"] = date_filter
 
+    # JSON field filters (PostgreSQL only) — each filter is AND'd with the
+    # others, but checks both before_value and updated_values internally (OR).
+    if object_team_id:
+        where_conditions["AND"] = where_conditions.get("AND", []) + [
+            _build_json_field_or_condition("team_id", object_team_id)
+        ]
+    if object_key_hash:
+        where_conditions["AND"] = where_conditions.get("AND", []) + [
+            _build_json_field_or_condition("token", object_key_hash)
+        ]
+
     # Build sort conditions
-    order_by = {}
+    order_by: Dict[str, Any] = {}
     if sort_by and isinstance(sort_by, str):
         order_by[sort_by] = sort_order
-    elif sort_order and isinstance(sort_order, str):
+    else:
         order_by["updated_at"] = sort_order  # Default sort by updated_at
 
     # Get paginated results

@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    populate_request_with_path_params,
 )
 
 
@@ -74,6 +75,7 @@ async def test_form_data_parsing():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -122,6 +124,7 @@ async def test_form_data_with_json_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -162,6 +165,7 @@ async def test_form_data_with_invalid_json_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Should raise JSONDecodeError when trying to parse invalid JSON metadata
     with pytest.raises(json.JSONDecodeError):
@@ -188,6 +192,7 @@ async def test_form_data_without_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -218,6 +223,7 @@ async def test_form_data_with_empty_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -255,6 +261,7 @@ async def test_form_data_with_dict_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -285,6 +292,7 @@ async def test_form_data_with_none_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -630,3 +638,200 @@ def test_get_tags_from_request_body_with_null_metadata():
 
     assert result == []
     assert isinstance(result, list)
+
+
+def test_populate_request_with_path_params_adds_query_params():
+    """
+    Test that populate_request_with_path_params correctly adds query parameters
+    like organization_id to the request data.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {
+        "organization_id": "org-123",
+        "user_id": "user-456"
+    }
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data without query params
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify query params were added
+    assert result["organization_id"] == "org-123"
+    assert result["user_id"] == "user-456"
+    # Verify original data is preserved
+    assert result["model"] == "gpt-4"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+def test_populate_request_with_path_params_does_not_overwrite_existing_values():
+    """
+    Test that populate_request_with_path_params does not overwrite existing values
+    in request_data when query params contain the same keys.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {
+        "organization_id": "org-query-param",
+        "model": "gpt-3.5-turbo"
+    }
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data with existing values
+    request_data = {
+        "model": "gpt-4",  # This should NOT be overwritten
+        "organization_id": "org-existing",  # This should NOT be overwritten
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify existing values were NOT overwritten
+    assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
+    # Verify other data is preserved
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.asyncio
+async def test_request_body_with_html_script_tags():
+    """
+    Test that JSON request bodies containing HTML tags like <script> are
+    parsed correctly without being blocked or modified.
+
+    Regression test for GitHub issue #20441:
+    https://github.com/BerriAI/litellm/issues/20441
+
+    LLM message content frequently contains HTML/code snippets.
+    The HTTP parsing layer must not interfere with such content.
+    """
+    test_messages = [
+        {
+            "role": "user",
+            "content": "<script>alert('hello')</script>",
+        },
+        {
+            "role": "user",
+            "content": "<script> test </script>",
+        },
+        {
+            "role": "user",
+            "content": "Can you explain what <script> tags do in HTML?",
+        },
+        {
+            "role": "user",
+            "content": "Here is code: <div><script src='app.js'></script></div>",
+        },
+        {
+            "role": "user",
+            "content": "<img onerror='alert(1)' src='x'>",
+        },
+        {
+            "role": "user",
+            "content": "<iframe src='https://example.com'></iframe>",
+        },
+    ]
+
+    for msg in test_messages:
+        test_payload = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "Hello! How can I help?"},
+                msg,
+            ],
+        }
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=orjson.dumps(test_payload))
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+
+        assert result["model"] == "gpt-4o"
+        assert len(result["messages"]) == 3
+        assert result["messages"][2]["content"] == msg["content"], (
+            f"Message content with HTML was modified during parsing: "
+            f"expected={msg['content']!r}, got={result['messages'][2]['content']!r}"
+        )
+
+
+def test_safe_get_request_headers_caches_on_request_state():
+    """
+    Test that _safe_get_request_headers caches the result on request.state
+    and returns the same object on subsequent calls.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json", "authorization": "Bearer sk-123"}
+    mock_request.state = MagicMock(spec=[])  # empty spec so getattr returns default
+
+    # First call — should create and cache
+    result1 = _safe_get_request_headers(mock_request)
+    assert result1 == {"content-type": "application/json", "authorization": "Bearer sk-123"}
+    assert mock_request.state._cached_headers is result1
+
+    # Second call — should return the cached object (same identity)
+    result2 = _safe_get_request_headers(mock_request)
+    assert result2 is result1
+
+
+def test_safe_get_request_headers_none_request():
+    """
+    Test that _safe_get_request_headers returns empty dict for None request.
+    """
+    result = _safe_get_request_headers(None)
+    assert result == {}
+
+
+def test_safe_get_request_headers_copy_protects_cache():
+    """
+    Test that callers using .copy() before mutation do not corrupt the cache.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {"authorization": "Bearer sk-123", "host": "localhost"}
+    mock_request.state = MagicMock(spec=[])
+
+    original = _safe_get_request_headers(mock_request)
+
+    # Simulate what mutation call sites do: copy then pop
+    mutable = _safe_get_request_headers(mock_request).copy()
+    mutable.pop("authorization", None)
+
+    # Cache must be unaffected
+    assert "authorization" in _safe_get_request_headers(mock_request)
+    assert _safe_get_request_headers(mock_request) is original
+
+
+def test_safe_get_request_headers_state_unavailable():
+    """
+    Test that _safe_get_request_headers still returns headers when
+    request.state rejects attribute writes (the except path on the cache-write).
+    """
+    class ReadOnlyState:
+        """State object that allows reads but raises on writes."""
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only state")
+
+        def __getattr__(self, name):
+            return None  # _cached_headers not found → triggers fresh read
+
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.state = ReadOnlyState()
+
+    result = _safe_get_request_headers(mock_request)
+    assert result == {"content-type": "application/json"}

@@ -27,21 +27,6 @@ class BaseOCRTest(ABC):
         """Must return the base OCR call args for the specific provider"""
         pass
 
-    @pytest.fixture(autouse=True)
-    def _handle_rate_limits(self):
-        """Fixture to handle rate limit errors for all test methods"""
-        try:
-            yield
-        except litellm.RateLimitError as e:
-            # Check if it's a quota exceeded error
-            error_msg = str(e)
-            if "Quota exceeded" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                pytest.skip(f"Quota exceeded - {error_msg}")
-            else:
-                pytest.skip(f"Rate limit exceeded - {error_msg}")
-        except litellm.InternalServerError:
-            pytest.skip("Model is overloaded")
-
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_ocr_with_url(self, sync_mode):
@@ -117,9 +102,20 @@ class BaseOCRTest(ABC):
             assert response_cost > 0, "Response cost should be greater than 0"
             print("response_cost=", response_cost)
             
-        except (litellm.RateLimitError, litellm.InternalServerError):
-            # Re-raise these errors so the fixture can handle them
-            raise
+        except litellm.RateLimitError as e:
+            error_msg = str(e)
+            if "Quota exceeded" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                pytest.skip(f"Quota exceeded - {error_msg}")
+            else:
+                pytest.skip(f"Rate limit exceeded - {error_msg}")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.BadRequestError as e:
+            error_msg = str(e)
+            if "URL_REJECTED" in error_msg or "Cannot fetch content from the provided URL" in error_msg:
+                pytest.skip(f"URL rejected by provider - {error_msg}")
+            else:
+                pytest.fail(f"OCR call failed: {str(e)}")
         except Exception as e:
             pytest.fail(f"OCR call failed: {str(e)}")
 
@@ -163,9 +159,20 @@ class BaseOCRTest(ABC):
                 print(f"  - pages_processed: {response.usage_info.pages_processed}")
                 print(f"  - doc_size_bytes: {response.usage_info.doc_size_bytes}")
         
-        except (litellm.RateLimitError, litellm.InternalServerError):
-            # Re-raise these errors so the fixture can handle them
-            raise
+        except litellm.RateLimitError as e:
+            error_msg = str(e)
+            if "Quota exceeded" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                pytest.skip(f"Quota exceeded - {error_msg}")
+            else:
+                pytest.skip(f"Rate limit exceeded - {error_msg}")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+        except litellm.BadRequestError as e:
+            error_msg = str(e)
+            if "URL_REJECTED" in error_msg or "Cannot fetch content from the provided URL" in error_msg:
+                pytest.skip(f"URL rejected by provider - {error_msg}")
+            else:
+                pytest.fail(f"OCR response structure test failed: {str(e)}")
         except Exception as e:
             pytest.fail(f"OCR response structure test failed: {str(e)}")
 

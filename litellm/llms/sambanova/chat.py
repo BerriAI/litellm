@@ -117,10 +117,11 @@ class SambanovaConfig(OpenAIGPTConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Transform messages to handle content list conversion.
-        
+
         SambaNova API doesn't support content as a list - only string content.
         This converts content lists like [{"type": "text", "text": "..."}] to strings.
         """
+
         async def _async_transform():
             return handle_messages_with_content_list_to_str_conversion(messages)
 

@@ -1,0 +1,12 @@
+# LiteLLM Trivy Ignore File
+# CVEs listed here are temporarily allowlisted pending fixes
+
+# Next.js vulnerabilities in UI dashboard (next@14.2.35)
+# Allowlisted: 2026-01-31, 7-day fix timeline
+# Fix: Upgrade to Next.js 15.5.10+ or 16.1.5+
+
+# HIGH: DoS via request deserialization
+GHSA-h25m-26qc-wcjf
+
+# MEDIUM: Image Optimizer DoS
+CVE-2025-59471

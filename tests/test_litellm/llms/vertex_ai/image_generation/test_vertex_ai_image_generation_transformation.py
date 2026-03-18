@@ -65,6 +65,42 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert self.config._map_size_to_aspect_ratio("896x1280") == "3:4"
         assert self.config._map_size_to_aspect_ratio("unknown") == "1:1"  # default
 
+    def test_get_supported_openai_params_includes_native_gemini_params(self):
+        """Test that native Gemini imageConfig params are supported"""
+        supported = self.config.get_supported_openai_params("gemini-3-pro-image-preview")
+        assert "aspectRatio" in supported
+        assert "aspect_ratio" in supported
+        assert "imageSize" in supported
+        assert "image_size" in supported
+
+    def test_map_openai_params_aspect_ratio_camel_case(self):
+        """Test mapping native aspectRatio parameter"""
+        result = self.config.map_openai_params(
+            {"aspectRatio": "9:16"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["aspectRatio"] == "9:16"
+
+    def test_map_openai_params_aspect_ratio_snake_case(self):
+        """Test mapping native aspect_ratio parameter"""
+        result = self.config.map_openai_params(
+            {"aspect_ratio": "16:9"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["aspectRatio"] == "16:9"
+
+    def test_map_openai_params_image_size_camel_case(self):
+        """Test mapping native imageSize parameter"""
+        result = self.config.map_openai_params(
+            {"imageSize": "4K"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["imageSize"] == "4K"
+
+    def test_map_openai_params_image_size_snake_case(self):
+        """Test mapping native image_size parameter"""
+        result = self.config.map_openai_params(
+            {"image_size": "2K"}, {}, "gemini-3-pro-image-preview", False
+        )
+        assert result["imageSize"] == "2K"
+
     def test_transform_image_generation_request_basic(self):
         """Test basic request transformation"""
         request = self.config.transform_image_generation_request(
@@ -229,6 +265,47 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert len(result.data) == 2
         assert result.data[0].b64_json == "image1"
         assert result.data[1].b64_json == "image2"
+
+    def test_transform_image_generation_response_signature(self):
+        """Test response transformation includes thoughtSignature for Gemini 3 Pro"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                },
+                                "thoughtSignature": "test_signature_abc123",
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        model_response = ImageResponse()
+        result = self.config.transform_image_generation_response(
+            model="gemini-3-pro-image-preview",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.data) == 1
+        assert result.data[0].b64_json == "base64_encoded_image_data"
+        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
 
 
 class TestVertexAIImagenImageGenerationConfig:

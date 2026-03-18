@@ -55,6 +55,33 @@ async def new_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    # Validate budget values are not negative
+    if budget_obj.max_budget is not None and budget_obj.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {budget_obj.max_budget}"
+            },
+        )
+    if budget_obj.soft_budget is not None and budget_obj.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {budget_obj.soft_budget}"
+            },
+        )
+
+    # Validate model_max_budget if present
+    if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(budget_obj.model_max_budget)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)})
+
     # if no budget_reset_at date is set, but a budget_duration is given, then set budget_reset_at initially to the first completed duration interval in future
     if budget_obj.budget_reset_at is None and budget_obj.budget_duration is not None:
         budget_obj.budget_reset_at = datetime.utcnow() + timedelta(
@@ -106,6 +133,33 @@ async def update_budget(
         )
     if budget_obj.budget_id is None:
         raise HTTPException(status_code=400, detail={"error": "budget_id is required"})
+
+    # Validate budget values are not negative
+    if budget_obj.max_budget is not None and budget_obj.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {budget_obj.max_budget}"
+            },
+        )
+    if budget_obj.soft_budget is not None and budget_obj.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {budget_obj.soft_budget}"
+            },
+        )
+
+    # Validate model_max_budget if present in update
+    if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(budget_obj.model_max_budget)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)})
 
     response = await prisma_client.db.litellm_budgettable.update(
         where={"budget_id": budget_obj.budget_id},
@@ -202,6 +256,7 @@ async def budget_settings(
         "budget_duration": {"type": "String"},
         "max_budget": {"type": "Float"},
         "soft_budget": {"type": "Float"},
+        "model_max_budget": {"type": "Object"},
     }
 
     return_val = []

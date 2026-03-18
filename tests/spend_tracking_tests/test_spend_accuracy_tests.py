@@ -2,6 +2,7 @@ import pytest
 import asyncio
 import aiohttp
 import json
+import time
 from httpx import AsyncClient
 from typing import Any, Optional
 from litellm._uuid import uuid
@@ -11,38 +12,26 @@ Tests to run
 
 Basic Tests:
 1. Basic Spend Accuracy Test:
-    - 1 Request costs $0.037
-    - Make 12 requests 
-    - Expect the spend for each of the following to be 12 * $0.037
-        Key: $0.444 (call /info endpoint for each object to validate)
-        Team: $0.444
-        User: $0.444
-        Org: $0.444
-        End User: $0.444
+    - Make 1 calibration request, poll for spend to derive SPEND_PER_REQUEST
+    - Make N-1 more requests (N total)
+    - Expect the spend for each of the following to be N * SPEND_PER_REQUEST
+        Key, Team, User, Org (call /info endpoint for each object to validate)
 
 2. Long term spend accuracy test (with 2 bursts of requests)
-    - 1 Request costs $0.037
-    - Burst 1: 12 requests
-    - Burst 2: 22 requests
-    
-    - Expect the spend for each of the following to be (12 + 22) * $0.037
-        Key: $1.296
-        Team: $1.296
-        User: $1.296
-        Org: $1.296
-        End User: $1.296
+    - Burst 1: Make requests, derive SPEND_PER_REQUEST from first request
+    - Burst 2: Make more requests
+    - Verify total spend = (burst1 + burst2) * SPEND_PER_REQUEST
 
 Additional Test Scenarios:
 
 3. Concurrent Request Accuracy Test:
     - Make 20 concurrent requests
-    - Verify total spend is 20 * $0.037
     - Check for race conditions in spend tracking
 
 4. Error Case Test:
-    - Make 10 successful requests ($0.037 each)
+    - Make 10 successful requests
     - Make 5 failed requests
-    - Verify spend is only counted for successful requests (10 * $0.037)
+    - Verify spend is only counted for successful requests
 
 5. Mixed Request Type Test:
     - Make different types of requests with varying costs
@@ -113,96 +102,64 @@ async def get_spend_info(session, entity_type: str, entity_id: str):
         return await response.json()
 
 
+async def poll_key_spend_until_nonzero(
+    session, key: str, timeout: int = 120, interval: int = 10
+):
+    """Poll key spend until it becomes non-zero or timeout is reached."""
+    start = time.time()
+    while time.time() - start < timeout:
+        key_info = await get_spend_info(session, "key", key)
+        spend = key_info["info"]["spend"]
+        if spend > 0:
+            print(f"Key spend became non-zero ({spend}) after {time.time() - start:.1f}s")
+            return spend
+        print(f"Key spend still 0.0, waiting... ({time.time() - start:.1f}s elapsed)")
+        await asyncio.sleep(interval)
+    raise TimeoutError(
+        f"Key spend remained 0.0 after {timeout}s — batch writer may not be running"
+    )
+
+
+async def calibrate_spend_per_request(session, key: str, max_retries: int = 5):
+    """
+    Make a single calibration request and poll for its spend to derive SPEND_PER_REQUEST.
+    Fails fast with pytest.fail() if spend cannot be determined.
+    """
+    response = await chat_completion(session, key)
+    print(f"Calibration request completed: {response}")
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            spend = await poll_key_spend_until_nonzero(
+                session, key, timeout=120, interval=10
+            )
+            print(
+                f"Calibrated SPEND_PER_REQUEST = {spend} "
+                f"(attempt {attempt}/{max_retries})"
+            )
+            return spend
+        except TimeoutError:
+            if attempt < max_retries:
+                print(
+                    f"Calibration attempt {attempt}/{max_retries} timed out, retrying..."
+                )
+            else:
+                pytest.fail(
+                    f"Failed to calibrate SPEND_PER_REQUEST after {max_retries} attempts. "
+                    "The batch writer may not be running or the model may have 0 cost."
+                )
+
+
 @pytest.mark.asyncio
 async def test_basic_spend_accuracy():
     """
     Test basic spend accuracy across different entities:
     1. Create org, team, user, and key
-    2. Make 12 requests at $0.037 each
-    3. Verify spend accuracy for key, team, user, org, and end user
+    2. Make 1 calibration request to derive SPEND_PER_REQUEST
+    3. Make remaining requests (NUM_LLM_REQUESTS total)
+    4. Verify spend accuracy for key, team, user, and org
     """
-    SPEND_PER_REQUEST = 3.75 * 10**-5
     NUM_LLM_REQUESTS = 20
-    expected_spend = NUM_LLM_REQUESTS * SPEND_PER_REQUEST  # 12 requests at $0.037 each
-
-    # Add tolerance constant at the top of the test
-    TOLERANCE = 1e-10  # Small number to account for floating-point precision
-
-    async with aiohttp.ClientSession() as session:
-        # Create organization
-        org_response = await create_organization(
-            session=session, organization_alias=f"test-org-{uuid.uuid4()}"
-        )
-        print("org_response: ", org_response)
-        org_id = org_response["organization_id"]
-
-        # Create team under organization
-        team_response = await create_team(session, org_id)
-        print("team_response: ", team_response)
-        team_id = team_response["team_id"]
-
-        # Create user
-        user_response = await create_user(session, org_id)
-        print("user_response: ", user_response)
-        user_id = user_response["user_id"]
-
-        # Generate key
-        key_response = await generate_key(session, user_id, team_id)
-        print("key_response: ", key_response)
-        key = key_response["key"]
-
-        # Make 12 requests
-        for _ in range(NUM_LLM_REQUESTS):
-            response = await chat_completion(session, key)
-            print("response: ", response)
-
-        # wait 15 seconds for spend to be updated
-        await asyncio.sleep(15)
-
-        # Get spend information for each entity
-        key_info = await get_spend_info(session, "key", key)
-        print("key_info: ", key_info)
-        team_info = await get_spend_info(session, "team", team_id)
-        print("team_info: ", team_info)
-        user_info = await get_spend_info(session, "user", user_id)
-        print("user_info: ", user_info)
-        org_info = await get_spend_info(session, "organization", org_id)
-        print("org_info: ", org_info)
-
-        # Verify spend for each entity
-        assert (
-            abs(key_info["info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"Key spend {key_info['info']['spend']} does not match expected {expected_spend}"
-
-        assert (
-            abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"User spend {user_info['info']['spend']} does not match expected {expected_spend}"
-
-        assert (
-            abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE
-        ), f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
-
-        assert (
-            abs(org_info["spend"] - expected_spend) < TOLERANCE
-        ), f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
-
-
-@pytest.mark.asyncio
-async def test_long_term_spend_accuracy_with_bursts():
-    """
-    Test long-term spend accuracy with multiple bursts of requests:
-    1. Create org, team, user, and key
-    2. Burst 1: Make 12 requests
-    3. Burst 2: Make 22 more requests
-    4. Verify the total spend (34 requests) is tracked accurately across all entities
-    """
-    SPEND_PER_REQUEST = 3.75 * 10**-5  # Cost per request
-    BURST_1_REQUESTS = 22  # Number of requests in first burst
-    BURST_2_REQUESTS = 12  # Number of requests in second burst
-    TOTAL_REQUESTS = BURST_1_REQUESTS + BURST_2_REQUESTS
-    expected_spend = TOTAL_REQUESTS * SPEND_PER_REQUEST
-
-    # Tolerance for floating-point comparison
     TOLERANCE = 1e-10
 
     async with aiohttp.ClientSession() as session:
@@ -228,27 +185,143 @@ async def test_long_term_spend_accuracy_with_bursts():
         print("key_response: ", key_response)
         key = key_response["key"]
 
-        # First burst: 12 requests
-        print(f"Starting first burst of {BURST_1_REQUESTS} requests...")
-        for i in range(BURST_1_REQUESTS):
-            response = await chat_completion(session, key)
-            print(f"Burst 1 - Request {i+1}/{BURST_1_REQUESTS} completed")
+        # Calibrate: make 1 request and derive SPEND_PER_REQUEST
+        spend_per_request = await calibrate_spend_per_request(session, key)
+        expected_spend = NUM_LLM_REQUESTS * spend_per_request
+        print(f"SPEND_PER_REQUEST={spend_per_request}, expected_spend={expected_spend}")
 
-        # Wait for spend to be updated
-        await asyncio.sleep(15)
+        # Make remaining requests (1 already made during calibration)
+        for i in range(NUM_LLM_REQUESTS - 1):
+            response = await chat_completion(session, key)
+            print(f"Request {i + 2}/{NUM_LLM_REQUESTS} completed")
+
+        # Poll until batch writer has flushed all spend
+        start = time.time()
+        while time.time() - start < 120:
+            key_info = await get_spend_info(session, "key", key)
+            current_spend = key_info["info"]["spend"]
+            if abs(current_spend - expected_spend) < TOLERANCE:
+                print(f"Key spend reached expected {expected_spend} after {time.time() - start:.1f}s")
+                break
+            print(f"Key spend {current_spend}, expected {expected_spend}, waiting...")
+            await asyncio.sleep(10)
+
+        # Allow extra time for all entity spend aggregations to complete
+        await asyncio.sleep(5)
+
+        # Get spend information for each entity
+        key_info = await get_spend_info(session, "key", key)
+        print("key_info: ", key_info)
+        team_info = await get_spend_info(session, "team", team_id)
+        print("team_info: ", team_info)
+        user_info = await get_spend_info(session, "user", user_id)
+        print("user_info: ", user_info)
+        org_info = await get_spend_info(session, "organization", org_id)
+        print("org_info: ", org_info)
+
+        # Verify spend for each entity
+        assert (
+            abs(key_info["info"]["spend"] - expected_spend) < TOLERANCE
+        ), f"Key spend {key_info['info']['spend']} does not match expected {expected_spend}"
+
+        assert (
+            abs(user_info["user_info"]["spend"] - expected_spend) < TOLERANCE
+        ), f"User spend {user_info['user_info']['spend']} does not match expected {expected_spend}"
+
+        assert (
+            abs(team_info["team_info"]["spend"] - expected_spend) < TOLERANCE
+        ), f"Team spend {team_info['team_info']['spend']} does not match expected {expected_spend}"
+
+        assert (
+            abs(org_info["spend"] - expected_spend) < TOLERANCE
+        ), f"Organization spend {org_info['spend']} does not match expected {expected_spend}"
+
+
+@pytest.mark.asyncio
+async def test_long_term_spend_accuracy_with_bursts():
+    """
+    Test long-term spend accuracy with multiple bursts of requests:
+    1. Create org, team, user, and key
+    2. Calibrate SPEND_PER_REQUEST from first request
+    3. Burst 1: Make remaining requests
+    4. Burst 2: Make more requests
+    5. Verify the total spend is tracked accurately across all entities
+    """
+    BURST_1_REQUESTS = 22
+    BURST_2_REQUESTS = 12
+    TOTAL_REQUESTS = BURST_1_REQUESTS + BURST_2_REQUESTS
+    TOLERANCE = 1e-10
+
+    async with aiohttp.ClientSession() as session:
+        # Create organization
+        org_response = await create_organization(
+            session=session, organization_alias=f"test-org-{uuid.uuid4()}"
+        )
+        print("org_response: ", org_response)
+        org_id = org_response["organization_id"]
+
+        # Create team under organization
+        team_response = await create_team(session, org_id)
+        print("team_response: ", team_response)
+        team_id = team_response["team_id"]
+
+        # Create user
+        user_response = await create_user(session, org_id)
+        print("user_response: ", user_response)
+        user_id = user_response["user_id"]
+
+        # Generate key
+        key_response = await generate_key(session, user_id, team_id)
+        print("key_response: ", key_response)
+        key = key_response["key"]
+
+        # Calibrate: make 1 request and derive SPEND_PER_REQUEST
+        spend_per_request = await calibrate_spend_per_request(session, key)
+        expected_spend = TOTAL_REQUESTS * spend_per_request
+        print(f"SPEND_PER_REQUEST={spend_per_request}, expected_spend={expected_spend}")
+
+        # First burst: remaining requests (1 already made during calibration)
+        print(f"Starting first burst ({BURST_1_REQUESTS - 1} remaining requests)...")
+        for i in range(BURST_1_REQUESTS - 1):
+            response = await chat_completion(session, key)
+            print(f"Burst 1 - Request {i + 2}/{BURST_1_REQUESTS} completed")
+
+        # Poll until batch writer has flushed burst 1 spend
+        burst_1_expected = BURST_1_REQUESTS * spend_per_request
+        start = time.time()
+        while time.time() - start < 120:
+            key_info_check = await get_spend_info(session, "key", key)
+            current_spend = key_info_check["info"]["spend"]
+            if abs(current_spend - burst_1_expected) < TOLERANCE:
+                print(f"Burst 1 spend reached expected {burst_1_expected} after {time.time() - start:.1f}s")
+                break
+            print(f"Key spend {current_spend}, expected {burst_1_expected}, waiting...")
+            await asyncio.sleep(10)
 
         # Check intermediate spend
         intermediate_key_info = await get_spend_info(session, "key", key)
         print(f"After Burst 1 - Key spend: {intermediate_key_info['info']['spend']}")
 
-        # Second burst: 22 requests
+        # Second burst
         print(f"Starting second burst of {BURST_2_REQUESTS} requests...")
         for i in range(BURST_2_REQUESTS):
             response = await chat_completion(session, key)
-            print(f"Burst 2 - Request {i+1}/{BURST_2_REQUESTS} completed")
+            print(f"Burst 2 - Request {i + 1}/{BURST_2_REQUESTS} completed")
 
-        # Wait for spend to be updated
-        await asyncio.sleep(15)
+        # Poll until key spend reflects burst 2
+        burst_1_spend = intermediate_key_info["info"]["spend"]
+        start = time.time()
+        while time.time() - start < 120:
+            key_info_check = await get_spend_info(session, "key", key)
+            current_spend = key_info_check["info"]["spend"]
+            if current_spend > burst_1_spend:
+                print(f"Key spend increased to {current_spend} after {time.time() - start:.1f}s")
+                break
+            print(f"Key spend still {current_spend}, waiting for burst 2 flush...")
+            await asyncio.sleep(10)
+
+        # Allow extra time for all entity spend aggregations
+        await asyncio.sleep(5)
 
         # Get final spend information for each entity
         key_info = await get_spend_info(session, "key", key)

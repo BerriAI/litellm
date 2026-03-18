@@ -3,7 +3,7 @@
 
 :::info
 
-You need a LiteLLM License to unlock this feature. [Grab time](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat), to get one today!
+You need a LiteLLM License to unlock this feature. [Grab time](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions), to get one today!
 
 :::
 

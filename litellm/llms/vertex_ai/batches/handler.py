@@ -8,6 +8,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
@@ -107,11 +108,20 @@ class VertexAIBatchPrediction(VertexLLM):
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
-        response = await client.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(vertex_batch_request),
-        )
+        try:
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(vertex_batch_request),
+            )
+        except httpx.HTTPStatusError as e:
+            error_body = e.response.text
+            litellm.verbose_logger.error(
+                "Vertex AI batch create failed: status=%s, body=%s",
+                e.response.status_code,
+                error_body[:1000],
+            )
+            raise
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
@@ -128,7 +138,8 @@ class VertexAIBatchPrediction(VertexLLM):
     ) -> str:
         """Return the base url for the vertex garden models"""
         #  POST https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/batchPredictionJobs
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
+        base_url = get_vertex_base_url(vertex_location)
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
 
     def retrieve_batch(
         self,
@@ -140,6 +151,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
+        logging_obj: Optional[Any] = None,
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         sync_handler = _get_httpx_client()
 
@@ -185,7 +197,30 @@ class VertexAIBatchPrediction(VertexLLM):
             return self._async_retrieve_batch(
                 api_base=api_base,
                 headers=headers,
+                logging_obj=logging_obj,
             )
+
+        # Log the request using logging_obj if available
+        if logging_obj is not None:
+            from litellm.litellm_core_utils.litellm_logging import Logging
+
+            if isinstance(logging_obj, Logging):
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": api_base,
+                        "headers": headers,
+                        "request_str": (
+                            f"\nGET Request Sent from LiteLLM:\n"
+                            f"curl -X GET \\\n"
+                            f"{api_base} \\\n"
+                            f"-H 'Authorization: Bearer ***REDACTED***' \\\n"
+                            f"-H 'Content-Type: application/json; charset=utf-8'\n"
+                        ),
+                    },
+                )
 
         response = sync_handler.get(
             url=api_base,
@@ -205,10 +240,34 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         api_base: str,
         headers: Dict[str, str],
+        logging_obj: Optional[Any] = None,
     ) -> LiteLLMBatch:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
+
+        # Log the request using logging_obj if available
+        if logging_obj is not None:
+            from litellm.litellm_core_utils.litellm_logging import Logging
+
+            if isinstance(logging_obj, Logging):
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": api_base,
+                        "headers": headers,
+                        "request_str": (
+                            f"\nGET Request Sent from LiteLLM:\n"
+                            f"curl -X GET \\\n"
+                            f"{api_base} \\\n"
+                            f"-H 'Authorization: Bearer ***REDACTED***' \\\n"
+                            f"-H 'Content-Type: application/json; charset=utf-8'\n"
+                        ),
+                    },
+                )
+
         response = await client.get(
             url=api_base,
             headers=headers,

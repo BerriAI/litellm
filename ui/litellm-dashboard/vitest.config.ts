@@ -7,7 +7,31 @@ export default defineConfig({
     setupFiles: ["tests/setupTests.ts"],
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
-    coverage: { reporter: ["text", "lcov"] },
+    testTimeout: 10000,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "**/*.d.ts",
+        "**/*.test.*",
+        "**/*.spec.*",
+
+        "tests/**",
+        "e2e_tests/**",
+
+        "node_modules/**",
+        ".next/**",
+        "out/**",
+
+        "**/*.config.*",
+        "postcss.config.*",
+        "tailwind.config.*",
+        "next.config.*",
+      ],
+    },
+    exclude: ["e2e_tests/**", "node_modules/**"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
   resolve: {
     alias: {

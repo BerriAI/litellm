@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
-import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
+import { fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export interface FilterState {
   "Team ID": string;
@@ -21,12 +21,10 @@ export function useFilterLogic({
   keys,
   teams,
   organizations,
-  accessToken,
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
   organizations: Organization[] | null;
-  accessToken: string | null;
 }) {
   const defaultFilters: FilterState = {
     "Team ID": "",
@@ -36,10 +34,12 @@ export function useFilterLogic({
     "Sort By": "created_at",
     "Sort Order": "desc",
   };
+  const { accessToken } = useAuthorized();
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
+  const [filteredTotalCount, setFilteredTotalCount] = useState<number | null>(null);
   const lastSearchTimestamp = useRef(0);
   const debouncedSearch = useCallback(
     debounce(async (filters: FilterState) => {
@@ -69,6 +69,7 @@ export function useFilterLogic({
         if (currentTimestamp === lastSearchTimestamp.current) {
           if (data) {
             setFilteredKeys(data.keys);
+            setFilteredTotalCount(data.total_count ?? null);
             console.log("called from debouncedSearch filters:", JSON.stringify(filters));
             console.log("called from debouncedSearch data:", JSON.stringify(data));
           }
@@ -95,7 +96,7 @@ export function useFilterLogic({
 
     // Apply Organization ID filter
     if (filters["Organization ID"]) {
-      result = result.filter((key) => key.organization_id === filters["Organization ID"]);
+      result = result.filter((key) => (key.organization_id ?? key.org_id) === filters["Organization ID"]);
     }
 
     setFilteredKeys(result);
@@ -122,16 +123,6 @@ export function useFilterLogic({
     }
   }, [accessToken]);
 
-  const queryAllKeysQuery = useQuery({
-    queryKey: ["allKeys"],
-    queryFn: async () => {
-      if (!accessToken) throw new Error("Access token required");
-      return await fetchAllKeyAliases(accessToken);
-    },
-    enabled: !!accessToken,
-  });
-  const allKeyAliases = queryAllKeysQuery.data || [];
-
   // Update teams and organizations when props change
   useEffect(() => {
     if (teams && teams.length > 0) {
@@ -151,7 +142,7 @@ export function useFilterLogic({
     }
   }, [organizations]);
 
-  const handleFilterChange = (newFilters: Record<string, string>) => {
+  const handleFilterChange = (newFilters: Record<string, string>, skipDebounce: boolean = false) => {
     // Update filters state
     setFilters({
       "Team ID": newFilters["Team ID"] || "",
@@ -162,17 +153,22 @@ export function useFilterLogic({
       "Sort Order": newFilters["Sort Order"] || "desc",
     });
 
-    // Fetch keys based on new filters
-    const updatedFilters = {
-      ...filters,
-      ...newFilters,
-    };
-    debouncedSearch(updatedFilters);
+    // Only trigger debouncedSearch if skipDebounce is false
+    // This allows sorting to be handled by the parent component's useKeys hook
+    if (!skipDebounce) {
+      // Fetch keys based on new filters
+      const updatedFilters = {
+        ...filters,
+        ...newFilters,
+      };
+      debouncedSearch(updatedFilters);
+    }
   };
 
   const handleFilterReset = () => {
     // Reset filters state
     setFilters(defaultFilters);
+    setFilteredTotalCount(null);
 
     // Reset selections
     debouncedSearch(defaultFilters);
@@ -181,7 +177,7 @@ export function useFilterLogic({
   return {
     filters,
     filteredKeys,
-    allKeyAliases,
+    filteredTotalCount,
     allTeams,
     allOrganizations,
     handleFilterChange,

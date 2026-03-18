@@ -63,20 +63,20 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
         """
         Get available models from Lemonade API.
-        
+
         This method queries the Lemonade /models endpoint to retrieve the list of available models.
-        
+
         Args:
             api_key: Optional API key (Lemonade doesn't require authentication)
             api_base: Optional API base URL (defaults to LEMONADE_API_BASE env var or http://localhost:8000)
-            
+
         Returns:
             List of model names prefixed with "lemonade/"
         """
         api_base, api_key = self._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
         )
-        
+
         if api_base is None:
             raise ValueError(
                 "LEMONADE_API_BASE is not set. Please set the environment variable to query Lemonade's /models endpoint."
@@ -113,7 +113,6 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         key = "lemonade"
         return api_base, key
 
-
     def transform_response(
         self,
         model: str,
@@ -146,4 +145,3 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         setattr(model_response, "model", "lemonade/" + model)
 
         return model_response
-    

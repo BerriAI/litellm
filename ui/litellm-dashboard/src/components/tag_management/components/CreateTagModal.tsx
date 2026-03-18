@@ -36,7 +36,7 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
   };
 
   return (
-    <Modal title="Create New Tag" visible={visible} width={800} footer={null} onCancel={handleCancel}>
+    <Modal title="Create New Tag" open={visible} width={800} footer={null} onCancel={handleCancel}>
       <Form form={form} onFinish={handleFinish} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item label="Tag Name" name="tag_name" rules={[{ required: true, message: "Please input a tag name" }]}>
           <TextInput />

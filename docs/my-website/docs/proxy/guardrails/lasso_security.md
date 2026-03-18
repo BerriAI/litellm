@@ -358,6 +358,25 @@ guardrails:
       lasso_user_id: os.environ/LASSO_USER_ID
 ```
 
+### Alternative Configuration: Generic Guardrail API
+
+Lasso can also be configured using the [Generic Guardrail API](/docs/adding_provider/generic_guardrail_api) format:
+
+```yaml
+guardrails:
+  - guardrail_name: "lasso-api-post-guard"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: post_call
+      api_base: https://server.lasso.security/gateway/v3
+      api_key: os.environ/LASSO_API_KEY
+      additional_provider_specific_params:
+        mask: false  # Set to true to enable PII masking
+```
+
+**Parameters:**
+- **`mask`**: Boolean flag to enable/disable PII masking (default: `false`)
+
 ## Security Features
 
 Lasso Security provides protection against:

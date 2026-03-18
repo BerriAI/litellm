@@ -312,6 +312,7 @@ Gemini models with audio output capabilities using the chat completions API.
 - Only supports `pcm16` audio format
 - Streaming not yet supported
 - Must set `modalities: ["audio"]`
+- When using via LiteLLM Proxy, must include `"allowed_openai_params": ["audio", "modalities"]` in the request body to enable audio parameters
 :::
 
 ### Quick Start
@@ -372,7 +373,8 @@ curl http://0.0.0.0:4000/v1/chat/completions \
     "model": "gemini-tts",
     "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
     "modalities": ["audio"],
-    "audio": {"voice": "Kore", "format": "pcm16"}
+    "audio": {"voice": "Kore", "format": "pcm16"},
+    "allowed_openai_params": ["audio", "modalities"]
   }'
 ```
 
@@ -389,6 +391,7 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
     modalities=["audio"],
     audio={"voice": "Kore", "format": "pcm16"},
+    extra_body={"allowed_openai_params": ["audio", "modalities"]}
 )
 print(response)
 ```

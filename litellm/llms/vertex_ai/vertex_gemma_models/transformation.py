@@ -21,7 +21,7 @@ from litellm.types.utils import ModelResponse
 class VertexGemmaConfig(OpenAIGPTConfig):
     """
     Configuration and transformation class for Vertex AI Gemma models
-    
+
     Extends OpenAIGPTConfig to wrap/unwrap the instances/predictions format
     used by Vertex AI's Gemma deployment endpoint.
     """
@@ -48,16 +48,17 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     ) -> Union[ModelResponse, Any]:
         """
         Helper method to return fake stream iterator if streaming is requested.
-        
+
         Args:
             model_response: The completed model response
             stream: Whether streaming was requested
-            
+
         Returns:
             MockResponseIterator if stream=True, otherwise the model_response
         """
         if stream:
             from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
             return MockResponseIterator(model_response=model_response)
         return model_response
 
@@ -71,7 +72,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Transform request to Vertex Gemma format.
-        
+
         Uses parent class to create OpenAI-compatible request, then wraps it
         in the Vertex Gemma instances format.
         """
@@ -83,12 +84,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Remove params not needed/supported by Vertex Gemma
         openai_request.pop("model", None)
-        openai_request.pop("stream", None)  # Streaming not supported, will be faked client-side
+        openai_request.pop(
+            "stream", None
+        )  # Streaming not supported, will be faked client-side
         openai_request.pop("stream_options", None)  # Stream options not supported
-        
+
         # Wrap in Vertex Gemma format
         return {
             "instances": [
@@ -105,7 +108,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     ) -> Dict[str, Any]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
-        
+
         Vertex Gemma wraps the OpenAI-compatible response in a 'predictions' field.
         This method extracts it so the parent class can process it normally.
         """
@@ -114,7 +117,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 status_code=422,
                 message="Invalid response format: missing 'predictions' field",
             )
-        
+
         return response_json["predictions"]
 
     def completion(
@@ -189,7 +192,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
         # Check if streaming is requested (will be faked)
         stream = optional_params.get("stream", False)
-        
+
         # Transform the request using parent class methods
         request_data = self.transform_request(
             model=model,
@@ -198,7 +201,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             litellm_params=litellm_params,
             headers={},
         )
-        
+
         # Set up headers
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -231,10 +234,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             )
 
         response_json = response.json()
-        
+
         # Unwrap predictions to get OpenAI-compatible response
         openai_response = self._unwrap_predictions_response(response_json)
-        
+
         # Use litellm's standard response converter
         model_response = cast(
             ModelResponse,
@@ -244,10 +247,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 _response_headers={},
             ),
         )
-        
+
         # Ensure model is set correctly
         model_response.model = model
-        
+
         # Log the response
         logging_obj.post_call(
             input=messages,
@@ -255,9 +258,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             original_response=response_json,
             additional_args={"complete_input_dict": request_data},
         )
-        
+
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
+        return self._handle_fake_stream_response(
+            model_response=model_response, stream=stream
+        )
 
     async def _async_completion(
         self,
@@ -280,7 +285,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
         # Check if streaming is requested (will be faked)
         stream = optional_params.get("stream", False)
-        
+
         # Transform the request using parent class async methods
         request_data = await self.async_transform_request(
             model=model,
@@ -289,7 +294,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             litellm_params=litellm_params,
             headers={},
         )
-        
+
         # Set up headers
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -324,10 +329,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             )
 
         response_json = response.json()
-        
+
         # Unwrap predictions to get OpenAI-compatible response
         openai_response = self._unwrap_predictions_response(response_json)
-        
+
         # Use litellm's standard response converter
         model_response = cast(
             ModelResponse,
@@ -337,10 +342,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 _response_headers={},
             ),
         )
-        
+
         # Ensure model is set correctly
         model_response.model = model
-        
+
         # Log the response
         logging_obj.post_call(
             input=messages,
@@ -348,7 +353,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             original_response=response_json,
             additional_args={"complete_input_dict": request_data},
         )
-        
-        # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
+        # Return fake stream iterator if streaming was requested
+        return self._handle_fake_stream_response(
+            model_response=model_response, stream=stream
+        )

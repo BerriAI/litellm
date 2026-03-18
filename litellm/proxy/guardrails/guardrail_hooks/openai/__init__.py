@@ -14,7 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("OpenAI Moderation: guardrail_name is required")
-    
+
     openai_moderation_guardrail = OpenAIModerationGuardrail(
         guardrail_name=guardrail_name,
         **{
@@ -27,12 +27,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         },
     )
 
-    litellm.logging_callback_manager.add_litellm_callback(
-        openai_moderation_guardrail
-    )
+    litellm.logging_callback_manager.add_litellm_callback(openai_moderation_guardrail)
 
     return openai_moderation_guardrail
-
 
 
 guardrail_initializer_registry = {

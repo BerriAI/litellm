@@ -23,7 +23,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     """
     SageMaker embedding configuration factory for supporting embedding parameters
     """
-    
+
     def __init__(self) -> None:
         pass
 
@@ -31,10 +31,10 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     def get_model_config(cls, model: str) -> "BaseEmbeddingConfig":
         """
         Factory method to get the appropriate embedding config based on model type
-        
+
         Args:
             model: The model name
-            
+
         Returns:
             Appropriate embedding config instance
         """
@@ -57,7 +57,6 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-    
         return optional_params
 
     def get_error_class(
@@ -98,15 +97,22 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             response_data = raw_response.json()
         except Exception as e:
             raise SagemakerError(
-                message=f"Failed to parse response: {str(e)}", 
-                status_code=raw_response.status_code
+                message=f"Failed to parse response: {str(e)}",
+                status_code=raw_response.status_code,
             )
 
-        if "embedding" not in response_data:
+        # Handle both raw array format (TEI) and wrapped format (standard HF)
+        if isinstance(response_data, list):
+            # TEI and some HF models return raw embedding arrays directly
+            embeddings = response_data
+        elif isinstance(response_data, dict) and "embedding" in response_data:
+            # Standard HF format with "embedding" key
+            embeddings = response_data["embedding"]
+        else:
             raise SagemakerError(
-                status_code=500, message="HF response missing 'embedding' field"
+                status_code=500,
+                message=f"Unexpected response format. Expected list or dict with 'embedding' key, got: {type(response_data).__name__}",
             )
-        embeddings = response_data["embedding"]
 
         if not isinstance(embeddings, list):
             raise SagemakerError(

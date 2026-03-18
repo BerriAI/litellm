@@ -134,6 +134,41 @@ class BaseLLMAIOHTTPHandler:
                 # Ignore errors during transport cleanup
                 pass
 
+    def __del__(self):
+        """
+        Cleanup: close aiohttp session on instance destruction.
+
+        Provides defense-in-depth for issue #12443 - ensures cleanup happens
+        even if atexit handler doesn't run (abnormal termination).
+        """
+        if (
+            self.client_session is not None
+            and not self.client_session.closed
+            and self._owns_session
+        ):
+            try:
+                import asyncio
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Event loop is running - schedule cleanup task
+                        asyncio.create_task(self.close())
+                    else:
+                        # Event loop exists but not running - run cleanup
+                        loop.run_until_complete(self.close())
+                except RuntimeError:
+                    # No event loop available - create one for cleanup
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self.close())
+                    finally:
+                        loop.close()
+            except Exception:
+                # Silently ignore errors during __del__ to avoid issues
+                pass
+
     async def _make_common_async_call(
         self,
         async_client_session: Optional[ClientSession],
