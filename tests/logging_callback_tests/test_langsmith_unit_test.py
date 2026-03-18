@@ -448,7 +448,16 @@ async def test_langsmith_key_based_logging():
             actual_body["post"][0]["session_name"]
             == expected_body["post"][0]["session_name"]
         )
-        
+
+        # Verify usage_metadata is populated so LangSmith can display cost
+        usage_metadata = actual_body["post"][0]["outputs"].get("usage_metadata")
+        assert usage_metadata is not None, "usage_metadata should be present in outputs"
+        assert "total_cost" in usage_metadata
+        assert "input_tokens" in usage_metadata
+        assert "output_tokens" in usage_metadata
+        assert "total_tokens" in usage_metadata
+        assert usage_metadata["total_tokens"] == 30
+
         mock_get_client.stop()
 
     except Exception as e:
@@ -475,7 +484,11 @@ async def test_langsmith_queue_logging():
                 mock_response="This is a mock response",
             )
 
-        await asyncio.sleep(3)
+        # Poll for async callbacks to complete (up to 10s)
+        for _ in range(20):
+            if len(test_langsmith_logger.log_queue) >= 5:
+                break
+            await asyncio.sleep(0.5)
 
         # Check that logs are in the queue
         assert len(test_langsmith_logger.log_queue) == 5
@@ -490,8 +503,11 @@ async def test_langsmith_queue_logging():
                 mock_response="This is a mock response",
             )
 
-        # Wait a short time for any asynchronous operations to complete
-        await asyncio.sleep(1)
+        # Poll for flush to complete (up to 10s)
+        for _ in range(20):
+            if len(test_langsmith_logger.log_queue) < 5:
+                break
+            await asyncio.sleep(0.5)
 
         print(
             "Length of langsmith log queue: {}".format(
@@ -508,3 +524,79 @@ async def test_langsmith_queue_logging():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_prepare_log_data_populates_usage_metadata():
+    """
+    Verify that _prepare_log_data injects usage_metadata into outputs
+    so that LangSmith can display cost in its project overview.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24001
+    """
+    logger = LangsmithLogger(langsmith_api_key="test-key")
+    credentials = logger.default_credentials
+
+    mock_payload = {
+        "id": "test-id",
+        "call_type": "completion",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "model_parameters": {},
+        "response": {
+            "id": "test-id",
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "hello",
+                        "role": "assistant",
+                        "tool_calls": None,
+                        "function_call": None,
+                    },
+                }
+            ],
+            "usage": {
+                "completion_tokens": 5,
+                "prompt_tokens": 10,
+                "total_tokens": 15,
+            },
+        },
+        "response_cost": 0.00042,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "startTime": "2025-01-01T00:00:00Z",
+        "endTime": "2025-01-01T00:00:01Z",
+        "request_tags": [],
+        "error_str": None,
+        "status": "success",
+        "metadata": {},
+    }
+
+    kwargs = {
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": mock_payload,
+    }
+
+    data = logger._prepare_log_data(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+        credentials=credentials,
+    )
+
+    # outputs must contain usage_metadata
+    assert "usage_metadata" in data["outputs"], (
+        "usage_metadata missing from outputs — LangSmith will not display cost"
+    )
+    um = data["outputs"]["usage_metadata"]
+    assert um["total_cost"] == 0.00042
+    assert um["input_cost"] == 0.00042
+    assert um["output_cost"] == 0.0
+    assert um["input_tokens"] == 10
+    assert um["output_tokens"] == 5
+    assert um["total_tokens"] == 15
