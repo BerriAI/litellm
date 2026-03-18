@@ -62,13 +62,13 @@ This release fixes out-of-memory (OOM) risks from unbounded `asyncio.Queue()` us
 
 This release adds a visual action builder for guardrail policies with conditional execution support. You can now chain guardrails into multi-step pipelines — if a simple guardrail fails, route to an advanced one instead of immediately blocking. Each step has configurable ON PASS and ON FAIL actions (Next Step, Block, or Allow), and you can test the full pipeline with a sample message before saving.
 
-![Guardrail Action Builder](../img/release_notes/guard_actions.png)
+![Guardrail Action Builder](../../img/release_notes/guard_actions.png)
 
 ### Access Groups
 
 Access Groups simplify defining resource access across your organization. One group can grant access to models, MCP servers, and agents—simply attach it to a key or team. Create groups in the Admin UI, define which resources each group includes, then assign the group when creating keys or teams. Updates to a group apply automatically to all attached keys and teams.
 
-<Image img={require('../img/ui_access_groups.png')} />
+<Image img={require('../../img/ui_access_groups.png')} />
 
 ## New Providers and Endpoints
 

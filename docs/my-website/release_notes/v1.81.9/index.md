@@ -81,7 +81,7 @@ This release makes it safe to expose MCP servers on the public internet by addin
 [Get started](../../docs/mcp_public_internet)
 
 <Image
-img={require('../img/release_notes/mcp_internet.png')}
+img={require('../../img/release_notes/mcp_internet.png')}
 style={{ maxWidth: '900px', width: '100%' }}
 />
 
@@ -92,7 +92,7 @@ Set a soft budget on any team to receive email alerts when spending crosses the 
 [Get started](../../docs/proxy/ui_team_soft_budget_alerts)
 
 <Image
-img={require('../img/ui_team_soft_budget_alerts.png')}
+img={require('../../img/ui_team_soft_budget_alerts.png')}
 style={{ maxWidth: '900px', width: '100%' }}
 />
 
