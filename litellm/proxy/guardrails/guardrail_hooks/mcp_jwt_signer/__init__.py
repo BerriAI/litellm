@@ -39,9 +39,31 @@ def initialize_guardrail(
         guardrail_name=guardrail_name,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        # Core signing
         issuer=_get("issuer"),
         audience=_get("audience"),
         ttl_seconds=_get("ttl_seconds"),
+        # FR-5: verify + re-sign
+        access_token_discovery_uri=_get("access_token_discovery_uri"),
+        token_introspection_endpoint=_get("token_introspection_endpoint"),
+        verify_issuer=_get("verify_issuer"),
+        verify_audience=_get("verify_audience"),
+        # FR-12: end-user identity mapping
+        end_user_claim_sources=_get("end_user_claim_sources"),
+        # FR-13: claim operations
+        add_claims=_get("add_claims"),
+        set_claims=_get("set_claims"),
+        remove_claims=_get("remove_claims"),
+        # FR-14: two-token model
+        channel_token_audience=_get("channel_token_audience"),
+        channel_token_ttl=_get("channel_token_ttl"),
+        # FR-15: incoming claim validation
+        required_claims=_get("required_claims"),
+        optional_claims=_get("optional_claims"),
+        # FR-9: debug headers
+        debug_headers=_get("debug_headers") or False,
+        # FR-10: configurable scopes
+        allowed_scopes=_get("allowed_scopes"),
     )
     litellm.logging_callback_manager.add_litellm_callback(signer)
     return signer

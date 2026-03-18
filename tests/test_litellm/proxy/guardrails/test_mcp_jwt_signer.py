@@ -750,6 +750,72 @@ async def test_sub_resolved_from_user_api_key_dict_jwt_claims():
 
 
 # ---------------------------------------------------------------------------
+# initialize_guardrail factory — regression test for config.yaml wire-up
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_guardrail_passes_all_params():
+    """
+    initialize_guardrail must wire every documented config.yaml param through
+    to MCPJWTSigner.  Previously only issuer/audience/ttl_seconds were passed;
+    all FR-5/9/10/12/13/14/15 params were silently dropped.
+    """
+    import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as mod
+
+    mod._mcp_jwt_signer_instance = None
+
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import (
+        initialize_guardrail,
+    )
+
+    litellm_params = MagicMock()
+    litellm_params.mode = "pre_mcp_call"
+    litellm_params.default_on = True
+    litellm_params.optional_params = None
+    # Set every non-default param directly on litellm_params
+    litellm_params.issuer = "https://litellm.example.com"
+    litellm_params.audience = "mcp-test"
+    litellm_params.ttl_seconds = 120
+    litellm_params.access_token_discovery_uri = "https://idp.example.com/.well-known/openid-configuration"
+    litellm_params.token_introspection_endpoint = "https://idp.example.com/introspect"
+    litellm_params.verify_issuer = "https://idp.example.com"
+    litellm_params.verify_audience = "api://test"
+    litellm_params.end_user_claim_sources = ["token:email", "litellm:user_id"]
+    litellm_params.add_claims = {"deployment_id": "prod"}
+    litellm_params.set_claims = {"env": "production"}
+    litellm_params.remove_claims = ["nbf"]
+    litellm_params.channel_token_audience = "bedrock-gateway"
+    litellm_params.channel_token_ttl = 60
+    litellm_params.required_claims = ["sub", "email"]
+    litellm_params.optional_claims = ["groups"]
+    litellm_params.debug_headers = True
+    litellm_params.allowed_scopes = ["mcp:tools/call"]
+
+    guardrail = {"guardrail_name": "mcp-jwt-signer"}
+
+    with patch("litellm.logging_callback_manager.add_litellm_callback"):
+        signer = initialize_guardrail(litellm_params, guardrail)
+
+    assert signer.issuer == "https://litellm.example.com"
+    assert signer.audience == "mcp-test"
+    assert signer.ttl_seconds == 120
+    assert signer.access_token_discovery_uri == "https://idp.example.com/.well-known/openid-configuration"
+    assert signer.token_introspection_endpoint == "https://idp.example.com/introspect"
+    assert signer.verify_issuer == "https://idp.example.com"
+    assert signer.verify_audience == "api://test"
+    assert signer.end_user_claim_sources == ["token:email", "litellm:user_id"]
+    assert signer.add_claims == {"deployment_id": "prod"}
+    assert signer.set_claims == {"env": "production"}
+    assert signer.remove_claims == ["nbf"]
+    assert signer.channel_token_audience == "bedrock-gateway"
+    assert signer.channel_token_ttl == 60
+    assert signer.required_claims == ["sub", "email"]
+    assert signer.optional_claims == ["groups"]
+    assert signer.debug_headers is True
+    assert signer.allowed_scopes == ["mcp:tools/call"]
+
+
+# ---------------------------------------------------------------------------
 # FR-5: _fetch_jwks, _get_oidc_discovery, _verify_incoming_jwt,
 #        _introspect_opaque_token
 # ---------------------------------------------------------------------------
