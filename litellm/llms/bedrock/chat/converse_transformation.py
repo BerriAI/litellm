@@ -566,6 +566,7 @@ class AmazonConverseConfig(BaseConfig):
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
+            or "claude-haiku-4" in model
             or "deepseek.r1" in model
             or supports_reasoning(
                 model=model,

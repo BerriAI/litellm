@@ -199,7 +199,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if (
             "claude-3-7-sonnet" in model
-            or AnthropicConfig._is_claude_4_6_model(model)
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or "claude-haiku-4" in model
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
