@@ -161,6 +161,8 @@ from litellm.utils import (
     validate_openai_optional_params,
 )
 
+_google_code_assist_chat = GoogleCodeAssistChat()
+
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import safe_deep_copy
@@ -3690,9 +3692,8 @@ def completion(  # type: ignore # noqa: PLR0915
             response = model_response
 
         elif custom_llm_provider == "google_code_assist":
-            google_code_assist_chat = GoogleCodeAssistChat()
             if acompletion is True:
-                response = google_code_assist_chat.acompletion(
+                response = _google_code_assist_chat.acompletion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -3703,7 +3704,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logger_fn=logger_fn,
                 )
             else:
-                response = google_code_assist_chat.completion(
+                response = _google_code_assist_chat.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,

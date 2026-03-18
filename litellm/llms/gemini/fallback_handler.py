@@ -4,6 +4,8 @@ from litellm._logging import verbose_logger
 from litellm.llms.gemini.common_utils import should_fallback_to_google_code_assist
 from litellm.llms.google_code_assist.chat import GoogleCodeAssistChat
 
+_google_code_assist_chat = GoogleCodeAssistChat()
+
 
 async def run_gemini_acompletion_with_code_assist_fallback(
     primary_call: Awaitable[Any],
@@ -27,7 +29,7 @@ async def run_gemini_acompletion_with_code_assist_fallback(
             "Gemini request failed with ACCESS_TOKEN_SCOPE_INSUFFICIENT. "
             "Falling back to google_code_assist."
         )
-        return await GoogleCodeAssistChat().acompletion(**fallback_kwargs)
+        return await _google_code_assist_chat.acompletion(**fallback_kwargs)
 
 
 def run_gemini_completion_with_code_assist_fallback(
@@ -52,4 +54,4 @@ def run_gemini_completion_with_code_assist_fallback(
             "Gemini request failed with ACCESS_TOKEN_SCOPE_INSUFFICIENT. "
             "Falling back to google_code_assist."
         )
-        return GoogleCodeAssistChat().completion(**fallback_kwargs)
+        return _google_code_assist_chat.completion(**fallback_kwargs)

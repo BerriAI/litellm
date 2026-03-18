@@ -70,6 +70,22 @@ class TestGoogleCodeAssist:
         assert response.choices[0].message.content == "Hello world"
         assert response.usage.total_tokens == 7
 
+    @patch("litellm.llms.gemini.common_utils.get_gemini_oauth_token")
+    def test_completion_raises_when_token_missing(self, mock_get_token):
+        mock_get_token.return_value = {"token": None}
+
+        handler = GoogleCodeAssistChat()
+        with pytest.raises(Exception, match="Missing Gemini OAuth token value"):
+            handler.completion(
+                model="google_code_assist/gemini-1.5-flash",
+                messages=[{"role": "user", "content": "hi"}],
+                model_response=ModelResponse(),
+                print_verbose=False,
+                logging_obj=MagicMock(),
+                optional_params={},
+                litellm_params={},
+            )
+
     @pytest.mark.asyncio
     @patch("litellm.llms.google_code_assist.chat.AsyncHTTPHandler.post")
     @patch(
@@ -132,3 +148,63 @@ class TestGoogleCodeAssist:
 
         assert response.choices[0].message.content == "Async success"
         mock_async_close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.llms.google_code_assist.chat.asyncio.to_thread", new_callable=AsyncMock
+    )
+    async def test_acompletion_uses_thread_for_oauth_lookup(self, mock_to_thread):
+        mock_to_thread.return_value = {"token": "test-token"}
+
+        with (
+            patch(
+                "litellm.llms.google_code_assist.chat.GoogleCodeAssistChat._ahandle_handshake",
+                new_callable=AsyncMock,
+                return_value="final-project",
+            ),
+            patch(
+                "litellm.llms.google_code_assist.chat.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_async_post,
+            patch(
+                "litellm.llms.google_code_assist.chat.AsyncHTTPHandler.close",
+                new_callable=AsyncMock,
+            ),
+        ):
+            completion_data = {
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "role": "model",
+                                "parts": [{"text": "Async success"}],
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 2,
+                        "totalTokenCount": 7,
+                    },
+                }
+            }
+            mock_completion_resp = httpx.Response(
+                status_code=200,
+                content=json.dumps(completion_data).encode(),
+                request=httpx.Request("POST", "https://completion"),
+            )
+            mock_async_post.return_value = mock_completion_resp
+
+            handler = GoogleCodeAssistChat()
+            await handler.acompletion(
+                model="google_code_assist/gemini-1.5-flash",
+                messages=[{"role": "user", "content": "hi"}],
+                model_response=ModelResponse(),
+                print_verbose=False,
+                logging_obj=MagicMock(),
+                optional_params={},
+                litellm_params={},
+            )
+
+        mock_to_thread.assert_awaited_once()

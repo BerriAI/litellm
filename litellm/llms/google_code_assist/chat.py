@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from typing import Any, Optional
 
@@ -43,6 +44,11 @@ class GoogleCodeAssistChat:
 
             token = gemini_auth_data.get("token")
             initial_project_id = gemini_auth_data.get("project_id")
+            if not token:
+                raise GoogleCodeAssistError(
+                    status_code=401,
+                    message="Missing Gemini OAuth token value. Re-run 'litellm-proxy gemini login'.",
+                )
 
             client = _get_httpx_client()
 
@@ -102,7 +108,7 @@ class GoogleCodeAssistChat:
         try:
             from litellm.llms.gemini.common_utils import get_gemini_oauth_token
 
-            gemini_auth_data = get_gemini_oauth_token()
+            gemini_auth_data = await asyncio.to_thread(get_gemini_oauth_token)
             if not gemini_auth_data:
                 raise GoogleCodeAssistError(
                     status_code=401,
@@ -111,6 +117,11 @@ class GoogleCodeAssistChat:
 
             token = gemini_auth_data.get("token")
             initial_project_id = gemini_auth_data.get("project_id")
+            if not token:
+                raise GoogleCodeAssistError(
+                    status_code=401,
+                    message="Missing Gemini OAuth token value. Re-run 'litellm-proxy gemini login'.",
+                )
 
             async_handler = AsyncHTTPHandler()
             try:
