@@ -138,7 +138,7 @@ curl -X POST \
 ## Troubleshooting 
 
 **Q: What does `403 Permission denied` or `IAM_PERMISSION_DENIED` mean?**  
-A: The service account or Application Default Credentials (ADC) user does not have the `roles/aiplatform.user` role. To resolve this, re-run the `gcloud projects add-iam-policy-binding` command as shown above in the guide.
+A: The service account or Application Default Credentials (ADC) user does not have the `roles/aiplatform.user` role. To resolve this, re-run the `gcloud projects add-iam-policy-binding`.
 
 **Q: What should I do if I get a `429 Quota exceeded` error?**  
 A: This means you've hit the per-region QPM (queries per minute) or TPM (tokens per minute) quota. You can:
