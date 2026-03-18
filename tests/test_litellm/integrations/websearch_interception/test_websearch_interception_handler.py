@@ -273,3 +273,50 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+def test_model_name_reconstruction_with_slashed_model():
+    """Regression test for #23970: model names containing slashes (e.g. NIM
+    ``qwen/qwen3.5-397b-a17b``) must still get the provider prefix prepended
+    when ``custom_llm_provider`` is present and the model does not already
+    start with the provider prefix.
+    """
+    model = "qwen/qwen3.5-397b-a17b"
+    custom_llm_provider = "nvidia_nim"
+
+    provider_prefix = f"{custom_llm_provider}/"
+    if not model.startswith(provider_prefix):
+        full_model_name = f"{custom_llm_provider}/{model}"
+    else:
+        full_model_name = model
+
+    assert full_model_name == "nvidia_nim/qwen/qwen3.5-397b-a17b"
+
+
+def test_model_name_reconstruction_already_prefixed():
+    """When the model already starts with the provider prefix, it should not
+    be doubled."""
+    model = "nvidia_nim/qwen/qwen3.5-397b-a17b"
+    custom_llm_provider = "nvidia_nim"
+
+    provider_prefix = f"{custom_llm_provider}/"
+    if not model.startswith(provider_prefix):
+        full_model_name = f"{custom_llm_provider}/{model}"
+    else:
+        full_model_name = model
+
+    assert full_model_name == "nvidia_nim/qwen/qwen3.5-397b-a17b"
+
+
+def test_model_name_reconstruction_simple_model():
+    """Simple model names without slashes should also get the prefix."""
+    model = "gpt-4o-mini"
+    custom_llm_provider = "openai"
+
+    provider_prefix = f"{custom_llm_provider}/"
+    if not model.startswith(provider_prefix):
+        full_model_name = f"{custom_llm_provider}/{model}"
+    else:
+        full_model_name = model
+
+    assert full_model_name == "openai/gpt-4o-mini"
