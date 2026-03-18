@@ -1909,6 +1909,7 @@ class ProxyLogging:
         4. /files
         """
 
+        from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1931,12 +1932,18 @@ class ProxyLogging:
                     ############## Handle Guardrails ########################################
                     #############################################################################
 
+            # Merge model-level guardrails before checking which guardrails to run
+            guardrail_data = _check_and_merge_model_level_guardrails(
+                data=data, llm_router=llm_router
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (
                     callback.should_run_guardrail(
-                        data=data, event_type=GuardrailEventHooks.post_call
+                        data=guardrail_data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
                     is not True
                 ):
