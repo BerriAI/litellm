@@ -33,9 +33,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
-    EmbeddingResponse,
     GuardrailStatus,
-    ImageResponse,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
@@ -115,44 +113,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         """
         Extract text content from model response.
 
-        - ModelResponse (chat completions): returns the assistant message text.
-        - ImageResponse: returns all non-empty revised_prompts joined with newlines.
-          revised_prompt is the actual prompt the provider used (may differ from the
-          request prompt), so it must be checked post-call.
-        - EmbeddingResponse: returns "" — the response is float vectors, not text;
-          there is nothing for a text-based guardrail to scan.
-        - All other types (TTS, etc.): returns "" and logs a warning.
+        Returns empty string for non-text responses (TTS, images, etc.) to skip guardrail processing.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             get_content_from_model_response,
         )
 
+        # Handle ModelResponse objects
         if isinstance(response, litellm.ModelResponse):
             return get_content_from_model_response(response)
 
-        if isinstance(response, ImageResponse):
-            # Extract revised_prompt fields — these are the prompts the provider
-            # actually used and may contain content that was not in the original request.
-            revised_prompts = [
-                item.revised_prompt
-                for item in (response.data or [])
-                if getattr(item, "revised_prompt", None)
-            ]
-            if revised_prompts:
-                return "\n".join(revised_prompts)
-            # No revised_prompt available (e.g. DALL-E 2, or url-only responses).
-            verbose_proxy_logger.debug(
-                "Model Armor post-call: ImageResponse has no revised_prompt — skipping"
-            )
-            return ""
-
-        if isinstance(response, EmbeddingResponse):
-            # Embedding responses contain float vectors — there is no text to scan.
-            verbose_proxy_logger.debug(
-                "Model Armor post-call: EmbeddingResponse contains vectors, not text — skipping"
-            )
-            return ""
-
+        # For non-ModelResponse types (embeddings, images, TTS, etc.), return empty
+        # string to signal that post-call scanning is not applicable.  These response
+        # types carry vectors or binary data rather than human-readable text.
+        # NOTE: the guardrail is intentionally NOT added to applied_guardrails here;
+        # post-call scanning genuinely did not run for this response type.
         verbose_proxy_logger.warning(
             "Model Armor post-call: skipping for %s response type (not text-scannable)",
             type(response).__name__,
