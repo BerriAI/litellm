@@ -2175,7 +2175,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
         otel = OpenTelemetry(
-            callback_name="langfuse_otel",
+            config=OpenTelemetryConfig(ignore_context_propagation=True),
             tracer_provider=tracer_provider,
         )
         otel.tracer = tracer_provider.get_tracer("litellm")
