@@ -3,6 +3,7 @@ import pytest
 import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
+from litellm.utils import _is_explicitly_disabled_factory
 
 
 @pytest.fixture()
@@ -483,6 +484,22 @@ def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
     assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
         "gpt-5.4-pro", "minimal"
     )
+
+
+def test_is_explicitly_disabled_factory_minimal():
+    """_is_explicitly_disabled_factory returns True only for explicit False entries.
+
+    Verifies the shared helper used by _is_reasoning_effort_level_explicitly_disabled
+    directly — so future changes to the helper are caught without going through the
+    method wrapper.
+    """
+    key = "supports_minimal_reasoning_effort"
+    assert _is_explicitly_disabled_factory("gpt-5.4-mini", None, key)
+    assert _is_explicitly_disabled_factory("gpt-5.4-nano", None, key)
+    assert _is_explicitly_disabled_factory("openai/gpt-5.4-mini", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4-pro", None, key)
+    assert not _is_explicitly_disabled_factory("gpt-5.4-turbo-preview", None, key)
 
 
 def test_gpt5_unknown_model_passes_through_minimal(config: OpenAIConfig):
