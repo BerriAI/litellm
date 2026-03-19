@@ -3417,7 +3417,9 @@ def _convert_teams_to_response_models(
     use_deleted_table: bool,
 ) -> List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
     """Convert raw Prisma team rows to response models."""
-    team_list: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
+    team_list: List[
+        Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]
+    ] = []
     for team in teams:
         try:
             team_dict = team.model_dump()
