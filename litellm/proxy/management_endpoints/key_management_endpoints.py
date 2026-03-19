@@ -1670,7 +1670,7 @@ async def _get_and_validate_existing_key(
 
     if existing_key_row is None:
         raise ProxyException(
-            message=f"Key not found.",
+            message="Key not found.",
             type=ProxyErrorTypes.not_found_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
@@ -4947,7 +4947,7 @@ async def block_key(
     )
     if existing_record is None:
         raise ProxyException(
-            message=f"Key not found.",
+            message="Key not found.",
             type=ProxyErrorTypes.not_found_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
@@ -5056,7 +5056,7 @@ async def unblock_key(
     )
     if existing_record is None:
         raise ProxyException(
-            message=f"Key not found.",
+            message="Key not found.",
             type=ProxyErrorTypes.not_found_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
