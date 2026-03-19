@@ -500,6 +500,46 @@ def _make_mock_session(closed=False):
     return MockSession()
 
 
+def _make_capturing_session(captured: dict):
+    """
+    Helper to create a fake session that records the kwargs passed to request().
+    Use ``captured["<key>"]`` after the transport call to inspect what was sent.
+    """
+
+    class CapturingSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            captured.update(kwargs)
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    return CapturingSession()
+
+
 @pytest.mark.asyncio
 async def test_handle_closed_session_before_request():
     """Test that closed sessions are detected and recreated"""
@@ -514,6 +554,69 @@ async def test_handle_closed_session_before_request():
 
     assert counts["sessions"] == 2  # Created 2 sessions: closed one, then open one
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_set_to_max_phase_value():
+    """
+    Regression test for issue #22747: ClientTimeout.total must be set to the
+    maximum phase timeout so aiohttp has an overall deadline.
+
+    Without this fix, total=None caused aiohttp to have no overall deadline,
+    allowing infrastructure idle timeouts (~60s) to kill connections before
+    long-running reasoning models (e.g. GPT-5-PRO) responded.
+
+    httpx converts ``timeout=300`` into all four phase keys set to 300.
+    The ``write`` key is included in ``_phase_values`` via ``.values()`` but is
+    not mapped to any aiohttp ``ClientTimeout`` field — that's expected and fine.
+    """
+    captured: dict = {}
+    transport = LiteLLMAiohttpTransport(client=lambda: _make_capturing_session(captured))  # type: ignore
+    request = httpx.Request("GET", "http://example.com")
+    request.extensions["timeout"] = {
+        "connect": 300.0,
+        "read": 300.0,
+        "write": 300.0,
+        "pool": 300.0,
+    }
+    await transport.handle_async_request(request)
+
+    timeout = captured["timeout"]
+    assert timeout is not None
+    assert timeout.total == 300.0, f"Expected total=300.0, got total={timeout.total}"
+    assert timeout.sock_connect == 300.0
+    assert timeout.sock_read == 300.0
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_uses_max_when_phases_differ():
+    """total should be the max of all provided phase timeouts."""
+    captured: dict = {}
+    transport = LiteLLMAiohttpTransport(client=lambda: _make_capturing_session(captured))  # type: ignore
+    request = httpx.Request("GET", "http://example.com")
+    request.extensions["timeout"] = {
+        "connect": 10.0,
+        "read": 600.0,  # Longest — should become total
+        "pool": 5.0,
+    }
+    await transport.handle_async_request(request)
+
+    timeout = captured["timeout"]
+    assert timeout.total == 600.0, f"Expected total=600.0, got total={timeout.total}"
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_is_none_when_no_phases_set():
+    """When no phase timeouts are provided, total should remain None."""
+    captured: dict = {}
+    transport = LiteLLMAiohttpTransport(client=lambda: _make_capturing_session(captured))  # type: ignore
+    request = httpx.Request("GET", "http://example.com")
+    # Empty timeout dict — simulates a request with no timeout configured
+    request.extensions["timeout"] = {}
+    await transport.handle_async_request(request)
+
+    timeout = captured["timeout"]
+    assert timeout.total is None, f"Expected total=None, got total={timeout.total}"
 
 
 @pytest.mark.asyncio

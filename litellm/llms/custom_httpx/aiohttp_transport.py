@@ -264,6 +264,14 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
+        
+        # Derive a `total` deadline from the per-phase values so that
+        # aiohttp doesn't leave it as None.  Without this, long-running
+        # reasoning models (e.g. GPT-5-PRO) can hit infrastructure idle
+        # timeouts (~60s) before the model responds.
+        _phase_values = [v for v in timeout.values() if v is not None]
+        _total = max(_phase_values) if _phase_values else None
+
         request_kwargs: Dict[str, Any] = {
             "method": request.method,
             "url": YarlURL(str(request.url), encoded=True),
@@ -272,6 +280,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             "allow_redirects": False,
             "auto_decompress": False,
             "timeout": ClientTimeout(
+                total=_total,
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),
