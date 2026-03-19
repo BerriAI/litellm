@@ -296,18 +296,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
         # Check if request under RPM/TPM per model for a given API Key
         _model = data.get("model", None)
-        if (
-            get_key_model_tpm_limit(user_api_key_dict, model_name=_model) is not None
-            or get_key_model_rpm_limit(user_api_key_dict, model_name=_model) is not None
-        ):
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        if _tpm_limit_for_key_model is not None or _rpm_limit_for_key_model is not None:
             request_count_api_key = (
                 f"{api_key}::{_model}::{precise_minute}::request_count"
-            )
-            _tpm_limit_for_key_model = get_key_model_tpm_limit(
-                user_api_key_dict, model_name=_model
-            )
-            _rpm_limit_for_key_model = get_key_model_rpm_limit(
-                user_api_key_dict, model_name=_model
             )
             tpm_limit_for_model = None
             rpm_limit_for_model = None
