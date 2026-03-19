@@ -1,6 +1,5 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -48,7 +47,7 @@ import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, stor
 import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
@@ -75,6 +74,15 @@ interface ProxySettings {
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
+/**
+ * Map of legacy query-param page keys → new path-based route segments.
+ * When a user visits ?page=<key>, they are redirected to /ui/<value>.
+ * Add entries here as pages are migrated from the if/else chain to path-based routes.
+ */
+const LEGACY_REDIRECTS: Record<string, string> = {
+  api_ref: "api-reference",
+};
+
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
@@ -90,6 +98,7 @@ function CreateKeyPageContent() {
   });
 
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
+  const router = useRouter();
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
@@ -431,6 +440,13 @@ function CreateKeyPageContent() {
     return <LoadingScreen />;
   }
 
+  // Redirect legacy query-param pages to their new path-based routes
+  if (page in LEGACY_REDIRECTS) {
+    const base = (proxyBaseUrl || "") + "/ui";
+    router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+    return <LoadingScreen />;
+  }
+
   return (
     <Suspense fallback={<LoadingScreen />}>
       <ConfigProvider theme={{
@@ -536,8 +552,6 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
-                  ) : page == "api_ref" ? (
-                    <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (
