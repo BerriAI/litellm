@@ -240,6 +240,24 @@ class TestOpenRouterImageEditTransformation:
         # Files should be empty (JSON mode)
         assert list(files) == []
 
+    def test_transform_image_edit_request_strips_openrouter_prefix(self):
+        """Test that openrouter/ prefix is stripped from model name in request.
+
+        When the proxy/router passes the model, it includes the openrouter/
+        prefix. OpenRouter rejects this as an invalid model ID.
+        Regression test for https://github.com/BerriAI/litellm/issues/22305
+        """
+        data, _ = self.config.transform_image_edit_request(
+            model="openrouter/google/gemini-2.5-flash-image",
+            prompt="Edit this",
+            image=self.sample_image_bytes,
+            image_edit_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["model"] == "google/gemini-2.5-flash-image"
+
     def test_transform_image_edit_request_with_bytesio(self):
         """Test request transformation with BytesIO image input."""
         image = BytesIO(self.sample_image_bytes)
