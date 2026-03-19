@@ -1182,8 +1182,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if (
                 valid_token.user_id is not None
                 and valid_token.team_id is not None
-                and valid_token.team_member_rpm_limit is None
-                and valid_token.team_member_tpm_limit is None
+                and (
+                    valid_token.team_member_rpm_limit is None
+                    or valid_token.team_member_tpm_limit is None
+                )
             ):
                 try:
                     _team_membership = await get_team_membership(
