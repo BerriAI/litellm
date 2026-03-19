@@ -3559,3 +3559,111 @@ def _can_object_call_vector_stores(
             )
 
     return True
+
+
+def _can_object_call_search_tools(
+    object_type: Literal["key", "team", "org"],
+    search_tool_name: str,
+    object_permissions: Optional[LiteLLM_ObjectPermissionTable],
+):
+    """
+    Raises ProxyException if the object (key, team, org) cannot access the specific search tool.
+
+    Key difference from vector stores: follows principle of least privilege.
+    - object_permissions is None → allow (no permission record)
+    - search_tools is None → allow (field not configured, no restriction)
+    - search_tools == [] → DENY ALL (empty list = no access granted)
+    - search_tool_name in search_tools → allow
+    - search_tool_name not in search_tools → deny
+    """
+    if object_permissions is None:
+        return True
+
+    if object_permissions.search_tools is None:
+        return True
+
+    # Empty list = no access (principle of least privilege)
+    # Non-empty list = only listed tools are accessible
+    if search_tool_name not in object_permissions.search_tools:
+        raise ProxyException(
+            message=f"User not allowed to access search tool '{search_tool_name}'. Allowed search tools: {object_permissions.search_tools}",
+            type=ProxyErrorTypes.get_search_tool_access_error_type_for_object(
+                object_type
+            ),
+            param="search_tool",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    return True
+
+
+async def search_tool_access_check(
+    search_tool_name: str,
+    valid_token: Optional[UserAPIKeyAuth],
+):
+    """
+    Checks if the key/team has access to a specific search tool.
+
+    Uses valid_token.object_permission_id (key level) and
+    valid_token.team_object_permission_id (team level) to look up permissions.
+
+    Raises ProxyException if access is denied.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        verbose_proxy_logger.debug(
+            "Prisma client not found, skipping search tool access check"
+        )
+        return True
+
+    # Check key-level permissions
+    if valid_token is not None and valid_token.object_permission_id is not None:
+        key_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": valid_token.object_permission_id},
+            )
+        )
+        if key_object_permission is not None:
+            _can_object_call_search_tools(
+                object_type="key",
+                search_tool_name=search_tool_name,
+                object_permissions=key_object_permission,
+            )
+
+    # Check team-level permissions
+    team_object_permission_id = (
+        getattr(valid_token, "team_object_permission_id", None)
+        if valid_token
+        else None
+    )
+    if team_object_permission_id is not None:
+        team_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": team_object_permission_id},
+            )
+        )
+        if team_object_permission is not None:
+            _can_object_call_search_tools(
+                object_type="team",
+                search_tool_name=search_tool_name,
+                object_permissions=team_object_permission,
+            )
+
+    return True
+
+
+def get_permitted_search_tool_names(
+    object_permissions: Optional[LiteLLM_ObjectPermissionTable],
+) -> Optional[List[str]]:
+    """
+    Returns the list of permitted search tool names for the given object permissions.
+
+    Returns:
+        None → no restriction (all tools accessible)
+        [] → no tools accessible
+        ["a", "b"] → only those tools accessible
+    """
+    if object_permissions is None:
+        return None
+    return object_permissions.search_tools
