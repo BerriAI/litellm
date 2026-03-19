@@ -959,10 +959,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = (
-                            "redacted by litellm. \
+                        _metadata["raw_request"] = "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
-                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -996,12 +994,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = (
-                        "Unable to Log \
-                        raw request: {}".format(
-                            str(e)
-                        )
-                    )
+                    _metadata["raw_request"] = "Unable to Log \
+                        raw request: {}".format(str(e))
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(

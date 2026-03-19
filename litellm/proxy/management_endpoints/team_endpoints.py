@@ -3729,9 +3729,7 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(
-                team.team_id, team.model_dump(), str(e)
-            )
+            """.format(team.team_id, team.model_dump(), str(e))
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
