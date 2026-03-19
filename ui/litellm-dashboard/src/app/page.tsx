@@ -256,11 +256,11 @@ function CreateKeyPageContent() {
   // Redirect legacy query-param pages to their new path-based routes
   const isLegacyRedirect = page in LEGACY_REDIRECTS;
   useEffect(() => {
-    if (isLegacyRedirect) {
+    if (!authLoading && isLegacyRedirect) {
       const base = (proxyBaseUrl || "") + "/ui";
       router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
     }
-  }, [isLegacyRedirect, page, router]);
+  }, [authLoading, isLegacyRedirect, page, router]);
 
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
