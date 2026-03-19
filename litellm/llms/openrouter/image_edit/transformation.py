@@ -156,6 +156,10 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[Dict, RequestFiles]:
+        # Strip 'openrouter/' prefix if present (router passes the full model name)
+        if model.startswith("openrouter/"):
+            model = model.replace("openrouter/", "", 1)
+
         content_parts: List[Dict[str, Any]] = []
 
         # Add source image(s) as base64 data URLs
