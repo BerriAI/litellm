@@ -297,3 +297,220 @@ async def test_deferred_logging_fires_on_guardrail_exception():
 
     assert enqueue_called is True, "Deferred logging should fire even on guardrail exception"
     assert logging_obj._enqueue_deferred_logging is None, "Closure should be cleared after firing"
+
+
+# ---------------------------------------------------------------------------
+# 5. Streaming deferred logging via closure
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredStreamingClosure:
+    """Tests for the streaming closure-based deferred logging."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_closure_defers_logging(self):
+        """When _on_deferred_stream_complete is set, CSW calls the closure
+        instead of firing async_success_handler directly."""
+        mock_logging_obj = MagicMock()
+        callback_called = False
+        callback_args = {}
+
+        async def mock_callback(assembled_response, cache_hit):
+            nonlocal callback_called, callback_args
+            callback_called = True
+            callback_args = {"response": assembled_response, "cache_hit": cache_hit}
+
+        mock_logging_obj._on_deferred_stream_complete = mock_callback
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        async for _ in resp:
+            pass
+
+        await asyncio.sleep(0)
+
+        assert callback_called is True, "Closure should be called at stream end"
+        assert callback_args["response"] is not None
+        assert mock_logging_obj._on_deferred_stream_complete is None
+
+    @pytest.mark.asyncio
+    async def test_streaming_no_closure_fires_normally(self):
+        """Regression: without closure, CSW fires logging immediately."""
+        created_tasks = []
+        real_create_task = asyncio.create_task
+
+        def tracking_create_task(coro):
+            task = real_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+        )
+        with patch("asyncio.create_task", side_effect=tracking_create_task):
+            async for _ in resp:
+                pass
+
+        assert len(created_tasks) >= 1
+        for task in created_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_closure_runs_guardrails_before_logging(self):
+        """The closure passes the guardrail-modified response to handlers."""
+        mock_logging_obj = MagicMock()
+        modified_response = MagicMock()
+        logged_response = None
+
+        async def mock_post_call(**kwargs):
+            return modified_response
+
+        async def mock_async_success(*args, **kwargs):
+            nonlocal logged_response
+            logged_response = args[0] if args else None
+
+        mock_logging_obj.async_success_handler = mock_async_success
+
+        async def closure(assembled_response, cache_hit):
+            try:
+                resp = await mock_post_call(response=assembled_response)
+            except Exception:
+                resp = assembled_response
+            asyncio.create_task(
+                mock_logging_obj.async_success_handler(
+                    resp, cache_hit=cache_hit, start_time=None, end_time=None
+                )
+            )
+
+        mock_logging_obj._on_deferred_stream_complete = closure
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        async for _ in resp:
+            pass
+
+        # Two sleeps: outer create_task (CSW calls closure) then
+        # inner create_task (closure calls async_success_handler)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert logged_response is modified_response, \
+            "Logging should receive the guardrail-modified response"
+
+    @pytest.mark.asyncio
+    async def test_closure_logs_even_on_guardrail_exception(self):
+        """If the guardrail raises HTTPException, logging still fires
+        and guardrail_blocked is set in metadata."""
+        logging_called = False
+
+        async def failing_hook(**kwargs):
+            raise HTTPException(status_code=400, detail="Blocked")
+
+        async def mock_async_success(*args, **kwargs):
+            nonlocal logging_called
+            logging_called = True
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+        mock_logging_obj.async_success_handler = mock_async_success
+
+        async def closure(assembled_response, cache_hit):
+            try:
+                resp = await failing_hook(response=assembled_response)
+            except Exception as e:
+                resp = assembled_response
+                if isinstance(e, HTTPException) and hasattr(
+                    mock_logging_obj, "model_call_details"
+                ):
+                    mock_logging_obj.model_call_details.setdefault(
+                        "metadata", {}
+                    )["guardrail_blocked"] = True
+            asyncio.create_task(
+                mock_logging_obj.async_success_handler(
+                    resp, cache_hit=cache_hit, start_time=None, end_time=None
+                )
+            )
+
+        mock_logging_obj._on_deferred_stream_complete = closure
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        async for _ in resp:
+            pass
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert logging_called is True, "Logging should fire even when guardrail raises"
+        assert mock_logging_obj.model_call_details["metadata"].get(
+            "guardrail_blocked"
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_transient_error_does_not_set_guardrail_blocked(self):
+        """Transient errors (not HTTPException) should NOT set guardrail_blocked."""
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def mock_async_success(*args, **kwargs):
+            pass
+
+        mock_logging_obj.async_success_handler = mock_async_success
+
+        async def closure(assembled_response, cache_hit):
+            try:
+                raise ConnectionError("Network timeout")
+            except Exception as e:
+                resp = assembled_response
+                if isinstance(e, HTTPException) and hasattr(
+                    mock_logging_obj, "model_call_details"
+                ):
+                    mock_logging_obj.model_call_details.setdefault(
+                        "metadata", {}
+                    )["guardrail_blocked"] = True
+            asyncio.create_task(
+                mock_logging_obj.async_success_handler(
+                    resp, cache_hit=cache_hit, start_time=None, end_time=None
+                )
+            )
+
+        mock_logging_obj._on_deferred_stream_complete = closure
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        async for _ in resp:
+            pass
+
+        await asyncio.sleep(0)
+
+        assert mock_logging_obj.model_call_details["metadata"].get(
+            "guardrail_blocked"
+        ) is not True

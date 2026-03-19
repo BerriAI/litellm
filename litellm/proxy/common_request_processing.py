@@ -930,9 +930,13 @@ class ProxyBaseLLMRequestProcessing:
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
-        # Only for non-streaming: streaming returns early in wrapper_async
-        # before the closure-storage point, so the flag would be unused.
-        if self._has_post_call_guardrails() and not self._is_streaming_request(
+        # Cache the result to avoid scanning litellm.callbacks twice.
+        _has_post_call_guardrails = self._has_post_call_guardrails()
+
+        # Non-streaming: defer the create_task in wrapper_async so the
+        # SLP is built after guardrails write to metadata.  Streaming
+        # uses a separate closure mechanism (see below).
+        if _has_post_call_guardrails and not self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
         ):
             logging_obj._defer_async_logging = True  # type: ignore
@@ -1034,6 +1038,81 @@ class ProxyBaseLLMRequestProcessing:
                     self.data[
                         "_litellm_client_requested_model"
                     ] = requested_model_from_client
+                # Streaming: attach a closure that CSW.__anext__ will call
+                # at stream end instead of firing logging directly.  The
+                # closure runs post_call_success_hook on the assembled
+                # response (so guardrail_information is populated), then
+                # fires both logging handlers.
+                # Only for CustomStreamWrapper — raw async generators from
+                # passthrough routes bypass CSW and would orphan the closure.
+                from litellm.litellm_core_utils.streaming_handler import (
+                    CustomStreamWrapper,
+                )
+
+                if _has_post_call_guardrails and isinstance(
+                    response, CustomStreamWrapper
+                ):
+                    _captured_data = self.data
+                    _captured_user_api_key_dict = user_api_key_dict
+                    _captured_logging_obj = logging_obj
+
+                    async def _on_deferred_stream_complete(
+                        assembled_response, cache_hit
+                    ):
+                        from litellm.litellm_core_utils.thread_pool_executor import (
+                            executor,
+                        )
+
+                        try:
+                            _response = await proxy_logging_obj.post_call_success_hook(
+                                data=_captured_data,
+                                user_api_key_dict=_captured_user_api_key_dict,
+                                response=assembled_response,
+                            )
+                        except Exception as e:
+                            verbose_proxy_logger.exception(
+                                "Error running post-call guardrails on streaming response: %s",
+                                e,
+                            )
+                            _response = assembled_response
+                            # Mark as blocked only for intentional guardrail
+                            # blocks, not transient errors.
+                            if isinstance(e, HTTPException) and hasattr(
+                                _captured_logging_obj, "model_call_details"
+                            ):
+                                _captured_logging_obj.model_call_details.setdefault(
+                                    "metadata", {}
+                                )["guardrail_blocked"] = True
+
+                        try:
+                            asyncio.create_task(
+                                _captured_logging_obj.async_success_handler(
+                                    _response,
+                                    cache_hit=cache_hit,
+                                    start_time=None,
+                                    end_time=None,
+                                )
+                            )
+                        except Exception as e:
+                            verbose_proxy_logger.exception(
+                                "Error in deferred streaming async logging: %s", e,
+                            )
+
+                        try:
+                            executor.submit(
+                                _captured_logging_obj.success_handler,
+                                _response,
+                                cache_hit=cache_hit,
+                                start_time=None,
+                                end_time=None,
+                            )
+                        except Exception as e:
+                            verbose_proxy_logger.exception(
+                                "Error in deferred streaming sync logging: %s", e,
+                            )
+
+                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[attr-defined]
+
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
                     if self._is_streaming_response(response):
