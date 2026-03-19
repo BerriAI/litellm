@@ -651,6 +651,7 @@ async def pass_through_request(  # noqa: PLR0915
     _parsed_body: Optional[dict] = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
+    logging_obj: Optional[Logging] = None
 
     #########################################################
     try:
@@ -2262,6 +2263,12 @@ async def initialize_pass_through_endpoints(
 
         # Add wildcard route for sub-paths
         if endpoint.get("include_subpath", False) is True:
+            # Register wildcard path in openai_routes so non-admin users
+            # can access subpath routes when auth is enabled
+            if _auth is not None and str(_auth).lower() == "true":
+                _wildcard_path = _path.rstrip("/") + "/*"
+                if _wildcard_path not in LiteLLMRoutes.openai_routes.value:
+                    LiteLLMRoutes.openai_routes.value.append(_wildcard_path)
             InitPassThroughEndpointHelpers.add_subpath_route(
                 app=app,
                 path=_path,
