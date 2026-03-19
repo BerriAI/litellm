@@ -2751,3 +2751,84 @@ class TestResponseIdFallback(unittest.TestCase):
         mock_span.set_attribute.assert_any_call(
             "gen_ai.response.id", "litellm-img-call-101"
         )
+
+
+class TestGenAiPromptAttributeTypes(unittest.TestCase):
+    """
+    Test that gen_ai.prompt attribute values are always OTEL-compatible
+    primitive types (str), not dicts or lists of dicts.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24057
+    """
+
+    def _make_otel_with_events(self):
+        """Create an OpenTelemetry instance with events enabled and message logging on."""
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(enable_events=True)
+        )
+        otel.message_logging = True
+        return otel
+
+    def _make_span_and_response(self):
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = MagicMock(
+            trace_id=1, span_id=2, trace_flags=MagicMock()
+        )
+        response_obj = {
+            "id": "resp-1",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+        return mock_span, response_obj
+
+    @patch("litellm.integrations.opentelemetry.get_logger")
+    def test_string_content_stored_as_string(self, mock_get_logger):
+        """String content should be stored directly as a string attribute."""
+        otel = self._make_otel_with_events()
+        mock_span, response_obj = self._make_span_and_response()
+        mock_logger = MagicMock()
+        mock_get_logger.return_value = mock_logger
+
+        kwargs = {
+            "messages": [{"role": "user", "content": "Hello world"}],
+            "litellm_params": {"custom_llm_provider": "openai"},
+        }
+
+        otel._emit_semantic_logs(kwargs, response_obj, mock_span)
+
+        emitted = mock_logger.emit.call_args_list
+        prompt_log = emitted[0][0][0]
+        self.assertEqual(prompt_log.attributes["gen_ai.prompt"], "Hello world")
+        self.assertIsInstance(prompt_log.attributes["gen_ai.prompt"], str)
+
+    @patch("litellm.integrations.opentelemetry.get_logger")
+    def test_multimodal_content_serialized_to_json_string(self, mock_get_logger):
+        """List-of-dicts content (multimodal) should be JSON-serialized to a string."""
+        otel = self._make_otel_with_events()
+        mock_span, response_obj = self._make_span_and_response()
+        mock_logger = MagicMock()
+        mock_get_logger.return_value = mock_logger
+
+        content_parts = [
+            {"type": "text", "text": "What is in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+        ]
+        kwargs = {
+            "messages": [{"role": "user", "content": content_parts}],
+            "litellm_params": {"custom_llm_provider": "openai"},
+        }
+
+        otel._emit_semantic_logs(kwargs, response_obj, mock_span)
+
+        emitted = mock_logger.emit.call_args_list
+        prompt_log = emitted[0][0][0]
+        attr_value = prompt_log.attributes["gen_ai.prompt"]
+        self.assertIsInstance(attr_value, str)
+        parsed = json.loads(attr_value)
+        self.assertEqual(parsed, content_parts)

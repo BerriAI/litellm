@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -1101,7 +1102,11 @@ class OpenTelemetry(CustomLogger):
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
             if self.message_logging and msg.get("content"):
-                attrs["gen_ai.prompt"] = msg["content"]
+                content = msg["content"]
+                if isinstance(content, str):
+                    attrs["gen_ai.prompt"] = content
+                else:
+                    attrs["gen_ai.prompt"] = json.dumps(content)
 
             log_record = SdkLogRecord(
                 timestamp=self._to_ns(datetime.now()),
