@@ -20,7 +20,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -233,6 +232,8 @@ async def test_deferred_logging_fires_on_guardrail_exception():
     If post_call_success_hook raises (e.g., guardrail blocks content),
     the deferred logging closure must still fire (via try/finally).
     """
+    from fastapi import HTTPException  # noqa: local import for test isolation
+
     enqueue_called = False
 
     def mock_enqueue():
@@ -470,6 +471,8 @@ class TestDeferredStreamingClosure:
         """If a guardrail raises HTTPException, the production
         _run_deferred_stream_guardrails must still fire logging
         and set guardrail_blocked in metadata."""
+        from fastapi import HTTPException  # noqa: local import for test isolation
+
         logging_called = False
 
         class BlockingGuardrail(CustomGuardrail):
@@ -902,3 +905,40 @@ class TestDeferredStreamingClosure:
                 f"{name} must be called"
             assert received_data_per_guardrail[name].get("_merged_marker") is True, \
                 f"{name} must receive guardrail_data (merged), not captured_data"
+
+    @pytest.mark.asyncio
+    async def test_logging_fires_even_if_guardrail_init_raises(self):
+        """If _check_and_merge_model_level_guardrails raises during
+        initialization, logging must still fire via the try/finally guard.
+        This prevents silent logging loss on transient init errors."""
+        logging_called = False
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            nonlocal logging_called
+            logging_called = True
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        def exploding_merge(data, llm_router):
+            raise RuntimeError("Simulated init failure")
+
+        with patch(
+            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            side_effect=exploding_merge,
+        ):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert logging_called is True, \
+            "Logging must fire even when guardrail initialization raises"
