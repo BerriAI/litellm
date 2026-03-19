@@ -902,6 +902,7 @@ router_settings:
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | OTEL_LOGS_EXPORTER | Exporter type for OpenTelemetry logs (e.g., console)
+| OTEL_IGNORE_CONTEXT_PROPAGATION | When true, ignore parent span context propagation in OpenTelemetry callbacks
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
 | PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
 | PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service

@@ -1519,6 +1519,8 @@ class TestTemporaryMCPSessionEndpoints:
                 client_id="client",
                 client_secret="secret",
                 code_verifier="verifier",
+                refresh_token=None,
+                scope=None,
             )
 
         assert result is exchange_response
@@ -1532,6 +1534,56 @@ class TestTemporaryMCPSessionEndpoints:
             client_id="client",
             client_secret="secret",
             code_verifier="verifier",
+            refresh_token=None,
+            scope=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_mcp_token_proxies_refresh_token_grant(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_token,
+        )
+
+        request = MagicMock()
+        server = generate_mock_mcp_server_config_record(server_id="server-1")
+        exchange_response = {"access_token": "new-token", "refresh_token": "new-rt"}
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ) as get_server,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.exchange_token_with_server",
+                AsyncMock(return_value=exchange_response),
+            ) as exchange_mock,
+        ):
+            result = await mcp_token(
+                request=request,
+                server_id="server-1",
+                grant_type="refresh_token",
+                code=None,
+                redirect_uri=None,
+                client_id="client",
+                client_secret="secret",
+                code_verifier=None,
+                refresh_token="rt-123",
+                scope=None,
+            )
+
+        assert result is exchange_response
+        get_server.assert_called_once_with("server-1")
+        exchange_mock.assert_awaited_once_with(
+            request=request,
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="client",
+            client_secret="secret",
+            code_verifier=None,
+            refresh_token="rt-123",
+            scope=None,
         )
 
     @pytest.mark.asyncio

@@ -1455,6 +1455,20 @@ class Logging(LiteLLMLoggingBaseClass):
             ):  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
+        # Fallback: extract router_model_id from litellm_params when not available
+        # from the result object. ResponsesAPIResponse objects (used by /v1/responses
+        # streaming) don't carry _hidden_params["model_id"] like ModelResponse does.
+        if router_model_id is None and hasattr(self, "litellm_params"):
+            for metadata_key in ("litellm_metadata", "metadata"):
+                _metadata: dict = (
+                    self.litellm_params.get(metadata_key, {}) or {}
+                )
+                _model_info: dict = _metadata.get("model_info", {}) or {}
+                _model_id = _model_info.get("id")
+                if _model_id is not None:
+                    router_model_id = _model_id
+                    break
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
