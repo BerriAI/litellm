@@ -8,31 +8,29 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import litellm
-from litellm.constants import (
-    LITELLM_MAX_STREAMING_DURATION_SECONDS,
-    STREAM_SSE_DONE_STRING,
-)
+from litellm.constants import (LITELLM_MAX_STREAMING_DURATION_SECONDS,
+                               STREAM_SSE_DONE_STRING)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    update_response_metadata,
-)
+from litellm.litellm_core_utils.litellm_logging import \
+    Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_api_base import \
+    get_api_base
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import \
+    update_response_metadata
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import \
+    BaseResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import (
-    OutputTextDeltaEvent,
-    ResponseAPIUsage,
-    ResponseCompletedEvent,
-    ResponsesAPIRequestParams,
-    ResponsesAPIResponse,
-    ResponsesAPIStreamEvents,
-    ResponsesAPIStreamingResponse,
-)
+from litellm.types.llms.openai import (OutputTextDeltaEvent, ResponseAPIUsage,
+                                       ResponseCompletedEvent,
+                                       ResponsesAPIRequestParams,
+                                       ResponsesAPIResponse,
+                                       ResponsesAPIStreamEvents,
+                                       ResponsesAPIStreamingResponse)
 from litellm.types.utils import CallTypes
-from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+from litellm.utils import (CustomStreamWrapper,
+                           async_post_call_success_deployment_hook)
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -166,11 +164,16 @@ class BaseResponsesAPIStreamingIterator:
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
-                # Store the completed response
+                # Store the completed response (also for incomplete/failed so logging still fires)
+                _chunk_type = getattr(openai_responses_api_chunk, "type", None)
                 if (
                     openai_responses_api_chunk
-                    and getattr(openai_responses_api_chunk, "type", None)
-                    == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+                    and _chunk_type
+                    in (
+                        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                        ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                    )
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -694,7 +697,8 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 # ---------------------------------------------------------------------------
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
+from litellm.litellm_core_utils.thread_pool_executor import \
+    executor as _ws_executor
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",
