@@ -1370,6 +1370,9 @@ if TYPE_CHECKING:
         CompactifAIChatConfig as CompactifAIChatConfig,
     )
     from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
+    from .llms.malachi.chat.transformation import (
+        MalachiChatConfig as MalachiChatConfig,
+    )
     from .llms.minimax.chat.transformation import MinimaxChatConfig as MinimaxChatConfig
     from .llms.aiohttp_openai.chat.transformation import (
         AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig,
@@ -1633,6 +1636,9 @@ if TYPE_CHECKING:
     )
     from .llms.databricks.responses.transformation import (
         DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig,
+    )
+    from .llms.malachi.responses.transformation import (
+        MalachiResponsesAPIConfig as MalachiResponsesAPIConfig,
     )
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,

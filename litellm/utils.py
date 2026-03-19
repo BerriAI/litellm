@@ -7962,6 +7962,7 @@ class ProviderConfigManager:
             LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
             LlmProviders.CUSTOM_OPENAI: (lambda: litellm.OpenAILikeChatConfig(), False),
             LlmProviders.OPENAI_LIKE: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.MALACHI: (lambda: litellm.MalachiChatConfig(), False),
             LlmProviders.AIOHTTP_OPENAI: (
                 lambda: litellm.AiohttpOpenAIChatConfig(),
                 False,
@@ -8434,6 +8435,8 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenRouterResponsesAPIConfig()
+        elif litellm.LlmProviders.MALACHI == provider:
+            return litellm.MalachiResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         return None

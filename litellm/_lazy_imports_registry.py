@@ -122,6 +122,7 @@ LLM_CONFIG_NAMES = (
     "BytezChatConfig",
     "CompactifAIChatConfig",
     "EmpowerChatConfig",
+    "MalachiChatConfig",
     "MinimaxChatConfig",
     "AiohttpOpenAIChatConfig",
     "HuggingFaceChatConfig",
@@ -233,6 +234,7 @@ LLM_CONFIG_NAMES = (
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
+    "MalachiResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
@@ -591,6 +593,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "CompactifAIChatConfig",
     ),
     "EmpowerChatConfig": (".llms.empower.chat.transformation", "EmpowerChatConfig"),
+    "MalachiChatConfig": (".llms.malachi.chat.transformation", "MalachiChatConfig"),
     "MinimaxChatConfig": (".llms.minimax.chat.transformation", "MinimaxChatConfig"),
     "AiohttpOpenAIChatConfig": (
         ".llms.aiohttp_openai.chat.transformation",
@@ -936,6 +939,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
         "DatabricksResponsesAPIConfig",
+    ),
+    "MalachiResponsesAPIConfig": (
+        ".llms.malachi.responses.transformation",
+        "MalachiResponsesAPIConfig",
     ),
     "OpenRouterResponsesAPIConfig": (
         ".llms.openrouter.responses.transformation",

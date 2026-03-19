@@ -479,6 +479,7 @@ DEFAULT_DATAFORSEO_LOCATION_CODE = int(
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
+    "malachi",
     "bytez",
     "xai",
     "custom_openai",
@@ -728,6 +729,7 @@ openai_compatible_endpoints: List = [
 
 openai_compatible_providers: List = [
     "anyscale",
+    "malachi",
     "groq",
     "nvidia_nim",
     "cerebras",
