@@ -5148,11 +5148,17 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         )
     elif isinstance(e, ProxyException):
         return e
+    original_status_code = getattr(e, "status_code", None)
+    if isinstance(original_status_code, int) and 400 <= original_status_code < 600:
+        error_code = original_status_code
+    else:
+        error_code = status.HTTP_500_INTERNAL_SERVER_ERROR
     return ProxyException(
-        message="Internal Server Error, " + str(e),
+        message=getattr(e, "message", str(e)),
         type=ProxyErrorTypes.internal_server_error,
         param=getattr(e, "param", "None"),
-        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=error_code,
+        headers=getattr(e, "headers", None),
     )
 
 
