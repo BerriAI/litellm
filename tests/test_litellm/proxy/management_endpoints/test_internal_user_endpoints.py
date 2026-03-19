@@ -2598,3 +2598,133 @@ async def test_unblock_user_returns_404_when_user_not_found(mocker):
 
     assert exc.value.status_code == 404
     assert "User not found" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unblock_user_cache_refresh_invalidates_key_before_reload(mocker):
+    """
+    Cache refresh must delete the key cache entry before get_key_object so
+    user_blocked / team_blocked are rebuilt from DB, not a stale cached object.
+    """
+    from litellm.proxy.management_endpoints import internal_user_endpoints as iue
+
+    mock_key_row = mocker.MagicMock()
+    mock_key_row.token = "tok_hash_1"
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "u1"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=mock_user_row
+    )
+
+    mock_tx = mocker.MagicMock()
+    mock_tx.litellm_verificationtoken.find_many = mocker.AsyncMock(
+        return_value=[mock_key_row]
+    )
+    mock_tx.litellm_usertable.update = mocker.AsyncMock(return_value=mock_user_row)
+    mock_tx.litellm_verificationtoken.update_many = mocker.AsyncMock()
+
+    mock_tx_ctx = mocker.AsyncMock()
+    mock_tx_ctx.__aenter__.return_value = mock_tx
+    mock_tx_ctx.__aexit__.return_value = None
+    mock_prisma_client.db.tx = mocker.MagicMock(return_value=mock_tx_ctx)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    order = []
+
+    async def delete_fn(*args, **kwargs):
+        order.append("delete")
+
+    async def get_fn(*args, **kwargs):
+        order.append("get")
+        return UserAPIKeyAuth(
+            token="tok_hash_1", user_blocked=False, team_blocked=False
+        )
+
+    async def cache_fn(*args, **kwargs):
+        order.append("cache")
+
+    mocker.patch.object(iue, "_delete_cache_key_object", side_effect=delete_fn)
+    mocker.patch.object(iue, "get_key_object", side_effect=get_fn)
+    mocker.patch.object(iue, "_cache_key_object", side_effect=cache_fn)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    await iue.unblock_user(
+        data=BlockUnblockUserRequest(user_id="u1"),
+        http_request=mocker.MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert order == ["delete", "get", "cache"]
+
+
+@pytest.mark.asyncio
+async def test_block_user_cache_refresh_invalidates_key_before_reload(mocker):
+    """Same cache invalidation order as unblock for block_user key refresh."""
+    from litellm.proxy.management_endpoints import internal_user_endpoints as iue
+
+    mock_key_row = mocker.MagicMock()
+    mock_key_row.token = "tok_hash_1"
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "u1"
+    mock_user_row.user_role = "internal_user"
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=mock_user_row
+    )
+
+    mock_tx = mocker.MagicMock()
+    mock_tx.litellm_verificationtoken.find_many = mocker.AsyncMock(
+        return_value=[mock_key_row]
+    )
+    mock_tx.litellm_usertable.update = mocker.AsyncMock(return_value=mock_user_row)
+    mock_tx.litellm_verificationtoken.update_many = mocker.AsyncMock()
+
+    mock_tx_ctx = mocker.AsyncMock()
+    mock_tx_ctx.__aenter__.return_value = mock_tx
+    mock_tx_ctx.__aexit__.return_value = None
+    mock_prisma_client.db.tx = mocker.MagicMock(return_value=mock_tx_ctx)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    order = []
+
+    async def delete_fn(*args, **kwargs):
+        order.append("delete")
+
+    async def get_fn(*args, **kwargs):
+        order.append("get")
+        return UserAPIKeyAuth(token="tok_hash_1")
+
+    async def cache_fn(*args, **kwargs):
+        order.append("cache")
+
+    mocker.patch.object(iue, "_delete_cache_key_object", side_effect=delete_fn)
+    mocker.patch.object(iue, "get_key_object", side_effect=get_fn)
+    mocker.patch.object(iue, "_cache_key_object", side_effect=cache_fn)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    await iue.block_user(
+        data=BlockUnblockUserRequest(user_id="u1"),
+        http_request=mocker.MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert order == ["delete", "get", "cache"]

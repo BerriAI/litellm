@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
+    _delete_cache_key_object,
     get_key_object,
     get_team_object,
     get_user_object,
@@ -2129,6 +2130,11 @@ async def block_user(
 
     for hashed_token in token_list:
         try:
+            await _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
             key_object = await get_key_object(
                 hashed_token=hashed_token,
                 prisma_client=prisma_client,
@@ -2215,6 +2221,11 @@ async def unblock_user(
 
     for hashed_token in token_list:
         try:
+            await _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
             key_object = await get_key_object(
                 hashed_token=hashed_token,
                 prisma_client=prisma_client,
