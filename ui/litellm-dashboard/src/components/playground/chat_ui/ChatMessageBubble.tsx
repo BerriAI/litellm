@@ -143,7 +143,7 @@ function ChatMessageBubble({
                     const match = /language-(\w+)/.exec(className || "");
                     return !inline && match ? (
                       <SyntaxHighlighter
-                        style={coy as Record<string, React.CSSProperties>}
+                        style={coy as any}
                         language={match[1]}
                         PreTag="div"
                         className="rounded-md my-2"
