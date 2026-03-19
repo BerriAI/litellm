@@ -2022,13 +2022,24 @@ class InitPassThroughEndpointHelpers:
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
-        """Remove all routes for a specific endpoint ID from the registry"""
+        """Remove all routes for a specific endpoint ID from the registry
+        and clean up corresponding entries from LiteLLMRoutes.openai_routes."""
         keys_to_remove = [
             key
             for key, value in _registered_pass_through_routes.items()
             if value["endpoint_id"] == endpoint_id
         ]
         for key in keys_to_remove:
+            route_info = _registered_pass_through_routes[key]
+            path = route_info.get("path")
+            if isinstance(path, str):
+                # Remove base path and wildcard path from openai_routes
+                openai_routes = LiteLLMRoutes.openai_routes.value
+                if path in openai_routes:
+                    openai_routes.remove(path)
+                wildcard_path = path.rstrip("/") + "/*"
+                if wildcard_path in openai_routes:
+                    openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug(
                 "Removed pass-through route from registry: %s", key
@@ -2224,7 +2235,8 @@ async def initialize_pass_through_endpoints(
                     )
                 )
             _dependencies = [Depends(user_api_key_auth)]
-            LiteLLMRoutes.openai_routes.value.append(_path)
+            if _path not in LiteLLMRoutes.openai_routes.value:
+                LiteLLMRoutes.openai_routes.value.append(_path)
 
         if _target is None:
             continue

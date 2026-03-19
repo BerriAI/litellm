@@ -1331,39 +1331,69 @@ def test_non_org_admin_with_organizations_list():
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
-def test_pass_through_subpath_auth_with_wildcard_in_openai_routes():
+@pytest.mark.asyncio
+async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
     """
-    Test that pass-through endpoints with include_subpath=true and auth=true
-    are accessible to non-admin users via wildcard route matching.
+    Test that initialize_pass_through_endpoints registers both base path and
+    wildcard path in openai_routes when auth=true and include_subpath=true,
+    and that subpath requests pass is_llm_api_route.
 
-    When auth=true and include_subpath=true, the wildcard path (e.g. /custom-endpoint/*)
-    should be added to openai_routes so that subpath requests like
-    /custom-endpoint/v1/infer are recognized as LLM API routes.
-
-    Regression test for: non-admin users getting 401 "Only proxy admin" error
-    on pass-through subpath requests.
+    Also verifies:
+    - Dedup: calling init twice does not duplicate entries
+    - Cleanup: removing the endpoint cleans up openai_routes
     """
     from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        initialize_pass_through_endpoints,
+    )
 
     base_path = "/v1/ocr/nvidia/community/nemoretriever-ocr-v1"
     wildcard_path = base_path + "/*"
 
-    # Simulate what init_pass_through_endpoints does when auth=true + include_subpath=true
+    endpoint_config = {
+        "path": base_path,
+        "target": "https://httpbin.org/post",
+        "include_subpath": True,
+        "auth": True,
+        "headers": {"content-type": "application/json"},
+    }
+
     original_routes = LiteLLMRoutes.openai_routes.value[:]
     try:
-        LiteLLMRoutes.openai_routes.value.append(base_path)
-        LiteLLMRoutes.openai_routes.value.append(wildcard_path)
+        with patch(
+            "litellm.proxy.proxy_server.app",
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ), patch(
+            "litellm.proxy.proxy_server.config_passthrough_endpoints",
+            None,
+        ):
+            await initialize_pass_through_endpoints([endpoint_config])
 
-        # Exact path should match
-        assert RouteChecks.is_llm_api_route(base_path) is True
+            # Both base and wildcard paths should be registered
+            assert base_path in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path in LiteLLMRoutes.openai_routes.value
 
-        # Subpath should match via wildcard
-        assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
+            # Subpath requests should pass the auth route check
+            assert RouteChecks.is_llm_api_route(base_path) is True
+            assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
 
-        # Deeper subpath should also match
-        assert RouteChecks.is_llm_api_route(base_path + "/v1/some/deep/path") is True
+            # Calling init again should not duplicate entries
+            await initialize_pass_through_endpoints([endpoint_config])
+            assert LiteLLMRoutes.openai_routes.value.count(base_path) == 1
+            assert LiteLLMRoutes.openai_routes.value.count(wildcard_path) == 1
 
-        # Unrelated route should not match
-        assert RouteChecks.is_llm_api_route("/v1/some-other-endpoint") is False
+            # Removing the endpoint should clean up openai_routes
+            # remove_endpoint_routes takes endpoint_id (UUID portion of
+            # the route key "{id}:exact:{path}:{methods}")
+            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+            endpoint_ids = {k.split(":")[0] for k in registered}
+            for eid in endpoint_ids:
+                InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
+            assert base_path not in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path not in LiteLLMRoutes.openai_routes.value
     finally:
         LiteLLMRoutes.openai_routes.value[:] = original_routes
