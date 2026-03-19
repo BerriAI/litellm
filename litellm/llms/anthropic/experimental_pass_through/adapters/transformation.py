@@ -843,15 +843,18 @@ class LiteLLMAnthropicMessagesAdapter:
     @staticmethod
     def _add_additional_properties_false(schema: dict) -> None:
         """
-        Recursively add 'additionalProperties': false to all object schemas.
+        Recursively ensure object schemas comply with OpenAI strict mode.
 
-        OpenAI's strict mode requires this at every object nesting level.
+        OpenAI's strict mode requires:
+        1. 'additionalProperties': false at every object nesting level
+        2. All property keys listed in 'required'
         """
         if not isinstance(schema, dict):
             return
 
         if schema.get("type") == "object" and "properties" in schema:
             schema["additionalProperties"] = False
+            schema["required"] = list(schema["properties"].keys())
             for prop in schema["properties"].values():
                 LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(prop)
 

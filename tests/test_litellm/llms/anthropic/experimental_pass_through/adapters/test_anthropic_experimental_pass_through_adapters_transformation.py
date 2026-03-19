@@ -2004,6 +2004,7 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert result is not None
         schema = result["json_schema"]["schema"]
         assert schema["additionalProperties"] is False
+        assert schema["required"] == ["name"]
 
     def test_nested_objects_adds_additional_properties_false(self):
         output_format = {
@@ -2028,8 +2029,11 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert result is not None
         schema = result["json_schema"]["schema"]
         assert schema["additionalProperties"] is False
+        assert schema["required"] == ["user"]
         assert schema["properties"]["user"]["additionalProperties"] is False
+        assert schema["properties"]["user"]["required"] == ["name", "address"]
         assert schema["properties"]["user"]["properties"]["address"]["additionalProperties"] is False
+        assert schema["properties"]["user"]["properties"]["address"]["required"] == ["city"]
 
     def test_array_items_object_adds_additional_properties_false(self):
         output_format = {
@@ -2061,6 +2065,7 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         output_format = {"type": "json_schema", "schema": original_schema}
         self.adapter.translate_anthropic_output_format_to_openai(output_format)
         assert "additionalProperties" not in original_schema
+        assert "required" not in original_schema
 
     def test_defs_adds_additional_properties_false(self):
         output_format = {
@@ -2080,6 +2085,27 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert result is not None
         schema = result["json_schema"]["schema"]
         assert schema["$defs"]["Item"]["additionalProperties"] is False
+        assert schema["$defs"]["Item"]["required"] == ["value"]
+
+    def test_incomplete_required_gets_completed(self):
+        """OpenAI strict mode requires ALL properties in required."""
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                    "email": {"type": "string"},
+                },
+                "required": ["name"],  # only 1 of 3
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert sorted(schema["required"]) == ["age", "email", "name"]
 
     def test_invalid_output_format_returns_none(self):
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
