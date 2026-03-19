@@ -129,7 +129,12 @@ class FocusTransformer:
                 & (pl.col("model_group").cast(pl.String) != "")
             )
             .then(pl.col("model_group").cast(pl.String))
-            .otherwise(pl.col("model").cast(pl.String))
+            .when(
+                pl.col("model").cast(pl.String).is_not_null()
+                & (pl.col("model").cast(pl.String) != "")
+            )
+            .then(pl.col("model").cast(pl.String))
+            .otherwise(pl.lit("unknown"))
             .alias("ServiceName"),
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
