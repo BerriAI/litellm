@@ -31,18 +31,14 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
             model_info = _get_model_info_helper(
                 model, custom_llm_provider="ovhcloud"
             )
-            supports_function_calling = getattr(
-                model_info, "supports_function_calling", None
+            supports_function_calling = model_info.get(
+                "supports_function_calling", None
             )
-            if supports_function_calling is None and isinstance(model_info, dict):
-                supports_function_calling = model_info.get(
-                    "supports_function_calling", False
-                )
             if supports_function_calling is None:
                 supports_function_calling = False
         except Exception as e:
             verbose_logger.debug(f"Error getting supported OpenAI params: {e}")
-            supports_function_calling = True
+            supports_function_calling = False
 
         optional_params = super().get_supported_openai_params(model)
         if supports_function_calling is not True:
