@@ -187,7 +187,7 @@ Use tags and multiple comparisons to run structured A/B tests:
 
 ## Related Features
 
-- [Playground Chat UI](./playground.md) - Single model testing interface
+- [Playground Chat UI](./ui.md) - Single model testing interface
 - [Model Management](./model_management.md) - Configure and manage models
-- [Guardrails](./guardrails.md) - Set up safety filters
+- [Guardrails](./guardrails/quick_start.md) - Set up safety filters
 - [AI Hub](./ai_hub.md) - Share models and agents with your organization

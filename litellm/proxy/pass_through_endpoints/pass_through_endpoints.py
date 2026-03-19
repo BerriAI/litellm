@@ -961,6 +961,8 @@ async def pass_through_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         if (
             "model" not in request_payload
@@ -1703,6 +1705,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
@@ -1729,6 +1733,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(

@@ -3,18 +3,9 @@ slug: gemini_3
 title: "DAY 0 Support: Gemini 3 on LiteLLM"
 date: 2025-11-19T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Common questions and best practices for using gemini-3-pro-preview with LiteLLM Proxy and SDK."
 tags: [gemini, day 0 support, llms]
 hide_table_of_contents: false
@@ -28,6 +19,8 @@ import TabItem from '@theme/TabItem';
 This guide covers common questions and best practices for using `gemini-3-pro-preview` with LiteLLM Proxy and SDK.
 
 :::
+
+{/* truncate */}
 
 ## Quick Start
 
@@ -976,8 +969,7 @@ messages.append(response.choices[0].message)  # ✅ Includes thought signatures
 
 ## Additional Resources
 
-- [Gemini Provider Documentation](../gemini.md)
-- [Thought Signatures Guide](../gemini.md#thought-signatures)
-- [Reasoning Content Documentation](../../reasoning_content.md)
-- [Function Calling Guide](../../function_calling.md)
-
+- [Gemini Provider Documentation](../../docs/providers/gemini)
+- [Thought Signatures Guide](../../docs/providers/gemini#thought-signatures)
+- [Reasoning Content Documentation](../../docs/reasoning_content)
+- [Function Calling Guide](../../docs/completion/function_call)

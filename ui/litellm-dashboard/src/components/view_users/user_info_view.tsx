@@ -1,6 +1,9 @@
 import React, { useState } from "react";
-import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
+import {
+  Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title,
+  Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell,
+} from "@tremor/react";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, PlusIcon } from "@heroicons/react/outline";
 import {
   userGetInfoV2,
   UserInfoV2Response,
@@ -10,8 +13,12 @@ import {
   invitationCreateCall,
   getProxyBaseUrl,
   teamInfoCall,
+  teamListCall,
+  teamMemberAddCall,
+  teamMemberDeleteCall,
+  Member,
 } from "../networking";
-import { Button as AntdButton } from "antd";
+import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";
@@ -61,6 +68,15 @@ export default function UserInfoView({
   const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
+  const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
+  const [isRemoveTeamModalOpen, setIsRemoveTeamModalOpen] = useState(false);
+  const [teamToRemove, setTeamToRemove] = useState<TeamDisplayInfo | null>(null);
+  const [isAddingTeam, setIsAddingTeam] = useState(false);
+  const [isRemovingTeam, setIsRemovingTeam] = useState(false);
+  const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<string>("user");
+  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -82,7 +98,7 @@ export default function UserInfoView({
                 const teamData = await teamInfoCall(accessToken, teamId);
                 return {
                   team_id: teamId,
-                  team_alias: teamData?.team_alias || null,
+                  team_alias: teamData?.team_info?.team_alias || null,
                 };
               } catch {
                 return { team_id: teamId, team_alias: null };
@@ -110,6 +126,118 @@ export default function UserInfoView({
 
     fetchData();
   }, [accessToken, userId, userRole]);
+
+  const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
+
+  const fetchAllTeams = async () => {
+    if (!accessToken) return;
+    setIsLoadingTeams(true);
+    try {
+      const teams = await teamListCall(accessToken, null);
+      setAllTeams(
+        (teams || []).map((t: any) => ({
+          team_id: t.team_id,
+          team_alias: t.team_alias || t.team_id,
+        }))
+      );
+    } catch (error) {
+      console.error("Error fetching teams:", error);
+    } finally {
+      setIsLoadingTeams(false);
+    }
+  };
+
+  const handleOpenAddTeamModal = () => {
+    setSelectedTeamId("");
+    setSelectedRole("user");
+    setIsAddTeamModalOpen(true);
+    fetchAllTeams();
+  };
+
+  const handleAddTeamSubmit = async () => {
+    if (!accessToken || !selectedTeamId) return;
+    setIsAddingTeam(true);
+    try {
+      const member: Member = {
+        role: selectedRole,
+        user_id: userId,
+      };
+      await teamMemberAddCall(accessToken, selectedTeamId, member);
+      NotificationsManager.success("User added to team successfully");
+      setIsAddTeamModalOpen(false);
+      // Re-fetch user data to refresh teams
+      const data = await userGetInfoV2(accessToken, userId);
+      setUserData(data);
+      if (data.teams && data.teams.length > 0) {
+        const teamPromises = data.teams.map(async (teamId: string) => {
+          try {
+            const teamData = await teamInfoCall(accessToken, teamId);
+            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
+          } catch {
+            return { team_id: teamId, team_alias: null };
+          }
+        });
+        setTeamDetails(await Promise.all(teamPromises));
+      } else {
+        setTeamDetails([]);
+      }
+    } catch (error: any) {
+      console.error("Error adding user to team:", error);
+      NotificationsManager.fromBackend(error?.message || "Failed to add user to team");
+    } finally {
+      setIsAddingTeam(false);
+    }
+  };
+
+  const handleOpenRemoveTeamModal = (team: TeamDisplayInfo) => {
+    setTeamToRemove(team);
+    setIsRemoveTeamModalOpen(true);
+  };
+
+  const handleRemoveTeamConfirm = async () => {
+    if (!accessToken || !teamToRemove) return;
+    setIsRemovingTeam(true);
+    try {
+      const member: Member = {
+        role: "user",
+        user_id: userId,
+      };
+      await teamMemberDeleteCall(accessToken, teamToRemove.team_id, member);
+      NotificationsManager.success("User removed from team successfully");
+      setIsRemoveTeamModalOpen(false);
+      setTeamToRemove(null);
+      // Re-fetch user data to refresh teams
+      const data = await userGetInfoV2(accessToken, userId);
+      setUserData(data);
+      if (data.teams && data.teams.length > 0) {
+        const teamPromises = data.teams.map(async (teamId: string) => {
+          try {
+            const teamData = await teamInfoCall(accessToken, teamId);
+            return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
+          } catch {
+            return { team_id: teamId, team_alias: null };
+          }
+        });
+        setTeamDetails(await Promise.all(teamPromises));
+      } else {
+        setTeamDetails([]);
+      }
+    } catch (error: any) {
+      console.error("Error removing user from team:", error);
+      NotificationsManager.fromBackend(error?.message || "Failed to remove user from team");
+    } finally {
+      setIsRemovingTeam(false);
+    }
+  };
+
+  const handleRemoveTeamCancel = () => {
+    setIsRemoveTeamModalOpen(false);
+    setTeamToRemove(null);
+  };
+
+  const availableTeamsForAdd = allTeams.filter(
+    (t) => !teamDetails.some((td) => td.team_id === t.team_id)
+  );
 
   const handleResetPassword = async () => {
     if (!accessToken) {
@@ -312,36 +440,71 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <Text>Teams</Text>
+                <div className="flex justify-between items-center mb-2">
+                  <Text>Teams</Text>
+                  {isProxyAdmin && (
+                    <Button
+                      icon={PlusIcon}
+                      variant="light"
+                      size="xs"
+                      onClick={handleOpenAddTeamModal}
+                    >
+                      Add Team
+                    </Button>
+                  )}
+                </div>
                 <div className="mt-2">
                   {teamDetails.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team, index) => (
-                        <Badge key={index} color="blue" title={team.team_alias || team.team_id}>
-                          {team.team_alias || team.team_id}
-                        </Badge>
-                      ))}
-                      {!isTeamsExpanded && teamDetails.length > 20 && (
-                        <Badge
-                          color="gray"
-                          className="cursor-pointer hover:bg-gray-200 transition-colors"
-                          onClick={() => setIsTeamsExpanded(true)}
-                        >
-                          +{teamDetails.length - 20} more
-                        </Badge>
-                      )}
-                      {isTeamsExpanded && teamDetails.length > 20 && (
-                        <Badge
-                          color="gray"
-                          className="cursor-pointer hover:bg-gray-200 transition-colors"
-                          onClick={() => setIsTeamsExpanded(false)}
-                        >
-                          Show Less
-                        </Badge>
-                      )}
+                    <div className="max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Team Name</TableHeaderCell>
+                          {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
+                          <TableRow key={team.team_id}>
+                            <TableCell>{team.team_alias || team.team_id}</TableCell>
+                            {isProxyAdmin && (
+                              <TableCell className="text-right">
+                                <Button
+                                  icon={TrashIcon}
+                                  variant="light"
+                                  size="xs"
+                                  color="red"
+                                  onClick={() => handleOpenRemoveTeamModal(team)}
+                                />
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                     </div>
                   ) : (
                     <Text>No teams</Text>
+                  )}
+                  {!isTeamsExpanded && teamDetails.length > 20 && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      className="mt-2"
+                      onClick={() => setIsTeamsExpanded(true)}
+                    >
+                      +{teamDetails.length - 20} more
+                    </Button>
+                  )}
+                  {isTeamsExpanded && teamDetails.length > 20 && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      className="mt-2"
+                      onClick={() => setIsTeamsExpanded(false)}
+                    >
+                      Show Less
+                    </Button>
                   )}
                 </div>
               </Card>
@@ -435,43 +598,6 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Teams</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {teamDetails.length > 0 ? (
-                        <>
-                          {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team, index) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 bg-blue-100 rounded text-xs"
-                              title={team.team_alias || team.team_id}
-                            >
-                              {team.team_alias || team.team_id}
-                            </span>
-                          ))}
-                          {!isTeamsExpanded && teamDetails.length > 20 && (
-                            <span
-                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
-                              onClick={() => setIsTeamsExpanded(true)}
-                            >
-                              +{teamDetails.length - 20} more
-                            </span>
-                          )}
-                          {isTeamsExpanded && teamDetails.length > 20 && (
-                            <span
-                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
-                              onClick={() => setIsTeamsExpanded(false)}
-                            >
-                              Show Less
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <Text>No teams</Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
                     <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.models?.length && userData.models?.length > 0 ? (
@@ -519,6 +645,87 @@ export default function UserInfoView({
         invitationLinkData={invitationLinkData}
         modalType="resetPassword"
       />
+
+      {/* Delete Team Member Modal */}
+      <DeleteResourceModal
+        isOpen={isRemoveTeamModalOpen}
+        title="Remove from Team"
+        alertMessage="Removing this user from the team will also delete any keys the user created for this team."
+        message="Are you sure you want to remove this user from the team? This action cannot be undone."
+        resourceInformationTitle="Team Membership"
+        resourceInformation={[
+          { label: "Team", value: teamToRemove?.team_alias || teamToRemove?.team_id },
+          { label: "User ID", value: userData?.user_id, code: true },
+          { label: "Email", value: userData?.user_email },
+        ]}
+        onCancel={handleRemoveTeamCancel}
+        onOk={handleRemoveTeamConfirm}
+        confirmLoading={isRemovingTeam}
+      />
+
+      {/* Add to Team Modal */}
+      <Modal
+        title="Add User to Team"
+        open={isAddTeamModalOpen}
+        onCancel={() => setIsAddTeamModalOpen(false)}
+        footer={null}
+        width={500}
+        maskClosable={!isAddingTeam}
+      >
+        <Form
+          layout="vertical"
+          onFinish={handleAddTeamSubmit}
+        >
+          <Form.Item label="Team" required>
+            <AntdSelect
+              showSearch
+              value={selectedTeamId || undefined}
+              onChange={setSelectedTeamId}
+              placeholder="Select a team"
+              filterOption={(input, option) => {
+                const team = availableTeamsForAdd.find((t) => t.team_id === option?.value);
+                if (!team) return false;
+                return team.team_alias.toLowerCase().includes(input.toLowerCase());
+              }}
+              loading={isLoadingTeams}
+            >
+              {availableTeamsForAdd.map((team) => (
+                <AntdSelect.Option key={team.team_id} value={team.team_id}>
+                  {team.team_alias}
+                </AntdSelect.Option>
+              ))}
+            </AntdSelect>
+          </Form.Item>
+
+          <Form.Item label="Member Role">
+            <AntdSelect value={selectedRole} onChange={setSelectedRole}>
+              <AntdSelect.Option value="user">
+                <Tooltip title="Can view team info, but not manage it">
+                  <span className="font-medium">user</span>
+                  <span className="ml-2 text-gray-500 text-sm">- Can view team info, but not manage it</span>
+                </Tooltip>
+              </AntdSelect.Option>
+              <AntdSelect.Option value="admin">
+                <Tooltip title="Can create team keys, add members, and manage settings">
+                  <span className="font-medium">admin</span>
+                  <span className="ml-2 text-gray-500 text-sm">- Can create team keys, add members, and manage settings</span>
+                </Tooltip>
+              </AntdSelect.Option>
+            </AntdSelect>
+          </Form.Item>
+
+          <div className="text-right mt-4">
+            <AntdButton
+              type="primary"
+              htmlType="submit"
+              loading={isAddingTeam}
+              disabled={!selectedTeamId}
+            >
+              {isAddingTeam ? "Adding..." : "Add to Team"}
+            </AntdButton>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 }
