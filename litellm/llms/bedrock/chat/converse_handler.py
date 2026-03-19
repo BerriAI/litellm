@@ -335,9 +335,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_external_id = optional_params.pop("aws_external_id", None)
         optional_params.pop("aws_region_name", None)
 
-        litellm_params["aws_region_name"] = (
-            aws_region_name  # [DO NOT DELETE] important for async calls
-        )
+        litellm_params[
+            "aws_region_name"
+        ] = aws_region_name  # [DO NOT DELETE] important for async calls
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
