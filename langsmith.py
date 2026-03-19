@@ -165,6 +165,16 @@ class LangsmithLogger(CustomBatchLogger):
                 "extra": extra_metadata,
             }
 
+            # Add usage_metadata for LangSmith Cost column
+            # LangSmith reads cost exclusively from outputs["usage_metadata"]["total_cost"]
+            if isinstance(data.get("outputs"), dict):
+                data["outputs"]["usage_metadata"] = {
+                    "input_tokens": payload.get("prompt_tokens", 0),
+                    "output_tokens": payload.get("completion_tokens", 0),
+                    "total_tokens": payload.get("total_tokens", 0),
+                    "total_cost": payload.get("response_cost", 0.0),
+                }
+
             if payload["error_str"] is not None and payload["status"] == "failure":
                 data["error"] = payload["error_str"]
 
@@ -207,18 +217,6 @@ class LangsmithLogger(CustomBatchLogger):
                 data["dotted_order"] = self.make_dot_order(run_id=run_id)  # type: ignore
 
             verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
-
-            # Fix: Add usage_metadata to outputs so LangSmith displays cost column
-            # LangSmith reads cost exclusively from outputs["usage_metadata"]["total_cost"]
-            if isinstance(data.get("outputs"), dict):
-                data["outputs"]["usage_metadata"] = {
-                    "input_tokens": payload.get("prompt_tokens", 0),
-                    "output_tokens": payload.get("completion_tokens", 0),
-                    "total_tokens": payload.get("total_tokens", 0),
-                    "input_cost": payload.get("response_cost", 0.0),
-                    "output_cost": 0.0,
-                    "total_cost": payload.get("response_cost", 0.0),
-                }
 
             return data
         except Exception:
