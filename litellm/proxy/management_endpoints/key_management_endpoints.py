@@ -2324,6 +2324,8 @@ async def bulk_update_keys(
                     error_message = error_detail.get("error", str(e))
                 else:
                     error_message = str(error_detail)
+            elif isinstance(e, ProxyException):
+                error_message = e.message
             else:
                 error_message = str(e)
 
