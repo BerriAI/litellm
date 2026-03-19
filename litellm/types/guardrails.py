@@ -80,6 +80,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    OPENGUARDRAILS = "openguardrails"
 
 
 class Role(Enum):
