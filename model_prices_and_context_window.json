@@ -37032,5 +37032,23 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "modelslab/llama-3.1-8b-uncensored": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "modelslab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0
+    },
+    "modelslab/llama-3.1-70b-uncensored": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "modelslab",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0
     }
 }

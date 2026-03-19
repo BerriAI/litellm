@@ -101,5 +101,12 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "modelslab": {
+    "base_url": "https://modelslab.com/uncensored-chat/v1",
+    "api_key_env": "MODELSLAB_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
