@@ -717,6 +717,8 @@ def convert_anyof_null_to_nullable(schema, depth=0):
 
 
 def add_object_type(schema):
+    # Make a deep copy to avoid mutating the original schema
+    schema = deepcopy(schema)
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
     if (

@@ -208,6 +208,18 @@ class LangsmithLogger(CustomBatchLogger):
 
             verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
 
+            # Fix: Add usage_metadata to outputs so LangSmith displays cost column
+            # LangSmith reads cost exclusively from outputs["usage_metadata"]["total_cost"]
+            if isinstance(data.get("outputs"), dict):
+                data["outputs"]["usage_metadata"] = {
+                    "input_tokens": payload.get("prompt_tokens", 0),
+                    "output_tokens": payload.get("completion_tokens", 0),
+                    "total_tokens": payload.get("total_tokens", 0),
+                    "input_cost": payload.get("response_cost", 0.0),
+                    "output_cost": 0.0,
+                    "total_cost": payload.get("response_cost", 0.0),
+                }
+
             return data
         except Exception:
             raise
