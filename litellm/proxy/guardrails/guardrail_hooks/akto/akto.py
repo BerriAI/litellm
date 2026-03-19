@@ -321,20 +321,25 @@ class AktoGuardrail(CustomGuardrail):
 
         return inputs
 
+    def extract_logging_data(self, kwargs: dict) -> dict:
+        """Promote metadata and proxy_server_request from litellm_params to top level."""
+        litellm_params = kwargs.get("litellm_params") or {}
+        data = dict(kwargs)
+        if (
+            "proxy_server_request" not in data
+            and "proxy_server_request" in litellm_params
+        ):
+            data["proxy_server_request"] = litellm_params["proxy_server_request"]
+        if "metadata" not in data and "metadata" in litellm_params:
+            data["metadata"] = litellm_params["metadata"]
+        return data
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Logging_only: non-blocking ingestion of request+response to Akto."""
         if not self.has_hook("logging_only"):
             return
         try:
-            litellm_params = kwargs.get("litellm_params") or {}
-            data = dict(kwargs)
-            if (
-                "proxy_server_request" not in data
-                and "proxy_server_request" in litellm_params
-            ):
-                data["proxy_server_request"] = litellm_params["proxy_server_request"]
-            if "metadata" not in data and "metadata" in litellm_params:
-                data["metadata"] = litellm_params["metadata"]
+            data = self.extract_logging_data(kwargs)
             payload = self.build_akto_payload(data, response_obj=response_obj)
             self.schedule(
                 self.fire_and_forget(
@@ -343,3 +348,18 @@ class AktoGuardrail(CustomGuardrail):
             )
         except Exception as e:
             verbose_proxy_logger.error("Akto logging error: %s", e)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """Logging_only: non-blocking ingestion of failed LLM calls to Akto."""
+        if not self.has_hook("logging_only"):
+            return
+        try:
+            data = self.extract_logging_data(kwargs)
+            payload = self.build_akto_payload(data, status_code=500)
+            self.schedule(
+                self.fire_and_forget(
+                    guardrails=False, ingest_data=True, payload=payload
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Akto logging error (failure): %s", e)

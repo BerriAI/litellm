@@ -362,9 +362,7 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
             inputs=sample_inputs, request_data=sample_request_data, input_type="request"
         )
 
-    # Yield control twice to let the fire-and-forget task chain complete
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.gather(*akto_validate.background_tasks)
 
     assert exc.value.status_code == 403
     assert akto_validate.async_handler.post.call_count == 2
@@ -424,8 +422,7 @@ async def test_logging_ingests(akto_logging):
     await akto_logging.async_log_success_event(
         kwargs=kwargs, response_obj=mock_resp, start_time=None, end_time=None
     )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.gather(*akto_logging.background_tasks)
 
     akto_logging.async_handler.post.assert_called_once()
     call = akto_logging.async_handler.post.call_args.kwargs
@@ -461,6 +458,45 @@ async def test_logging_skips_for_pre_call():
     g.async_handler.post.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_failure_event_ingests(akto_logging):
+    akto_logging.async_handler.post = AsyncMock(return_value=_mock_allowed())
+    kwargs = {
+        "messages": [{"role": "user", "content": "bad prompt"}],
+        "model": "gpt-4",
+        "litellm_params": {
+            "metadata": {"user_api_key_request_route": "/v1/chat/completions"},
+            "proxy_server_request": {},
+        },
+    }
+    await akto_logging.async_log_failure_event(
+        kwargs=kwargs, response_obj=None, start_time=None, end_time=None
+    )
+    await asyncio.gather(*akto_logging.background_tasks)
+
+    akto_logging.async_handler.post.assert_called_once()
+    call = akto_logging.async_handler.post.call_args.kwargs
+    assert call["params"].get("ingest_data") == "true"
+    payload = json.loads(call["data"])
+    assert payload["statusCode"] == "500"
+    assert payload["path"] == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_failure_event_skips_for_pre_call():
+    g = AktoGuardrail(
+        akto_base_url="http://x",
+        akto_api_key="tok",
+        guardrail_name="t",
+        event_hook="pre_call",
+    )
+    g.async_handler.post = AsyncMock()
+    await g.async_log_failure_event(
+        kwargs={}, response_obj=None, start_time=None, end_time=None
+    )
+    g.async_handler.post.assert_not_called()
+
+
 # ── Combined mode (pre_call + logging_only) ──
 
 
@@ -491,8 +527,7 @@ async def test_combined_logging_works(akto_combined):
         start_time=None,
         end_time=None,
     )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await asyncio.gather(*akto_combined.background_tasks)
     akto_combined.async_handler.post.assert_called_once()
 
 
