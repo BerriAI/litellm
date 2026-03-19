@@ -7,6 +7,7 @@ export default function useProxySettings() {
   const [proxySettings, setProxySettings] = useState({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
+    LITELLM_UI_API_DOC_BASE_URL: null as string | null,
   });
 
   useEffect(() => {
