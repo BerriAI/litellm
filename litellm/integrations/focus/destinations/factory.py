@@ -59,17 +59,14 @@ class FocusDestinationFactory:
             return {k: v for k, v in resolved.items() if v is not None}
         if provider == "vantage":
             resolved = {
-                "api_key": overrides.get("api_key")
-                or os.getenv("VANTAGE_API_KEY"),
+                "api_key": overrides.get("api_key") or os.getenv("VANTAGE_API_KEY"),
                 "integration_token": overrides.get("integration_token")
                 or os.getenv("VANTAGE_INTEGRATION_TOKEN"),
                 "base_url": overrides.get("base_url")
                 or os.getenv("VANTAGE_BASE_URL", "https://api.vantage.sh"),
             }
             if not resolved.get("api_key"):
-                raise ValueError(
-                    "VANTAGE_API_KEY must be provided for Vantage exports"
-                )
+                raise ValueError("VANTAGE_API_KEY must be provided for Vantage exports")
             if not resolved.get("integration_token"):
                 raise ValueError(
                     "VANTAGE_INTEGRATION_TOKEN must be provided for Vantage exports"

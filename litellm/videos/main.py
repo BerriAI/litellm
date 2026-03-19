@@ -1186,13 +1186,17 @@ def video_create_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+        provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
             model=None,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(f"video create character is not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"video create character is not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
         request_params: Dict = {"name": name}
@@ -1311,13 +1315,17 @@ def video_get_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+        provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
             model=None,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(f"video get character is not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"video get character is not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
         request_params: Dict = {"character_id": character_id}
@@ -1439,7 +1447,9 @@ def video_edit(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+        provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
             model=None,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
@@ -1572,16 +1582,24 @@ def video_extension(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[BaseVideoConfig] = ProviderConfigManager.get_provider_video_config(
+        provider_config: Optional[
+            BaseVideoConfig
+        ] = ProviderConfigManager.get_provider_video_config(
             model=None,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if provider_config is None:
-            raise ValueError(f"video extension is not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"video extension is not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
-        request_params: Dict = {"video_id": video_id, "prompt": prompt, "seconds": seconds}
+        request_params: Dict = {
+            "video_id": video_id,
+            "prompt": prompt,
+            "seconds": seconds,
+        }
 
         litellm_logging_obj.update_environment_variables(
             model="",
