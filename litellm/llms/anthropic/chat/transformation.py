@@ -61,7 +61,7 @@ from litellm.types.utils import (
 )
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
-    OutputCodeInterpreterCallLog,
+    build_code_interpreter_log_outputs,
 )
 from litellm.utils import (
     ModelResponse,
@@ -1771,20 +1771,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         continue
                     call_id = tr.get("tool_use_id", "")
                     content = tr.get("content", {})
-                    if isinstance(content, dict):
-                        parts = []
-                        if content.get("stdout"):
-                            parts.append(content["stdout"])
-                        if content.get("stderr"):
-                            parts.append(f"STDERR: {content['stderr']}")
-                        logs = "".join(parts)
-                    else:
-                        logs = ""
-                    log_outputs = (
-                        [OutputCodeInterpreterCallLog(type="logs", logs=logs)]
-                        if logs
-                        else None
-                    )
+                    log_outputs = build_code_interpreter_log_outputs(content)
                     code_interpreter_results.append(
                         OutputCodeInterpreterCall(
                             type="code_interpreter_call",
