@@ -205,11 +205,18 @@ async def anthropic_messages(
     # Extract modified parameters
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
-    # Propagate the provider derived inside pre-request hooks, if not already set
+    # Propagate the provider derived inside pre-request hooks, if not already set.
+    # The litellm_params dict may have been overwritten by **kwargs in
+    # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
     if not custom_llm_provider:
         custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
             "custom_llm_provider"
         )
+        if not custom_llm_provider:
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:
+                pass
     # Remove litellm_params from kwargs (only needed for hooks)
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications

@@ -115,6 +115,29 @@ class TestTryShortCircuitSearch:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_does_not_short_circuit_bedrock(self):
+        """Bedrock has native agentic loop support → NOT short-circuited.
+
+        Providers with a BaseAnthropicMessagesConfig (bedrock, vertex_ai, etc.)
+        use the agentic loop which includes a follow-up LLM synthesis step.
+        The short-circuit must not fire for them.
+        """
+        logger = WebSearchInterceptionLogger(
+            enabled_providers=["bedrock", "github_copilot"]
+        )
+
+        result = await logger.try_short_circuit_search(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Search for something"}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
+            custom_llm_provider="bedrock",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_does_not_short_circuit_no_messages(self):
         """Empty messages → NOT short-circuited"""
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
