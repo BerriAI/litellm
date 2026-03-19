@@ -1179,10 +1179,6 @@ class ProxyBaseLLMRequestProcessing:
                 if _deferred_fn is not None:
                     logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
                     try:
-                        from litellm.litellm_core_utils.thread_pool_executor import (
-                            executor as _exc,
-                        )
-
                         asyncio.create_task(
                             logging_obj.async_success_handler(
                                 response,
@@ -1191,6 +1187,15 @@ class ProxyBaseLLMRequestProcessing:
                                 end_time=None,
                             )
                         )
+                    except Exception as e:
+                        verbose_proxy_logger.exception(
+                            "Error in orphaned streaming async logging: %s", e
+                        )
+                    try:
+                        from litellm.litellm_core_utils.thread_pool_executor import (
+                            executor as _exc,
+                        )
+
                         _exc.submit(
                             logging_obj.success_handler,
                             response,
@@ -1200,7 +1205,7 @@ class ProxyBaseLLMRequestProcessing:
                         )
                     except Exception as e:
                         verbose_proxy_logger.exception(
-                            "Error in orphaned streaming closure cleanup: %s", e
+                            "Error in orphaned streaming sync logging: %s", e
                         )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
