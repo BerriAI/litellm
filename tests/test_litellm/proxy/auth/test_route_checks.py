@@ -1397,3 +1397,10 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
             assert wildcard_path not in LiteLLMRoutes.openai_routes.value
     finally:
         LiteLLMRoutes.openai_routes.value[:] = original_routes
+        # Clean up any routes registered during this test to avoid
+        # polluting the module-level _registered_pass_through_routes
+        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        for k in registered:
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(
+                k.split(":")[0]
+            )

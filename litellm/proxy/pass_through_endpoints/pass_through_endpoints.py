@@ -2033,13 +2033,13 @@ class InitPassThroughEndpointHelpers:
             route_info = _registered_pass_through_routes[key]
             path = route_info.get("path")
             if isinstance(path, str):
-                # Remove base path and wildcard path from openai_routes
                 openai_routes = LiteLLMRoutes.openai_routes.value
                 if path in openai_routes:
                     openai_routes.remove(path)
-                wildcard_path = path.rstrip("/") + "/*"
-                if wildcard_path in openai_routes:
-                    openai_routes.remove(wildcard_path)
+                if route_info.get("type") == "subpath":
+                    wildcard_path = path.rstrip("/") + "/*"
+                    if wildcard_path in openai_routes:
+                        openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug(
                 "Removed pass-through route from registry: %s", key
