@@ -5100,13 +5100,15 @@ async def test_validate_max_budget():
 async def test_get_and_validate_existing_key():
     """
     Test _get_and_validate_existing_key helper function.
-    
+
     Tests:
     1. Successfully retrieve existing key
-    2. Key not found raises HTTPException
+    2. Key not found raises ProxyException
     3. Database not connected raises HTTPException
     """
     from fastapi import HTTPException
+
+    from litellm.proxy._types import ProxyException
 
     # Test Case 1: Successfully retrieve existing key
     mock_prisma_client = AsyncMock()
@@ -5116,39 +5118,49 @@ async def test_get_and_validate_existing_key():
         models=["gpt-4"],
         team_id=None,
     )
-    mock_prisma_client.get_data = AsyncMock(return_value=mock_key)
-    
-    result = await _get_and_validate_existing_key(
-        token="test-key-123",
-        prisma_client=mock_prisma_client,
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key
     )
-    
-    assert result == mock_key
-    mock_prisma_client.get_data.assert_called_once_with(
-        token="test-key-123",
-        table_name="key",
-        query_type="find_unique",
-    )
-    
-    # Test Case 2: Key not found raises HTTPException
-    mock_prisma_client.get_data = AsyncMock(return_value=None)
-    
-    with pytest.raises(HTTPException) as exc_info:
-        await _get_and_validate_existing_key(
-            token="non-existent-key",
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value="hashed-test-key-123",
+    ):
+        result = await _get_and_validate_existing_key(
+            token="test-key-123",
             prisma_client=mock_prisma_client,
         )
-    
-    assert exc_info.value.status_code == 404
-    assert "Key not found" in str(exc_info.value.detail)
-    
+
+    assert result == mock_key
+    mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once_with(
+        where={"token": "hashed-test-key-123"}
+    )
+
+    # Test Case 2: Key not found raises ProxyException
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value="hashed-non-existent-key",
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _get_and_validate_existing_key(
+                token="non-existent-key",
+                prisma_client=mock_prisma_client,
+            )
+
+    assert str(exc_info.value.code) == "404"
+    assert "Key not found" in exc_info.value.message
+
     # Test Case 3: Database not connected raises HTTPException
     with pytest.raises(HTTPException) as exc_info:
         await _get_and_validate_existing_key(
             token="test-key-123",
             prisma_client=None,
         )
-    
+
     assert exc_info.value.status_code == 500
     assert "Database not connected" in str(exc_info.value.detail)
 
@@ -5189,75 +5201,82 @@ async def test_process_single_key_update():
         "tags": ["production"],
     }
     
-    mock_prisma_client.get_data = AsyncMock(return_value=existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=existing_key
+    )
     mock_updated_key_obj = MagicMock()
     mock_updated_key_obj.model_dump.return_value = updated_key_data
     mock_prisma_client.update_data = AsyncMock(
         return_value={"data": mock_updated_key_obj}
     )
-    
+
     # Mock prepare_key_update_data
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data"
     ) as mock_prepare:
         mock_prepare.return_value = {"max_budget": 100.0, "tags": ["production"]}
-        
+
         # Mock TeamMemberPermissionChecks
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint"
         ) as mock_permission_check:
             mock_permission_check.return_value = None
-            
+
             # Mock _delete_cache_key_object
             with patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
             ) as mock_delete_cache:
                 mock_delete_cache.return_value = None
-                
+
                 # Mock hash_token (imported from litellm.proxy._types)
                 with patch(
                     "litellm.proxy._types.hash_token"
                 ) as mock_hash:
                     mock_hash.return_value = "hashed-test-key-123"
-                    
-                    # Mock KeyManagementEventHooks
+
+                    # Mock _hash_token_if_needed
                     with patch(
-                        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+                        return_value="hashed-test-key-123",
                     ):
-                        # Create update request
-                        key_update_item = BulkUpdateKeyRequestItem(
-                            key="test-key-123",
-                            max_budget=100.0,
-                            tags=["production"],
-                        )
-                        
-                        user_api_key_dict = UserAPIKeyAuth(
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            api_key="sk-admin",
-                            user_id="admin-user",
-                        )
-                        
-                        # Call the function
-                        result = await _process_single_key_update(
-                            key_update_item=key_update_item,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_changed_by=None,
-                            prisma_client=mock_prisma_client,
-                            user_api_key_cache=mock_user_api_key_cache,
-                            proxy_logging_obj=mock_proxy_logging_obj,
-                            llm_router=mock_llm_router,
-                        )
-                        
-                        # Verify results
-                        assert result is not None
-                        assert "token" not in result  # Token should be removed
-                        assert result.get("max_budget") == 100.0
-                        assert result.get("tags") == ["production"]
-                        
-                        # Verify mocks were called
-                        mock_prisma_client.get_data.assert_called_once()
-                        mock_prisma_client.update_data.assert_called_once()
-                        mock_delete_cache.assert_called_once()
+                        # Mock KeyManagementEventHooks
+                        with patch(
+                            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        ):
+                            # Create update request
+                            key_update_item = BulkUpdateKeyRequestItem(
+                                key="test-key-123",
+                                max_budget=100.0,
+                                tags=["production"],
+                            )
+
+                            user_api_key_dict = UserAPIKeyAuth(
+                                user_role=LitellmUserRoles.PROXY_ADMIN,
+                                api_key="sk-admin",
+                                user_id="admin-user",
+                            )
+
+                            # Call the function
+                            result = await _process_single_key_update(
+                                key_update_item=key_update_item,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_changed_by=None,
+                                prisma_client=mock_prisma_client,
+                                user_api_key_cache=mock_user_api_key_cache,
+                                proxy_logging_obj=mock_proxy_logging_obj,
+                                llm_router=mock_llm_router,
+                            )
+
+                            # Verify results
+                            assert result is not None
+                            assert "token" not in result  # Token should be removed
+                            assert result.get("max_budget") == 100.0
+                            assert result.get("tags") == ["production"]
+
+                            # Verify mocks were called
+                            mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once()
+                            mock_prisma_client.update_data.assert_called_once()
+                            mock_delete_cache.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -5319,7 +5338,7 @@ async def test_bulk_update_keys_success(monkeypatch):
         "tags": ["staging"],
     }
     
-    mock_prisma_client.get_data = AsyncMock(
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         side_effect=[existing_key_1, existing_key_2]
     )
     mock_updated_key_1_obj = MagicMock()
@@ -5332,7 +5351,7 @@ async def test_bulk_update_keys_success(monkeypatch):
             {"data": mock_updated_key_2_obj},
         ]
     )
-    
+
     # Patch dependencies
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
@@ -5344,7 +5363,7 @@ async def test_bulk_update_keys_success(monkeypatch):
         "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_llm_router)
-    
+
     # Mock helper functions
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data"
@@ -5353,7 +5372,7 @@ async def test_bulk_update_keys_success(monkeypatch):
             {"max_budget": 100.0, "tags": ["production"]},
             {"max_budget": 200.0, "tags": ["staging"]},
         ]
-        
+
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint"
         ):
@@ -5364,45 +5383,49 @@ async def test_bulk_update_keys_success(monkeypatch):
                     "litellm.proxy._types.hash_token"
                 ) as mock_hash:
                     mock_hash.side_effect = ["hashed-key-1", "hashed-key-2"]
-                    
+
                     with patch(
-                        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+                        side_effect=["hashed-key-1", "hashed-key-2"],
                     ):
-                        # Create request
-                        request_data = BulkUpdateKeyRequest(
-                            keys=[
-                                BulkUpdateKeyRequestItem(
-                                    key="test-key-1",
-                                    max_budget=100.0,
-                                    tags=["production"],
-                                ),
-                                BulkUpdateKeyRequestItem(
-                                    key="test-key-2",
-                                    max_budget=200.0,
-                                    tags=["staging"],
-                                ),
-                            ]
-                        )
-                        
-                        user_api_key_dict = UserAPIKeyAuth(
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            api_key="sk-admin",
-                            user_id="admin-user",
-                        )
-                        
-                        # Call endpoint
-                        response = await bulk_update_keys(
-                            data=request_data,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_changed_by=None,
-                        )
-                        
-                        # Verify response
-                        assert response.total_requested == 2
-                        assert len(response.successful_updates) == 2
-                        assert len(response.failed_updates) == 0
-                        assert response.successful_updates[0].key == "test-key-1"
-                        assert response.successful_updates[1].key == "test-key-2"
+                        with patch(
+                            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        ):
+                            # Create request
+                            request_data = BulkUpdateKeyRequest(
+                                keys=[
+                                    BulkUpdateKeyRequestItem(
+                                        key="test-key-1",
+                                        max_budget=100.0,
+                                        tags=["production"],
+                                    ),
+                                    BulkUpdateKeyRequestItem(
+                                        key="test-key-2",
+                                        max_budget=200.0,
+                                        tags=["staging"],
+                                    ),
+                                ]
+                            )
+
+                            user_api_key_dict = UserAPIKeyAuth(
+                                user_role=LitellmUserRoles.PROXY_ADMIN,
+                                api_key="sk-admin",
+                                user_id="admin-user",
+                            )
+
+                            # Call endpoint
+                            response = await bulk_update_keys(
+                                data=request_data,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_changed_by=None,
+                            )
+
+                            # Verify response
+                            assert response.total_requested == 2
+                            assert len(response.successful_updates) == 2
+                            assert len(response.failed_updates) == 0
+                            assert response.successful_updates[0].key == "test-key-1"
+                            assert response.successful_updates[1].key == "test-key-2"
 
 
 @pytest.mark.asyncio
@@ -5447,7 +5470,7 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
     }
     
     # First key exists, second key doesn't exist
-    mock_prisma_client.get_data = AsyncMock(
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         side_effect=[existing_key_1, None]  # Second key not found
     )
     mock_updated_key_1_obj = MagicMock()
@@ -5455,7 +5478,9 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
     mock_prisma_client.update_data = AsyncMock(
         return_value={"data": mock_updated_key_1_obj}
     )
-    
+    # Mock get_data for the error handler path (used to fetch key_info on failure)
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+
     # Patch dependencies
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
@@ -5467,13 +5492,13 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
         "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_llm_router)
-    
+
     # Mock helper functions
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data"
     ) as mock_prepare:
         mock_prepare.return_value = {"max_budget": 100.0, "tags": ["production"]}
-        
+
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint"
         ):
@@ -5484,46 +5509,50 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
                     "litellm.proxy._types.hash_token"
                 ) as mock_hash:
                     mock_hash.return_value = "hashed-key-1"
-                    
+
                     with patch(
-                        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+                        side_effect=["hashed-key-1", "hashed-non-existent-key"],
                     ):
-                        # Create request with one valid and one invalid key
-                        request_data = BulkUpdateKeyRequest(
-                            keys=[
-                                BulkUpdateKeyRequestItem(
-                                    key="test-key-1",
-                                    max_budget=100.0,
-                                    tags=["production"],
-                                ),
-                                BulkUpdateKeyRequestItem(
-                                    key="non-existent-key",
-                                    max_budget=200.0,
-                                    tags=["staging"],
-                                ),
-                            ]
-                        )
-                        
-                        user_api_key_dict = UserAPIKeyAuth(
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            api_key="sk-admin",
-                            user_id="admin-user",
-                        )
-                        
-                        # Call endpoint
-                        response = await bulk_update_keys(
-                            data=request_data,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_changed_by=None,
-                        )
-                        
-                        # Verify response
-                        assert response.total_requested == 2
-                        assert len(response.successful_updates) == 1
-                        assert len(response.failed_updates) == 1
-                        assert response.successful_updates[0].key == "test-key-1"
-                        assert response.failed_updates[0].key == "non-existent-key"
-                        assert "Key not found" in response.failed_updates[0].failed_reason
+                        with patch(
+                            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
+                        ):
+                            # Create request with one valid and one invalid key
+                            request_data = BulkUpdateKeyRequest(
+                                keys=[
+                                    BulkUpdateKeyRequestItem(
+                                        key="test-key-1",
+                                        max_budget=100.0,
+                                        tags=["production"],
+                                    ),
+                                    BulkUpdateKeyRequestItem(
+                                        key="non-existent-key",
+                                        max_budget=200.0,
+                                        tags=["staging"],
+                                    ),
+                                ]
+                            )
+
+                            user_api_key_dict = UserAPIKeyAuth(
+                                user_role=LitellmUserRoles.PROXY_ADMIN,
+                                api_key="sk-admin",
+                                user_id="admin-user",
+                            )
+
+                            # Call endpoint
+                            response = await bulk_update_keys(
+                                data=request_data,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_changed_by=None,
+                            )
+
+                            # Verify response
+                            assert response.total_requested == 2
+                            assert len(response.successful_updates) == 1
+                            assert len(response.failed_updates) == 1
+                            assert response.successful_updates[0].key == "test-key-1"
+                            assert response.failed_updates[0].key == "non-existent-key"
+                            assert "Key not found" in response.failed_updates[0].failed_reason
 
 
 @pytest.mark.parametrize(
