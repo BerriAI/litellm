@@ -387,6 +387,31 @@ class TestDeploymentDefaultRpmLimit:
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result is None
 
+    def test_returns_minimum_across_multiple_deployments(self):
+        """When multiple deployments share a model name, the minimum rpm limit is used."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", rpm=200),
+            _make_deployment_dict("model1", rpm=50),
+            _make_deployment_dict("model1", rpm=150),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 50}
+
+    def test_ignores_deployments_without_default_when_others_have_it(self):
+        """Deployments missing the field are skipped; min is taken over those that have it."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1"),        # no rpm default
+            _make_deployment_dict("model1", rpm=75),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 75}
+
 
 class TestDeploymentDefaultTpmLimit:
     """Tests for deployment default_api_key_tpm_limit fallback in get_key_model_tpm_limit."""
@@ -444,3 +469,28 @@ class TestDeploymentDefaultTpmLimit:
         with patch(_ROUTER_PATCH, None):
             result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
         assert result is None
+
+    def test_returns_minimum_across_multiple_deployments(self):
+        """When multiple deployments share a model name, the minimum tpm limit is used."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", tpm=1000),
+            _make_deployment_dict("model1", tpm=300),
+            _make_deployment_dict("model1", tpm=700),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 300}
+
+    def test_ignores_deployments_without_default_when_others_have_it(self):
+        """Deployments missing the field are skipped; min is taken over those that have it."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1"),           # no tpm default
+            _make_deployment_dict("model1", tpm=400),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 400}
