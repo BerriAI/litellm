@@ -72,6 +72,7 @@ import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageU
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
+import MessageActions from "./MessageActions";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 
@@ -160,7 +161,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(() => {
+    if (simplified) return fixedModel;
+    return sessionStorage.getItem("selectedModel") || undefined;
+  });
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
@@ -245,6 +249,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
+
+  const [pendingResend, setPendingResend] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -1221,6 +1227,52 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setInputMessage("");
   };
 
+  useEffect(() => {
+    if (pendingResend && inputMessage.trim() !== "" && !isLoading) {
+      setPendingResend(false);
+      handleSendMessage();
+    }
+  }, [pendingResend, inputMessage]);
+
+  const handleRetry = (messageIndex: number) => {
+    if (isLoading || chatHistory.length === 0) return;
+
+    const message = chatHistory[messageIndex];
+    if (!message) return;
+
+    if (message.role === "user") {
+      const userContent = typeof message.content === "string" ? message.content : "";
+      setChatHistory(chatHistory.slice(0, messageIndex));
+      setInputMessage(userContent);
+      setPendingResend(true);
+    } else if (message.role === "assistant") {
+      // Find the user message that preceded this assistant response
+      let userMsgIdx = -1;
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        if (chatHistory[i].role === "user") {
+          userMsgIdx = i;
+          break;
+        }
+      }
+      if (userMsgIdx === -1) return;
+
+      const userContent = typeof chatHistory[userMsgIdx].content === "string"
+        ? (chatHistory[userMsgIdx].content as string) : "";
+      setChatHistory(chatHistory.slice(0, userMsgIdx));
+      setInputMessage(userContent);
+      setPendingResend(true);
+    }
+  };
+
+  const handleEditSubmit = (messageIndex: number, newContent: string) => {
+    if (isLoading) return;
+
+    // Truncate history at the edited message (remove it and everything after)
+    setChatHistory(chatHistory.slice(0, messageIndex));
+    setInputMessage(newContent);
+    setPendingResend(true);
+  };
+
   const clearChatHistory = () => {
     // Clean up audio object URLs before clearing history
     chatHistory.forEach((message) => {
@@ -1932,7 +1984,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
+                  <div className={`group mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
                     <div
                       className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
                       style={{
@@ -2092,6 +2144,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           />
                         )}
                       </div>
+                      <MessageActions
+                        role={message.role}
+                        content={typeof message.content === "string" ? message.content : ""}
+                        messageIndex={index}
+                        isLastAssistantMessage={
+                          message.role === "assistant" &&
+                          index === chatHistory.map((m) => m.role).lastIndexOf("assistant")
+                        }
+                        isLoading={isLoading}
+                        isImage={message.isImage}
+                        isAudio={message.isAudio}
+                        isEmbeddings={message.isEmbeddings}
+                        onRetry={handleRetry}
+                        onEditSubmit={handleEditSubmit}
+                      />
                     </div>
                   </div>
                 </div>
