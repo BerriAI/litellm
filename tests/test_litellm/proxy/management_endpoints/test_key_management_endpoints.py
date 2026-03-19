@@ -1545,6 +1545,46 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unblock_key_not_found_when_audit_logs_disabled(monkeypatch):
+    """
+    Missing key returns 404 even when litellm.store_audit_logs is False.
+    (find_unique must not be gated on audit logs — matches block_key.)
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import unblock_key
+
+    missing_hash = "0123456789abcdef" * 4  # 64 chars, valid for is_valid_api_key
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await unblock_key(
+            data=BlockKeyRequest(key=missing_hash),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "not found" in str(exc_info.value.message).lower()
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_unblock_key_invalid_key_format(monkeypatch):
     """
     Test that unblock_key properly validates key format and raises appropriate errors

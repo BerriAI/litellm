@@ -5098,18 +5098,18 @@ async def unblock_key(
     else:
         hashed_token = data.key
 
-    if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
+    key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if key_row is None:
+        raise ProxyException(
+            message=f"Key {data.key} not found",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+
+    if litellm.store_audit_logs is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -5121,9 +5121,9 @@ async def unblock_key(
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
-                    action="blocked",
+                    action="unblocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=key_row.model_dump_json(),
                 )
             )
         )
