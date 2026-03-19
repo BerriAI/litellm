@@ -1893,15 +1893,23 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-                    self.cache_streaming_response(
-                        processed_chunk=complete_streaming_response.model_copy(
+                    try:
+                        _cache_copy = complete_streaming_response.model_copy(
                             deep=True
-                        ),
+                        )
+                        _log_copy = complete_streaming_response.model_copy(
+                            deep=True
+                        )
+                    except RuntimeError:
+                        _cache_copy = complete_streaming_response.model_copy()
+                        _log_copy = complete_streaming_response.model_copy()
+                    self.cache_streaming_response(
+                        processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
                     executor.submit(
                         self.logging_obj.success_handler,
-                        complete_streaming_response.model_copy(deep=True),
+                        _log_copy,
                         None,
                         None,
                         cache_hit,
@@ -2113,11 +2121,15 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    try:
+                        _copy = complete_streaming_response.model_copy(
+                            deep=True
+                        )
+                    except RuntimeError:
+                        _copy = complete_streaming_response.model_copy()
                     asyncio.create_task(
                         self.async_cache_streaming_response(
-                            processed_chunk=complete_streaming_response.model_copy(
-                                deep=True
-                            ),
+                            processed_chunk=_copy,
                             cache_hit=cache_hit,
                         )
                     )

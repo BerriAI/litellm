@@ -291,7 +291,7 @@ class DataDogLogger(
 
             dd_payload = DatadogPayload(
                 ddsource=get_datadog_source(),
-                ddtags=get_datadog_tags(),
+                ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
                 message=safe_dumps(message_payload),
                 service=get_datadog_service(),
@@ -442,7 +442,7 @@ class DataDogLogger(
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
             ddsource=get_datadog_source(),
-            ddtags=get_datadog_tags(standard_logging_object=standard_logging_object),
+            ddtags=",".join(get_datadog_tags(standard_logging_object=standard_logging_object)),
             hostname=get_datadog_hostname(),
             message=json_payload,
             service=get_datadog_service(),
@@ -545,7 +545,7 @@ class DataDogLogger(
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=get_datadog_source(),
-                ddtags=get_datadog_tags(),
+                ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
                 message=_dd_message_str,
                 service=get_datadog_service(),
@@ -587,7 +587,7 @@ class DataDogLogger(
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=get_datadog_source(),
-                ddtags=get_datadog_tags(),
+                ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
                 message=_dd_message_str,
                 service=get_datadog_service(),
@@ -678,7 +678,7 @@ class DataDogLogger(
 
         dd_payload = DatadogPayload(
             ddsource=get_datadog_source(),
-            ddtags=get_datadog_tags(),
+            ddtags=",".join(get_datadog_tags()),
             hostname=get_datadog_hostname(),
             message=json_payload,
             service=get_datadog_service(),
