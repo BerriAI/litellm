@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 HTTP_PROXY_PATH = "/api/http-proxy"
 AKTO_CONNECTOR_NAME = "litellm"
 DEFAULT_GUARDRAIL_TIMEOUT = 5
+SENSITIVE_HEADERS = {"authorization", "x-litellm-api-key", "x-api-key", "cookie"}
 
 
 class AktoGuardrail(CustomGuardrail):
@@ -130,7 +131,7 @@ class AktoGuardrail(CustomGuardrail):
         proxy_req = data.get("proxy_server_request")
         if isinstance(proxy_req, dict):
             for key, val in (proxy_req.get("headers") or {}).items():
-                if key and val:
+                if key and val and str(key).lower() not in SENSITIVE_HEADERS:
                     headers[str(key).lower()] = str(val)
         if "host" not in headers:
             headers["host"] = "litellm.ai"
@@ -352,6 +353,10 @@ class AktoGuardrail(CustomGuardrail):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Logging_only: non-blocking ingestion of failed LLM calls to Akto."""
         if not self.has_hook("logging_only"):
+            return
+        # Skip guardrail-blocked requests — apply_guardrail already ingests those.
+        exception = kwargs.get("exception")
+        if isinstance(exception, HTTPException) and exception.status_code == 403:
             return
         try:
             data = self.extract_logging_data(kwargs)

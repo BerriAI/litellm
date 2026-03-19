@@ -497,6 +497,18 @@ async def test_failure_event_skips_for_pre_call():
     g.async_handler.post.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_failure_event_skips_guardrail_block(akto_logging):
+    akto_logging.async_handler.post = AsyncMock()
+    await akto_logging.async_log_failure_event(
+        kwargs={"exception": HTTPException(status_code=403, detail="Blocked")},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    akto_logging.async_handler.post.assert_not_called()
+
+
 # ── Combined mode (pre_call + logging_only) ──
 
 
@@ -624,6 +636,29 @@ def test_build_request_headers_from_proxy():
             }
         }
     )
+    assert headers["host"] == "myhost.com"
+    assert headers["user-agent"] == "test-agent"
+
+
+def test_build_request_headers_strips_sensitive():
+    headers = AktoGuardrail.build_request_headers(
+        {
+            "proxy_server_request": {
+                "headers": {
+                    "host": "myhost.com",
+                    "Authorization": "Bearer sk-secret",
+                    "X-Api-Key": "key-123",
+                    "X-LiteLLM-Api-Key": "litellm-key",
+                    "Cookie": "token=abc; session=xyz",
+                    "user-agent": "test-agent",
+                }
+            }
+        }
+    )
+    assert "authorization" not in headers
+    assert "x-api-key" not in headers
+    assert "x-litellm-api-key" not in headers
+    assert "cookie" not in headers
     assert headers["host"] == "myhost.com"
     assert headers["user-agent"] == "test-agent"
 
