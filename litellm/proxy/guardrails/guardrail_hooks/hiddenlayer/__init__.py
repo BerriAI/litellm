@@ -13,7 +13,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     api_id = litellm_params.api_id if hasattr(litellm_params, "api_id") else None
     auth_url = litellm_params.auth_url if hasattr(litellm_params, "auth_url") else None
-    version: int | None = litellm_params.version if hasattr(litellm_params, "version") else None
+    version: int | None = (
+        litellm_params.version if hasattr(litellm_params, "version") else None
+    )
 
     if not version or version < 2:
         _hiddenlayer_callback = HiddenlayerGuardrail(

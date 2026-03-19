@@ -157,7 +157,14 @@ class HiddenlayerGuardrail(CustomGuardrail):
             result = await self._call_hiddenlayer(
                 project_id,
                 hl_request_metadata,
-                {"messages": [{"role": last_msg.get("role", "user"), "content": last_msg.get("content", "")}]},
+                {
+                    "messages": [
+                        {
+                            "role": last_msg.get("role", "user"),
+                            "content": last_msg.get("content", ""),
+                        }
+                    ]
+                },
                 input_type,
             )
         elif text := inputs.get("texts"):
@@ -215,7 +222,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         headers = {
             "Content-Type": "application/json",
             "hl-runtime-edge-provider": "litellm",
-            "hl-runtime-edge-provider-version": "1"
+            "hl-runtime-edge-provider-version": "1",
         }
 
         if project_id:
@@ -267,6 +274,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         )
 
         return HiddenlayerGuardrailConfigModel
+
 
 class HiddenlayerGuardrailV2(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
@@ -353,7 +361,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 proxy_req["headers"]["hl-roundtrip-id"] = str(uuid4())
                 headers["hl-roundtrip-id"] = proxy_req["headers"]["hl-roundtrip-id"]
 
-        hl_headers = {h.lower():v for h,v in headers.items() if h.lower().startswith("hl-")} 
+        hl_headers = {
+            h.lower(): v for h, v in headers.items() if h.lower().startswith("hl-")
+        }
 
         if "hl-requester-id" not in hl_headers:
             hl_headers["hl-requester-id"] = "LiteLLM"
@@ -362,7 +372,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             payload = {
                 "messages": inputs.get("structured_messages"),
                 "model": inputs.get("model"),
-                "tools": inputs.get("tools")
+                "tools": inputs.get("tools"),
             }
         else:
             if inputs.get("texts"):
@@ -372,7 +382,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": inputs["texts"][0] if inputs.get("texts") else "",
+                                "content": inputs["texts"][0]
+                                if inputs.get("texts")
+                                else "",
                             },
                             "finish_reason": "stop",
                         }
@@ -384,9 +396,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 payload = {}
 
         response = await self._call_hiddenlayer(
-            payload,  # ty:ignore[invalid-argument-type]
-            input_type,
-            hl_headers
+            payload, input_type, hl_headers  # ty:ignore[invalid-argument-type]
         )
         output = response.json()
 
@@ -396,20 +406,23 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 detail={
                     "error": "Violated guardrail policy",
                     "hiddenlayer_guardrail_response": HiddenlayerMessages.BLOCK_MESSAGE.value,
-            })
+                },
+            )
 
         new_texts = []
         if input_type == "request":
-            inputs["structured_messages"] = output 
+            inputs["structured_messages"] = output
 
             for message in output.get("messages", []):
                 if content := message.get("content", ""):
                     new_texts.append(content)
-                
+
             inputs["texts"] = new_texts
-                
+
         elif input_type == "response" and inputs.get("texts"):
-            inputs["texts"] = [output.get("choices", [{}])[-1].get("message", {}).get("content", "")]
+            inputs["texts"] = [
+                output.get("choices", [{}])[-1].get("message", {}).get("content", "")
+            ]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output
 
@@ -419,9 +432,8 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         self,
         payload: dict[str, Any],
         input_type: Literal["request", "response"],
-        hl_headers: dict[str, str]
+        hl_headers: dict[str, str],
     ) -> httpx.Response:
-
         if input_type == "request":
             path = "detection/v2/request-evaluations"
         else:
@@ -430,7 +442,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         headers = {
             "Content-Type": "application/json",
             "hl-runtime-edge-provider": "litellm",
-            "hl-runtime-edge-provider-version": "2"
+            "hl-runtime-edge-provider-version": "2",
         }
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
