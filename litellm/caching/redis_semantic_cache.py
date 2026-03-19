@@ -313,11 +313,16 @@ class RedisSemanticCache(BaseCache):
                 )
             else:
                 # Generate embedding directly
-                embedding_response = await litellm.aembedding(
-                    model=self.embedding_model,
-                    input=prompt,
-                    cache={"no-store": True, "no-cache": True},
-                )
+                async_embed_kwargs: dict = {
+                    "model": self.embedding_model,
+                    "input": prompt,
+                    "cache": {"no-store": True, "no-cache": True},
+                }
+                if self.embedding_api_base is not None:
+                    async_embed_kwargs["api_base"] = self.embedding_api_base
+                if self.embedding_api_key is not None:
+                    async_embed_kwargs["api_key"] = self.embedding_api_key
+                embedding_response = await litellm.aembedding(**async_embed_kwargs)
 
             # Extract and return the embedding vector
             return embedding_response["data"][0]["embedding"]
