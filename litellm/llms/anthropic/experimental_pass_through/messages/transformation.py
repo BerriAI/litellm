@@ -118,6 +118,31 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
+    @staticmethod
+    def _strip_schema_from_tools(tools: List[Dict]) -> List[Dict]:
+        """
+        Remove the ``$schema`` key from each tool's ``input_schema``.
+
+        Anthropic's API does not accept ``$schema`` inside
+        ``input_schema`` and will reject the request with a validation
+        error.  Callers such as Claude Code routinely include this field,
+        so we strip it before forwarding the request.
+        """
+        sanitized_tools: List[Dict] = []
+        for tool in tools:
+            if isinstance(tool, dict) and isinstance(
+                tool.get("input_schema"), dict
+            ):
+                if "$schema" in tool["input_schema"]:
+                    tool = {**tool}  # shallow copy to avoid mutating caller data
+                    tool["input_schema"] = {
+                        k: v
+                        for k, v in tool["input_schema"].items()
+                        if k != "$schema"
+                    }
+            sanitized_tools.append(tool)
+        return sanitized_tools
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -212,6 +237,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 anthropic_messages_optional_request_params[
                     "context_management"
                 ] = transformed_context_management
+
+        # Strip unsupported $schema field from tool input_schema objects.
+        # Clients like Claude Code include $schema in tool definitions, but
+        # Anthropic's API rejects unknown fields.  PR #23103 fixed this for
+        # the /v1/chat/completions path; apply the same sanitisation here.
+        tools = anthropic_messages_optional_request_params.get("tools")
+        if tools:
+            anthropic_messages_optional_request_params["tools"] = (
+                self._strip_schema_from_tools(tools)
+            )
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
