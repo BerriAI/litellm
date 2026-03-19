@@ -1498,6 +1498,22 @@ if docs_url != "/" and root_redirect_url is not None:
         return RedirectResponse(url=root_redirect_url)  # type: ignore[arg-type]
 
 
+@app.get("/version", tags=["info"])
+async def get_version():
+    """Return the LiteLLM version. Unprotected for easy deployment checks."""
+    return {"version": version}
+
+
+@app.get("/info", tags=["info"])
+async def get_info():
+    """Return API info (title, description, version). Matches OpenAPI info structure."""
+    return {
+        "title": _title,
+        "description": _description,
+        "version": version,
+    }
+
+
 from typing import Dict
 
 user_api_base = None

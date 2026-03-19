@@ -852,6 +852,29 @@ def test_health(client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+def test_version_endpoint(client_no_auth):
+    """Test that /version returns LiteLLM version. Unprotected for deployment checks."""
+    response = client_no_auth.get("/version")
+    assert response.status_code == 200
+    data = response.json()
+    assert "version" in data
+    assert isinstance(data["version"], str)
+    assert len(data["version"]) > 0
+
+
+def test_info_endpoint(client_no_auth):
+    """Test that /info returns API info (title, description, version). Matches OpenAPI info."""
+    response = client_no_auth.get("/info")
+    assert response.status_code == 200
+    data = response.json()
+    assert "title" in data
+    assert "description" in data
+    assert "version" in data
+    assert isinstance(data["title"], str)
+    assert isinstance(data["description"], str)
+    assert isinstance(data["version"], str)
+
+
 # test_add_new_model()
 
 from litellm.integrations.custom_logger import CustomLogger
