@@ -14,8 +14,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
-    _get_deployment_default_rpm_limit,
-    _get_deployment_default_tpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
@@ -548,8 +546,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "model_rpm_limit" in user_api_key_metadata
                     or "model_tpm_limit" in user_api_key_metadata
                     or user_api_key_model_max_budget is not None
-                    or _get_deployment_default_tpm_limit(model_group) is not None
-                    or _get_deployment_default_rpm_limit(model_group) is not None
+                    or get_key_model_tpm_limit(
+                        user_api_key_dict, model_name=model_group
+                    )
+                    is not None
+                    or get_key_model_rpm_limit(
+                        user_api_key_dict, model_name=model_group
+                    )
+                    is not None
                 )
             ):
                 request_count_api_key = (

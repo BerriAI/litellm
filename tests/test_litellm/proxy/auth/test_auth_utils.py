@@ -2,6 +2,7 @@
 Unit tests for auth_utils functions related to rate limiting and customer ID extraction.
 """
 
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -317,7 +318,7 @@ def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
     assert result == "user-legacy"
 
 
-def _make_deployment_dict(model_name: str, tpm: int = None, rpm: int = None) -> dict:
+def _make_deployment_dict(model_name: str, tpm: Optional[int] = None, rpm: Optional[int] = None) -> dict:
     """Helper to build a minimal deployment dict as returned by router.get_model_list."""
     litellm_params: dict = {"model": model_name}
     if tpm is not None:
