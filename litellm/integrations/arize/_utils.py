@@ -236,23 +236,19 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
     if prompt_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
-    completion_tokens_details = (
-        usage.get("completion_tokens_details")
-        or usage.get("output_tokens_details")
+    completion_tokens_details = usage.get("completion_tokens_details") or usage.get(
+        "output_tokens_details"
     )
     if completion_tokens_details is not None:
-        reasoning_tokens = getattr(
-            completion_tokens_details, "reasoning_tokens", None
-        )
+        reasoning_tokens = getattr(completion_tokens_details, "reasoning_tokens", None)
         if reasoning_tokens:
             safe_set_attribute(
                 span,
                 span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
                 reasoning_tokens,
             )
-    prompt_tokens_details = (
-        usage.get("prompt_tokens_details")
-        or usage.get("input_tokens_details")
+    prompt_tokens_details = usage.get("prompt_tokens_details") or usage.get(
+        "input_tokens_details"
     )
     if prompt_tokens_details is not None:
         cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
