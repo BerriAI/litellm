@@ -71,16 +71,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         Validate environment and return headers for Azure Document Intelligence.
 
-        Authentication uses Ocp-Apim-Subscription-Key header.
+        Authentication supports API key (Ocp-Apim-Subscription-Key) or Entra ID / Azure AD
+        bearer token when no API key is available.
         """
+        from litellm.llms.azure.common_utils import get_azure_ad_token
+        from litellm.types.router import GenericLiteLLMParams
+
         # Get API key from environment if not provided
         if api_key is None:
             api_key = get_secret_str("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure Document Intelligence API Key - Set AZURE_DOCUMENT_INTELLIGENCE_API_KEY environment variable or pass api_key parameter"
-            )
 
         # Validate API base/endpoint is provided
         if api_base is None:
@@ -91,8 +90,23 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 "Missing Azure Document Intelligence Endpoint - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT environment variable or pass api_base parameter"
             )
 
+        if api_key is not None:
+            auth_headers = {"Ocp-Apim-Subscription-Key": api_key}
+        else:
+            # Fall back to Entra ID / Azure AD token-based authentication
+            azure_ad_token = get_azure_ad_token(
+                GenericLiteLLMParams(**(litellm_params or {}))
+            )
+            if azure_ad_token is not None:
+                auth_headers = {"Authorization": f"Bearer {azure_ad_token}"}
+            else:
+                raise ValueError(
+                    "Missing Azure Document Intelligence credentials - Set AZURE_DOCUMENT_INTELLIGENCE_API_KEY "
+                    "or configure Entra ID credentials (tenant_id, client_id, client_secret)"
+                )
+
         headers = {
-            "Ocp-Apim-Subscription-Key": api_key,
+            **auth_headers,
             "Content-Type": "application/json",
             **headers,
         }
@@ -508,12 +522,19 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                         "Azure Document Intelligence returned 202 but no Operation-Location header found"
                     )
 
-                # Get headers for polling (need auth)
-                poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get(
+                # Get headers for polling (need auth - either API key or Bearer token)
+                poll_headers = {}
+                if "Ocp-Apim-Subscription-Key" in raw_response.request.headers:
+                    poll_headers["Ocp-Apim-Subscription-Key"] = raw_response.request.headers.get(
                         "Ocp-Apim-Subscription-Key", ""
                     )
-                }
+                elif "Authorization" in raw_response.request.headers:
+                    poll_headers["Authorization"] = raw_response.request.headers["Authorization"]
+                else:
+                    raise ValueError(
+                        "Cannot poll Azure Document Intelligence operation: no authentication "
+                        "header (Ocp-Apim-Subscription-Key or Authorization) found in original request"
+                    )
 
                 # Get timeout from kwargs or use default
                 timeout_secs = AZURE_OPERATION_POLLING_TIMEOUT
@@ -620,12 +641,19 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                         "Azure Document Intelligence returned 202 but no Operation-Location header found"
                     )
 
-                # Get headers for polling (need auth)
-                poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get(
+                # Get headers for polling (need auth - either API key or Bearer token)
+                poll_headers = {}
+                if "Ocp-Apim-Subscription-Key" in raw_response.request.headers:
+                    poll_headers["Ocp-Apim-Subscription-Key"] = raw_response.request.headers.get(
                         "Ocp-Apim-Subscription-Key", ""
                     )
-                }
+                elif "Authorization" in raw_response.request.headers:
+                    poll_headers["Authorization"] = raw_response.request.headers["Authorization"]
+                else:
+                    raise ValueError(
+                        "Cannot poll Azure Document Intelligence operation: no authentication "
+                        "header (Ocp-Apim-Subscription-Key or Authorization) found in original request"
+                    )
 
                 # Get timeout from kwargs or use default
                 timeout_secs = AZURE_OPERATION_POLLING_TIMEOUT
