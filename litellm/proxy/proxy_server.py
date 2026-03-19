@@ -963,6 +963,27 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
 
+    # Shutdown event - close cached async HTTP clients (base_llm_aiohttp_handler, etc.)
+    try:
+        from litellm.llms.custom_httpx.async_client_cleanup import (
+            close_litellm_async_clients,
+        )
+
+        await close_litellm_async_clients()
+        verbose_proxy_logger.info("Closed cached async HTTP clients")
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error closing cached async HTTP clients: {e}")
+
+    # Shutdown event - close guardrail/callback resources (e.g. presidio aiohttp sessions)
+    for callback in litellm.callbacks:
+        if hasattr(callback, "async_close") and callable(callback.async_close):
+            try:
+                await callback.async_close()
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error closing callback {type(callback).__name__}: {e}"
+                )
+
     # Shutdown event - stop RDS IAM token refresh background task
     if (
         prisma_client is not None
