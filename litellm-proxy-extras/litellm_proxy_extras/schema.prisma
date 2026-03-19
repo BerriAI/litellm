@@ -269,6 +269,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
+  search_tools          String[]       @default([]) // Search tool names allowed for this key/team/org. Empty = no access (least privilege).
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
   models                String[]       @default([])

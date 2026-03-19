@@ -856,6 +856,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
@@ -1843,6 +1844,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """
 
     vector_stores: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
 
@@ -3527,6 +3529,21 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    key_search_tool_access_denied = "key_search_tool_access_denied"
+    """
+    Key does not have access to the search tool
+    """
+
+    team_search_tool_access_denied = "team_search_tool_access_denied"
+    """
+    Team does not have access to the search tool
+    """
+
+    org_search_tool_access_denied = "org_search_tool_access_denied"
+    """
+    Organization does not have access to the search tool
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -3568,6 +3585,20 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+
+    @classmethod
+    def get_search_tool_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "org"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the search tool access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_search_tool_access_denied
+        elif object_type == "team":
+            return cls.team_search_tool_access_denied
+        elif object_type == "org":
+            return cls.org_search_tool_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES = (
