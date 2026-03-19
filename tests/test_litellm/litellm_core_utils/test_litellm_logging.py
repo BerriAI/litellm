@@ -12,8 +12,11 @@ import time
 
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    set_callbacks,
+)
+from litellm.types.utils import ModelResponse, TextCompletionResponse, Usage
 
 
 @pytest.fixture
@@ -1388,6 +1391,96 @@ def test_get_usage_as_dict():
         response_obj={"id": "resp-1", "choices": []}
     )
     assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+class TestNormalizeCacheTokens:
+    """Tests for _normalize_cache_tokens called via get_usage_as_dict.
+
+    OpenAI models store cached tokens only under prompt_tokens_details.cached_tokens.
+    Anthropic/DeepSeek/Gemini set cache_read_input_tokens at the top level.
+    The normalization ensures cache_read_input_tokens is always present when
+    cached tokens are reported by any provider.
+    """
+
+    def test_openai_cached_tokens_promoted_to_top_level(self):
+        """OpenAI-style usage gets cache_read_input_tokens set from prompt_tokens_details."""
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "prompt_tokens_details": {"cached_tokens": 300},
+                }
+            }
+        )
+        assert result["cache_read_input_tokens"] == 300
+
+    def test_anthropic_top_level_field_preserved(self):
+        """Anthropic-style usage already has cache_read_input_tokens — no overwrite."""
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "cache_read_input_tokens": 500,
+                    "prompt_tokens_details": {"cached_tokens": 500},
+                }
+            }
+        )
+        assert result["cache_read_input_tokens"] == 500
+
+    def test_top_level_zero_not_overwritten(self):
+        """An explicit 0 at top level must not be replaced by a nested value."""
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "cache_read_input_tokens": 0,
+                    "prompt_tokens_details": {"cached_tokens": 300},
+                }
+            }
+        )
+        assert result["cache_read_input_tokens"] == 0
+
+    def test_no_cached_tokens_anywhere(self):
+        """No cache fields at all — key should not be added."""
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                }
+            }
+        )
+        assert "cache_read_input_tokens" not in result
+
+    def test_combined_usage_object_normalized(self):
+        """Usage passed via combined_usage_object is also normalized."""
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details={"cached_tokens": 42},
+        )
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj=None,
+            combined_usage_object=usage,
+        )
+        assert result["cache_read_input_tokens"] == 42
+
+    def test_none_cached_tokens_not_promoted(self):
+        """cached_tokens: None should not be promoted."""
+        result = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj={
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "prompt_tokens_details": {"cached_tokens": None},
+                }
+            }
+        )
+        assert "cache_read_input_tokens" not in result
 
 
 def test_append_system_prompt_messages():

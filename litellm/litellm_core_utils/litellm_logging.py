@@ -4822,27 +4822,51 @@ class StandardLoggingPayloadSetup:
         """
         _empty: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         if combined_usage_object is not None:
-            return combined_usage_object.model_dump()
-        if not response_obj:
+            result = combined_usage_object.model_dump()
+        elif not response_obj:
             return _empty
-        _raw = response_obj.get("usage", None)
-        if _raw is None:
-            return _empty
-        if isinstance(_raw, ResponseAPIUsage):
-            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                _raw
-            ).model_dump()
-        if isinstance(_raw, dict):
-            if ResponseAPILoggingUtils._is_response_api_usage(_raw):
-                return (
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        _raw
-                    ).model_dump()
-                )
-            return _raw
-        if isinstance(_raw, Usage):
-            return _raw.model_dump()
-        return _empty
+        else:
+            _raw = response_obj.get("usage", None)
+            if _raw is None:
+                return _empty
+            if isinstance(_raw, ResponseAPIUsage):
+                result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    _raw
+                ).model_dump()
+            elif isinstance(_raw, dict):
+                if ResponseAPILoggingUtils._is_response_api_usage(_raw):
+                    result = (
+                        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                            _raw
+                        ).model_dump()
+                    )
+                else:
+                    result = _raw
+            elif isinstance(_raw, Usage):
+                result = _raw.model_dump()
+            else:
+                return _empty
+
+        StandardLoggingPayloadSetup._normalize_cache_tokens(result)
+        return result
+
+    @staticmethod
+    def _normalize_cache_tokens(usage_dict: dict) -> None:
+        """
+        Ensure cache_read_input_tokens is set on the usage dict.
+
+        OpenAI models report cached tokens only under
+        prompt_tokens_details.cached_tokens.  Anthropic, DeepSeek, and
+        Gemini set cache_read_input_tokens at the top level.  This
+        normalizes the dict so downstream consumers (spend writer, etc.)
+        can always read cache_read_input_tokens directly.
+        """
+        if "cache_read_input_tokens" not in usage_dict:
+            prompt_details = usage_dict.get("prompt_tokens_details")
+            if isinstance(prompt_details, dict):
+                cached = prompt_details.get("cached_tokens")
+                if cached is not None:
+                    usage_dict["cache_read_input_tokens"] = cached
 
     @staticmethod
     def get_model_cost_information(
