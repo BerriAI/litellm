@@ -539,6 +539,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - model group + API Key
             # ------------
             model_group = get_model_group_from_litellm_kwargs(kwargs)
+            _success_tpm_limit = (
+                get_key_model_tpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
+            _success_rpm_limit = (
+                get_key_model_rpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
             if (
                 user_api_key is not None
                 and model_group is not None
@@ -546,14 +556,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "model_rpm_limit" in user_api_key_metadata
                     or "model_tpm_limit" in user_api_key_metadata
                     or user_api_key_model_max_budget is not None
-                    or get_key_model_tpm_limit(
-                        user_api_key_dict, model_name=model_group
-                    )
-                    is not None
-                    or get_key_model_rpm_limit(
-                        user_api_key_dict, model_name=model_group
-                    )
-                    is not None
+                    or _success_tpm_limit is not None
+                    or _success_rpm_limit is not None
                 )
             ):
                 request_count_api_key = (

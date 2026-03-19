@@ -539,15 +539,14 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
-def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
     """
-    Return the default_api_key_rpm_limit for model_name.
+    Return the minimum value of `field` across all deployments for model_name,
+    or None if no deployment has the field set.
 
-    When multiple deployments share the same model name, returns the minimum
-    across all deployments that have the field set. This is the safest choice
-    for load-balanced setups: it ensures no deployment is over-consumed
-    regardless of which one actually serves a given request.
-    Returns None if no deployment has the field set.
+    When multiple deployments share the same model name, taking the minimum is
+    the safest choice for load-balanced setups: it ensures no deployment is
+    over-consumed regardless of which one actually serves a given request.
     """
     from litellm.proxy.proxy_server import llm_router
 
@@ -557,38 +556,19 @@ def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
     if not deployments:
         return None
     limits = [
-        int(deployment.get("litellm_params", {}).get("default_api_key_rpm_limit"))
+        int(deployment.get("litellm_params", {}).get(field))
         for deployment in deployments
-        if deployment.get("litellm_params", {}).get("default_api_key_rpm_limit")
-        is not None
+        if deployment.get("litellm_params", {}).get(field) is not None
     ]
     return min(limits) if limits else None
+
+
+def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
 
 
 def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
-    """
-    Return the default_api_key_tpm_limit for model_name.
-
-    When multiple deployments share the same model name, returns the minimum
-    across all deployments that have the field set. This is the safest choice
-    for load-balanced setups: it ensures no deployment is over-consumed
-    regardless of which one actually serves a given request.
-    Returns None if no deployment has the field set.
-    """
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        return None
-    deployments = llm_router.get_model_list(model_name=model_name)
-    if not deployments:
-        return None
-    limits = [
-        int(deployment.get("litellm_params", {}).get("default_api_key_tpm_limit"))
-        for deployment in deployments
-        if deployment.get("litellm_params", {}).get("default_api_key_tpm_limit")
-        is not None
-    ]
-    return min(limits) if limits else None
+    return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
 
 
 def get_key_model_rpm_limit(
