@@ -58,7 +58,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
         file_path = str(audio_file)
         with open(file_path, "rb") as f:
             file_content = f.read()
-        filename = file_path.split("/")[-1]
+        filename = os.path.basename(file_path)
     elif isinstance(audio_file, tuple):
         # Tuple format: (filename, content, content_type) or (filename, content)
         if len(audio_file) >= 2:
@@ -121,9 +121,9 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
         str: The name of the file if available, otherwise a string representation of the object.
     """
     if hasattr(file_obj, "name"):
-        return getattr(file_obj, "name")
+        return os.path.basename(getattr(file_obj, "name"))
     elif hasattr(file_obj, "__str__"):
-        return str(file_obj)
+        return os.path.basename(str(file_obj))
     else:
         return repr(file_obj)
 

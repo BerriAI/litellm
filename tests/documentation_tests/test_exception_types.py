@@ -1,6 +1,7 @@
 import os
 import sys
 import traceback
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -32,10 +33,9 @@ error_names = {
 
 
 # Parse the documentation to extract documented keys
-# repo_base = "./"
-repo_base = "../../"
+repo_base = Path(__file__).resolve().parents[2]
 print(os.listdir(repo_base))
-docs_path = f"{repo_base}/docs/my-website/docs/exception_mapping.md"  # Path to the documentation
+docs_path = repo_base / "docs" / "my-website" / "docs" / "exception_mapping.md"
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
@@ -45,14 +45,18 @@ try:
             r"## LiteLLM Exceptions(.*?)\n##", content, re.DOTALL
         )
         if exceptions_section:
-            # Step 2: Extract the table content
             table_content = exceptions_section.group(1)
-
-            # Step 3: Create a pattern to capture the Error Types from each row
-            error_type_pattern = re.compile(r"\|\s*[^|]+\s*\|\s*([^\|]+?)\s*\|")
-
-            # Extract the error types
-            exceptions = error_type_pattern.findall(table_content)
+            exceptions = []
+            for line in table_content.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("|"):
+                    continue
+                columns = [column.strip() for column in stripped.strip("|").split("|")]
+                if len(columns) < 2:
+                    continue
+                if columns[0] == "Status Code" or set(columns[0]) == {"-"}:
+                    continue
+                exceptions.append(columns[1])
             print(f"exceptions: {exceptions}")
 
             # Remove extra spaces if any

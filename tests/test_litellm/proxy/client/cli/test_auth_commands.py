@@ -37,7 +37,7 @@ class TestTokenUtilities:
             
             result = get_token_file_path()
             
-            assert result == '/home/user/.litellm/token.json'
+            assert Path(result) == Path('/home/user/.litellm/token.json')
             mock_mkdir.assert_called_once_with(exist_ok=True)
 
     def test_get_token_file_path_creates_directory(self):

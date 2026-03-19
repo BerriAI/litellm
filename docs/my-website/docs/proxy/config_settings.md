@@ -222,9 +222,11 @@ router_settings:
 | master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
 | database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
 | database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
+| database_connection_pool_timeout | integer | The timeout in seconds when waiting to acquire a database connection from the pool. |
 | database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
 | allow_requests_on_db_unavailable | boolean | If true, allows requests to succeed even if DB is unreachable. **Only use this if running LiteLLM in your VPC** This will allow requests to work even when LiteLLM cannot connect to the DB to verify a Virtual Key [Doc on graceful db unavailability](prod#5-if-running-litellm-on-vpc-gracefully-handle-db-unavailability) |
 | custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
+| custom_auth_run_common_checks | boolean | If true, runs the proxy’s built-in auth and quota checks after a custom auth handler returns successfully. |
 | max_parallel_requests | integer | The max parallel requests allowed per deployment |
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
 | infer_model_from_keys | boolean | If true, infers the model from the provided keys |
@@ -277,8 +279,30 @@ router_settings:
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
+| forward_llm_provider_auth_headers | boolean | If true, forwards provider authentication headers on pass-through requests when the backend integration requires them. |
+| always_include_stream_usage | boolean | If true, includes usage fields in streaming responses whenever the provider returns them. |
+| disable_error_logs | boolean | If true, skips recording proxy error log entries in spend/error tracking callbacks. |
+| health_check_concurrency | int | Maximum number of deployments to health-check concurrently in each background cycle. |
+| use_shared_health_check | boolean | If true, shares cached health-check results across proxy instances when shared cache is configured. |
+| maximum_spend_logs_cleanup_cron | str | Cron expression controlling when spend-log cleanup runs. Overrides the interval-based cleanup schedule when set. |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 | maximum_spend_logs_retention_interval             | str                   | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
+| use_redis_transaction_buffer | boolean | If true, batches spend and accounting updates through Redis before flushing them to the database. |
+| token_rate_limit_type | str | Selects how token-based rate limits are enforced, such as total-token accounting versus other token limit strategies. |
+| user_header_name | str | Deprecated single-header mapping for extracting the end-user identifier from incoming requests. |
+| user_header_mappings | List[Dict[str, Any]] | Rules for mapping incoming headers to user identity fields like end-user ID, user ID, or email. |
+| role_permissions | List[Dict[str, Any]] | Role-based permissions definitions used to validate access rules across proxy routes. |
+| enforce_rbac | boolean | If true, requires requests authenticated through JWT/SSO flows to resolve to an allowed user, team, or admin role. |
+| alert_type_config | Dict[str, Any] | Per-alert-type configuration overrides for integrations such as Slack alerting. |
+| auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects the UI login page to the configured SSO flow when SSO is available. |
+| custom_ui_sso_sign_in_handler | str | Path to a custom UI SSO sign-in handler used to override the default login initiation behavior. |
+| enable_mcp_registry | boolean | If true, enables the MCP server registry and registry-driven server discovery flows. |
+| mcp_client_side_auth_header_name | str | Override for the header name used to accept client-side MCP authentication tokens. |
+| mcp_internal_ip_ranges | List[str] | CIDR ranges treated as internal networks for MCP visibility and access checks. |
+| mcp_trusted_proxy_ranges | List[str] | CIDR ranges of trusted reverse proxies whose forwarded client IP headers should be honored for MCP access checks. |
+| mcp_required_fields | List[str] | Submission fields that must be present before an MCP server entry can pass validation. |
+| require_end_user_mcp_access_defined | boolean | If true, blocks MCP access for end users unless explicit MCP permissions are defined for that end user. |
+| search_tools | List[SearchToolTypedDict] | Search API tool definitions that can be loaded from `general_settings` as part of proxy startup. |
 
 ### router_settings - Reference
 

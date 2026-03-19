@@ -19,6 +19,19 @@ from openapi_core import OpenAPI
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
+def _resolve_schema_ref(spec_dict: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve a local OpenAPI schema $ref when present."""
+    ref = schema.get("$ref")
+    if ref is None:
+        return schema
+
+    ref_path = ref.removeprefix("#/").split("/")
+    resolved: Any = spec_dict
+    for segment in ref_path:
+        resolved = resolved[segment]
+    return resolved
+
+
 def _load_openapi_spec_dict() -> Dict[str, Any]:
     """
     Load the OpenAPI spec JSON.
@@ -75,8 +88,8 @@ class TestRequestCompliance:
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-        input_schema = schema["properties"]["input"]
-        
+        input_schema = _resolve_schema_ref(spec_dict, schema["properties"]["input"])
+
         # Should be oneOf with multiple types
         assert "oneOf" in input_schema
         
@@ -101,9 +114,16 @@ class TestRequestCompliance:
         assert content_schema["discriminator"]["propertyName"] == "type"
         
         # Check TextContent is an option
-        mapping = content_schema["discriminator"]["mapping"]
-        assert "text" in mapping
-        print(f"Content type discriminator mapping: {list(mapping.keys())}")
+        content_refs = [
+            option["$ref"]
+            for option in content_schema.get("oneOf", [])
+            if "$ref" in option
+        ]
+        assert "#/components/schemas/TextContent" in content_refs
+
+        text_schema = spec_dict["components"]["schemas"]["TextContent"]
+        assert text_schema["properties"]["type"].get("const") == "text"
+        print(f"Content schema options: {content_refs}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""

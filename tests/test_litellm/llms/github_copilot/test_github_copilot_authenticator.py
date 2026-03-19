@@ -2,6 +2,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -37,9 +38,11 @@ class TestGitHubCopilotAuthenticator:
         """Test the initialization of the authenticator."""
         with patch("os.path.exists", return_value=False), patch("os.makedirs") as mock_makedirs:
             auth = Authenticator()
-            assert auth.token_dir.endswith("/github_copilot")
-            assert auth.access_token_file.endswith("/access-token")
-            assert auth.api_key_file.endswith("/api-key.json")
+            assert Path(auth.token_dir).name == "github_copilot"
+            assert Path(auth.access_token_file).parent == Path(auth.token_dir)
+            assert Path(auth.access_token_file).name == "access-token"
+            assert Path(auth.api_key_file).parent == Path(auth.token_dir)
+            assert Path(auth.api_key_file).name == "api-key.json"
             mock_makedirs.assert_called_once()
 
     def test_ensure_token_dir(self):

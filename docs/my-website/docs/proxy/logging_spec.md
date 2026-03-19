@@ -10,6 +10,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `id` | `str` | Unique identifier |
 | `trace_id` | `str` | Trace multiple LLM calls belonging to same overall request |
 | `call_type` | `str` | Type of call |
+| `stream` | `Optional[bool]` | Whether the original request used streaming mode |
 | `response_cost` | `float` | Cost of the response in USD ($) |
 | `cost_breakdown` | `Optional[CostBreakdown]` | Detailed cost breakdown object |
 | `response_cost_failure_debug_info` | `StandardLoggingModelCostFailureDebugInformation` | Debug information if cost tracking fails |
@@ -34,12 +35,15 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `request_tags` | `list` | List of request tags |
 | `end_user` | `Optional[str]` | Optional end user identifier |
 | `requester_ip_address` | `Optional[str]` | Optional requester IP address |
+| `user_agent` | `Optional[str]` | User-Agent header captured from the originating client when available |
 | `messages` | `Optional[Union[str, list, dict]]` | Messages sent in the request |
 | `response` | `Optional[Union[str, list, dict]]` | LLM response |
 | `error_str` | `Optional[str]` | Optional error string |
 | `error_information` | `Optional[StandardLoggingPayloadErrorInformation]` | Optional error information |
 | `model_parameters` | `dict` | Model parameters |
 | `hidden_params` | `StandardLoggingHiddenParams` | Hidden parameters |
+| `guardrail_information` | `Optional[list[StandardLoggingGuardrailInformation]]` | Guardrail execution metadata collected during the request |
+| `standard_built_in_tools_params` | `Optional[StandardBuiltInToolsParams]` | Cost and usage metadata for built-in tools such as web search or code interpreter |
 
 ## Cost Breakdown
 
@@ -70,10 +74,18 @@ class CostBreakdown(TypedDict, total=False):
 |-------|------|-------------|
 | `user_api_key_hash` | `Optional[str]` | Hash of the litellm virtual key |
 | `user_api_key_alias` | `Optional[str]` | Alias of the API key |
+| `user_api_key_spend` | `Optional[float]` | Current tracked spend for the API key |
+| `user_api_key_max_budget` | `Optional[float]` | Maximum configured budget for the API key |
+| `user_api_key_budget_reset_at` | `Optional[str]` | Next scheduled budget reset time for the API key |
 | `user_api_key_org_id` | `Optional[str]` | Organization ID associated with the key |
 | `user_api_key_team_id` | `Optional[str]` | Team ID associated with the key |
+| `user_api_key_project_id` | `Optional[str]` | Project ID associated with the key |
 | `user_api_key_user_id` | `Optional[str]` | User ID associated with the key |
+| `user_api_key_user_email` | `Optional[str]` | User email associated with the key |
 | `user_api_key_team_alias` | `Optional[str]` | Team alias associated with the key |
+| `user_api_key_end_user_id` | `Optional[str]` | End-user ID associated with the key |
+| `user_api_key_request_route` | `Optional[str]` | Proxy route used by the API key for this request |
+| `user_api_key_auth_metadata` | `Optional[Dict[str, str]]` | Additional authentication metadata stored alongside the API key |
 
 ## StandardLoggingMetadata
 
@@ -83,6 +95,7 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 |-------|------|-------------|
 | `spend_logs_metadata` | `Optional[dict]` | Key-value pairs for spend logging |
 | `requester_ip_address` | `Optional[str]` | Requester's IP address |
+| `user_agent` | `Optional[str]` | User-Agent header captured from the originating client |
 | `requester_metadata` | `Optional[dict]` | Additional requester metadata |
 | `vector_store_request_metadata` | `Optional[List[StandardLoggingVectorStoreRequest]]` | Vector store request metadata |
 | `requester_custom_headers` | Dict[str, str] | Any custom (`x-`) headers sent by the client to the proxy. |
@@ -92,6 +105,8 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `usage_object` | `Optional[dict]` | Raw usage object from the LLM provider |
 | `cold_storage_object_key` | `Optional[str]` | S3/GCS object key for cold storage retrieval |
 | `guardrail_information` | `Optional[list[StandardLoggingGuardrailInformation]]` | Guardrail information |
+| `team_alias` | `Optional[str]` | Team alias resolved for the current request context |
+| `team_id` | `Optional[str]` | Team ID resolved for the current request context |
 
 
 ## StandardLoggingVectorStoreRequest
@@ -123,6 +138,7 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `cache_key` | `Optional[str]` | Optional cache key |
 | `api_base` | `Optional[str]` | Optional API base URL |
 | `response_cost` | `Optional[str]` | Optional response cost |
+| `litellm_overhead_time_ms` | `Optional[float]` | LiteLLM overhead time in milliseconds excluding the upstream provider runtime |
 | `additional_headers` | `Optional[StandardLoggingAdditionalHeaders]` | Additional headers |
 | `batch_models` | `Optional[List[str]]` | Only set for Batches API. Lists the models used for cost calculation |
 | `litellm_model_name` | `Optional[str]` | Model name sent in request |

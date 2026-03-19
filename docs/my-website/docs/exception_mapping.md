@@ -11,6 +11,7 @@ All exceptions can be imported from `litellm` - e.g. `from litellm import BadReq
 | 400         | BadRequestError          | openai.BadRequestError |
 | 400 | UnsupportedParamsError | litellm.BadRequestError | Raised when unsupported params are passed |
 | 400         | ContextWindowExceededError| litellm.BadRequestError | Special error type for context window exceeded error messages - enables context window fallbacks |
+| 400         | RejectedRequestError | litellm.BadRequestError | Raised when LiteLLM proxy guardrails reject a request before it is sent upstream |
 | 400         | ContentPolicyViolationError| litellm.BadRequestError | Special error type for content policy violation error messages - enables content policy fallbacks |
 | 400         | ImageFetchError | litellm.BadRequestError | Raised when there are errors fetching or processing images |
 | 400 | InvalidRequestError | openai.BadRequestError | Deprecated error, use BadRequestError instead |
@@ -22,6 +23,7 @@ All exceptions can be imported from `litellm` - e.g. `from litellm import BadReq
 | 429         | RateLimitError           | openai.RateLimitError |
 | 500         | APIConnectionError       | openai.APIConnectionError | If any unmapped error is returned, we return this error |
 | 500         | APIError | openai.APIError | Generic 500-status code error | 
+| 502         | BadGatewayError | openai.APIStatusError | Raised when the upstream provider returns a bad gateway error |
 | 503 | ServiceUnavailableError | openai.APIStatusError | If provider returns a service unavailable error, this error is raised |
 | >=500       | InternalServerError      | openai.InternalServerError | If any unmapped 500-status code error is returned, this error is raised |
 | N/A         | APIResponseValidationError | openai.APIResponseValidationError | If Rules are used, and request/response fails a rule, this error is raised |

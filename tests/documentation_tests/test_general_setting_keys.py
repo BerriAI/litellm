@@ -1,8 +1,9 @@
 import os
 import re
+from pathlib import Path
 
 # Define the base directory for the litellm repository and documentation path
-repo_base = "./litellm"  # Change this to your actual path
+repo_base = Path(__file__).resolve().parents[2] / "litellm"
 
 
 # Regular expressions to capture the keys used in general_settings.get() and general_settings[]
@@ -32,11 +33,9 @@ for root, dirs, files in os.walk(repo_base):
                 general_settings_keys.update(bracket_matches)
 
 # Parse the documentation to extract documented keys
-repo_base = "./"
+repo_base = Path(__file__).resolve().parents[2]
 print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-)
+docs_path = repo_base / "docs" / "my-website" / "docs" / "proxy" / "config_settings.md"
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
@@ -49,10 +48,16 @@ try:
         if general_settings_section:
             # Extract the table rows, which contain the documented keys
             table_content = general_settings_section.group(1)
-            doc_key_pattern = re.compile(
-                r"\|\s*([^\|]+?)\s*\|"
-            )  # Capture the key from each row of the table
-            documented_keys.update(doc_key_pattern.findall(table_content))
+            for line in table_content.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("|"):
+                    continue
+                columns = [column.strip() for column in stripped.strip("|").split("|")]
+                if len(columns) < 2:
+                    continue
+                if columns[0] == "Name" or set(columns[0]) == {"-"}:
+                    continue
+                documented_keys.add(columns[0])
 except Exception as e:
     raise Exception(
         f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"

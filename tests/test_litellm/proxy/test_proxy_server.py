@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1028,7 +1029,10 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     # Test Case 2: File path provided but file doesn't exist
     non_existent_file = tmp_path / "non_existent.yaml"
 
-    with pytest.raises(Exception, match=f"Config file not found: {non_existent_file}"):
+    with pytest.raises(
+        Exception,
+        match=re.escape(f"Config file not found: {non_existent_file}"),
+    ):
         await proxy_config._get_config_from_file(str(non_existent_file))
 
     # Test Case 3: No file path provided (should return default config)
@@ -3250,12 +3254,14 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
 
     # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
     exists_calls = []
+    assets_dir = os.path.normpath("/var/lib/litellm/assets")
 
     def exists_side_effect(path):
-        exists_calls.append(path)
+        normalized_path = os.path.normpath(str(path))
+        exists_calls.append(normalized_path)
         # Return False for /var/lib/litellm/assets* so: makedirs is called, logo fallback
         # triggers, and we don't return early with cached file
-        if "/var/lib/litellm/assets" in path:
+        if normalized_path.startswith(assets_dir):
             return False
         return True
 
@@ -3283,8 +3289,8 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
         # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
-        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
-        assert any(assets_logo_path in str(call) for call in exists_calls), \
+        assets_logo_path = os.path.normpath("/var/lib/litellm/assets/logo.jpg")
+        assert any(assets_logo_path == call for call in exists_calls), \
             f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)

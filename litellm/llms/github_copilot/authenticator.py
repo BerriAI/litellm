@@ -28,16 +28,23 @@ class Authenticator:
     def __init__(self) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
         # Token storage paths
-        self.token_dir = os.getenv(
-            "GITHUB_COPILOT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/github_copilot"),
+        self.token_dir = os.path.normpath(
+            os.getenv(
+                "GITHUB_COPILOT_TOKEN_DIR",
+                os.path.expanduser("~/.config/litellm/github_copilot"),
+            )
         )
-        self.access_token_file = os.path.join(
-            self.token_dir,
-            os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+        self.access_token_file = os.path.normpath(
+            os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+            )
         )
-        self.api_key_file = os.path.join(
-            self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
+        self.api_key_file = os.path.normpath(
+            os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+            )
         )
         self._ensure_token_dir()
 

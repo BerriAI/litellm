@@ -1,8 +1,9 @@
 import os
 import re
+from pathlib import Path
 
 # Define the base directory for the litellm repository and documentation path
-repo_base = "./litellm"  # Change this to your actual path
+repo_base = Path(__file__).resolve().parents[2] / "litellm"
 
 # Regular expressions to capture the keys used in os.getenv() and litellm.get_secret()
 getenv_pattern = re.compile(r'os\.getenv\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*)?\)')
@@ -78,17 +79,13 @@ print(env_keys)
 
 
 # Parse the documentation to extract documented keys
-repo_base = "./"
+repo_base = Path(__file__).resolve().parents[2]
 print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-)
+docs_path = repo_base / "docs" / "my-website" / "docs" / "proxy" / "config_settings.md"
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
         content = docs_file.read()
-
-        print(f"content: {content}")
 
         # Find the section titled "general_settings - Reference"
         general_settings_section = re.search(
@@ -96,7 +93,6 @@ try:
             content,
             re.DOTALL | re.MULTILINE,
         )
-        print(f"general_settings_section: {general_settings_section}")
         if general_settings_section:
             # Extract the table rows - only first column (key name) from each row
             table_content = general_settings_section.group(1)

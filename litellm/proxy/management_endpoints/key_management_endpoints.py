@@ -3296,6 +3296,14 @@ async def _rotate_master_key(  # noqa: PLR0915
 
     from litellm.proxy.proxy_server import proxy_config
 
+    json_wrapper = getattr(prisma, "Json", None)
+    if json_wrapper is None:
+        class _PrismaJsonFallback(dict):
+            """Fallback wrapper for environments without generated prisma.Json."""
+
+        prisma.Json = _PrismaJsonFallback  # type: ignore[attr-defined]
+        json_wrapper = prisma.Json
+
     try:
         models: Optional[
             List
@@ -3319,8 +3327,8 @@ async def _rotate_master_key(  # noqa: PLR0915
             )
             if new_model:
                 _dumped = new_model.model_dump(exclude_none=True)
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
+                _dumped["litellm_params"] = json_wrapper(_dumped["litellm_params"])
+                _dumped["model_info"] = json_wrapper(_dumped["model_info"])
                 new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
         async with prisma_client.db.tx() as tx:
@@ -3354,7 +3362,7 @@ async def _rotate_master_key(  # noqa: PLR0915
             if encrypted_env_vars:
                 await prisma_client.db.litellm_config.update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},  # type: ignore[attr-defined]
+                    data={"param_value": json_wrapper(encrypted_env_vars)},
                 )
 
     # 4. process MCP server table

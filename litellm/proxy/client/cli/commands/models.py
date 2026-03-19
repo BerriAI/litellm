@@ -1,5 +1,5 @@
 # stdlib imports
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from typing import Optional, Literal, Any
 import yaml
@@ -59,11 +59,11 @@ def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
 
 
 def format_timestamp(timestamp: Optional[int]) -> str:
-    """Format a Unix timestamp (integer) to human-readable date with minute resolution."""
+    """Format a Unix timestamp (integer) as a UTC date with minute resolution."""
     if timestamp is None:
         return ""
     try:
-        dt = datetime.fromtimestamp(timestamp)
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
         return str(timestamp)

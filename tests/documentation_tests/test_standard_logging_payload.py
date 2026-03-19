@@ -2,6 +2,7 @@ import os
 import re
 import sys
 
+from pathlib import Path
 from typing import get_type_hints
 
 sys.path.insert(
@@ -38,7 +39,14 @@ def test_standard_logging_payload_documentation():
         print(_field)
 
     # Read the documentation
-    docs_path = "../../docs/my-website/docs/proxy/logging_spec.md"
+    docs_path = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "my-website"
+        / "docs"
+        / "proxy"
+        / "logging_spec.md"
+    )
 
     try:
         with open(docs_path, "r", encoding="utf-8") as docs_file:

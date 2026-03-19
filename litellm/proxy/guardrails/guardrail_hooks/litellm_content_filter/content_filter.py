@@ -601,7 +601,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         if file_path.lower().endswith(".json"):
             return self._load_category_file_json(file_path)
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         # Handle always_block_keywords if present
@@ -627,7 +627,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Each entry has: id, match (pipe-separated phrases), tags, severity (1-4).
         Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
         """
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             entries = json.load(f)
         if not isinstance(entries, list):
             entries = [entries]
@@ -733,7 +733,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         ```
         """
         try:
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
             if not isinstance(data, dict) or "blocked_words" not in data:
