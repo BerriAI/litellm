@@ -29,6 +29,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -105,6 +106,28 @@ class WebSearchInterceptionLogger(CustomLogger):
             and provider_str not in self.enabled_providers
         ):
             return None
+
+        # Only short-circuit for providers without native Anthropic Messages
+        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
+        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
+        # includes a follow-up LLM call to synthesize the answer from search
+        # results.  Short-circuiting those would skip that synthesis step and
+        # return raw search text — a regression for existing users.
+        try:
+            provider_enum = LlmProviders(provider_str)
+            anthropic_config = (
+                ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model, provider=provider_enum
+                )
+            )
+            if anthropic_config is not None:
+                verbose_logger.debug(
+                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
+                    "(provider has native Anthropic Messages support, using agentic loop)"
+                )
+                return None
+        except (ValueError, Exception):
+            pass  # unknown provider enum → safe to short-circuit
 
         # All tools must be web search tools
         if not all(is_web_search_tool(t) for t in tools):
