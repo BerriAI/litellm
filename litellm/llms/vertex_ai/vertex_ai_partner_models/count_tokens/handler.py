@@ -105,27 +105,21 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get(
+        # common_utils.py already resolves vertex_count_tokens_location and
+        # passes it as vertex_location through the call chain.
+        # Only override to us-central1 when the user did NOT explicitly set
+        # vertex_count_tokens_location -- this preserves backwards compat for
+        # users whose vertex_location is "global" or another unsupported region.
+        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        explicit_count_tokens_location = litellm_params.get(
             "vertex_count_tokens_location"
         )
-        vertex_location_raw = self.get_vertex_ai_location(litellm_params)
-
-        # Determine final location with precedence:
-        # 1. vertex_count_tokens_location (if provided)
-        # 2. vertex_location (if provided)
-        # 3. Default to us-east5 for Claude models when no location is set
-        # Supported regions: us-east5, europe-west1, asia-southeast1
-        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if vertex_count_tokens_location:
-            vertex_location: str = vertex_count_tokens_location
-        elif vertex_location_raw:
-            vertex_location = vertex_location_raw
-        elif "claude" in model.lower():
-            vertex_location = "us-east5"
-        else:
-            vertex_location = "us-east5"
+        if explicit_count_tokens_location:
+            vertex_location = explicit_count_tokens_location
+        elif not vertex_location or "claude" in model.lower():
+            vertex_location = "us-central1"
 
         # Get access token and resolved project ID
         access_token, project_id = await self._ensure_access_token_async(
