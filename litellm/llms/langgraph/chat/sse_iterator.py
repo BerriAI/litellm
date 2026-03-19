@@ -33,6 +33,7 @@ class LangGraphSSEStreamIterator:
         self.finished = False
         self.line_iterator = None
         self.async_line_iterator = None
+        self._current_event_type: Optional[str] = None
 
     def __iter__(self):
         """Initialize sync iteration."""
@@ -56,6 +57,11 @@ class LangGraphSSEStreamIterator:
         if not line:
             return None
 
+        # Handle SSE event: lines (standard SSE - event type in header)
+        if line.startswith("event:"):
+            self._current_event_type = line[len("event:"):].strip()
+            return None
+
         # Handle SSE data lines
         if line.startswith("data:"):
             json_str = line[5:].strip()
@@ -64,27 +70,38 @@ class LangGraphSSEStreamIterator:
 
             try:
                 data = json.loads(json_str)
-                return self._process_data(data)
+                event_type = self._current_event_type
+                self._current_event_type = None
+                return self._process_data(data, event_type)
             except json.JSONDecodeError:
                 verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                 return None
 
         return None
 
-    def _process_data(self, data) -> Optional[ModelResponseStream]:
+    def _process_data(self, data, event_type: Optional[str] = None) -> Optional[ModelResponseStream]:
         """
         Process parsed data from SSE stream.
 
         LangGraph uses tuple format: [event_type, payload]
         """
-        # Handle tuple format: ["messages", ...]
+        # Standard SSE: event type from header, data is [msg_obj, meta_obj]
+        if event_type == "messages" and isinstance(data, list) and len(data) >= 1:
+            return self._process_messages_event(data)
+        if event_type == "metadata":
+            if isinstance(data, dict):
+                return self._process_metadata_event(data)
+            elif isinstance(data, list) and len(data) >= 1:
+                return self._process_metadata_event(data[0] if isinstance(data[0], dict) else data)
+
+        # Handle tuple format: ["messages", ...] (backward compatibility)
         if isinstance(data, list) and len(data) >= 2:
-            event_type = data[0]
+            evt = data[0]
             payload = data[1]
 
-            if event_type == "messages":
+            if evt == "messages":
                 return self._process_messages_event(payload)
-            elif event_type == "metadata":
+            elif evt == "metadata":
                 # Metadata event, might contain usage info
                 return self._process_metadata_event(payload)
 
