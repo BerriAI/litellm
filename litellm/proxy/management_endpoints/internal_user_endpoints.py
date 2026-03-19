@@ -21,7 +21,7 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
-from litellm.constants import BLOCK_UNBLOCK_KEYS_HARD_LIMIT
+from litellm.constants import BLOCK_UNBLOCK_KEYS_HARD_LIMIT, LITELLM_PROXY_ADMIN_NAME
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
@@ -2072,7 +2072,7 @@ async def block_user(
 ):
     """
     Block the user and all keys belonging to them (up to 20k keys). Only proxy admins.
-    Cannot block a user with role proxy_admin.
+    Cannot block the default proxy admin user (see LITELLM_PROXY_ADMIN_NAME).
     """
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -2096,10 +2096,10 @@ async def block_user(
             status_code=404,
             detail={"error": f"User not found, passed user_id={data.user_id}"},
         )
-    if getattr(user_row, "user_role", None) == "proxy_admin":
+    if data.user_id == LITELLM_PROXY_ADMIN_NAME:
         raise HTTPException(
             status_code=403,
-            detail="Cannot block proxy admin users.",
+            detail=f"Cannot block the default proxy admin user (user_id={LITELLM_PROXY_ADMIN_NAME}).",
         )
 
     token_list: List[str] = []
@@ -2120,6 +2120,12 @@ async def block_user(
                 where={"token": {"in": token_list}},
                 data={"blocked": True},  # type: ignore
             )
+
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"user/block: user {data.user_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit remain active until cache expires."
+        )
 
     for hashed_token in token_list:
         try:
@@ -2200,6 +2206,12 @@ async def unblock_user(
                 where={"token": {"in": token_list}},
                 data={"blocked": False},  # type: ignore
             )
+
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"user/unblock: user {data.user_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit may retain stale blocked state until cache expires."
+        )
 
     for hashed_token in token_list:
         try:

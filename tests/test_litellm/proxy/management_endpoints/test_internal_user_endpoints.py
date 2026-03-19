@@ -2479,10 +2479,13 @@ async def test_block_user_returns_404_when_user_not_found(mocker):
 
 
 @pytest.mark.asyncio
-async def test_block_user_rejected_when_blocking_proxy_admin(mocker):
-    """Cannot block a user with role proxy_admin."""
+async def test_block_user_rejected_when_blocking_default_proxy_admin(mocker):
+    """Cannot block the default proxy admin user (LITELLM_PROXY_ADMIN_NAME)."""
+    from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+
     mock_prisma_client = mocker.MagicMock()
     mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = LITELLM_PROXY_ADMIN_NAME
     mock_user_row.user_role = "proxy_admin"
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
         return_value=mock_user_row
@@ -2497,13 +2500,56 @@ async def test_block_user_rejected_when_blocking_proxy_admin(mocker):
 
     with pytest.raises(HTTPException) as exc:
         await block_user(
-            data=BlockUnblockUserRequest(user_id="proxy_admin_user"),
+            data=BlockUnblockUserRequest(user_id=LITELLM_PROXY_ADMIN_NAME),
             http_request=mock_request,
             user_api_key_dict=user_api_key_dict,
         )
 
     assert exc.value.status_code == 403
-    assert "Cannot block proxy admin users." in str(exc.value.detail)
+    assert "Cannot block the default proxy admin user" in str(exc.value.detail)
+    assert LITELLM_PROXY_ADMIN_NAME in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_block_user_allows_non_default_proxy_admin(mocker):
+    """A user with role proxy_admin but not the default admin id may be blocked."""
+    from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "other_proxy_admin"
+    mock_user_row.user_role = "proxy_admin"
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=mock_user_row
+    )
+
+    mock_tx = mocker.MagicMock()
+    mock_tx.litellm_verificationtoken.find_many = mocker.AsyncMock(return_value=[])
+    mock_tx.litellm_usertable.update = mocker.AsyncMock(return_value=mock_user_row)
+    mock_tx.litellm_verificationtoken.update_many = mocker.AsyncMock()
+
+    mock_tx_ctx = mocker.AsyncMock()
+    mock_tx_ctx.__aenter__.return_value = mock_tx
+    mock_tx_ctx.__aexit__.return_value = None
+    mock_prisma_client.db.tx = mocker.MagicMock(return_value=mock_tx_ctx)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_request = mocker.MagicMock()
+
+    result = await block_user(
+        data=BlockUnblockUserRequest(user_id="other_proxy_admin"),
+        http_request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result is mock_user_row
 
 
 @pytest.mark.asyncio

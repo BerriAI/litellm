@@ -3125,6 +3125,12 @@ async def block_team(
                 data={"blocked": True},  # type: ignore
             )
 
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"team/block: team {data.team_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit remain active until cache expires."
+        )
+
     for hashed_token in token_list:
         try:
             key_object = await get_key_object(
@@ -3197,6 +3203,12 @@ async def unblock_team(
                 where={"token": {"in": token_list}},
                 data={"blocked": False},  # type: ignore
             )
+
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"team/unblock: team {data.team_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit may retain stale blocked state until cache expires."
+        )
 
     for hashed_token in token_list:
         try:
