@@ -210,6 +210,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             params.append("thinking")
             params.append("reasoning_effort")
 
+        # output_config is supported for all Anthropic models (effort, schema settings)
+        params.append("output_config")
+
         return params
 
     @staticmethod

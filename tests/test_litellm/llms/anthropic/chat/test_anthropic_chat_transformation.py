@@ -3321,3 +3321,34 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+def test_output_config_in_supported_params():
+    """
+    Test that output_config is listed in get_supported_openai_params for all
+    Anthropic models. This ensures the parameter is not silently dropped before
+    reaching transform_request().
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23380
+    """
+    config = AnthropicConfig()
+
+    # Standard model — must include output_config
+    params = config.get_supported_openai_params(model="claude-3-5-sonnet-20241022")
+    assert "output_config" in params, (
+        "output_config must be in supported params for standard claude models"
+    )
+
+    # Claude 4.6 model — must also include output_config
+    params_46 = config.get_supported_openai_params(model="claude-opus-4-6-20251101")
+    assert "output_config" in params_46, (
+        "output_config must be in supported params for claude-4.6 models"
+    )
+
+    # Reasoning model — must also include output_config
+    params_reasoning = config.get_supported_openai_params(
+        model="claude-3-7-sonnet-20250219"
+    )
+    assert "output_config" in params_reasoning, (
+        "output_config must be in supported params for reasoning models"
+    )
