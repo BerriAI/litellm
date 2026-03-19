@@ -244,8 +244,9 @@ class Tools(TypedDict, total=False):
     retrieval: Retrieval
 
 
-class ToolConfig(TypedDict):
+class ToolConfig(TypedDict, total=False):
     functionCallingConfig: FunctionCallingConfig
+    includeServerSideToolInvocations: bool
 
 
 class TTL(TypedDict, total=False):
