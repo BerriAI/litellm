@@ -127,7 +127,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                # Convert tools back from OpenAI format to Anthropic format
+                anthropic_config = AnthropicConfig()
+                anthropic_tools: List[AllAnthropicToolsValues] = []
+                for tool in guardrailed_tools:
+                    converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
+                    if converted_tool is not None:
+                        anthropic_tools.append(converted_tool)
+                    # Note: MCP servers are handled separately in the main transformation
+                data["tools"] = anthropic_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(

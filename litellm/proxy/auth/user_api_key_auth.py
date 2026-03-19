@@ -64,7 +64,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.proxy.utils import PrismaClient, ProxyLogging, normalize_route_for_root_path
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    normalize_route_for_root_path,
+)
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -681,6 +685,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 do_standard_jwt_auth = True
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
+                    jwt_claims: Optional[dict]
                     if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
@@ -696,6 +701,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     if valid_token is not None:
                         api_key = valid_token.token or ""
+                        valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
 
@@ -725,6 +731,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     team_membership: Optional[LiteLLM_TeamMembership] = result.get(
                         "team_membership", None
                     )
+                    jwt_claims = result.get("jwt_claims", None)
 
                     global_proxy_spend = await get_global_proxy_spend(
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -753,6 +760,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
+                            jwt_claims=jwt_claims,
                         )
 
                     valid_token = UserAPIKeyAuth(
@@ -799,6 +807,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_metadata=(
                             team_object.metadata if team_object is not None else None
                         ),
+                        jwt_claims=jwt_claims,
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks

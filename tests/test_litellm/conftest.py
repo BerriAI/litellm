@@ -49,6 +49,11 @@ def isolate_litellm_state():
     if hasattr(litellm, '_async_failure_callback'):
         original_state['_async_failure_callback'] = litellm._async_failure_callback.copy() if litellm._async_failure_callback else []
 
+    # Store routing globals — leaked model_fallbacks causes tests to route
+    # through async_completion_with_fallbacks / Router, bypassing HTTP mocks
+    if hasattr(litellm, 'model_fallbacks'):
+        original_state['model_fallbacks'] = litellm.model_fallbacks
+
     # Store transport/network globals — many tests set these without restoring,
     # causing subsequent tests to get None from _create_async_transport()
     for _attr in ('disable_aiohttp_transport', 'force_ipv4'):
@@ -59,7 +64,9 @@ def isolate_litellm_state():
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
-    # Clear success/failure callbacks to prevent chaining
+    # Clear all callback lists to prevent cross-test contamination
+    if hasattr(litellm, 'callbacks'):
+        litellm.callbacks = []
     if hasattr(litellm, 'success_callback'):
         litellm.success_callback = []
     if hasattr(litellm, 'failure_callback'):
@@ -68,6 +75,10 @@ def isolate_litellm_state():
         litellm._async_success_callback = []
     if hasattr(litellm, '_async_failure_callback'):
         litellm._async_failure_callback = []
+
+    # Clear routing globals
+    if hasattr(litellm, 'model_fallbacks'):
+        litellm.model_fallbacks = None
 
     yield
 

@@ -415,7 +415,9 @@ class LiteLLMCompletionResponsesConfig:
                                         if isinstance(new_msg, dict)
                                         else getattr(new_msg, "tool_calls", None)
                                     )
-                                    new_tcs: list = _raw_tcs if isinstance(_raw_tcs, list) else []
+                                    new_tcs: list = (
+                                        _raw_tcs if isinstance(_raw_tcs, list) else []
+                                    )
                                     for tc in new_tcs:
                                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                                             last_msg, tc
