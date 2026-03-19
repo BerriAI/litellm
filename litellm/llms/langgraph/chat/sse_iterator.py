@@ -55,6 +55,7 @@ class LangGraphSSEStreamIterator:
         """
         line = line.strip()
         if not line:
+            self._current_event_type = None
             return None
 
         # Handle SSE event: lines (standard SSE - event type in header)
