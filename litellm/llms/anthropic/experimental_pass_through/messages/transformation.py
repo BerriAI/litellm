@@ -23,7 +23,6 @@ from ...common_utils import (
     optionally_handle_anthropic_oauth,
 )
 
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
 
@@ -127,7 +126,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
+        api_base = AnthropicModelInfo.get_api_base(api_base)
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base}/v1/messages"
         return api_base
