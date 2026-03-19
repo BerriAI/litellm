@@ -348,7 +348,10 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
         # put our roundtrip id in the header to the model so we get it on the way back from the model
         if "hl-roundtrip-id" not in headers:
-            request_data["proxy_server_request"]["headers"]["hl-roundtrip-id"] = str(uuid4())
+            proxy_req = request_data.get("proxy_server_request")
+            if proxy_req is not None and "headers" in proxy_req:
+                proxy_req["headers"]["hl-roundtrip-id"] = str(uuid4())
+                headers["hl-roundtrip-id"] = proxy_req["headers"]["hl-roundtrip-id"]
 
         hl_headers = {h.lower():v for h,v in headers.items() if h.lower().startswith("hl-")} 
 
