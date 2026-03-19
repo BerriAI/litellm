@@ -17,6 +17,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
+from litellm.integrations.custom_logger import CustomLogger
+
 
 # ---------------------------------------------------------------------------
 # Step 1 — Enum check
@@ -77,18 +79,40 @@ class TestStreamingHandlerRouting:
 
 # ---------------------------------------------------------------------------
 # Step 4 — Unit test: GOOGLE_GENAI endpoint actually routes to Gemini handler
+#           AND that success_callbacks are fired (not silently skipped).
 # ---------------------------------------------------------------------------
+
+class _SpyCustomLogger(CustomLogger):
+    """Minimal spy that records async_log_success_event calls."""
+
+    def __init__(self):
+        super().__init__()
+        self.success_events = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+
 
 class TestStreamingHandlerGoogleGenAIRouting:
     @pytest.mark.asyncio
-    async def test_google_genai_routes_to_gemini_handler(self):
-        """GOOGLE_GENAI endpoint_type must call GeminiPassthroughLoggingHandler."""
-        from unittest.mock import MagicMock, AsyncMock, patch
-        from datetime import datetime
-        from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+    async def test_google_genai_routes_to_gemini_handler_and_fires_callbacks(self):
+        """GOOGLE_GENAI endpoint_type must call GeminiPassthroughLoggingHandler AND
+        fire registered success_callbacks — not silently skip them.
 
+        Previous regression: streaming_handler.py pre-set async_complete_streaming_response
+        before calling async_success_handler, which triggered the early-return guard in
+        litellm_logging.py:2492, causing every callback to be silently skipped.
+        """
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+        from litellm.types.utils import StandardPassThroughResponseObject
+
+        spy = _SpyCustomLogger()
+        standard_response = StandardPassThroughResponseObject(response="chunk data")
         mock_result = {
-            "result": MagicMock(),
+            "result": standard_response,
             "kwargs": {"response_cost": 0.0001, "model": "gemini-1.5-flash"},
         }
 
@@ -105,12 +129,22 @@ class TestStreamingHandlerGoogleGenAIRouting:
                 PassThroughStreamingHandler,
             )
 
-            mock_logging = MagicMock()
-            mock_logging.model_call_details = {}
-            mock_logging.async_success_handler = AsyncMock()
+            # Use a real LiteLLMLoggingObj so async_success_handler runs its actual
+            # callback-dispatch logic (including the guard at litellm_logging.py:2492).
+            real_logging = LiteLLMLoggingObj(
+                model="gemini-1.5-flash",
+                messages=[],
+                stream=False,
+                call_type="pass_through_endpoint",
+                start_time=datetime.now(),
+                litellm_call_id="test-call-id",
+                function_id="test-fn",
+                # Register the spy directly so we don't pollute global litellm state.
+                dynamic_async_success_callbacks=[spy],
+            )
 
             await PassThroughStreamingHandler._route_streaming_logging_to_handler(
-                litellm_logging_obj=mock_logging,
+                litellm_logging_obj=real_logging,
                 passthrough_success_handler_obj=MagicMock(),
                 url_route="/v1/models/gemini-1.5-flash:streamGenerateContent",
                 request_body={},
@@ -121,16 +155,26 @@ class TestStreamingHandlerGoogleGenAIRouting:
                 model="gemini-1.5-flash",
             )
 
-            assert mock_gemini.call_count == 1, (
-                "GeminiPassthroughLoggingHandler was NOT called for GOOGLE_GENAI endpoint — "
-                "callbacks would be silently skipped (issue #24097 not fixed)"
-            )
-            assert (
-                "async_complete_streaming_response" in mock_logging.model_call_details
-            ), (
-                "async_complete_streaming_response not set on model_call_details — "
-                "function-based success_callbacks will be silently skipped (self.stream=True guard)"
-            )
+        # 1. Gemini handler was called → routing is correct.
+        assert mock_gemini.call_count == 1, (
+            "GeminiPassthroughLoggingHandler was NOT called for GOOGLE_GENAI endpoint — "
+            "callbacks would be silently skipped (issue #24097 not fixed)"
+        )
+
+        # 2. The spy was invoked → async_success_handler ran past the guard and
+        #    actually dispatched callbacks instead of returning early.
+        assert len(spy.success_events) == 1, (
+            "success_callback was NOT invoked — async_success_handler returned before "
+            "the callback loop (early-return guard at litellm_logging.py:2492 still "
+            "triggered, meaning async_complete_streaming_response was pre-set before "
+            "async_success_handler was called)"
+        )
+
+        # 3. async_complete_streaming_response is set on model_call_details by
+        #    async_success_handler's call_type=="pass_through_endpoint" branch (not pre-set).
+        assert (
+            "async_complete_streaming_response" in real_logging.model_call_details
+        ), "async_complete_streaming_response not set by async_success_handler"
 
     @pytest.mark.asyncio
     async def test_vertex_ai_does_not_route_to_gemini_handler(self):
