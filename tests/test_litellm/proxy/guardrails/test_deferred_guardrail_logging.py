@@ -20,7 +20,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from starlette.exceptions import HTTPException
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -421,139 +421,141 @@ class TestDeferredStreamingClosure:
 
     @pytest.mark.asyncio
     async def test_closure_passes_guardrail_modified_response_to_logging(self):
-        """The closure passes the guardrail-modified response to logging handlers."""
-        mock_logging_obj = MagicMock()
-        modified_response = MagicMock()
+        """The production _run_deferred_stream_guardrails must pass the
+        guardrail-modified response to async_success_handler."""
         logged_response = None
+        modified_response = MagicMock()
 
-        async def mock_async_success(*args, **kwargs):
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = mock_async_success
+        mock_logging_obj.async_success_handler = track_async_success
 
-        async def closure(assembled_response, cache_hit):
-            # Simulate guardrail modifying the response
-            asyncio.create_task(
-                mock_logging_obj.async_success_handler(
-                    modified_response, cache_hit=cache_hit, start_time=None, end_time=None
+        class ModifyingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="modifier",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
                 )
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                return modified_response
+
+        guardrail = ModifyingGuardrail()
+
+        with patch("litellm.callbacks", [guardrail]):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
             )
 
-        mock_logging_obj._on_deferred_stream_complete = closure
-
-        resp = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="Hello!",
-            stream=True,
-            litellm_logging_obj=mock_logging_obj,
-        )
-        async for _ in resp:
-            pass
-
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert logged_response is modified_response
+        assert logged_response is modified_response, \
+            "Logging must receive the guardrail-modified response"
 
     @pytest.mark.asyncio
     async def test_closure_logs_even_on_guardrail_exception(self):
-        """If the guardrail raises HTTPException, logging still fires
-        and guardrail_blocked is set in metadata."""
+        """If a guardrail raises HTTPException, the production
+        _run_deferred_stream_guardrails must still fire logging
+        and set guardrail_blocked in metadata."""
         logging_called = False
 
-        async def mock_async_success(*args, **kwargs):
+        class BlockingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="blocker",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                raise HTTPException(status_code=400, detail="Blocked")
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
             nonlocal logging_called
             logging_called = True
 
-        mock_logging_obj = MagicMock()
-        mock_logging_obj.model_call_details = {"metadata": {}}
-        mock_logging_obj.async_success_handler = mock_async_success
+        mock_logging_obj.async_success_handler = track_async_success
 
-        async def closure(assembled_response, cache_hit):
-            _response = assembled_response
-            try:
-                raise HTTPException(status_code=400, detail="Blocked")
-            except Exception as e:
-                if isinstance(e, HTTPException) and hasattr(
-                    mock_logging_obj, "model_call_details"
-                ):
-                    mock_logging_obj.model_call_details.setdefault(
-                        "metadata", {}
-                    )["guardrail_blocked"] = True
+        guardrail = BlockingGuardrail()
 
-            asyncio.create_task(
-                mock_logging_obj.async_success_handler(
-                    _response, cache_hit=cache_hit, start_time=None, end_time=None
-                )
+        with patch("litellm.callbacks", [guardrail]):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
             )
 
-        mock_logging_obj._on_deferred_stream_complete = closure
-
-        resp = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="Hello!",
-            stream=True,
-            litellm_logging_obj=mock_logging_obj,
-        )
-        async for _ in resp:
-            pass
-
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert logging_called is True
+        assert logging_called is True, \
+            "Logging must fire even when guardrail raises HTTPException"
         assert mock_logging_obj.model_call_details["metadata"].get(
             "guardrail_blocked"
-        ) is True
+        ) is True, "guardrail_blocked must be set for HTTPException"
 
     @pytest.mark.asyncio
     async def test_transient_error_does_not_set_guardrail_blocked(self):
-        """Transient errors (not HTTPException) should NOT set guardrail_blocked."""
+        """Transient errors (not HTTPException) should NOT set
+        guardrail_blocked. Uses the production _run_deferred_stream_guardrails."""
+
+        class TransientErrorGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="transient",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                raise ConnectionError("Network timeout")
+
         mock_logging_obj = MagicMock()
         mock_logging_obj.model_call_details = {"metadata": {}}
 
-        async def mock_async_success(*args, **kwargs):
+        async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = mock_async_success
+        mock_logging_obj.async_success_handler = track_async_success
 
-        async def closure(assembled_response, cache_hit):
-            try:
-                raise ConnectionError("Network timeout")
-            except Exception as e:
-                if isinstance(e, HTTPException) and hasattr(
-                    mock_logging_obj, "model_call_details"
-                ):
-                    mock_logging_obj.model_call_details.setdefault(
-                        "metadata", {}
-                    )["guardrail_blocked"] = True
+        guardrail = TransientErrorGuardrail()
 
-            asyncio.create_task(
-                mock_logging_obj.async_success_handler(
-                    assembled_response, cache_hit=cache_hit, start_time=None, end_time=None
-                )
+        with patch("litellm.callbacks", [guardrail]):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
             )
-
-        mock_logging_obj._on_deferred_stream_complete = closure
-
-        resp = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="Hello!",
-            stream=True,
-            litellm_logging_obj=mock_logging_obj,
-        )
-        async for _ in resp:
-            pass
 
         await asyncio.sleep(0)
 
         assert mock_logging_obj.model_call_details["metadata"].get(
             "guardrail_blocked"
-        ) is not True
+        ) is not True, "guardrail_blocked must NOT be set for transient errors"
 
     @pytest.mark.asyncio
     async def test_production_closure_integration(self):
@@ -685,3 +687,218 @@ class TestDeferredStreamingClosure:
             "apply_guardrail guardrails must be dispatched through UnifiedLLMGuardrails"
         assert logged_response is not None, \
             "Logging must fire after unified guardrail path"
+
+    @pytest.mark.asyncio
+    async def test_hooks_receive_merged_guardrail_data(self):
+        """Hooks must receive guardrail_data (the merged dict from
+        _check_and_merge_model_level_guardrails), not the original
+        captured_data.  This ensures model-level non-default guardrails
+        are visible to any inner should_run_guardrail re-checks.
+
+        Uses a deep-copy mock to break the shallow-copy side-effect that
+        would otherwise mask the bug — verifying the code is explicitly
+        correct, not correct-by-accident."""
+        import copy
+
+        hook_received_data = None
+
+        class InspectingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="inspector",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                nonlocal hook_received_data
+                hook_received_data = data
+                return response
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            pass
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        guardrail = InspectingGuardrail()
+
+        captured_data = {"model": "gpt-4", "metadata": {"existing_key": "value"}}
+
+        def mock_merge(data, llm_router):
+            """Return a fully independent dict (deep copy) so the original
+            captured_data is NOT mutated.  This simulates a correct merge
+            implementation and proves _run_deferred_stream_guardrails uses
+            the return value, not the original data."""
+            merged = copy.deepcopy(data)
+            merged["metadata"]["guardrails"] = ["model-guardrail"]
+            merged["_merged_marker"] = True
+            return merged
+
+        with patch("litellm.callbacks", [guardrail]), \
+             patch(
+                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                side_effect=mock_merge,
+             ):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data=captured_data,
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+        assert hook_received_data is not None, "Guardrail hook must be called"
+        assert hook_received_data.get("_merged_marker") is True, \
+            "Hook must receive guardrail_data (merged), not original captured_data"
+        assert "model-guardrail" in hook_received_data.get("metadata", {}).get(
+            "guardrails", []
+        ), "Hook data must contain model-level guardrails"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_path_receives_merged_guardrail_data(self):
+        """The apply_guardrail path (through UnifiedLLMGuardrails) must also
+        receive guardrail_data so that the inner should_run_guardrail re-check
+        inside UnifiedLLMGuardrails sees model-level guardrails.
+
+        This is the specific scenario Greptile flagged: a default_on=False
+        guardrail configured at the model level would pass the outer gate but
+        be silently skipped at execution time if captured_data (unmerged) were
+        passed instead of guardrail_data (merged)."""
+        import copy
+        from litellm.types.utils import GenericGuardrailAPIInputs
+
+        unified_received_data = None
+
+        class ModelLevelApplyGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="model-apply-guardrail",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def apply_guardrail(
+                self, inputs, request_data, input_type, logging_obj=None
+            ) -> GenericGuardrailAPIInputs:
+                return inputs
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            pass
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        guardrail = ModelLevelApplyGuardrail()
+        captured_data = {"model": "gpt-4", "metadata": {}}
+
+        def mock_merge(data, llm_router):
+            merged = copy.deepcopy(data)
+            merged["metadata"]["guardrails"] = ["model-apply-guardrail"]
+            merged["_merged_marker"] = True
+            return merged
+
+        # Capture what UnifiedLLMGuardrails.async_post_call_success_hook receives
+        original_unified_hook = None
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+        original_unified_hook = UnifiedLLMGuardrails.async_post_call_success_hook
+
+        async def tracking_unified_hook(self, user_api_key_dict, data, response):
+            nonlocal unified_received_data
+            unified_received_data = data
+            return response
+
+        with patch("litellm.callbacks", [guardrail]), \
+             patch(
+                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                side_effect=mock_merge,
+             ), \
+             patch.object(
+                UnifiedLLMGuardrails,
+                "async_post_call_success_hook",
+                tracking_unified_hook,
+             ):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data=captured_data,
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+        assert unified_received_data is not None, \
+            "UnifiedLLMGuardrails must be called for apply_guardrail guardrails"
+        assert unified_received_data.get("_merged_marker") is True, \
+            "UnifiedLLMGuardrails must receive guardrail_data (merged), not captured_data"
+        assert "model-apply-guardrail" in unified_received_data.get(
+            "metadata", {}
+        ).get("guardrails", []), \
+            "UnifiedLLMGuardrails data must contain model-level guardrails"
+
+    @pytest.mark.asyncio
+    async def test_multiple_guardrails_all_receive_merged_data(self):
+        """When multiple guardrails are configured, ALL of them must receive
+        guardrail_data (merged), not just the first one."""
+        import copy
+
+        received_data_per_guardrail = {}
+
+        class TaggedGuardrail(CustomGuardrail):
+            def __init__(self, name):
+                super().__init__(
+                    guardrail_name=name,
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                received_data_per_guardrail[self.guardrail_name] = data
+                return response
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            pass
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        guardrail_a = TaggedGuardrail("guardrail-a")
+        guardrail_b = TaggedGuardrail("guardrail-b")
+
+        captured_data = {"model": "gpt-4", "metadata": {}}
+
+        def mock_merge(data, llm_router):
+            merged = copy.deepcopy(data)
+            merged["metadata"]["guardrails"] = ["guardrail-a", "guardrail-b"]
+            merged["_merged_marker"] = True
+            return merged
+
+        with patch("litellm.callbacks", [guardrail_a, guardrail_b]), \
+             patch(
+                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                side_effect=mock_merge,
+             ):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data=captured_data,
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+        for name in ("guardrail-a", "guardrail-b"):
+            assert name in received_data_per_guardrail, \
+                f"{name} must be called"
+            assert received_data_per_guardrail[name].get("_merged_marker") is True, \
+                f"{name} must receive guardrail_data (merged), not captured_data"

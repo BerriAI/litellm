@@ -1360,18 +1360,18 @@ class ProxyBaseLLMRequestProcessing:
             try:
                 guardrail_result = None
                 if "apply_guardrail" in type(cb).__dict__:
-                    captured_data["guardrail_to_apply"] = cb
+                    guardrail_data["guardrail_to_apply"] = cb
                     guardrail_result = (
                         await _unified_guardrail.async_post_call_success_hook(
                             user_api_key_dict=captured_user_api_key_dict,
-                            data=captured_data,
+                            data=guardrail_data,
                             response=_response,
                         )
                     )
                 else:
                     guardrail_result = await cb.async_post_call_success_hook(
                         user_api_key_dict=captured_user_api_key_dict,
-                        data=captured_data,
+                        data=guardrail_data,
                         response=_response,
                     )
                 if guardrail_result is not None:
