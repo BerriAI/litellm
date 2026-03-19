@@ -24,7 +24,7 @@ export const pageDescriptions: Record<string, string> = {
   projects: "Manage projects within teams",
   "access-groups": "Manage access groups for role-based permissions",
   budgets: "Set and monitor spending budgets",
-  api_ref: "Browse API documentation and endpoints",
+  "api-reference": "Browse API documentation and endpoints",
   "model-hub-table": "Explore available AI models and providers",
   "learning-resources": "Access tutorials and documentation",
   caching: "Configure response caching settings",

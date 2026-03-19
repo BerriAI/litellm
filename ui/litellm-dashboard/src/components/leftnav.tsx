@@ -231,8 +231,8 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "DEVELOPER TOOLS",
     items: [
       {
-        key: "api_ref",
-        page: "api_ref",
+        key: "api-reference",
+        page: "api-reference",
         label: "API Reference",
         icon: <ApiOutlined />,
       },
