@@ -841,6 +841,31 @@ class TestValidateEnvironmentAuthToken:
                     api_base=None,
                 )
 
+    def test_resolves_api_key_from_env_when_param_is_none(self):
+        """validate_environment should resolve ANTHROPIC_API_KEY from env when api_key param is None."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_REGULAR_KEY},
+            clear=True,
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
 
 
 
@@ -953,6 +978,27 @@ class TestGetAuthHeader:
         with mock_patch.dict("os.environ", {}, clear=True):
             result = AnthropicModelInfo.get_auth_header()
             assert result is None
+
+    def test_oauth_token_uses_bearer_not_x_api_key(self):
+        """OAuth token (sk-ant-oat*) should return Authorization: Bearer, not x-api-key."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN)
+        assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+    def test_oauth_token_from_env_uses_bearer(self):
+        """OAuth token in ANTHROPIC_API_KEY env var should return Authorization: Bearer."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN},
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
 
 
 class TestGetApiBaseFallbackChain:

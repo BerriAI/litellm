@@ -486,6 +486,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
         )
+        api_key = AnthropicModelInfo.get_api_key(api_key)
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
         auth_token: Optional[str] = None
         if api_key is None:
@@ -580,6 +581,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         resolved_key = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
+            if is_anthropic_oauth_key(resolved_key):
+                return {"authorization": f"Bearer {resolved_key}"}
             return {"x-api-key": resolved_key}
         auth_token = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
