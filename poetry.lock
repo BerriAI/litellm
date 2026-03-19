@@ -3222,15 +3222,15 @@ files = [
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.57"
+version = "0.4.58"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.4.57-py3-none-any.whl", hash = "sha256:04538223cd80318a72d70c6e10f701598e58c763368296a6503c674c92fbdb62"},
-    {file = "litellm_proxy_extras-0.4.57.tar.gz", hash = "sha256:ef9b95dc42237614216833bd5d46ebf9dea1caa5ea14ea1a66d7f7842b224ec2"},
+    {file = "litellm_proxy_extras-0.4.58-py3-none-any.whl", hash = "sha256:8863e70de833c0e35119a1cbbf583619bdebe52222efd5654586519175ba403b"},
+    {file = "litellm_proxy_extras-0.4.58.tar.gz", hash = "sha256:84a67483329eced8be4fc61c4e43f117287aa4e3deeb8ddf8fe8cdc9a8508836"},
 ]
 
 [[package]]
@@ -4460,6 +4460,21 @@ spss = ["pyreadstat (>=1.2.0)"]
 sql-other = ["SQLAlchemy (>=2.0.0)", "adbc-driver-postgresql (>=0.8.0)", "adbc-driver-sqlite (>=0.8.0)"]
 test = ["hypothesis (>=6.46.1)", "pytest (>=7.3.2)", "pytest-xdist (>=2.2.0)"]
 xml = ["lxml (>=4.9.2)"]
+
+[[package]]
+name = "parameterized"
+version = "0.9.0"
+description = "Parameterized testing with any Python test framework"
+optional = false
+python-versions = ">=3.7"
+groups = ["dev"]
+files = [
+    {file = "parameterized-0.9.0-py2.py3-none-any.whl", hash = "sha256:4e0758e3d41bea3bbd05ec14fc2c24736723f243b28d702081aef438c9372b1b"},
+    {file = "parameterized-0.9.0.tar.gz", hash = "sha256:7fc905272cefa4f364c1a3429cbbe9c0f98b793988efb5bf90aac80f08db09b1"},
+]
+
+[package.extras]
+dev = ["jinja2"]
 
 [[package]]
 name = "pathspec"
@@ -8003,4 +8018,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "22cdc8096e0c8296827734393f5ab6e66088f397b5295caa1d277466d1fde1e8"
+content-hash = "2cf958f1a04fd5f1ab0e5cfc33bdbf441b518ed6c82d0f2546bf64cd3d2f89be"
