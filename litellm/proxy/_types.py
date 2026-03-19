@@ -2284,6 +2284,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    route_anthropic_passthrough_to_router: Optional[bool] = Field(
+        None,
+        description="If True, /anthropic/v1/messages requests whose model matches a configured deployment in model_list are routed through LiteLLM's anthropic_messages flow instead of the default passthrough behavior.",
+    )
     mcp_required_fields: Optional[List[str]] = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",

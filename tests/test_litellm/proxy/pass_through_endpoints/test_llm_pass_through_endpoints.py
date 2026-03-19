@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+import types
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -18,6 +19,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    anthropic_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
@@ -184,6 +186,150 @@ class TestBaseOpenAIPassThroughHandler:
         assert mock_endpoint_func.await_args is not None
         # The endpoint_func is called with request, fastapi_response, user_api_key_dict
         # No longer checking for stream and query_params as they're handled differently
+
+
+@pytest.mark.asyncio
+async def test_anthropic_proxy_route_router_model_uses_native_anthropic_messages_flow():
+    request_body = {
+        "model": "my-anthropic-compatible-model",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    body_bytes = json.dumps(request_body).encode("utf-8")
+
+    async def receive():
+        return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive,
+    )
+    fastapi_response = Response()
+    user_api_key_dict = MagicMock()
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing"
+    ) as mock_processing_class, patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    ) as mock_create_pass_through_route, patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": types.SimpleNamespace(
+                llm_router=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                proxy_config=MagicMock(),
+                general_settings={
+                    "route_anthropic_passthrough_to_router": True,
+                },
+                user_api_base=None,
+                user_max_tokens=None,
+                user_model=None,
+                user_request_timeout=None,
+                user_temperature=None,
+                version="test-version",
+            )
+        },
+    ):
+        mock_processor = MagicMock()
+        mock_processor.base_process_llm_request = AsyncMock(
+            return_value={"status": "ok"}
+        )
+        mock_processing_class.return_value = mock_processor
+
+        result = await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert result == {"status": "ok"}
+        mock_processing_class.assert_called_once_with(data=request_body)
+        mock_processor.base_process_llm_request.assert_called_once()
+        call_kwargs = mock_processor.base_process_llm_request.call_args.kwargs
+        assert call_kwargs["route_type"] == "anthropic_messages"
+        assert call_kwargs["request"] is request
+        assert call_kwargs["fastapi_response"] is fastapi_response
+        assert call_kwargs["user_api_key_dict"] is user_api_key_dict
+        mock_create_pass_through_route.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_proxy_route_router_model_stays_passthrough_by_default():
+    request_body = {
+        "model": "my-anthropic-compatible-model",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    body_bytes = json.dumps(request_body).encode("utf-8")
+
+    async def receive():
+        return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive,
+    )
+    fastapi_response = Response()
+    user_api_key_dict = MagicMock()
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing"
+    ) as mock_processing_class, patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    ) as mock_create_pass_through_route, patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+        return_value="test-anthropic-key",
+    ), patch.dict(
+        sys.modules,
+        {
+            "litellm.proxy.proxy_server": types.SimpleNamespace(
+                llm_router=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                proxy_config=MagicMock(),
+                general_settings={},
+                user_api_base=None,
+                user_max_tokens=None,
+                user_model=None,
+                user_request_timeout=None,
+                user_temperature=None,
+                version="test-version",
+            )
+        },
+    ):
+        mock_endpoint = AsyncMock(return_value={"status": "passthrough"})
+        mock_create_pass_through_route.return_value = mock_endpoint
+
+        result = await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert result == {"status": "passthrough"}
+        mock_processing_class.assert_not_called()
+        mock_create_pass_through_route.assert_called_once()
 
 
 class TestVertexAIPassThroughHandler:
