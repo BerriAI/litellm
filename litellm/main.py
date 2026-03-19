@@ -3692,13 +3692,14 @@ def completion(  # type: ignore # noqa: PLR0915
             response = model_response
 
         elif custom_llm_provider == "google_code_assist":
+            _ca_optional_params = optional_params or {}
             if acompletion is True:
                 response = _google_code_assist_chat.acompletion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=_ca_optional_params,
                     litellm_params=litellm_params,  # type: ignore
                     logging_obj=logging,
                     logger_fn=logger_fn,
@@ -3709,7 +3710,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
-                    optional_params=optional_params,
+                    optional_params=_ca_optional_params,
                     litellm_params=litellm_params,  # type: ignore
                     logging_obj=logging,
                     logger_fn=logger_fn,

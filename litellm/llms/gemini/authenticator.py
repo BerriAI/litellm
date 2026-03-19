@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import time
 import webbrowser
 import http.server
@@ -143,17 +144,22 @@ class GeminiAuthenticator:
         """
         Write oauth credentials with user-only permissions.
         """
-        fd = os.open(
-            self.oauth_creds_file,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            0o600,
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(creds, f)
+        fd, tmp_path = tempfile.mkstemp(dir=self.token_dir, prefix=".tmp_creds_")
         try:
-            os.chmod(self.oauth_creds_file, 0o600)
-        except OSError:
-            pass
+            os.chmod(tmp_path, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(creds, f)
+            os.replace(tmp_path, self.oauth_creds_file)
+            try:
+                os.chmod(self.oauth_creds_file, 0o600)
+            except OSError:
+                pass
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _login(self) -> Dict[str, Any]:
         """Perform loopback flow login."""

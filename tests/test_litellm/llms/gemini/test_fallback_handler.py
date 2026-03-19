@@ -12,15 +12,9 @@ def test_run_gemini_completion_with_code_assist_fallback_disabled():
     def _raise_scope_error():
         raise Exception("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
 
-    with (
-        patch(
-            "litellm.llms.gemini.fallback_handler.should_fallback_to_google_code_assist",
-            return_value=True,
-        ),
-        patch(
-            "litellm.llms.gemini.fallback_handler._google_code_assist_chat.completion"
-        ) as mock_completion,
-    ):
+    with patch(
+        "litellm.llms.gemini.fallback_handler._google_code_assist_chat.completion"
+    ) as mock_completion:
         with pytest.raises(Exception, match="ACCESS_TOKEN_SCOPE_INSUFFICIENT"):
             run_gemini_completion_with_code_assist_fallback(
                 primary_call=_raise_scope_error,
@@ -28,6 +22,30 @@ def test_run_gemini_completion_with_code_assist_fallback_disabled():
                 auto_fallback_to_google_code_assist=False,
             )
 
+        mock_completion.assert_not_called()
+
+
+def test_run_gemini_completion_with_code_assist_fallback_enabled_but_not_match():
+    def _raise_other_error():
+        raise Exception("SOME_OTHER_ERROR")
+
+    with (
+        patch(
+            "litellm.llms.gemini.fallback_handler.should_fallback_to_google_code_assist",
+            return_value=False,
+        ) as mock_should_fallback,
+        patch(
+            "litellm.llms.gemini.fallback_handler._google_code_assist_chat.completion"
+        ) as mock_completion,
+    ):
+        with pytest.raises(Exception, match="SOME_OTHER_ERROR"):
+            run_gemini_completion_with_code_assist_fallback(
+                primary_call=_raise_other_error,
+                fallback_kwargs={},
+                auto_fallback_to_google_code_assist=True,
+            )
+
+        mock_should_fallback.assert_called_once()
         mock_completion.assert_not_called()
 
 

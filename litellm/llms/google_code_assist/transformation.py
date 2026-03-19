@@ -99,13 +99,14 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
                 "includeThoughts": base_params.pop("include_thoughts")
             }
 
-        if (
-            "thinkingConfig" in optional_params
-            and "thinkingConfig" not in generation_config
-        ):
-            verbose_logger.warning(
-                "google_code_assist: `thinkingConfig` was provided but not mapped into generationConfig."
-            )
+        # Forward any remaining mapped params into generation_config so they are not silently dropped.
+        for key, value in base_params.items():
+            if key not in generation_config:
+                verbose_logger.debug(
+                    "google_code_assist: forwarding mapped param '%s' into generationConfig",
+                    key,
+                )
+                generation_config[key] = value
 
         vertex_request = {
             "contents": contents,
