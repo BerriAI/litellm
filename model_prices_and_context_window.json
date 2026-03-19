@@ -37032,5 +37032,17 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "nvidia_nim/z-ai/glm5": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "nvidia_nim",
+        "max_input_tokens": 202752,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.56e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
     }
 }
