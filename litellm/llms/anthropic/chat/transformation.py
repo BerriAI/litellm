@@ -59,6 +59,10 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServerToolUse,
 )
+from litellm.types.responses.main import (
+    OutputCodeInterpreterCall,
+    build_code_interpreter_log_outputs,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -960,11 +964,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[
-                    AnthropicMessagesToolChoice
-                ] = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    )
                 )
 
                 if _tool_choice is not None:
@@ -1062,9 +1066,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params[
-                            "context_management"
-                        ] = anthropic_context_management
+                        optional_params["context_management"] = (
+                            anthropic_context_management
+                        )
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1138,9 +1142,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content[
-                            "cache_control"
-                        ] = system_message_block["cache_control"]
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1164,9 +1168,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content[
-                                "cache_control"
-                            ] = _content["cache_control"]
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1463,9 +1467,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(
-        self, completion_response: dict
-    ) -> Tuple[
+    def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1749,6 +1751,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["web_search_results"] = web_search_results
             if tool_results is not None:
                 provider_specific_fields["tool_results"] = tool_results
+                # Convert to provider-neutral OutputCodeInterpreterCall objects
+                # so the Responses API layer can use them without Anthropic-specific knowledge.
+                container_id = (
+                    completion_response.get("container", {}).get("id")
+                    if isinstance(completion_response.get("container"), dict)
+                    else None
+                )
+                code_by_id: Dict[str, str] = {}
+                for tc in tool_calls:
+                    try:
+                        args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        code_by_id[tc.get("id", "")] = args.get("command", "")
+                    except Exception:
+                        pass
+                code_interpreter_results = []
+                for tr in tool_results:
+                    if tr.get("type") != "bash_code_execution_tool_result":
+                        continue
+                    call_id = tr.get("tool_use_id", "")
+                    content = tr.get("content", {})
+                    log_outputs = build_code_interpreter_log_outputs(content)
+                    code_interpreter_results.append(
+                        OutputCodeInterpreterCall(
+                            type="code_interpreter_call",
+                            id=call_id,
+                            code=code_by_id.get(call_id, ""),
+                            container_id=container_id,
+                            status="completed",
+                            outputs=log_outputs,
+                        )
+                    )
+                provider_specific_fields["code_interpreter_results"] = (
+                    code_interpreter_results
+                )
             if container is not None:
                 provider_specific_fields["container"] = container
             if compaction_blocks is not None:
@@ -1794,6 +1830,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
 
+        _hidden_params["provider_specific_fields"] = provider_specific_fields
         model_response._hidden_params = _hidden_params
         return model_response
 
