@@ -7421,7 +7421,7 @@ async def test_block_key_rejected_for_internal_user(monkeypatch):
         )
 
     assert exc.value.status_code == 403
-    assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+    assert "Only proxy admins can call /key/block." in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -7448,7 +7448,7 @@ async def test_unblock_key_rejected_for_internal_user(monkeypatch):
         )
 
     assert exc.value.status_code == 403
-    assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+    assert "Only proxy admins can call /key/unblock." in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
@@ -7476,29 +7476,13 @@ async def test_block_key_allowed_for_proxy_admin(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_block_key_allowed_for_team_admin(monkeypatch):
-    """Team admins should be able to block keys belonging to their team."""
+async def test_block_key_rejected_for_team_admin(monkeypatch):
+    """Only proxy admins can block keys; team admins get 403."""
     from litellm.proxy._types import BlockKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import block_key
 
     team_id = "team-123"
     _setup_block_unblock_mocks(monkeypatch, mock_key_team_id=team_id)
-
-    # Mock get_team_object to return a team where the user is admin
-    team_obj = LiteLLM_TeamTableCachedObj(
-        team_id=team_id,
-        members_with_roles=[
-            Member(user_id="team_admin_user", role="admin"),
-        ],
-    )
-
-    async def mock_get_team_object(**kwargs):
-        return team_obj
-
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
-        mock_get_team_object,
-    )
 
     mock_request = MagicMock()
     user_api_key_dict = UserAPIKeyAuth(
@@ -7507,13 +7491,57 @@ async def test_block_key_allowed_for_team_admin(monkeypatch):
         user_id="team_admin_user",
     )
 
-    result = await block_key(
-        data=BlockKeyRequest(key="sk-test123456789"),
-        http_request=mock_request,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=None,
+    with pytest.raises(HTTPException) as exc:
+        await block_key(
+            data=BlockKeyRequest(key="sk-test123456789"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can call /key/block." in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_block_key_rejected_when_blocking_proxy_admin_key(monkeypatch):
+    """Blocking a key that belongs to a proxy_admin user returns 403."""
+    from litellm.proxy._types import BlockKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import block_key
+
+    mock_prisma_client, test_hashed_token = _setup_block_unblock_mocks(monkeypatch)
+    mock_key_record = MagicMock()
+    mock_key_record.token = test_hashed_token
+    mock_key_record.user_id = "proxy_admin_user"
+    mock_key_record.blocked = False
+    mock_key_record.model_dump_json.return_value = "{}"
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_record
     )
-    assert result is not None
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_role = "proxy_admin"
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mock_user_row
+    )
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin_user",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await block_key(
+            data=BlockKeyRequest(key="sk-test123456789"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc.value.status_code == 403
+    assert "Cannot block proxy admin keys." in str(exc.value.detail)
 
 
 @pytest.mark.asyncio

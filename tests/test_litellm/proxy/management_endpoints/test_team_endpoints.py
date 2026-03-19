@@ -16,6 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
+    BlockTeamRequest,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_OrganizationTableWithMembers,
@@ -37,11 +38,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
     _validate_and_populate_member_user_info,
+    block_team,
     delete_team,
     list_available_teams,
     router,
     team_member_add_duplication_check,
     team_member_delete,
+    unblock_team,
     validate_team_org_change,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -6441,3 +6444,100 @@ async def test_list_team_v1_batches_key_queries():
         assert result[0].keys == [key1, key2]
         assert result[1].team_id == "team-2"
         assert result[1].keys == [key3]
+
+
+# =============================================================================
+# Tests for POST /team/block and POST /team/unblock (proxy_admin only)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_block_team_rejected_for_non_proxy_admin(mocker):
+    """Only proxy admins can call /team/block."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    mock_request = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await block_team(
+            data=BlockTeamRequest(team_id="some-team"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can call /team/block." in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_block_team_returns_404_when_team_not_found(mocker):
+    """block_team returns 404 when team_id does not exist."""
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_request = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await block_team(
+            data=BlockTeamRequest(team_id="nonexistent-team"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert exc.value.status_code == 404
+    assert "Team not found" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unblock_team_rejected_for_non_proxy_admin(mocker):
+    """Only proxy admins can call /team/unblock."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    mock_request = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await unblock_team(
+            data=BlockTeamRequest(team_id="some-team"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert exc.value.status_code == 403
+    assert "Only proxy admins can call /team/unblock." in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_unblock_team_returns_404_when_team_not_found(mocker):
+    """unblock_team returns 404 when team_id does not exist."""
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_request = MagicMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await unblock_team(
+            data=BlockTeamRequest(team_id="nonexistent-team"),
+            http_request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert exc.value.status_code == 404
+    assert "Team not found" in str(exc.value.detail)
