@@ -67,6 +67,120 @@ class WebSearchInterceptionLogger(CustomLogger):
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
 
+    async def try_short_circuit_search(
+        self,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        custom_llm_provider: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Short-circuit web-search-only requests by executing the search directly.
+
+        Claude Code sends web search as a separate, standalone /v1/messages
+        request with a simple prompt and only web_search tool(s). For providers
+        that don't natively support web search (e.g. github_copilot), there is
+        no need to route this through the backend LLM — we can detect the
+        pattern, execute the search via Tavily/Perplexity, and return a
+        synthetic Anthropic response immediately.
+
+        Args:
+            model: Model name from the request
+            messages: Messages list from the request
+            tools: Tools list from the request
+            custom_llm_provider: Provider name
+
+        Returns:
+            An AnthropicMessagesResponse dict if short-circuited, or None to
+            continue normal processing.
+        """
+        if not tools:
+            return None
+
+        # Check if provider is in enabled list
+        provider_str = custom_llm_provider or ""
+        if (
+            self.enabled_providers is not None
+            and provider_str not in self.enabled_providers
+        ):
+            return None
+
+        # All tools must be web search tools
+        if not all(is_web_search_tool(t) for t in tools):
+            return None
+
+        # Extract search query from the last user message
+        query = self._extract_search_query(messages)
+        if not query:
+            return None
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search detected "
+            f"(provider={provider_str}, query='{query}')"
+        )
+
+        # Execute search
+        try:
+            search_result_text = await self._execute_search(query)
+        except Exception as e:
+            verbose_logger.error(
+                f"WebSearchInterception: Short-circuit search failed: {e}"
+            )
+            search_result_text = f"Search failed: {e}"
+
+        # Build synthetic Anthropic response
+        from uuid import uuid4
+
+        response: Dict[str, Any] = {
+            "id": f"msg_{uuid4().hex[:24]}",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": search_result_text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search completed, "
+            f"returning synthetic response ({len(search_result_text)} chars)"
+        )
+        return response
+
+    @staticmethod
+    def _extract_search_query(messages: List[Dict]) -> Optional[str]:
+        """
+        Extract the search query from messages.
+
+        Looks at the last user message content for the search query text.
+        """
+        if not messages:
+            return None
+
+        # Find the last user message
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content.strip() or None
+
+            # Handle list-of-blocks content
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "").strip()
+                        if text:
+                            return text
+                    elif isinstance(block, str):
+                        text = block.strip()
+                        if text:
+                            return text
+
+        return None
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[Any]
     ) -> Optional[dict]:

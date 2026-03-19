@@ -114,6 +114,54 @@ async def _execute_pre_request_hooks(
     return request_kwargs
 
 
+async def _try_websearch_short_circuit(
+    model: str,
+    messages: List[Dict],
+    tools: Optional[List[Dict]],
+    custom_llm_provider: Optional[str],
+    stream: Optional[bool],
+) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
+    """
+    Attempt to short-circuit a web-search-only request.
+
+    Claude Code sends web search as a separate, standalone /v1/messages
+    request. For providers that don't natively support web search (e.g.
+    github_copilot), we detect this pattern, execute the search via
+    Tavily/Perplexity, and return a synthetic Anthropic response — bypassing
+    the backend LLM entirely.
+
+    Returns the synthetic response if short-circuited, or None to continue
+    normal processing.
+    """
+    if not litellm.callbacks:
+        return None
+
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    for callback in litellm.callbacks:
+        if not isinstance(callback, WebSearchInterceptionLogger):
+            continue
+
+        response = await callback.try_short_circuit_search(
+            model=model,
+            messages=messages,
+            tools=tools,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if response is not None:
+            if stream:
+                from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                    FakeAnthropicMessagesStreamIterator,
+                )
+
+                return FakeAnthropicMessagesStreamIterator(response)
+            return response
+
+    return None
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -155,6 +203,19 @@ async def anthropic_messages(
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications
     kwargs.update(request_kwargs)
+
+    # Short-circuit web-search-only requests: detect the pattern, execute
+    # search directly via Tavily/Perplexity, and return a synthetic response
+    # without ever touching the backend LLM or the adapter path.
+    short_circuit_response = await _try_websearch_short_circuit(
+        model=model,
+        messages=messages,
+        tools=tools,
+        custom_llm_provider=custom_llm_provider,
+        stream=stream,
+    )
+    if short_circuit_response is not None:
+        return short_circuit_response
 
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True
