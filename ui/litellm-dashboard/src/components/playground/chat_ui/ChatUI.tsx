@@ -1936,7 +1936,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ChatMessageBubble
                     message={message}
                     isLastMessage={index === chatHistory.length - 1}
-                    endpointType={endpointType}
+                    endpointType={endpointType as EndpointType}
                     mcpEvents={mcpEvents}
                     codeInterpreterResult={codeInterpreter.result}
                     accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
