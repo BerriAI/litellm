@@ -2,7 +2,7 @@
 Unit tests for auth_utils functions related to rate limiting and customer ID extraction.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -315,3 +315,132 @@ def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
         result = get_end_user_id_from_request_body(request_body={}, request_headers=headers)
 
     assert result == "user-legacy"
+
+
+def _make_deployment_dict(model_name: str, tpm: int = None, rpm: int = None) -> dict:
+    """Helper to build a minimal deployment dict as returned by router.get_model_list."""
+    litellm_params: dict = {"model": model_name}
+    if tpm is not None:
+        litellm_params["default_api_key_tpm_limit"] = tpm
+    if rpm is not None:
+        litellm_params["default_api_key_rpm_limit"] = rpm
+    return {"model_name": model_name, "litellm_params": litellm_params}
+
+
+_ROUTER_PATCH = "litellm.proxy.proxy_server.llm_router"
+
+
+class TestDeploymentDefaultRpmLimit:
+    """Tests for deployment default_api_key_rpm_limit fallback in get_key_model_rpm_limit."""
+
+    def test_returns_deployment_default_when_key_has_no_limits(self):
+        """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", rpm=200)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 200}
+
+    def test_key_model_limit_takes_priority_over_deployment_default(self):
+        """Case 1 from spec: key model-specific limit wins over deployment default."""
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"model_rpm_limit": {"model1": 10}},
+        )
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", rpm=200)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 10}
+
+    def test_returns_none_when_no_deployment_default_and_no_key_limits(self):
+        """Returns None when neither the key nor the deployment has any rpm limit."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1")  # no rpm default
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result is None
+
+    def test_returns_none_without_model_name_even_when_deployment_has_default(self):
+        """No model_name means deployment fallback is skipped."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", rpm=200)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_llm_router_is_none(self):
+        """No router means deployment fallback returns None gracefully."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        with patch(_ROUTER_PATCH, None):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        assert result is None
+
+
+class TestDeploymentDefaultTpmLimit:
+    """Tests for deployment default_api_key_tpm_limit fallback in get_key_model_tpm_limit."""
+
+    def test_returns_deployment_default_when_key_has_no_limits(self):
+        """Case 2 from spec: key has no model-specific limits, falls back to deployment default."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", tpm=100)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 100}
+
+    def test_key_model_limit_takes_priority_over_deployment_default(self):
+        """Case 1 from spec: key model-specific limit wins over deployment default."""
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"model_tpm_limit": {"model1": 20}},
+        )
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", tpm=100)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result == {"model1": 20}
+
+    def test_returns_none_when_no_deployment_default_and_no_key_limits(self):
+        """Returns None when neither the key nor the deployment has any tpm limit."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1")  # no tpm default
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result is None
+
+    def test_returns_none_without_model_name_even_when_deployment_has_default(self):
+        """No model_name means deployment fallback is skipped."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            _make_deployment_dict("model1", tpm=100)
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_llm_router_is_none(self):
+        """No router means deployment fallback returns None gracefully."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        with patch(_ROUTER_PATCH, None):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        assert result is None

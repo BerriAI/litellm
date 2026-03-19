@@ -539,8 +539,49 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
+def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+    """
+    Return the default_api_key_rpm_limit configured on the deployment for model_name,
+    or None if not set.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    deployments = llm_router.get_model_list(model_name=model_name)
+    if not deployments:
+        return None
+    for deployment in deployments:
+        litellm_params = deployment.get("litellm_params", {})
+        limit = litellm_params.get("default_api_key_rpm_limit")
+        if limit is not None:
+            return int(limit)
+    return None
+
+
+def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
+    """
+    Return the default_api_key_tpm_limit configured on the deployment for model_name,
+    or None if not set.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    deployments = llm_router.get_model_list(model_name=model_name)
+    if not deployments:
+        return None
+    for deployment in deployments:
+        litellm_params = deployment.get("litellm_params", {})
+        limit = litellm_params.get("default_api_key_tpm_limit")
+        if limit is not None:
+            return int(limit)
+    return None
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model rpm limit for a given api key.
@@ -549,6 +590,7 @@ def get_key_model_rpm_limit(
     1. Key metadata (model_rpm_limit)
     2. Key model_max_budget (rpm_limit per model)
     3. Team metadata (model_rpm_limit)
+    4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -567,13 +609,22 @@ def get_key_model_rpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_rpm_limit")
+        if team_limit:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_rpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_rpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model tpm limit for a given api key.
@@ -582,6 +633,7 @@ def get_key_model_tpm_limit(
     1. Key metadata (model_tpm_limit)
     2. Key model_max_budget (tpm_limit per model)
     3. Team metadata (model_tpm_limit)
+    4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -600,7 +652,15 @@ def get_key_model_tpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_tpm_limit")
+        if team_limit:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_tpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_tpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
