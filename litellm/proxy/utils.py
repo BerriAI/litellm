@@ -4014,7 +4014,7 @@ class PrismaClient:
                         "Prisma DB disconnect before reconnect failed: %s",
                         disconnect_err,
                     )
-                    PrismaWrapper._kill_engine_process(old_pid)
+                    await PrismaWrapper._kill_engine_process(old_pid)
 
                 await self.db.connect()
                 await self.db.query_raw("SELECT 1")

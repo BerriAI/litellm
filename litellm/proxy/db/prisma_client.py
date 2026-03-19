@@ -58,7 +58,7 @@ class PrismaWrapper:
         return 0
 
     @staticmethod
-    def _kill_engine_process(pid: int) -> None:
+    async def _kill_engine_process(pid: int) -> None:
         """Force-kill an orphaned engine subprocess to prevent DB connection pool leaks.
 
         Called when disconnect() fails and the old engine process may still be
@@ -76,9 +76,9 @@ class PrismaWrapper:
             pid,
         )
         # Brief wait for graceful shutdown, then force-kill
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
             verbose_proxy_logger.warning(
                 "Sent SIGKILL to prisma-query-engine PID %s (did not exit after SIGTERM).",
                 pid,
@@ -226,7 +226,7 @@ class PrismaWrapper:
             await self._original_prisma.disconnect()
         except Exception as e:
             verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
-            self._kill_engine_process(old_engine_pid)
+            await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)

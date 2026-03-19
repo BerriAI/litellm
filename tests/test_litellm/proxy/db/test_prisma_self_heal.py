@@ -293,7 +293,7 @@ async def test_lightweight_reconnect_kills_engine_on_disconnect_failure(mock_pro
     with (
         patch.object(client, "_get_engine_pid", return_value=9999),
         patch("os.kill") as mock_kill,
-        patch("time.sleep"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         await client._run_reconnect_cycle(timeout_seconds=5.0)
 
