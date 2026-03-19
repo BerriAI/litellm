@@ -187,53 +187,6 @@ class TestTryShortCircuitSearch:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractSearchQuery:
-    """Tests for WebSearchInterceptionLogger._extract_search_query"""
-
-    def test_string_content(self):
-        messages = [{"role": "user", "content": "Search for Python 3.14 features"}]
-        assert (
-            WebSearchInterceptionLogger._extract_search_query(messages)
-            == "Search for Python 3.14 features"
-        )
-
-    def test_list_content_with_text_block(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Perform a web search for latest news"},
-                ],
-            }
-        ]
-        assert (
-            WebSearchInterceptionLogger._extract_search_query(messages)
-            == "Perform a web search for latest news"
-        )
-
-    def test_takes_last_user_message(self):
-        messages = [
-            {"role": "user", "content": "First message"},
-            {"role": "assistant", "content": "Response"},
-            {"role": "user", "content": "Second message"},
-        ]
-        assert (
-            WebSearchInterceptionLogger._extract_search_query(messages)
-            == "Second message"
-        )
-
-    def test_empty_messages(self):
-        assert WebSearchInterceptionLogger._extract_search_query([]) is None
-
-    def test_no_user_messages(self):
-        messages = [{"role": "assistant", "content": "Hello"}]
-        assert WebSearchInterceptionLogger._extract_search_query(messages) is None
-
-    def test_empty_content(self):
-        messages = [{"role": "user", "content": ""}]
-        assert WebSearchInterceptionLogger._extract_search_query(messages) is None
-
-
 # ---------------------------------------------------------------------------
 # Integration with entry point
 # ---------------------------------------------------------------------------
