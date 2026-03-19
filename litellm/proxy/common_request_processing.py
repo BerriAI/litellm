@@ -931,7 +931,7 @@ class ProxyBaseLLMRequestProcessing:
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
         # Cache the result to avoid scanning litellm.callbacks twice.
-        _has_post_call_guardrails = self._has_post_call_guardrails()
+        _post_call_guardrails_active = self._has_post_call_guardrails()
 
         # Non-streaming: defer the create_task in wrapper_async so the
         # SLP is built after guardrails write to metadata.  Streaming
@@ -943,7 +943,7 @@ class ProxyBaseLLMRequestProcessing:
         # so _enqueue_deferred_logging is never stored — the finally
         # block is a no-op.  The CSW path handles this correctly via
         # _on_deferred_stream_complete, which fires its own logging.
-        if _has_post_call_guardrails and not self._is_streaming_request(
+        if _post_call_guardrails_active and not self._is_streaming_request(
             data=self.data, is_streaming_request=is_streaming_request
         ):
             logging_obj._defer_async_logging = True  # type: ignore
@@ -1057,7 +1057,7 @@ class ProxyBaseLLMRequestProcessing:
                     CustomStreamWrapper,
                 )
 
-                if _has_post_call_guardrails and isinstance(
+                if _post_call_guardrails_active and isinstance(
                     response, CustomStreamWrapper
                 ):
                     # Intentionally a live reference (not a copy) — mirrors
@@ -1338,15 +1338,14 @@ class ProxyBaseLLMRequestProcessing:
         implementation directly rather than reimplementing the closure.
         """
         from litellm.litellm_core_utils.thread_pool_executor import executor
-        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-            UnifiedLLMGuardrails,
-        )
         from litellm.proxy.proxy_server import llm_router as _global_llm_router
-        from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+        from litellm.proxy.utils import (
+            _check_and_merge_model_level_guardrails,
+            unified_guardrail as _unified_guardrail,
+        )
 
         _response = assembled_response
         try:
-            _unified_guardrail = UnifiedLLMGuardrails()
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
             )
