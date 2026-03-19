@@ -1,6 +1,6 @@
 """
-Verify that timeout is forwarded from async_streaming() through make_call()
-to client.post() for Bedrock streaming requests.
+Verify that timeout is forwarded through make_call() (async) and
+make_sync_call() (sync) to client.post() for Bedrock streaming requests.
 
 Regression test for https://github.com/BerriAI/litellm/issues/23375
 """
@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 sys.path.insert(
-    0, os.path.abspath("../../../../..")
+    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -81,3 +81,50 @@ def test_bedrock_make_call_partial_includes_timeout():
         timeout=0.5,
     )
     assert bound.keywords["timeout"] == 0.5
+
+
+# --- Sync path: make_sync_call (converse_handler) ---
+
+
+def _run_bedrock_make_sync_call(**extra_kwargs):
+    """Helper to call bedrock make_sync_call with mocked dependencies."""
+    from litellm.llms.bedrock.chat.converse_handler import make_sync_call
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([b"chunk"]))
+
+    mock_client = MagicMock()
+    mock_client.post = MagicMock(return_value=mock_response)
+
+    mock_logging = MagicMock()
+
+    with patch("litellm.llms.bedrock.chat.converse_handler.AWSEventStreamDecoder"):
+        make_sync_call(
+            client=mock_client,
+            api_base="https://bedrock.us-east-1.amazonaws.com/model/converse",
+            headers={"Content-Type": "application/json"},
+            data='{"prompt": "test"}',
+            model="anthropic.claude-3-sonnet",
+            messages=[{"role": "user", "content": "test"}],
+            logging_obj=mock_logging,
+            **extra_kwargs,
+        )
+    return mock_client
+
+
+def test_bedrock_make_sync_call_forwards_timeout_to_client_post():
+    mock_client = _run_bedrock_make_sync_call(timeout=0.1)
+    mock_client.post.assert_called_once()
+    assert mock_client.post.call_args.kwargs.get("timeout") == 0.1
+
+
+def test_bedrock_make_sync_call_timeout_defaults_to_none():
+    mock_client = _run_bedrock_make_sync_call()
+    assert mock_client.post.call_args.kwargs.get("timeout") is None
+
+
+def test_bedrock_make_sync_call_forwards_httpx_timeout_object():
+    timeout_obj = httpx.Timeout(5.0, connect=2.0)
+    mock_client = _run_bedrock_make_sync_call(timeout=timeout_obj)
+    assert mock_client.post.call_args.kwargs.get("timeout") is timeout_obj
