@@ -342,3 +342,67 @@ class TestShortCircuitEntryPoint:
                 stream=False,
             )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_uses_original_stream_not_hook_converted(self):
+        """Verify that the entry point passes original_stream to the short-circuit.
+
+        The pre-request hook converts stream=True → stream=False for the agentic
+        loop. The short-circuit must use the ORIGINAL stream value so streaming
+        callers get SSE events instead of a plain dict.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = "streaming results"
+            with patch("litellm.callbacks", [logger]):
+                # Simulate what anthropic_messages() does: original_stream=True
+                # is passed to the short-circuit, even though the hook would have
+                # already converted stream to False in request_kwargs.
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-4",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=True,  # original_stream, NOT the hook-converted value
+                )
+
+        # Must return a stream iterator, not a plain dict
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_with_provider_from_model_string(self):
+        """Provider embedded in model string (custom_llm_provider=None) should
+        still fire the short-circuit when the caller propagates the derived
+        provider.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = "results"
+            with patch("litellm.callbacks", [logger]):
+                # Simulate the caller having derived custom_llm_provider from
+                # the model string before calling _try_websearch_short_circuit
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-4",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=False,
+                )
+
+        assert result is not None
+        assert result["content"][0]["text"] == "results"
