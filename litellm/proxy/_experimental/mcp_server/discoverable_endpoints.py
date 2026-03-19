@@ -244,7 +244,7 @@ async def exchange_token_with_server(
                 detail="code is required for authorization_code grant",
             )
         proxy_base_url = get_request_base_url(request)
-        token_data: dict = {
+        token_data = {
             "grant_type": "authorization_code",
             "client_id": resolved_client_id,
             "code": code,

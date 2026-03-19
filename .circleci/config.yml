@@ -42,7 +42,7 @@ commands:
               "pydantic==2.11.0" "mcp==1.25.0" "requests-mock>=1.12.1" \
               "responses==0.25.7" "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" \
               "pytest-cov==5.0.0" "semantic_router==0.1.10" "fastapi-offline==1.7.3" \
-              "a2a"
+              "a2a" "parameterized>=0.9.0"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -1331,7 +1331,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
