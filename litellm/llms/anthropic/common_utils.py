@@ -452,7 +452,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
-        else:
+        elif api_key:
             headers["x-api-key"] = api_key
 
         if user_anthropic_beta_headers is not None:
