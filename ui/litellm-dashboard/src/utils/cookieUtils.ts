@@ -1,16 +1,18 @@
 /**
  * Utility functions for managing cookies
  */
-import { serverRootPath } from "@/components/networking";
 
 /**
  * Returns the cookie path for the UI.
- * Respects server_root_path so the cookie works when LiteLLM is
- * deployed behind a subpath (e.g. /myapp/ui instead of /ui).
+ * Derives the path from window.location.pathname so it works when
+ * LiteLLM is deployed behind a subpath (e.g. /myapp/ui instead of /ui).
+ * No imports from networking.tsx to avoid circular dependencies.
  */
 function getUiCookiePath(): string {
-  const root = serverRootPath === "/" ? "" : serverRootPath;
-  return `${root}/ui`;
+  if (typeof window === "undefined") return "/ui";
+  const idx = window.location.pathname.indexOf("/ui");
+  if (idx >= 0) return window.location.pathname.substring(0, idx + 3);
+  return "/ui";
 }
 
 /**
