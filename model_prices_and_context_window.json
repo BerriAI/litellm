@@ -28595,7 +28595,7 @@
     },
     "veniceai/kimi-k2-5": {
         "input_cost_per_token": 5.6e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
@@ -28609,7 +28609,7 @@
     },
     "veniceai/deepseek-v3.2": {
         "input_cost_per_token": 3.3e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
@@ -28621,7 +28621,7 @@
     },
     "veniceai/minimax-m25": {
         "input_cost_per_token": 3.4e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 198000,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
@@ -28632,7 +28632,7 @@
     },
     "veniceai/zai-org-glm-5": {
         "input_cost_per_token": 1e-06,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 198000,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
@@ -28645,7 +28645,7 @@
     },
     "veniceai/qwen3-vl-235b-a22b": {
         "input_cost_per_token": 2.5e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
@@ -28656,7 +28656,7 @@
     },
     "veniceai/llama-3.3-70b": {
         "input_cost_per_token": 7e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 131072,
         "max_output_tokens": 65536,
         "max_tokens": 65536,
@@ -28667,7 +28667,7 @@
     },
     "veniceai/venice-uncensored": {
         "input_cost_per_token": 2e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 32768,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
@@ -28677,7 +28677,7 @@
     },
     "veniceai/text-embedding-bge-m3": {
         "input_cost_per_token": 1.5e-07,
-        "litellm_provider": "openai_like",
+        "litellm_provider": "veniceai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
