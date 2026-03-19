@@ -1664,10 +1664,8 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    existing_key_row = await prisma_client.get_data(
-        token=token,
-        table_name="key",
-        query_type="find_unique",
+    existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": token}
     )
 
     if existing_key_row is None:
@@ -2114,14 +2112,14 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        existing_key_row = await prisma_client.get_data(
-            token=data.key, table_name="key", query_type="find_unique"
+        existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": data.key}
         )
 
         if existing_key_row is None:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Team not found, passed team_id={data.team_id}"},
+                detail={"error": f"Key not found"},
             )
 
         await _validate_update_key_data(
