@@ -897,7 +897,9 @@ class ModelResponseIterator:
                         args = ""
                         for block in self.content_blocks:
                             if block["delta"]["type"] == "input_json_delta":
-                                args += block["delta"].get("partial_json", "")
+                                partial_json = block["delta"].get("partial_json")
+                                if isinstance(partial_json, str):
+                                    args += partial_json
                         if args:
                             try:
                                 self._server_tool_inputs[
