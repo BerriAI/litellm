@@ -2385,3 +2385,134 @@ async def test_during_call_hook_parallel_execution_with_error():
         assert "Guardrail violation detected!" in str(exc_info.value)
     finally:
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type():
+    """Ensure _handle_logging_proxy_only_error does not overwrite call_type
+    when the logging object is already marked as pass_through_endpoint.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import CallTypes
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
+        with patch.object(logging_obj, "failure_handler"):
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    assert logging_obj.call_type == CallTypes.pass_through.value
+
+
+@pytest.mark.asyncio
+async def test_litellm_logging_obj_excluded_from_optional_params():
+    """Ensure litellm_logging_obj is excluded from _optional_params to prevent
+    circular references in model_call_details.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
+        with patch.object(logging_obj, "failure_handler"):
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    assert "litellm_logging_obj" not in logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through():
+    """Ensure _handle_logging_proxy_only_error skips async_failure_handler and
+    failure_handler for pass-through endpoint errors, so only
+    async_post_call_failure_hook fires (avoiding duplicate logs).
+
+    Regression test for duplicate Datadog/Arize logs on pass-through failures.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import CallTypes
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+        with patch.object(logging_obj, "failure_handler") as mock_sync:
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    # Neither handler should fire for pass-through requests
+    mock_async.assert_not_called()
+    mock_sync.assert_not_called()
+    assert logging_obj.call_type == CallTypes.pass_through.value
