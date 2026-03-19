@@ -1566,6 +1566,93 @@ def _add_guardrails_from_policies_in_metadata(
     )
 
 
+async def _add_guardrails_from_user_team_memberships(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: dict,
+    metadata_variable_name: str,
+) -> None:
+    """
+    Apply guardrails from the user's team memberships.
+
+    When a user is a member of one or more teams (via LiteLLM_UserTable.teams),
+    this function fetches each team's metadata and applies any guardrails found,
+    even if the API key's team_id is null or points to a different team.
+
+    This ensures that adding a user to a team with guardrails causes those
+    guardrails to apply to the user's requests regardless of key-level team
+    association.
+    """
+    from litellm.proxy.utils import _premium_user_check
+
+    user_id = user_api_key_dict.user_id
+    if not user_id:
+        return
+
+    try:
+        from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client is None:
+            return
+
+        user_obj = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+        if user_obj is None or not user_obj.teams:
+            return
+
+        key_team_id = user_api_key_dict.team_id
+        for team_id in user_obj.teams:
+            if team_id == key_team_id:
+                continue  # already handled by the key's team_metadata
+
+            try:
+                team_obj = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if team_obj and team_obj.metadata:
+                    team_meta = (
+                        team_obj.metadata if isinstance(team_obj.metadata, dict) else {}
+                    )
+                    if (
+                        "guardrails" in team_meta
+                        and isinstance(team_meta["guardrails"], list)
+                        and len(team_meta["guardrails"]) > 0
+                    ):
+                        _premium_user_check()
+                        existing = set(
+                            data.get(metadata_variable_name, {}).get("guardrails", [])
+                        )
+                        new_guardrails = set(team_meta["guardrails"]) - existing
+                        if new_guardrails:
+                            if "guardrails" not in data[metadata_variable_name]:
+                                data[metadata_variable_name]["guardrails"] = []
+                            data[metadata_variable_name]["guardrails"].extend(
+                                list(new_guardrails)
+                            )
+                            verbose_proxy_logger.debug(
+                                "Applied guardrails %s from user team membership (team_id=%s, user_id=%s)",
+                                new_guardrails,
+                                team_id,
+                                user_id,
+                            )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Could not fetch team object for team_id=%s during user team guardrails resolution",
+                    team_id,
+                )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Could not resolve user team memberships for guardrails (user_id=%s)",
+            user_id,
+        )
+
+
 async def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
@@ -1593,8 +1680,11 @@ async def move_guardrails_to_metadata(
         "guardrails" in data or "guardrail_config" in data or "policies" in data
     )
 
+    # Check if user might have team memberships with guardrails
+    has_user_teams = bool(user_api_key_dict.user_id)
+
     # Only check policy engine if no local config (avoid import + registry lookup)
-    if not (has_key_config or has_team_config or has_request_config):
+    if not (has_key_config or has_team_config or has_request_config or has_user_teams):
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if not get_policy_registry().is_initialized():
@@ -1606,6 +1696,17 @@ async def move_guardrails_to_metadata(
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+    )
+
+    #########################################################################################
+    # Apply guardrails from user's team memberships
+    # If a user is a member of teams (via user.teams), apply those teams'
+    # guardrails even if the key's team_id is null or different.
+    #########################################################################################
+    await _add_guardrails_from_user_team_memberships(
+        user_api_key_dict=user_api_key_dict,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
