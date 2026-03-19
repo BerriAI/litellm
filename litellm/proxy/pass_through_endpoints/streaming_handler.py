@@ -192,6 +192,11 @@ class PassThroughStreamingHandler:
                 standard_logging_response_object = StandardPassThroughResponseObject(
                     response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
                 )
+            # Set async_complete_streaming_response so function-based success_callbacks
+            # are not silently skipped when self.stream is True (see async_success_handler).
+            litellm_logging_obj.model_call_details[
+                "async_complete_streaming_response"
+            ] = standard_logging_response_object
             await litellm_logging_obj.async_success_handler(
                 result=standard_logging_response_object,
                 start_time=start_time,

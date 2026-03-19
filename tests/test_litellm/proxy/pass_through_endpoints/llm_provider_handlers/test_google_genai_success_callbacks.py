@@ -108,6 +108,7 @@ class TestStreamingHandlerGoogleGenAIRouting:
             )
 
             mock_logging = MagicMock()
+            mock_logging.model_call_details = {}
             mock_logging.async_success_handler = AsyncMock()
 
             await PassThroughStreamingHandler._route_streaming_logging_to_handler(
@@ -125,6 +126,12 @@ class TestStreamingHandlerGoogleGenAIRouting:
             mock_gemini.assert_called_once(), (
                 "GeminiPassthroughLoggingHandler was NOT called for GOOGLE_GENAI endpoint — "
                 "callbacks would be silently skipped (issue #24097 not fixed)"
+            )
+            assert (
+                "async_complete_streaming_response" in mock_logging.model_call_details
+            ), (
+                "async_complete_streaming_response not set on model_call_details — "
+                "function-based success_callbacks will be silently skipped (self.stream=True guard)"
             )
 
     @pytest.mark.asyncio
