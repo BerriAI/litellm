@@ -13,7 +13,6 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 
-
 # ---------------------------------------------------------------------------
 # Detection tests
 # ---------------------------------------------------------------------------
@@ -30,12 +29,18 @@ class TestTryShortCircuitSearch:
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
         ) as mock_search:
-            mock_search.return_value = "Title: Result\nURL: https://example.com\nSnippet: test"
+            mock_search.return_value = (
+                "Title: Result\nURL: https://example.com\nSnippet: test"
+            )
 
             result = await logger.try_short_circuit_search(
                 model="github_copilot/claude-sonnet-4",
-                messages=[{"role": "user", "content": "Search for Claude Code releases"}],
-                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+                messages=[
+                    {"role": "user", "content": "Search for Claude Code releases"}
+                ],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
                 custom_llm_provider="github_copilot",
             )
 
@@ -101,7 +106,9 @@ class TestTryShortCircuitSearch:
         result = await logger.try_short_circuit_search(
             model="github_copilot/claude-sonnet-4",
             messages=[{"role": "user", "content": "Search for something"}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
             custom_llm_provider="github_copilot",
         )
 
@@ -115,7 +122,9 @@ class TestTryShortCircuitSearch:
         result = await logger.try_short_circuit_search(
             model="github_copilot/claude-sonnet-4",
             messages=[],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
             custom_llm_provider="github_copilot",
         )
 
@@ -134,7 +143,9 @@ class TestTryShortCircuitSearch:
             result = await logger.try_short_circuit_search(
                 model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "Search for something"}],
-                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
                 custom_llm_provider="github_copilot",
             )
 
@@ -207,7 +218,8 @@ class TestExtractSearchQuery:
             {"role": "user", "content": "Second message"},
         ]
         assert (
-            WebSearchInterceptionLogger._extract_search_query(messages) == "Second message"
+            WebSearchInterceptionLogger._extract_search_query(messages)
+            == "Second message"
         )
 
     def test_empty_messages(self):
