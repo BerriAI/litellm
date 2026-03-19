@@ -86,7 +86,23 @@ const defaultProxyBaseUrl =
     : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
-export let proxyBaseUrl = defaultProxyBaseUrl;
+const WORKER_URL_KEY = "litellm_worker_url";
+// If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
+// This survives page navigation and the sessionStorage.clear() in user_dashboard.
+const _rawWorkerUrl =
+  typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
+// Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
+const _initialWorkerUrl = (() => {
+  if (!_rawWorkerUrl) return null;
+  try {
+    const parsed = new URL(_rawWorkerUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return _rawWorkerUrl;
+  } catch { /* invalid URL */ }
+  // Invalid URL in storage — clear it
+  if (typeof window !== "undefined") window.localStorage.removeItem(WORKER_URL_KEY);
+  return null;
+})();
+export let proxyBaseUrl: string | null = _initialWorkerUrl ?? defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function () { };
 }
@@ -102,6 +118,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
+  // If a worker URL is in localStorage, don't let getUiConfig overwrite it
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
+    return;
+  }
   const browserLocation = getWindowLocation();
   const resolvedDefaultProxyBaseUrl =
     isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
@@ -136,6 +156,36 @@ export const getProxyBaseUrl = (): string => {
   const browserLocation = getWindowLocation();
   return browserLocation?.origin ?? "";
 };
+
+/**
+ * Switch API calls to point at a worker (or back to the control plane).
+ * Persists to localStorage so it survives page navigation and the
+ * sessionStorage.clear() in user_dashboard. Also updates the module-level
+ * proxyBaseUrl so in-flight code in this JS execution sees the new value
+ * immediately.
+ */
+function isValidHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function switchToWorkerUrl(workerUrl: string | null): void {
+  if (workerUrl && !isValidHttpUrl(workerUrl)) {
+    return;
+  }
+  if (typeof window !== "undefined") {
+    if (workerUrl) {
+      window.localStorage.setItem(WORKER_URL_KEY, workerUrl);
+    } else {
+      window.localStorage.removeItem(WORKER_URL_KEY);
+    }
+  }
+  proxyBaseUrl = workerUrl ?? defaultProxyBaseUrl;
+}
 
 const HTTP_REQUEST = {
   GET: "GET",
@@ -262,12 +312,20 @@ interface PublicModelHubInfo {
   useful_links: Record<string, string | { url: string; index: number }>;
 }
 
+export interface WorkerInfo {
+  worker_id: string;
+  name: string;
+  url: string;
+}
+
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  is_control_plane?: boolean;
+  workers?: WorkerInfo[];
 }
 
 export interface CredentialsResponse {
@@ -8972,15 +9030,18 @@ export const deriveErrorMessage = (errorData: any): string => {
 export interface LoginRequest {
   username: string;
   password: string;
+  useV3?: boolean;
 }
 
 interface LoginResponse {
   redirect_url: string;
+  token?: string;
 }
 
-export const loginCall = async (username: string, password: string): Promise<LoginResponse> => {
+export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}/v2/login` : "/v2/login";
+  const loginPath = useV3 ? "/v3/login" : "/v2/login";
+  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}${loginPath}` : loginPath;
 
   const body = JSON.stringify({
     username,
@@ -9002,7 +9063,15 @@ export const loginCall = async (username: string, password: string): Promise<Log
     throw new Error(errorMessage);
   }
 
-  const data = await response.json();
+  const data: LoginResponse = await response.json();
+
+  // Write the token cookie from the response body so it works cross-origin
+  // (control plane UI → worker). The Set-Cookie header is still sent for
+  // same-origin deployments as a fallback.
+  if (data.token) {
+    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+  }
+
   return data;
 };
 
