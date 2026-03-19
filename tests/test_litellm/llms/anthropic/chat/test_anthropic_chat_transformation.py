@@ -3321,3 +3321,43 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+def test_transform_request_strips_vector_store_ids():
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "vector_store_ids": ["vs_abc123", "vs_def456"],
+        "vector_store_id": "vs_abc123",
+        "max_tokens": 100,
+    }
+
+    data = config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "vector_store_ids" not in data
+    assert "vector_store_id" not in data
+    assert data["max_tokens"] == 100
+
+
+def test_transform_request_strips_vector_store_ids_when_absent():
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {"max_tokens": 50}
+
+    data = config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "vector_store_ids" not in data
+    assert "vector_store_id" not in data
+    assert data["max_tokens"] == 50
