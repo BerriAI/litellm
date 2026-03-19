@@ -1663,6 +1663,24 @@ def test_translate_anthropic_tools_mixed_names():
     assert len(tool_name_mapping) == 1
 
 
+def test_translate_anthropic_tools_skips_tools_without_name():
+    """Tools without a 'name' key should be skipped instead of raising KeyError."""
+    tools = [
+        {"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        {"type": "custom_tool_without_name", "description": "no name field"},
+        {},
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model="gpt-4"
+    )
+
+    assert len(result) == 1
+    assert result[0]["function"]["name"] == "get_weather"
+    assert len(tool_name_mapping) == 0
+
+
 def test_translate_openai_response_restores_tool_names():
     """Tool names in responses should be restored to original."""
     original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"

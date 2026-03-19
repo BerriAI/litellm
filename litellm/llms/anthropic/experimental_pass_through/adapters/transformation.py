@@ -781,6 +781,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
 
+            if "name" not in tool:
+                continue
+
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 
