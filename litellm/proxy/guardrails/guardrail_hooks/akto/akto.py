@@ -316,9 +316,12 @@ class AktoGuardrail(CustomGuardrail):
                     guardrails=False, ingest_data=True, payload=blocked
                 )
             )
-            raise HTTPException(
-                status_code=403, detail=reason or "Blocked by Akto Guardrails"
+            detail = (
+                f"Blocked by Akto Guardrails: {reason}"
+                if reason
+                else "Blocked by Akto Guardrails"
             )
+            raise HTTPException(status_code=403, detail=detail)
 
         return inputs
 
@@ -354,9 +357,12 @@ class AktoGuardrail(CustomGuardrail):
         """Logging_only: non-blocking ingestion of failed LLM calls to Akto."""
         if not self.has_hook("logging_only"):
             return
-        # Skip guardrail-blocked requests — apply_guardrail already ingests those.
         exception = kwargs.get("exception")
-        if isinstance(exception, HTTPException) and exception.status_code == 403:
+        if (
+            isinstance(exception, HTTPException)
+            and exception.status_code == 403
+            and "Akto" in str(getattr(exception, "detail", ""))
+        ):
             return
         try:
             data = self.extract_logging_data(kwargs)

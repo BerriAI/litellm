@@ -498,15 +498,57 @@ async def test_failure_event_skips_for_pre_call():
 
 
 @pytest.mark.asyncio
-async def test_failure_event_skips_guardrail_block(akto_logging):
+async def test_failure_event_skips_akto_guardrail_block(akto_logging):
     akto_logging.async_handler.post = AsyncMock()
     await akto_logging.async_log_failure_event(
-        kwargs={"exception": HTTPException(status_code=403, detail="Blocked")},
+        kwargs={
+            "exception": HTTPException(
+                status_code=403, detail="Blocked by Akto Guardrails"
+            )
+        },
         response_obj=None,
         start_time=None,
         end_time=None,
     )
     akto_logging.async_handler.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failure_event_skips_akto_block_with_custom_reason(akto_logging):
+    akto_logging.async_handler.post = AsyncMock()
+    await akto_logging.async_log_failure_event(
+        kwargs={
+            "exception": HTTPException(
+                status_code=403, detail="Blocked by Akto Guardrails: PII detected"
+            )
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    akto_logging.async_handler.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failure_event_ingests_other_guardrail_block(akto_logging):
+    akto_logging.async_handler.post = AsyncMock(return_value=_mock_allowed())
+    await akto_logging.async_log_failure_event(
+        kwargs={
+            "messages": [{"role": "user", "content": "test"}],
+            "model": "gpt-4",
+            "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+            "exception": HTTPException(
+                status_code=403, detail="Blocked by Bedrock Guardrails"
+            ),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await asyncio.gather(*akto_logging.background_tasks)
+    akto_logging.async_handler.post.assert_called_once()
+    payload = json.loads(akto_logging.async_handler.post.call_args.kwargs["data"])
+    assert payload["statusCode"] == "500"
 
 
 # ── Combined mode (pre_call + logging_only) ──
