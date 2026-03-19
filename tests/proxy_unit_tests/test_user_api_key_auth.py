@@ -1146,3 +1146,108 @@ async def test_user_api_key_from_query_param():
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_value",
+    [
+        False,       # explicit auth: false
+        None,        # auth key absent (default no-auth)
+    ],
+    ids=["auth_false", "auth_absent"],
+)
+async def test_pass_through_auth_disabled_no_authorization_header(auth_value):
+    """
+    Pass-through endpoints with auth:false (or auth absent) must succeed even
+    when no Authorization header is provided.  Before the fix this crashed with
+    AttributeError: 'NoneType' object has no attribute 'split' (issue #23909).
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    endpoint = {"path": "/my/custom/endpoint"}
+    if auth_value is not None:
+        endpoint["auth"] = auth_value
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"pass_through_endpoints": [endpoint]},
+    ):
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/my/custom/endpoint")
+
+        # No Authorization header — api_key is empty string (FastAPI default)
+        result = await user_api_key_auth(request=request, api_key="")
+
+    assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_auth_enabled_no_key_raises():
+    """
+    Pass-through endpoints with auth:true must still enforce authentication.
+    A missing API key should raise an exception, not silently pass.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    endpoint = {"path": "/my/authed/endpoint", "auth": True}
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"pass_through_endpoints": [endpoint]},
+    ):
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/my/authed/endpoint")
+
+        with pytest.raises(Exception):
+            await user_api_key_auth(request=request, api_key="")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_auth_disabled_unmatched_route_still_enforces_auth():
+    """
+    The early bail-out must only fire for the matching route.
+    A request to a different route should go through normal auth enforcement.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    # endpoint registered for /my/custom/endpoint but we request /other/route
+    endpoint = {"path": "/my/custom/endpoint", "auth": False}
+
+    with patch.object(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"pass_through_endpoints": [endpoint]},
+    ):
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/other/route")
+
+        with pytest.raises(Exception):
+            await user_api_key_auth(request=request, api_key="")
+

@@ -558,6 +558,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
+        # EARLY BAIL-OUT: if this route is a pass-through endpoint with auth disabled, return immediately before any token parsing that would crash on a None api_key.
+        if pass_through_endpoints is not None:
+            for _endpoint in pass_through_endpoints:
+                if (
+                    isinstance(_endpoint, dict)
+                    and _endpoint.get("path", "") == route
+                    and _endpoint.get("auth") is not True
+                ):
+                    return UserAPIKeyAuth()
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
