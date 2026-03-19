@@ -1055,6 +1055,7 @@ class ProxyBaseLLMRequestProcessing:
                     _captured_data = self.data
                     _captured_user_api_key_dict = user_api_key_dict
                     _captured_logging_obj = logging_obj
+                    _captured_proxy_logging_obj = proxy_logging_obj
 
                     async def _on_deferred_stream_complete(
                         assembled_response, cache_hit
@@ -1073,7 +1074,7 @@ class ProxyBaseLLMRequestProcessing:
                         # block content.  Per-chunk filtering should use
                         # async_post_call_streaming_hook instead.
                         try:
-                            _response = await proxy_logging_obj.post_call_success_hook(
+                            _response = await _captured_proxy_logging_obj.post_call_success_hook(
                                 data=_captured_data,
                                 user_api_key_dict=_captured_user_api_key_dict,
                                 response=assembled_response,

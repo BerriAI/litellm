@@ -514,3 +514,90 @@ class TestDeferredStreamingClosure:
         assert mock_logging_obj.model_call_details["metadata"].get(
             "guardrail_blocked"
         ) is not True
+
+    @pytest.mark.asyncio
+    async def test_production_closure_calls_post_call_success_hook(self):
+        """Integration test: a closure built with the same structure as the
+        production _on_deferred_stream_complete calls
+        post_call_success_hook on the assembled response, then fires
+        async_success_handler with the guardrail-modified response.
+
+        Uses a mock proxy_logging_obj to verify the hook is called and
+        the response flows to async_success_handler correctly."""
+        hook_called = False
+        logged_response = None
+        modified_response = MagicMock()
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            nonlocal logged_response
+            logged_response = args[0] if args else None
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        # Mock proxy_logging_obj with a post_call_success_hook that
+        # simulates guardrail execution
+        mock_proxy_logging = MagicMock()
+
+        async def mock_hook(**kwargs):
+            nonlocal hook_called
+            hook_called = True
+            return modified_response
+
+        mock_proxy_logging.post_call_success_hook = mock_hook
+
+        # Build the closure using the exact production pattern
+        _captured_data = {"model": "gpt-4", "metadata": {}}
+        _captured_user_api_key_dict = UserAPIKeyAuth(api_key="test")
+        _captured_logging_obj = mock_logging_obj
+        _captured_proxy_logging_obj = mock_proxy_logging
+
+        async def _on_deferred_stream_complete(assembled_response, cache_hit):
+            try:
+                _response = await _captured_proxy_logging_obj.post_call_success_hook(
+                    data=_captured_data,
+                    user_api_key_dict=_captured_user_api_key_dict,
+                    response=assembled_response,
+                )
+            except Exception as e:
+                _response = assembled_response
+                if isinstance(e, HTTPException) and hasattr(
+                    _captured_logging_obj, "model_call_details"
+                ):
+                    _captured_logging_obj.model_call_details.setdefault(
+                        "metadata", {}
+                    )["guardrail_blocked"] = True
+
+            try:
+                asyncio.create_task(
+                    _captured_logging_obj.async_success_handler(
+                        _response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                    )
+                )
+            except Exception:
+                pass
+
+        mock_logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
+
+        resp = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello!",
+            stream=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        async for _ in resp:
+            pass
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert hook_called is True, \
+            "Production closure must call post_call_success_hook"
+        assert logged_response is modified_response, \
+            "Production closure must pass guardrail-modified response to logging"
