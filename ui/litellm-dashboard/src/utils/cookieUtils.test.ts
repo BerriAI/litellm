@@ -147,6 +147,25 @@ describe("cookieUtils", () => {
 
       global.window = originalWindow;
     });
+
+    it("should not store empty string token", () => {
+      storeLoginToken("");
+      expect(sessionStorage.getItem("token")).toBeNull();
+    });
+
+    it("should not store whitespace-only token", () => {
+      storeLoginToken("   ");
+      expect(sessionStorage.getItem("token")).toBeNull();
+    });
+
+    it("should set a JS-accessible cookie at /ui path", () => {
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+      storeLoginToken("my-jwt-token");
+      expect(cookieSpy).toHaveBeenCalledWith(
+        expect.stringContaining("path=/ui")
+      );
+      vi.restoreAllMocks();
+    });
   });
 
   describe("getCookie", () => {

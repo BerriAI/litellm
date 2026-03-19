@@ -10,8 +10,12 @@
  */
 function getUiCookiePath(): string {
   if (typeof window === "undefined") return "/ui";
-  const idx = window.location.pathname.indexOf("/ui");
-  if (idx >= 0) return window.location.pathname.substring(0, idx + 3);
+  // Match "/ui" only as a full path segment (followed by "/" or end of string)
+  // to avoid false matches like "/my-ui-tool/login" → "/my-ui".
+  const match = window.location.pathname.match(/\/ui(?=\/|$)/);
+  if (match && match.index !== undefined) {
+    return window.location.pathname.substring(0, match.index + 3);
+  }
   return "/ui";
 }
 
