@@ -82,6 +82,9 @@ class TestModelInfoDefaultLimitsInResponse:
         """
         default_api_key_tpm_limit / default_api_key_rpm_limit must not be
         treated as sensitive and must survive remove_sensitive_info_from_deployment.
+        They contain "key" which normally triggers masking; the call site explicitly
+        excludes these two fields via excluded_keys rather than widening the global
+        non_sensitive_overrides.
         """
         deployment = _make_deployment("model1", default_tpm=100, default_rpm=200)
         model_dict = deployment.model_dump(exclude_none=True)

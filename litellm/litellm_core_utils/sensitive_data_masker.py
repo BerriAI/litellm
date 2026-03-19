@@ -30,9 +30,7 @@ class SensitiveDataMasker:
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
-        # Similarly, "*_limit" fields (tpm_limit, rpm_limit, etc.) are rate/budget caps,
-        # not credentials, even though their names may contain "key" (e.g. default_api_key_tpm_limit).
-        self.non_sensitive_overrides = non_sensitive_overrides or {"cost", "limit"}
+        self.non_sensitive_overrides = non_sensitive_overrides or {"cost"}
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
