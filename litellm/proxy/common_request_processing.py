@@ -1063,6 +1063,15 @@ class ProxyBaseLLMRequestProcessing:
                             executor,
                         )
 
+                        # NOTE: This closure runs after all chunks have been
+                        # delivered to the client.  Blocking guardrails that
+                        # raise HTTPException cannot prevent content delivery
+                        # for streaming — this is an inherent limitation of
+                        # SSE streaming, not specific to this deferral.  The
+                        # purpose here is to populate guardrail_information in
+                        # the logging payload for audit/compliance, not to
+                        # block content.  Per-chunk filtering should use
+                        # async_post_call_streaming_hook instead.
                         try:
                             _response = await proxy_logging_obj.post_call_success_hook(
                                 data=_captured_data,
