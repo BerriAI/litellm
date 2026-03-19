@@ -46,8 +46,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "output_config",
-            # TODO: Add Anthropic `metadata` support
-            # "metadata",
+            "metadata",
         ]
 
     def _remove_scope_from_cache_control(

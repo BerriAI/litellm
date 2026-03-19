@@ -190,6 +190,31 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
 
 
+def test_anthropic_messages_pass_through_includes_metadata():
+    """
+    Test that metadata is included in the transformed request body
+    when passed to the Anthropic messages pass-through.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AnthropicMessagesConfig()
+    result = config.transform_anthropic_messages_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "metadata": {"user_id": "user-123"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("metadata") == {"user_id": "user-123"}
+
+
 class TestThinkingParameterTransformation:
     """Core tests for thinking parameter transformation logic."""
 
