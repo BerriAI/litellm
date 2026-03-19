@@ -409,7 +409,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["texts"] = new_texts
                 
         elif input_type == "response" and inputs.get("texts"):
-            inputs["texts"] = [output["choices"][-1]["message"]["content"]]
+            inputs["texts"] = [output.get("choices", [{}])[-1].get("message", {}).get("content", "")]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output
 
