@@ -1460,9 +1460,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # streaming) don't carry _hidden_params["model_id"] like ModelResponse does.
         if router_model_id is None and hasattr(self, "litellm_params"):
             for metadata_key in ("litellm_metadata", "metadata"):
-                _metadata: dict = (
-                    self.litellm_params.get(metadata_key, {}) or {}
-                )
+                _metadata: dict = self.litellm_params.get(metadata_key, {}) or {}
                 _model_info: dict = _metadata.get("model_info", {}) or {}
                 _model_id = _model_info.get("id")
                 if _model_id is not None:
@@ -2972,8 +2970,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if (
                         isinstance(callback, CustomLogger)
                         and is_sync_request
-                        and self.call_type
-                        != CallTypes.pass_through.value
+                        and self.call_type != CallTypes.pass_through.value
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
