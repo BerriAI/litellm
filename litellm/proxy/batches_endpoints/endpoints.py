@@ -537,9 +537,10 @@ async def retrieve_batch(  # noqa: PLR0915
         )
 
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
-        # Resolve raw provider input_file_id to unified ID.
+        # Resolve raw provider file IDs (input, output, error) to unified IDs.
         if unified_batch_id:
             await resolve_input_file_id_to_unified(response, prisma_client)
+            await resolve_output_file_ids_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(

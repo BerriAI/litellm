@@ -3348,3 +3348,54 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
+
+
+def test_extract_response_content_thinking_block_null_thinking():
+    """
+    Test that thinking blocks are not dropped when the 'thinking' field is null
+    or missing. Regression test for https://github.com/BerriAI/litellm/issues/24026
+    """
+    config = AnthropicConfig()
+
+    # Case 1: thinking key is explicitly null
+    completion_response_null = {
+        "content": [
+            {"type": "thinking", "thinking": None, "signature": "sig123"},
+            {"type": "text", "text": "Hello"},
+        ]
+    }
+    text, _, thinking_blocks, _, _, _, _, _ = config.extract_response_content(
+        completion_response_null
+    )
+    assert thinking_blocks is not None, "thinking blocks should not be None when thinking=null"
+    assert len(thinking_blocks) == 1
+    assert "Hello" in text
+
+    # Case 2: thinking key is absent entirely
+    completion_response_missing = {
+        "content": [
+            {"type": "thinking", "signature": "sig456"},
+            {"type": "text", "text": "World"},
+        ]
+    }
+    text, _, thinking_blocks, _, _, _, _, _ = config.extract_response_content(
+        completion_response_missing
+    )
+    assert thinking_blocks is not None, "thinking blocks should not be None when thinking key is absent"
+    assert len(thinking_blocks) == 1
+    assert "World" in text
+
+    # Case 3: thinking key has actual content (should still work)
+    completion_response_text = {
+        "content": [
+            {"type": "thinking", "thinking": "Let me think...", "signature": "sig789"},
+            {"type": "text", "text": "Done"},
+        ]
+    }
+    text, _, thinking_blocks, _, _, _, _, _ = config.extract_response_content(
+        completion_response_text
+    )
+    assert thinking_blocks is not None
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["thinking"] == "Let me think..."
+    assert "Done" in text
