@@ -102,7 +102,9 @@ class LLMResponseFormat(Enum):
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self, api_key: str | None = None, api_base: str | None = None, **kwargs
+    ):
         _flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=_flush_lock)
 
@@ -120,7 +122,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                     parsed_rate = max(0.0, min(1.0, parsed_rate))
                 self.sampling_rate = parsed_rate
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0")
+                verbose_logger.warning(
+                    f"Invalid RUBRIK_SAMPLING_RATE: {rbrk_sampling_rate!r}, using 1.0"
+                )
 
         # Initialize helpers for format conversion
         self.anthropic_adapter = LiteLLMAnthropicMessagesAdapter()
@@ -138,9 +142,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 if parsed_batch_size > 0:
                     self.batch_size = parsed_batch_size
                 else:
-                    verbose_logger.warning(f"RUBRIK_BATCH_SIZE={parsed_batch_size} must be positive, using default")
+                    verbose_logger.warning(
+                        f"RUBRIK_BATCH_SIZE={parsed_batch_size} must be positive, using default"
+                    )
             except ValueError:
-                verbose_logger.warning(f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default")
+                verbose_logger.warning(
+                    f"Invalid RUBRIK_BATCH_SIZE: {_batch_size!r}, using default"
+                )
 
         _webhook_url = api_base or os.getenv("RUBRIK_WEBHOOK_URL")
 
@@ -152,12 +160,16 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self.logging_endpoint = f"{_webhook_url}{_WEBHOOK_PATH_LOGGING_BATCH}"
 
         # Cache the httpx client for logging (uses LiteLLM's shared client)
-        self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
 
         # Create a dedicated httpx client for tool blocking to avoid connection pooling issues
         # with LiteLLM's shared client
         self.tool_blocking_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(5.0, connect=2.0),  # 2s connect timeout, 5s total timeout
+            timeout=httpx.Timeout(
+                5.0, connect=2.0
+            ),  # 2s connect timeout, 5s total timeout
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
 
@@ -169,26 +181,41 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_payload: StandardLoggingPayload = kwargs["standard_logging_object"]
+            standard_logging_payload: StandardLoggingPayload = kwargs[
+                "standard_logging_object"
+            ]
             random_sample = random.random()
             if random_sample > self.sampling_rate:
-                verbose_logger.debug(f"Skipping Rubrik logging (sampling_rate={self.sampling_rate})")
+                verbose_logger.debug(
+                    f"Skipping Rubrik logging (sampling_rate={self.sampling_rate})"
+                )
                 return
             if "system" in kwargs:
                 system_prompt_msg_list = kwargs["system"]
                 try:
                     if system_prompt_msg_list:
-                        system_scaffold = {"role": "system", "content": system_prompt_msg_list}
+                        system_scaffold = {
+                            "role": "system",
+                            "content": system_prompt_msg_list,
+                        }
                         if isinstance(standard_logging_payload["messages"], list):
-                            if not standard_logging_payload["messages"] or standard_logging_payload["messages"][0].get("role") != "system":
+                            if (
+                                not standard_logging_payload["messages"]
+                                or standard_logging_payload["messages"][0].get("role")
+                                != "system"
+                            ):
                                 standard_logging_payload["messages"] = [system_scaffold] + list(standard_logging_payload["messages"])  # type: ignore[union-attr]
-                        elif isinstance(standard_logging_payload["messages"], (dict, str)):
+                        elif isinstance(
+                            standard_logging_payload["messages"], (dict, str)
+                        ):
                             standard_logging_payload["messages"] = [
                                 system_scaffold,
                                 standard_logging_payload["messages"],
                             ]
                 except Exception as e:
-                    verbose_logger.warning(f"Error adding system prompt to messages: {e}")
+                    verbose_logger.warning(
+                        f"Error adding system prompt to messages: {e}"
+                    )
 
             self.log_queue.append(standard_logging_payload)
 
@@ -213,11 +240,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # Log context before raising — raise_for_status() produces HTTPStatusError
             # which is caught by the outer except block.
             if response.status_code >= 300:
-                verbose_logger.error(f"Rubrik Error: {response.status_code} - {response.text}")
+                verbose_logger.error(
+                    f"Rubrik Error: {response.status_code} - {response.text}"
+                )
                 response.raise_for_status()
 
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}")
+            verbose_logger.exception(
+                f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}"
+            )
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
 
@@ -229,7 +260,6 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         await self._log_batch_to_rubrik(
             data=list(self.log_queue),
         )
-
 
     async def async_post_call_success_hook(
         self,
@@ -272,7 +302,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             if response_format == LLMResponseFormat.ANTHROPIC:
                 # Skip blocking service if the response has no tool calls (text-only)
-                content = (response.get("content") or []) if isinstance(response, dict) else []
+                content = (
+                    (response.get("content") or [])
+                    if isinstance(response, dict)
+                    else []
+                )
                 has_tools = any(
                     isinstance(b, dict) and b.get("type") == _BLOCK_TYPE_TOOL_USE
                     for b in content
@@ -291,7 +325,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             if not message.get("tool_calls"):
                 return response
 
-            modified_openai_dict = await self._post_to_tool_blocking_service(openai_dict)
+            modified_openai_dict = await self._post_to_tool_blocking_service(
+                openai_dict
+            )
             try:
                 return type(response).model_validate(modified_openai_dict)
             except Exception:
@@ -328,7 +364,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         elif response_format == LLMResponseFormat.ANTHROPIC:
             handler = self._handle_anthropic_streaming
         else:
-            verbose_logger.info("Streaming response for non-OpenAI/Anthropic endpoint - passing through")
+            verbose_logger.info(
+                "Streaming response for non-OpenAI/Anthropic endpoint - passing through"
+            )
             async for chunk in response:
                 yield chunk
             return
@@ -353,7 +391,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return LLMResponseFormat.ANTHROPIC
         return LLMResponseFormat.UNKNOWN
 
-    async def _handle_openai_streaming(self, response: Any) -> AsyncGenerator[ModelResponseStream, None]:
+    async def _handle_openai_streaming(
+        self, response: Any
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Process OpenAI streaming responses, filtering blocked tool calls.
 
@@ -385,7 +425,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # which would double the arguments if accumulated.
             has_tool_calls = False
             if not choice.finish_reason:
-                has_tool_calls = RubrikLogger._accumulate_openai_tool_calls(choice, accumulated_tool_calls)
+                has_tool_calls = RubrikLogger._accumulate_openai_tool_calls(
+                    choice, accumulated_tool_calls
+                )
 
             if has_tool_calls:
                 buffered_chunks.append(chunk)
@@ -450,7 +492,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         allowed_indices = {tc.index for tc in allowed_tools}
         # Map original tool_call indices to dense 0-based indices so the
         # consumer sees a contiguous sequence after blocked calls are removed.
-        index_remap = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted(allowed_indices))}
+        index_remap = {
+            old_idx: new_idx for new_idx, old_idx in enumerate(sorted(allowed_indices))
+        }
 
         for buffered_chunk in buffered_chunks:
             buffered_choice: StreamingChoices = buffered_chunk.choices[0]
@@ -475,7 +519,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                         # GPT-5 style: finish chunk carries allowed tool calls —
                         # emit explanation before yielding the finish chunk.
                         if explanation:
-                            yield RubrikLogger._create_openai_explanation_chunk(buffered_chunk, explanation)
+                            yield RubrikLogger._create_openai_explanation_chunk(
+                                buffered_chunk, explanation
+                            )
                     yield buffered_chunk
                     continue
 
@@ -495,7 +541,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # Some tools allowed — yield explanation then original finish chunk
             if explanation:
-                yield RubrikLogger._create_openai_explanation_chunk(buffered_chunk, explanation)
+                yield RubrikLogger._create_openai_explanation_chunk(
+                    buffered_chunk, explanation
+                )
             yield buffered_chunk
 
     @staticmethod
@@ -520,7 +568,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             ],
         )
 
-    async def _handle_anthropic_streaming(self, response: Any) -> AsyncGenerator[bytes, None]:
+    async def _handle_anthropic_streaming(
+        self, response: Any
+    ) -> AsyncGenerator[bytes, None]:
         """
         Process Anthropic streaming responses, filtering blocked tool calls.
 
@@ -546,12 +596,18 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             event_type = chunk.get("type")
             is_tool_chunk = self._is_tool_related_anthropic_chunk(chunk)
 
-            if not is_buffering and not is_tool_chunk and event_type in _CONTENT_BLOCK_EVENTS:
+            if (
+                not is_buffering
+                and not is_tool_chunk
+                and event_type in _CONTENT_BLOCK_EVENTS
+            ):
                 replay_index_base = chunk.get("index", 0)
 
             if is_tool_chunk:
                 is_buffering = True
-                self._accumulate_anthropic_tool_call(chunk, accumulated_tools, index_to_tool)
+                self._accumulate_anthropic_tool_call(
+                    chunk, accumulated_tools, index_to_tool
+                )
 
             # Pass through non-tool chunks before any tools appear
             if not is_buffering:
@@ -566,7 +622,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # Stream complete - validate tools and emit filtered results
             try:
-                blocked_indices, explanation = await self._get_blocked_anthropic_tool_calls(accumulated_tools)
+                (
+                    blocked_indices,
+                    explanation,
+                ) = await self._get_blocked_anthropic_tool_calls(accumulated_tools)
             except Exception as e:
                 verbose_logger.error(
                     f"Anthropic tool blocking service failed: {e}. Emitting buffered chunks unchanged (fail-open).",
@@ -580,11 +639,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # Emit allowed chunks with sequential content block reindexing
             for buffered_chunk in buffered_chunks:
-                if not self._should_yield_anthropic_chunk(buffered_chunk, blocked_indices):
+                if not self._should_yield_anthropic_chunk(
+                    buffered_chunk, blocked_indices
+                ):
                     continue
 
                 if buffered_chunk.get("type") in _CONTENT_BLOCK_EVENTS:
-                    buffered_chunk = dict(buffered_chunk)  # shallow copy to avoid mutating the buffer
+                    buffered_chunk = dict(
+                        buffered_chunk
+                    )  # shallow copy to avoid mutating the buffer
                     if buffered_chunk.get("type") == _EVENT_CONTENT_BLOCK_START:
                         replay_index_base += 1
                     buffered_chunk["index"] = replay_index_base
@@ -592,7 +655,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
             # Add explanation text block if any tools were blocked
             if explanation:
-                for explanation_chunk in self._generate_anthropic_text_block(explanation, replay_index_base + 1):
+                for explanation_chunk in self._generate_anthropic_text_block(
+                    explanation, replay_index_base + 1
+                ):
                     yield self._encode_anthropic_chunk_to_sse(explanation_chunk)
 
             # Adjust stop_reason if all tools were blocked
@@ -615,7 +680,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Post-loop fail-open: if we were still buffering when the stream ended
         # (e.g., no message_delta was received), emit buffered non-terminal chunks as-is
         if is_buffering and buffered_chunks:
-            verbose_logger.warning("Anthropic stream ended while still buffering — emitting buffered chunks (fail-open)")
+            verbose_logger.warning(
+                "Anthropic stream ended while still buffering — emitting buffered chunks (fail-open)"
+            )
             for buffered_chunk in buffered_chunks:
                 event_type = buffered_chunk.get("type")
                 if event_type not in _TERMINAL_MESSAGE_EVENTS:
@@ -633,7 +700,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         for delta in choice.delta.tool_calls:
             delta_index = delta.index
             if delta_index is None:
-                verbose_logger.warning(f"Tool call delta has None index, skipping: {delta}")
+                verbose_logger.warning(
+                    f"Tool call delta has None index, skipping: {delta}"
+                )
                 continue
 
             # First delta for this index: store full copy as base
@@ -644,14 +713,20 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             # Subsequent deltas: append arguments
             existing = accumulated_tool_calls[delta_index]
             if not delta.function:
-                verbose_logger.warning(f"Tool call delta missing function field: {delta}")
+                verbose_logger.warning(
+                    f"Tool call delta missing function field: {delta}"
+                )
                 continue
 
             if existing.function is None:
-                verbose_logger.warning(f"Accumulated tool call missing function field at index {delta_index}")
+                verbose_logger.warning(
+                    f"Accumulated tool call missing function field at index {delta_index}"
+                )
                 continue
 
-            existing.function.arguments = (existing.function.arguments or "") + (delta.function.arguments or "")
+            existing.function.arguments = (existing.function.arguments or "") + (
+                delta.function.arguments or ""
+            )
 
         return True
 
@@ -661,7 +736,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         event_type = chunk.get("type")
 
         if event_type == _EVENT_CONTENT_BLOCK_START:
-            return bool(chunk.get("content_block", {}).get("type") == _BLOCK_TYPE_TOOL_USE)
+            return bool(
+                chunk.get("content_block", {}).get("type") == _BLOCK_TYPE_TOOL_USE
+            )
 
         if event_type == _EVENT_CONTENT_BLOCK_DELTA:
             return bool(chunk.get("delta", {}).get("type") == _DELTA_TYPE_INPUT_JSON)
@@ -669,7 +746,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return False
 
     @staticmethod
-    def _should_yield_anthropic_chunk(chunk: dict[str, Any], blocked_content_indices: set[int]) -> bool:
+    def _should_yield_anthropic_chunk(
+        chunk: dict[str, Any], blocked_content_indices: set[int]
+    ) -> bool:
         """
         Determine whether a buffered Anthropic chunk should be emitted to the client.
 
@@ -700,7 +779,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if not accumulated_tools:
             return set(), None
 
-        openai_format_tools = self._convert_anthropic_tools_to_openai_format(accumulated_tools)
+        openai_format_tools = self._convert_anthropic_tools_to_openai_format(
+            accumulated_tools
+        )
         blocked = await self._get_allowed_tool_calls(
             {tc.index: tc for tc in openai_format_tools},
         )
@@ -711,7 +792,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Compute blocked content block indices
         allowed_tool_ids = {tc.id for tc in blocked.allowed_tools}
         blocked_content_indices = {
-            tool_data.index for tool_id, tool_data in accumulated_tools.items() if tool_id not in allowed_tool_ids
+            tool_data.index
+            for tool_id, tool_data in accumulated_tools.items()
+            if tool_id not in allowed_tool_ids
         }
 
         return blocked_content_indices, blocked.explanation
@@ -747,7 +830,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
 
         tool_id = content_block.get("id")
         if tool_id is None:
-            verbose_logger.warning("Anthropic tool_use content_block_start missing 'id', skipping")
+            verbose_logger.warning(
+                "Anthropic tool_use content_block_start missing 'id', skipping"
+            )
             return
 
         tool_data = AnthropicToolCallData(
@@ -795,11 +880,19 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if not all_tool_calls:
             return None
         message_tool_calls = [
-            ChatCompletionMessageToolCall(id=tc.id, type=tc.type or "function", function=tc.function)
+            ChatCompletionMessageToolCall(
+                id=tc.id, type=tc.type or "function", function=tc.function
+            )
             for tc in all_tool_calls
         ]
         payload = ModelResponse(
-            choices=[Choices(message=Message(role="assistant", content=None, tool_calls=message_tool_calls))],
+            choices=[
+                Choices(
+                    message=Message(
+                        role="assistant", content=None, tool_calls=message_tool_calls
+                    )
+                )
+            ],
         ).model_dump(exclude_none=True)
         service_response = await self._post_to_tool_blocking_service(payload)
         return self._extract_allowed_tools(service_response, all_tool_calls)
@@ -817,7 +910,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         """
         choices = service_response.get("choices", [])
         if not choices:
-            verbose_logger.warning("Tool blocking service returned empty response — allowing all tools (fail-open)")
+            verbose_logger.warning(
+                "Tool blocking service returned empty response — allowing all tools (fail-open)"
+            )
             return None
 
         message = choices[0].get("message", {})
@@ -843,7 +938,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 index=tool_data.index,
                 id=tool_id,
                 type="function",
-                function=Function(name=tool_data.name, arguments=tool_data.partial_json),
+                function=Function(
+                    name=tool_data.name, arguments=tool_data.partial_json
+                ),
             )
             for tool_id, tool_data in tool_calls.items()
         ]
@@ -852,16 +949,28 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     def _generate_anthropic_text_block(text: str, index: int) -> list[dict[str, Any]]:
         """Generate Anthropic SSE events for a synthetic text content block."""
         return [
-            {"type": _EVENT_CONTENT_BLOCK_START, "index": index, "content_block": {"type": _BLOCK_TYPE_TEXT, "text": ""}},
-            {"type": _EVENT_CONTENT_BLOCK_DELTA, "index": index, "delta": {"type": "text_delta", "text": text}},
+            {
+                "type": _EVENT_CONTENT_BLOCK_START,
+                "index": index,
+                "content_block": {"type": _BLOCK_TYPE_TEXT, "text": ""},
+            },
+            {
+                "type": _EVENT_CONTENT_BLOCK_DELTA,
+                "index": index,
+                "delta": {"type": "text_delta", "text": text},
+            },
             {"type": _EVENT_CONTENT_BLOCK_STOP, "index": index},
         ]
 
     @staticmethod
-    async def _parse_anthropic_sse_stream(response: Any) -> AsyncGenerator[dict[str, Any], None]:
+    async def _parse_anthropic_sse_stream(
+        response: Any,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Parse raw Anthropic SSE bytes into decoded dict chunks."""
         async for raw_chunk in response:
-            for decoded_chunk in RubrikLogger._decode_all_anthropic_sse_events(raw_chunk):
+            for decoded_chunk in RubrikLogger._decode_all_anthropic_sse_events(
+                raw_chunk
+            ):
                 yield decoded_chunk
 
     @staticmethod
@@ -894,18 +1003,24 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 try:
                     events.append(json.loads(json_payload))
                 except json.JSONDecodeError:
-                    verbose_logger.warning(f"Skipping malformed Anthropic SSE payload: {json_payload!r}")
+                    verbose_logger.warning(
+                        f"Skipping malformed Anthropic SSE payload: {json_payload!r}"
+                    )
 
         return events
 
-    async def _post_to_tool_blocking_service(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_to_tool_blocking_service(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Post a payload to the tool blocking service and return the response.
 
         Raises:
             Exception: If the service is unavailable or returns an error.
         """
         headers = self._build_headers()
-        verbose_logger.debug(f"Sending request to tool blocking service: {self.tool_blocking_endpoint}")
+        verbose_logger.debug(
+            f"Sending request to tool blocking service: {self.tool_blocking_endpoint}"
+        )
         http_response = await self.tool_blocking_client.post(
             self.tool_blocking_endpoint,
             json=payload,
@@ -944,7 +1059,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "total_tokens": input_tokens + output_tokens,
         }
 
-    def _anthropic_response_to_openai_dict(self, response: dict[str, Any]) -> dict[str, Any]:
+    def _anthropic_response_to_openai_dict(
+        self, response: dict[str, Any]
+    ) -> dict[str, Any]:
         """Convert raw Anthropic /v1/messages response to OpenAI format for the blocking service."""
         anthropic_completion = {
             "content": response.get("content") or [],
@@ -960,7 +1077,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             _web_search_results,
             _tool_results,
             _compaction_blocks,
-        ) = self.anthropic_config.extract_response_content(completion_response=anthropic_completion)
+        ) = self.anthropic_config.extract_response_content(
+            completion_response=anthropic_completion
+        )
 
         message: dict[str, Any] = {"role": "assistant", "content": text_content}
         if tool_calls:
@@ -971,7 +1090,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "object": "chat.completion",
             "created": int(time.time()),
             "model": response.get("model", ""),
-            "choices": [{"index": 0, "message": message, "finish_reason": response.get("stop_reason", "stop")}],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": response.get("stop_reason", "stop"),
+                }
+            ],
             "usage": self._convert_anthropic_usage_to_openai(response.get("usage", {})),
         }
 
@@ -985,9 +1110,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         Only replaces tool_use blocks from the original response with the filtered set from the
         blocking service. Non-tool blocks (text, thinking, citations, etc.) are preserved.
         """
-        openai_dict.setdefault("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
-        anthropic_response = self.anthropic_adapter.translate_openai_response_to_anthropic(
-            response=ModelResponse.model_validate(openai_dict),
+        openai_dict.setdefault(
+            "usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        )
+        anthropic_response = (
+            self.anthropic_adapter.translate_openai_response_to_anthropic(
+                response=ModelResponse.model_validate(openai_dict),
+            )
         )
 
         new_content = anthropic_response.get("content") or []
@@ -997,11 +1126,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # may have modified text (added explanation) and removed blocked tool calls.
         original_content = original_response.get("content") or []
         preserved_blocks = [
-            block for block in original_content
-            if not (isinstance(block, dict) and block.get("type") in _REPLACED_BLOCK_TYPES)
+            block
+            for block in original_content
+            if not (
+                isinstance(block, dict) and block.get("type") in _REPLACED_BLOCK_TYPES
+            )
         ]
 
         original_response["content"] = preserved_blocks + new_content
-        original_response["stop_reason"] = anthropic_response.get("stop_reason", "end_turn")
-
-
+        original_response["stop_reason"] = anthropic_response.get(
+            "stop_reason", "end_turn"
+        )
