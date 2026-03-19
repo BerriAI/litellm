@@ -16,6 +16,7 @@ import os
 import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from urllib.parse import urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
@@ -403,6 +404,7 @@ async def google_login(
             state=cli_state,
         )
         if return_to is not None and sso_redirect is not None:
+            SSOAuthenticationHandler._validate_return_to(return_to)
             sso_redirect.set_cookie(
                 key="litellm_cp_return_to",
                 value=return_to,
@@ -1772,6 +1774,34 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
+    def _validate_return_to(return_to: str) -> None:
+        """
+        Validate that return_to matches the configured control_plane_url origin.
+
+        Raises HTTPException(400) if:
+        - control_plane_url is not configured in general_settings
+        - return_to origin does not match control_plane_url origin
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        control_plane_url = general_settings.get("control_plane_url")
+        if control_plane_url is None:
+            raise HTTPException(
+                status_code=400,
+                detail="return_to is not allowed: control_plane_url is not configured",
+            )
+
+        parsed_cp = urlparse(control_plane_url)
+        parsed_return = urlparse(return_to)
+        cp_origin = f"{parsed_cp.scheme}://{parsed_cp.netloc}"
+        return_origin = f"{parsed_return.scheme}://{parsed_return.netloc}"
+        if cp_origin != return_origin:
+            raise HTTPException(
+                status_code=400,
+                detail="return_to does not match the configured control_plane_url",
+            )
+
+    @staticmethod
     async def get_sso_login_redirect(
         redirect_url: str,
         google_client_id: Optional[str] = None,
@@ -2550,14 +2580,7 @@ class SSOAuthenticationHandler:
         # Control-plane cross-origin: redirect back to the control plane UI
         # with the token in the URL (cookie won't work cross-origin)
         if return_to is not None:
-            from urllib.parse import urlencode, urlparse
-
-            parsed = urlparse(return_to)
-            if parsed.scheme not in ("http", "https"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="return_to must be an HTTP(S) URL",
-                )
+            SSOAuthenticationHandler._validate_return_to(return_to)
             separator = "&" if "?" in return_to else "?"
             redirect_url = (
                 return_to
@@ -2565,7 +2588,7 @@ class SSOAuthenticationHandler:
                 + urlencode({"login": "success", "token": jwt_token})
             )
             verbose_proxy_logger.info(
-                f"Cross-origin SSO: redirecting to control plane at {parsed.netloc}"
+                "Cross-origin SSO: redirecting to control plane"
             )
             redirect_response = RedirectResponse(url=redirect_url, status_code=303)
             redirect_response.delete_cookie("litellm_cp_return_to")
