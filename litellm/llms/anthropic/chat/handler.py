@@ -50,7 +50,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
-    OutputCodeInterpreterCallLog,
+    build_code_interpreter_log_outputs,
 )
 from litellm.types.utils import (
     Delta,
@@ -708,20 +708,9 @@ class ModelResponseIterator:
                 continue
             call_id = tr.get("tool_use_id", "")
             content = tr.get("content", {})
-            if isinstance(content, dict):
-                parts = []
-                if content.get("stdout"):
-                    parts.append(content["stdout"])
-                if content.get("stderr"):
-                    parts.append(f"STDERR: {content['stderr']}")
-                logs = "".join(parts)
-            else:
-                logs = ""
+            log_outputs = build_code_interpreter_log_outputs(content)
             tool_input = self._server_tool_inputs.get(call_id, {})
             code = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-            log_outputs = (
-                [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
-            )
             results.append(
                 OutputCodeInterpreterCall(
                     type="code_interpreter_call",
