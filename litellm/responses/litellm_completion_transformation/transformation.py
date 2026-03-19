@@ -233,6 +233,13 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
+
+        # Do not forward empty tool configuration to chat-completion providers.
+        # Providers like Ollama change behavior when they see `tools=[]`, even
+        # though the user did not actually request tool use.
+        if not tools:
+            litellm_completion_request.pop("tools", None)
+            litellm_completion_request.pop("tool_choice", None)
         return litellm_completion_request
 
     @staticmethod

@@ -26,6 +26,58 @@ from litellm.types.utils import (
 
 
 class TestLiteLLMCompletionResponsesConfig:
+    def test_transform_responses_request_omits_empty_tools(self):
+        result = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model="ollama/llama3.2:latest",
+                input="Reply with exactly: ok",
+                responses_api_request={
+                    "temperature": 0,
+                    "tools": [],
+                    "tool_choice": "auto",
+                },
+                custom_llm_provider="ollama",
+                stream=False,
+            )
+        )
+
+        assert "tools" not in result
+        assert "tool_choice" not in result
+        assert result["messages"] == [{"role": "user", "content": "Reply with exactly: ok"}]
+        assert result["model"] == "ollama/llama3.2:latest"
+
+    def test_transform_responses_request_preserves_non_empty_tools(self):
+        result = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model="ollama/llama3.2:latest",
+                input="Reply with exactly: ok",
+                responses_api_request={
+                    "temperature": 0,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "echo",
+                            "description": "Echo text",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"text": {"type": "string"}},
+                                "required": ["text"],
+                            },
+                        }
+                    ],
+                    "tool_choice": "auto",
+                },
+                custom_llm_provider="ollama",
+                stream=False,
+            )
+        )
+
+        assert "tools" in result
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["type"] == "function"
+        assert result["tools"][0]["function"]["name"] == "echo"
+        assert result["tool_choice"] == "auto"
+
     def test_transform_input_file_item_to_file_item_with_file_id(self):
         """Test transformation of input_file item with file_id to Chat Completion file format"""
         # Setup
