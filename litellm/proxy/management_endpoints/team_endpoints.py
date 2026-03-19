@@ -1542,12 +1542,12 @@ async def update_team(  # noqa: PLR0915
             updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+        team_row: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": data.team_id},
+                data=updated_kv,
+                include={"litellm_model_table": True},  # type: ignore
+            )
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2294,13 +2294,13 @@ async def team_member_delete(
         )
 
         # Fetch keys before deletion to persist them
-        keys_to_delete: List[
-            LiteLLM_VerificationToken
-        ] = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": {"in": list(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
+        keys_to_delete: List[LiteLLM_VerificationToken] = (
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                where={
+                    "user_id": {"in": list(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
         )
 
         if keys_to_delete:
@@ -2684,10 +2684,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -2746,10 +2746,10 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: List[
-        LiteLLM_VerificationToken
-    ] = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": {"in": data.team_ids}}
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
     )
 
     if keys_to_delete:
@@ -2969,11 +2969,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception
@@ -3334,7 +3334,9 @@ def _convert_teams_to_response_models(
     use_deleted_table: bool,
 ) -> List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
     """Convert raw Prisma team rows to response models."""
-    team_list: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
+    team_list: List[
+        Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]
+    ] = []
     for team in teams:
         try:
             team_dict = team.model_dump()
