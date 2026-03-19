@@ -8,29 +8,31 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 import litellm
-from litellm.constants import (LITELLM_MAX_STREAMING_DURATION_SECONDS,
-                               STREAM_SSE_DONE_STRING)
+from litellm.constants import (
+    LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    STREAM_SSE_DONE_STRING,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.litellm_logging import \
-    Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_response_utils.get_api_base import \
-    get_api_base
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import \
-    update_response_metadata
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    update_response_metadata,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.responses.transformation import \
-    BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import (OutputTextDeltaEvent, ResponseAPIUsage,
-                                       ResponseCompletedEvent,
-                                       ResponsesAPIRequestParams,
-                                       ResponsesAPIResponse,
-                                       ResponsesAPIStreamEvents,
-                                       ResponsesAPIStreamingResponse)
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponsesAPIRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.utils import CallTypes
-from litellm.utils import (CustomStreamWrapper,
-                           async_post_call_success_deployment_hook)
+from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -198,10 +200,12 @@ class BaseResponsesAPIStreamingIterator:
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
-                                    # If cost calculation fails, continue without cost
                                     pass
 
-                    self._handle_logging_completed_response()
+                    if _chunk_type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+                        self._handle_logging_failed_response()
+                    else:
+                        self._handle_logging_completed_response()
 
                 return openai_responses_api_chunk
 
@@ -218,6 +222,32 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
         pass
+
+    def _handle_logging_failed_response(self):
+        """
+        Handle logging for RESPONSE_FAILED events by routing to failure handlers.
+
+        Unlike _handle_logging_completed_response (which calls success handlers),
+        this constructs an exception from the response error and routes to
+        async_failure_handler / failure_handler so logging integrations correctly
+        record the call as failed.
+        """
+        response_obj = (
+            getattr(self.completed_response, "response", None)
+            if self.completed_response
+            else None
+        )
+        error_info = getattr(response_obj, "error", None) if response_obj else None
+        error_message = "Response failed"
+        if isinstance(error_info, dict):
+            error_message = error_info.get("message", str(error_info))
+        exception = litellm.APIError(
+            status_code=500,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+        self._handle_failure(exception)
 
     async def _call_post_streaming_deployment_hook(self, chunk):
         """
@@ -697,8 +727,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 # ---------------------------------------------------------------------------
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.thread_pool_executor import \
-    executor as _ws_executor
+from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",

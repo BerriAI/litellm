@@ -30,9 +30,11 @@ from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterat
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
-    OutputTextDeltaEvent
+    OutputTextDeltaEvent,
 )
 
 
@@ -428,4 +430,156 @@ class TestBaseResponsesAPIStreamingIterator:
         # StopIteration is a normal end of stream, not a failure
         mock_logging_obj.async_failure_handler.assert_not_called()
         mock_logging_obj.failure_handler.assert_not_called()
+
+    def test_process_chunk_response_failed_calls_failure_handler(self):
+        """
+        Test that a RESPONSE_FAILED event routes to failure handlers,
+        not success handlers. Failed responses represent genuine LLM-level
+        errors and should be logged as failures.
+        """
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_lines = Mock()
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_failure_handler = Mock()
+        mock_logging_obj.failure_handler = Mock()
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
+        mock_responses_api_response.id = "resp_failed_123"
+        mock_responses_api_response.error = {
+            "type": "server_error",
+            "message": "The model encountered an error",
+        }
+        mock_responses_api_response.usage = None
+
+        mock_failed_event = Mock(spec=ResponseFailedEvent)
+        mock_failed_event.type = ResponsesAPIStreamEvents.RESPONSE_FAILED
+        mock_failed_event.response = mock_responses_api_response
+
+        mock_config.transform_streaming_response.return_value = mock_failed_event
+
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            litellm_metadata={"model_info": {"id": "model_123"}},
+            custom_llm_provider="openai",
+        )
+
+        test_chunk_data = {
+            "type": "response.failed",
+            "response": {
+                "id": "resp_failed_123",
+                "error": {
+                    "type": "server_error",
+                    "message": "The model encountered an error",
+                },
+            },
+        }
+
+        with patch.object(
+            ResponsesAPIRequestUtils,
+            "_update_responses_api_response_id_with_model_id",
+            return_value=mock_responses_api_response,
+        ), patch(
+            "litellm.responses.streaming_iterator.run_async_function"
+        ) as mock_run_async, patch(
+            "litellm.responses.streaming_iterator.executor"
+        ) as mock_executor:
+            result = iterator._process_chunk(json.dumps(test_chunk_data))
+
+            assert result is not None
+            assert result.type == ResponsesAPIStreamEvents.RESPONSE_FAILED
+            assert iterator.completed_response == result
+
+            # Failure handler should have been called via _handle_failure
+            mock_run_async.assert_called_once()
+            call_kwargs = mock_run_async.call_args
+            assert (
+                call_kwargs[1]["async_function"]
+                == mock_logging_obj.async_failure_handler
+            )
+
+            mock_executor.submit.assert_called_once()
+            submit_args = mock_executor.submit.call_args
+            assert submit_args[0][0] == mock_logging_obj.failure_handler
+
+    def test_process_chunk_response_incomplete_calls_success_handler(self):
+        """
+        Test that a RESPONSE_INCOMPLETE event routes to success handlers.
+        Incomplete responses (e.g. max_output_tokens reached) are still valid
+        responses with usage data — analogous to finish_reason='length' in chat.
+        """
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_lines = Mock()
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_failure_handler = Mock()
+        mock_logging_obj.failure_handler = Mock()
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
+        mock_responses_api_response.id = "resp_incomplete_123"
+        mock_responses_api_response.incomplete_details = {
+            "reason": "max_output_tokens"
+        }
+        mock_responses_api_response.usage = None
+
+        mock_incomplete_event = Mock(spec=ResponseIncompleteEvent)
+        mock_incomplete_event.type = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+        mock_incomplete_event.response = mock_responses_api_response
+
+        mock_config.transform_streaming_response.return_value = mock_incomplete_event
+
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            litellm_metadata={"model_info": {"id": "model_123"}},
+            custom_llm_provider="openai",
+        )
+
+        test_chunk_data = {
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_incomplete_123",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+        }
+
+        with patch.object(
+            ResponsesAPIRequestUtils,
+            "_update_responses_api_response_id_with_model_id",
+            return_value=mock_responses_api_response,
+        ), patch(
+            "asyncio.create_task"
+        ) as mock_create_task, patch(
+            "litellm.responses.streaming_iterator.executor"
+        ) as mock_executor:
+            result = iterator._process_chunk(json.dumps(test_chunk_data))
+
+            assert result is not None
+            assert result.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+            assert iterator.completed_response == result
+
+            # Success handler should have been called (via _handle_logging_completed_response)
+            mock_create_task.assert_called_once()
+            mock_executor.submit.assert_called_once()
+
+            # Failure handlers should NOT have been called
+            mock_logging_obj.async_failure_handler.assert_not_called()
+            mock_logging_obj.failure_handler.assert_not_called()
 
