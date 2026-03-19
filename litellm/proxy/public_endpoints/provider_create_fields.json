@@ -1579,6 +1579,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "MALACHI",
+    "provider_display_name": "Malachi",
+    "litellm_provider": "malachi",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://your-malachi-host/v1",
+        "tooltip": "Malachi OpenAI-compatible base URL.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Optional API key for Malachi if the gateway requires one.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "malachi/my-model"
+  },
+  {
     "provider": "MARITALK",
     "provider_display_name": "Maritalk",
     "litellm_provider": "maritalk",
