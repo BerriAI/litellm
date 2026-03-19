@@ -1917,6 +1917,7 @@ class ProxyLogging:
                     original_exception,
                     traceback.format_exc(),
                 ),
+                daemon=True,
             ).start()
 
     async def post_call_success_hook(
@@ -4005,13 +4006,15 @@ class PrismaClient:
             )
 
             async def _do_direct_reconnect() -> None:
+                old_pid = self._get_engine_pid()
                 try:
                     await self.db.disconnect()
                 except Exception as disconnect_err:
-                    verbose_proxy_logger.debug(
-                        "Prisma DB disconnect before reconnect failed (ignored): %s",
+                    verbose_proxy_logger.warning(
+                        "Prisma DB disconnect before reconnect failed: %s",
                         disconnect_err,
                     )
+                    PrismaWrapper._kill_engine_process(old_pid)
 
                 await self.db.connect()
                 await self.db.query_raw("SELECT 1")

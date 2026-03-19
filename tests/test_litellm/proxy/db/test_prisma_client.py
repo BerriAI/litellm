@@ -1,7 +1,8 @@
 import json
 import os
+import signal
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,14 @@ sys.path.insert(
 
 
 from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
+
+
+@pytest.fixture(autouse=True)
+def mock_prisma_binary():
+    """Mock prisma.Prisma to avoid requiring generated Prisma binaries for unit tests."""
+    mock_module = MagicMock()
+    with patch.dict(sys.modules, {"prisma": mock_module}):
+        yield mock_module
 
 
 def test_should_update_prisma_schema(monkeypatch):
@@ -73,4 +82,79 @@ async def test_recreate_prisma_client_successful_disconnect():
     
     # Verify that the new client replaced the original
     assert wrapper._original_prisma != mock_prisma
-    assert hasattr(wrapper._original_prisma, 'connect') 
+    assert hasattr(wrapper._original_prisma, 'connect')
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_kills_old_engine_on_disconnect_failure(
+    mock_prisma_binary,
+):
+    """When disconnect() fails, recreate_prisma_client must SIGTERM/SIGKILL the old engine PID."""
+    mock_prisma = AsyncMock()
+    mock_prisma.disconnect.side_effect = Exception("engine hung")
+
+    # Simulate engine subprocess with a known PID
+    mock_engine = MagicMock()
+    mock_engine.process.pid = 12345
+    mock_prisma._engine = mock_engine
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    # Configure the mock Prisma constructor
+    mock_new_prisma = AsyncMock()
+    mock_prisma_binary.Prisma.return_value = mock_new_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("time.sleep"),
+    ):
+        await wrapper.recreate_prisma_client("postgresql://new")
+
+    # Verify old engine was killed
+    mock_kill.assert_any_call(12345, signal.SIGTERM)
+    # Verify new client was created and connected
+    mock_new_prisma.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_skips_kill_on_successful_disconnect(
+    mock_prisma_binary,
+):
+    """When disconnect() succeeds, no kill should be attempted."""
+    mock_prisma = AsyncMock()
+    mock_prisma.disconnect.return_value = None
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    mock_new_prisma = AsyncMock()
+    mock_prisma_binary.Prisma.return_value = mock_new_prisma
+
+    with patch("os.kill") as mock_kill:
+        await wrapper.recreate_prisma_client("postgresql://new")
+
+    mock_kill.assert_not_called()
+    mock_new_prisma.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_handles_missing_engine_pid(
+    mock_prisma_binary,
+):
+    """When engine PID is unavailable (no _engine attr), kill is skipped gracefully."""
+    mock_prisma = AsyncMock()
+    mock_prisma.disconnect.side_effect = Exception("engine hung")
+    mock_prisma._engine = None  # No engine subprocess
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    mock_new_prisma = AsyncMock()
+    mock_prisma_binary.Prisma.return_value = mock_new_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("time.sleep"),
+    ):
+        await wrapper.recreate_prisma_client("postgresql://new")
+
+    mock_kill.assert_not_called()  # PID was 0, kill skipped
+    mock_new_prisma.connect.assert_awaited_once()
