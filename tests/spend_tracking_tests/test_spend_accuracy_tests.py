@@ -308,16 +308,19 @@ async def test_long_term_spend_accuracy_with_bursts():
             response = await chat_completion(session, key)
             print(f"Burst 2 - Request {i + 1}/{BURST_2_REQUESTS} completed")
 
-        # Poll until key spend reflects burst 2
-        burst_1_spend = intermediate_key_info["info"]["spend"]
+        # Poll until key spend reaches expected total (burst 1 + burst 2)
         start = time.time()
         while time.time() - start < 120:
             key_info_check = await get_spend_info(session, "key", key)
             current_spend = key_info_check["info"]["spend"]
-            if current_spend > burst_1_spend:
-                print(f"Key spend increased to {current_spend} after {time.time() - start:.1f}s")
+            if abs(current_spend - expected_spend) < TOLERANCE:
+                print(
+                    f"Total spend reached expected {expected_spend} after {time.time() - start:.1f}s"
+                )
                 break
-            print(f"Key spend still {current_spend}, waiting for burst 2 flush...")
+            print(
+                f"Key spend {current_spend}, expected {expected_spend}, waiting..."
+            )
             await asyncio.sleep(10)
 
         # Allow extra time for all entity spend aggregations

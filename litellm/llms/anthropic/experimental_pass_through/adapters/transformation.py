@@ -780,7 +780,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Keep Anthropic-native tools in their original format
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
-            
+
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 
