@@ -169,7 +169,7 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 
 ##### Create Key
 
-Create Key with with `permissions={"get_spend_routes": true}`
+Create Key with `permissions={"get_spend_routes": true}`
 
 ```shell title="Generate Key with Spend Route Permissions" showLineNumbers
 curl --location 'http://0.0.0.0:4000/key/generate' \

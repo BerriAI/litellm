@@ -380,7 +380,7 @@ The proxy will log a warning about the UI but API endpoints will work normally.
 
 ## 10. Use a Separate Health Check App
 :::info
-The Separate Health Check App only runs when running via the the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
+The Separate Health Check App only runs when running via the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
 :::
 
 Using a separate health check app ensures that your liveness and readiness probes remain responsive even when the main application is under heavy load. 
