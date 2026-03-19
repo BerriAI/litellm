@@ -63,7 +63,7 @@ class TestDashScopeResponsesAPITransformation:
         url = config.get_complete_url(
             api_base="https://custom.example.com", litellm_params={}
         )
-        assert url == "https://custom.example.com/compatible-mode/v1/responses"
+        assert url == "https://custom.example.com/responses"
 
     @pytest.mark.parametrize(
         "litellm_params, expected_key",

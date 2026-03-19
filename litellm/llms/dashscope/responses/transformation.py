@@ -23,7 +23,6 @@ _DEFAULT_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _SUPPORTED_OPTIONAL_PARAMS: List[str] = [
     "instructions",
     "max_output_tokens",
-    "metadata",
     "previous_response_id",
     "reasoning",
     "store",
@@ -48,13 +47,13 @@ class DashScopeResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.DASHSCOPE
 
+    def supports_native_websocket(self) -> bool:
+        """DashScope compatible-mode does not expose a native WebSocket endpoint."""
+        return False
+
     def get_supported_openai_params(self, model: str) -> list:
         """Return the parameter whitelist for DashScope Responses API."""
-        supported = ["input", "model"] + list(_SUPPORTED_OPTIONAL_PARAMS)
-        # metadata is LiteLLM-internal; advertise all others
-        if "metadata" in supported:
-            supported.remove("metadata")
-        return supported
+        return ["input", "model"] + list(_SUPPORTED_OPTIONAL_PARAMS)
 
     def map_openai_params(
         self,
@@ -125,7 +124,7 @@ class DashScopeResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{base_url}/responses"
         if base_url.endswith("/compatible-mode/v1"):
             return f"{base_url}/responses"
-        return f"{base_url}/compatible-mode/v1/responses"
+        return f"{base_url}/responses"
 
     def get_error_class(
         self,
