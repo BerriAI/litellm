@@ -1106,6 +1106,8 @@ BEDROCK_CONVERSE_MODELS = [
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
     "minimax.minimax-m2.1",
+    "minimax.minimax-m2.5",
+    "zai.glm-5",
     "moonshotai.kimi-k2.5",
 ]
 
