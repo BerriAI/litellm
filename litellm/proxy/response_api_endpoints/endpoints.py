@@ -136,6 +136,7 @@ async def responses_api(
                 user_request_timeout=user_request_timeout,
                 user_max_tokens=user_max_tokens,
                 user_api_base=user_api_base,
+                model=None,
                 route_type="aresponses",
                 llm_router=llm_router,
             )

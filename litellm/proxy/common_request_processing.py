@@ -912,6 +912,11 @@ class ProxyBaseLLMRequestProcessing:
 
         if skip_pre_call_logic:
             logging_obj = self.data.get("litellm_logging_obj")
+            if logging_obj is None:
+                raise ValueError(
+                    "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
+                    "Ensure common_processing_pre_call_logic was called before using this parameter."
+                )
         else:
             self.data, logging_obj = await self.common_processing_pre_call_logic(
                 request=request,
