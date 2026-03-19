@@ -2662,6 +2662,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
+    blocked: bool = False
     max_budget: Optional[float] = None
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}

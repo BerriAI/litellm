@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import BLOCK_UNBLOCK_KEYS_HARD_LIMIT
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -3072,9 +3073,6 @@ async def team_info(
         )
 
 
-BLOCK_UNBLOCK_KEYS_HARD_LIMIT = 20_000
-
-
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -3109,14 +3107,16 @@ async def block_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": data.team_id},
-        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
-    )
-    token_list = [k.token for k in keys_to_update]
-
+    token_list: List[str] = []
+    updated_team = None
     async with prisma_client.db.tx() as tx:
-        await tx.litellm_teamtable.update(
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"team_id": data.team_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_team = await tx.litellm_teamtable.update(
             where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
         )
         if token_list:
@@ -3146,10 +3146,7 @@ async def block_team(
                 "team/block: cache refresh for key %s: %s", hashed_token, e
             )
 
-    record = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
-    )
-    return record
+    return updated_team
 
 
 @router.post(
@@ -3183,14 +3180,16 @@ async def unblock_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": data.team_id},
-        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
-    )
-    token_list = [k.token for k in keys_to_update]
-
+    token_list: List[str] = []
+    updated_team = None
     async with prisma_client.db.tx() as tx:
-        await tx.litellm_teamtable.update(
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"team_id": data.team_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_team = await tx.litellm_teamtable.update(
             where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
         )
         if token_list:
@@ -3220,10 +3219,7 @@ async def unblock_team(
                 "team/unblock: cache refresh for key %s: %s", hashed_token, e
             )
 
-    record = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
-    )
-    return record
+    return updated_team
 
 
 @router.get("/team/available")

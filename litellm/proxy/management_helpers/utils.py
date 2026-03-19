@@ -10,6 +10,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
+    BlockTeamRequest,
+    BlockUnblockUserRequest,
     BudgetNewRequest,
     DeleteCustomerRequest,
     DeleteTeamRequest,
@@ -244,6 +246,13 @@ async def add_new_member(
     return returned_user, returned_team_membership
 
 
+def _team_management_cache_keys(team_id: str) -> Tuple[str, str]:
+    """
+    Keys that may hold a team in DualCache: canonical get_team_object key plus legacy plain team_id.
+    """
+    return ("team_id:{}".format(team_id), team_id)
+
+
 def _delete_user_id_from_cache(kwargs):
     from litellm.proxy.proxy_server import user_api_key_cache
 
@@ -256,6 +265,10 @@ def _delete_user_id_from_cache(kwargs):
         if isinstance(update_user_request, DeleteUserRequest):
             for user_id in update_user_request.user_ids:
                 user_api_key_cache.delete_cache(key=user_id)
+
+        # block / unblock user (same cache key as get_user_object)
+        if isinstance(update_user_request, BlockUnblockUserRequest):
+            user_api_key_cache.delete_cache(key=update_user_request.user_id)
     pass
 
 
@@ -280,12 +293,19 @@ def _delete_team_id_from_cache(kwargs):
     if kwargs.get("data") is not None:
         update_request = kwargs.get("data")
         if isinstance(update_request, UpdateTeamRequest):
-            user_api_key_cache.delete_cache(key=update_request.team_id)
+            for _key in _team_management_cache_keys(update_request.team_id):
+                user_api_key_cache.delete_cache(key=_key)
 
         # delete team request
         if isinstance(update_request, DeleteTeamRequest):
             for team_id in update_request.team_ids:
-                user_api_key_cache.delete_cache(key=team_id)
+                for _key in _team_management_cache_keys(team_id):
+                    user_api_key_cache.delete_cache(key=_key)
+
+        # block / unblock team (get_team_object uses team_id:{id})
+        if isinstance(update_request, BlockTeamRequest):
+            for _key in _team_management_cache_keys(update_request.team_id):
+                user_api_key_cache.delete_cache(key=_key)
     pass
 
 

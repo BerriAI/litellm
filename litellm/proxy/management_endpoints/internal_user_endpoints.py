@@ -21,6 +21,7 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
+from litellm.constants import BLOCK_UNBLOCK_KEYS_HARD_LIMIT
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
@@ -2058,9 +2059,6 @@ async def delete_user(
     return deleted_users
 
 
-BLOCK_UNBLOCK_KEYS_HARD_LIMIT = 20_000
-
-
 @router.post(
     "/user/block",
     tags=["Internal User management"],
@@ -2104,14 +2102,16 @@ async def block_user(
             detail="Cannot block proxy admin users.",
         )
 
-    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"user_id": data.user_id},
-        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
-    )
-    token_list = [k.token for k in keys_to_update]
-
+    token_list: List[str] = []
+    updated_user = None
     async with prisma_client.db.tx() as tx:
-        await tx.litellm_usertable.update(
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_user = await tx.litellm_usertable.update(
             where={"user_id": data.user_id},
             data={"blocked": True},  # type: ignore
         )
@@ -2142,10 +2142,7 @@ async def block_user(
                 "user/block: cache refresh for key %s: %s", hashed_token, e
             )
 
-    record = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": data.user_id}
-    )
-    return record
+    return updated_user
 
 
 @router.post(
@@ -2185,14 +2182,16 @@ async def unblock_user(
             detail={"error": f"User not found, passed user_id={data.user_id}"},
         )
 
-    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"user_id": data.user_id},
-        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
-    )
-    token_list = [k.token for k in keys_to_update]
-
+    token_list: List[str] = []
+    updated_user = None
     async with prisma_client.db.tx() as tx:
-        await tx.litellm_usertable.update(
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_user = await tx.litellm_usertable.update(
             where={"user_id": data.user_id},
             data={"blocked": False},  # type: ignore
         )
@@ -2223,10 +2222,7 @@ async def unblock_user(
                 "user/unblock: cache refresh for key %s: %s", hashed_token, e
             )
 
-    record = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": data.user_id}
-    )
-    return record
+    return updated_user
 
 
 async def add_internal_user_to_organization(
