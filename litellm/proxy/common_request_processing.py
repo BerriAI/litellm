@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import sys
 import time
 import traceback
 from datetime import datetime
@@ -1160,6 +1161,45 @@ class ProxyBaseLLMRequestProcessing:
                         "Error firing deferred logging: %s", e
                     )
 
+            # Streaming cleanup: if an exception is propagating AND the
+            # deferred streaming closure is still set, no streaming route
+            # will consume the CSW — the closure is orphaned.  Clear it
+            # and fire logging directly to avoid silent loss.
+            #
+            # On normal streaming returns the closure must stay: CSW calls
+            # it at stream end.  sys.exc_info()[1] is None for normal
+            # returns, non-None only when an exception is propagating.
+            if sys.exc_info()[1] is not None:
+                _deferred_fn = getattr(
+                    logging_obj, "_on_deferred_stream_complete", None
+                )
+                if _deferred_fn is not None:
+                    logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    try:
+                        from litellm.litellm_core_utils.thread_pool_executor import (
+                            executor as _exc,
+                        )
+
+                        asyncio.create_task(
+                            logging_obj.async_success_handler(
+                                response,
+                                cache_hit=None,
+                                start_time=None,
+                                end_time=None,
+                            )
+                        )
+                        _exc.submit(
+                            logging_obj.success_handler,
+                            response,
+                            cache_hit=None,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.exception(
+                            "Error in orphaned streaming closure cleanup: %s", e
+                        )
+
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
@@ -1338,14 +1378,15 @@ class ProxyBaseLLMRequestProcessing:
         implementation directly rather than reimplementing the closure.
         """
         from litellm.litellm_core_utils.thread_pool_executor import executor
-        from litellm.proxy.proxy_server import llm_router as _global_llm_router
-        from litellm.proxy.utils import (
-            _check_and_merge_model_level_guardrails,
-            unified_guardrail as _unified_guardrail,
-        )
 
         _response = assembled_response
         try:
+            from litellm.proxy.proxy_server import llm_router as _global_llm_router
+            from litellm.proxy.utils import (
+                _check_and_merge_model_level_guardrails,
+                unified_guardrail as _unified_guardrail,
+            )
+
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
             )
