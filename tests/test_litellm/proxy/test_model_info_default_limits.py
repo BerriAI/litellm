@@ -119,7 +119,7 @@ class TestModelInfoEndpointWithRouter:
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
-             patch("litellm.proxy.proxy_server.llm_model_list", [{}]), \
+             patch("litellm.proxy.proxy_server.llm_model_list", []), \
              patch("litellm.proxy.proxy_server.user_model", None):
             response = await model_info_v1(
                 user_api_key_dict=user_api_key_dict,
