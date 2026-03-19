@@ -106,7 +106,7 @@ async def test_recreate_prisma_client_kills_old_engine_on_disconnect_failure(
 
     with (
         patch("os.kill") as mock_kill,
-        patch("time.sleep"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         await wrapper.recreate_prisma_client("postgresql://new")
 
@@ -152,7 +152,7 @@ async def test_recreate_prisma_client_handles_missing_engine_pid(
 
     with (
         patch("os.kill") as mock_kill,
-        patch("time.sleep"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         await wrapper.recreate_prisma_client("postgresql://new")
 
