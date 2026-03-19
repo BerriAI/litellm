@@ -147,9 +147,18 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        # Handle different response formats from various Cloudflare AI models
+        # Some models (e.g., Nemotron) may return "response" while others might use different keys
+        result = completion_response.get("result", {})
+        response_content = result.get("response") or result.get("output") or result.get("text")
+        
+        if response_content is None:
+            raise CloudflareError(
+                status_code=500,
+                message=f"Unable to parse response from Cloudflare API. Received: {completion_response}"
+            )
+
+        model_response.choices[0].message.content = response_content  # type: ignore
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
