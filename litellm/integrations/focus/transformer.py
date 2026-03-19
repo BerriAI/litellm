@@ -19,6 +19,8 @@ _TAG_KEYS = (
     "model",
     "model_group",
     "custom_llm_provider",
+    "prompt_tokens",
+    "completion_tokens",
 )
 
 
@@ -122,7 +124,13 @@ class FocusTransformer:
             pl.col("model").cast(pl.String).alias("ResourceType"),
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
-            pl.col("model_group").cast(pl.String).alias("ServiceName"),
+            pl.when(
+                pl.col("model_group").cast(pl.String).is_not_null()
+                & (pl.col("model_group").cast(pl.String) != "")
+            )
+            .then(pl.col("model_group").cast(pl.String))
+            .otherwise(pl.col("model").cast(pl.String))
+            .alias("ServiceName"),
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),
