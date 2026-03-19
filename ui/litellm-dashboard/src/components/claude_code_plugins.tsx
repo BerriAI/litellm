@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
-import { Modal } from "antd";
+import { Button, Modal } from "antd";
 import {
   getClaudeCodePluginsList,
   deleteClaudeCodePlugin,
@@ -112,7 +111,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
           <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
         </p>
         <div className="mt-2">
-          <Button onClick={handleAddPlugin} disabled={!accessToken || !isAdmin}>
+          <Button type="primary" onClick={handleAddPlugin} disabled={!accessToken || !isAdmin}>
             + Add New Plugin
           </Button>
         </div>
