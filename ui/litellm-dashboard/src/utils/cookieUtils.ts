@@ -1,6 +1,17 @@
 /**
  * Utility functions for managing cookies
  */
+import { serverRootPath } from "@/components/networking";
+
+/**
+ * Returns the cookie path for the UI.
+ * Respects server_root_path so the cookie works when LiteLLM is
+ * deployed behind a subpath (e.g. /myapp/ui instead of /ui).
+ */
+function getUiCookiePath(): string {
+  const root = serverRootPath === "/" ? "" : serverRootPath;
+  return `${root}/ui`;
+}
 
 /**
  * Clears the token cookie from both root and /ui paths
@@ -16,7 +27,8 @@ export function clearTokenCookies() {
   // Clear with various combinations of path and SameSite
   // Include current path in case of custom server root path
   const currentPath = window.location.pathname;
-  const paths = ["/", "/ui"];
+  const uiCookiePath = getUiCookiePath();
+  const paths = ["/", uiCookiePath];
 
   // Add the current path directory if it's different from root and /ui
   if (currentPath && currentPath !== "/" && !currentPath.startsWith("/ui")) {
@@ -70,7 +82,8 @@ export function storeLoginToken(token: string) {
   //    is readable by getCookie() via document.cookie.
   try {
     const secure = window.location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = `token=${encodeURIComponent(token)}; path=/ui; SameSite=Lax${secure}`;
+    const cookiePath = getUiCookiePath();
+    document.cookie = `token=${encodeURIComponent(token)}; path=${cookiePath}; SameSite=Lax${secure}`;
   } catch {
     // cookie setting may fail in restrictive environments
   }

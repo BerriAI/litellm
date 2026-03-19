@@ -43,7 +43,7 @@ import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import { getCookie } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
@@ -56,14 +56,8 @@ import { ConfigProvider, theme } from "antd";
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
-  // Also clear the JS-set cookie at /ui (used to work around HttpOnly proxies)
   if (name === "token") {
-    document.cookie = `${name}=; Max-Age=0; Path=/ui`;
-    try {
-      sessionStorage.removeItem(name);
-    } catch {
-      // sessionStorage may be unavailable
-    }
+    clearTokenCookies();
   }
 }
 
