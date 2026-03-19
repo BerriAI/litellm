@@ -413,7 +413,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                team_model_aliases=valid_token.team_model_aliases
+                if valid_token
+                else None,
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -482,7 +484,9 @@ async def common_checks(  # noqa: PLR0915
             )
 
         # 3.1. If organization is in budget
-        with tracer.trace("litellm.proxy.auth.common_checks.organization_max_budget_check"):
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.organization_max_budget_check"
+        ):
             await _organization_max_budget_check(
                 valid_token=valid_token,
                 team_object=team_object,

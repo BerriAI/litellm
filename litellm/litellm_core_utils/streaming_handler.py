@@ -1894,12 +1894,8 @@ class CustomStreamWrapper:
                         getattr(complete_streaming_response, "usage"),
                     )
                     try:
-                        _cache_copy = complete_streaming_response.model_copy(
-                            deep=True
-                        )
-                        _log_copy = complete_streaming_response.model_copy(
-                            deep=True
-                        )
+                        _cache_copy = complete_streaming_response.model_copy(deep=True)
+                        _log_copy = complete_streaming_response.model_copy(deep=True)
                     except RuntimeError:
                         _cache_copy = complete_streaming_response.model_copy()
                         _log_copy = complete_streaming_response.model_copy()
@@ -2122,9 +2118,7 @@ class CustomStreamWrapper:
                         getattr(complete_streaming_response, "usage"),
                     )
                     try:
-                        _copy = complete_streaming_response.model_copy(
-                            deep=True
-                        )
+                        _copy = complete_streaming_response.model_copy(deep=True)
                     except RuntimeError:
                         _copy = complete_streaming_response.model_copy()
                     asyncio.create_task(
