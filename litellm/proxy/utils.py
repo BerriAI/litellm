@@ -1885,16 +1885,19 @@ class ProxyLogging:
                 litellm_logging_obj.model_call_details["messages"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
                     litellm_logging_obj.call_type = CallTypes.acompletion.value
+                    litellm_logging_obj.model_call_details["call_type"] = litellm_logging_obj.call_type
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
                     litellm_logging_obj.call_type = CallTypes.atext_completion.value
+                    litellm_logging_obj.model_call_details["call_type"] = litellm_logging_obj.call_type
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
                     litellm_logging_obj.call_type = CallTypes.aembedding.value
+                    litellm_logging_obj.model_call_details["call_type"] = litellm_logging_obj.call_type
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
