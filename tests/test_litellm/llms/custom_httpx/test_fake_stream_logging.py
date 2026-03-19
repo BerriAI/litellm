@@ -65,9 +65,9 @@ async def test_fake_stream_wrapped_with_logging_handler():
     # The result should be an async generator (from async_sse_wrapper)
     # NOT a FakeAnthropicMessagesStreamIterator directly
     assert result is not None
-    assert inspect.isasyncgen(result), (
-        f"Expected async generator from async_sse_wrapper, got {type(result)}"
-    )
+    assert inspect.isasyncgen(
+        result
+    ), f"Expected async generator from async_sse_wrapper, got {type(result)}"
 
     # Consume the stream and verify we get SSE-formatted chunks
     chunks = []
