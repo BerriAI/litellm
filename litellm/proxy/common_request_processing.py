@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -985,6 +984,7 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
+        _exception_raised = False
         try:
             hidden_params = getattr(response, "_hidden_params", {}) or {}
             model_id = self._get_model_id_from_response(hidden_params, self.data)
@@ -1145,6 +1145,9 @@ class ProxyBaseLLMRequestProcessing:
             response = await proxy_logging_obj.post_call_success_hook(
                 data=self.data, user_api_key_dict=user_api_key_dict, response=response
             )
+        except Exception:
+            _exception_raised = True
+            raise
         finally:
             # Enqueue deferred logging after post-call guardrails have written
             # guardrail_information to metadata.  The finally block ensures
@@ -1161,15 +1164,15 @@ class ProxyBaseLLMRequestProcessing:
                         "Error firing deferred logging: %s", e
                     )
 
-            # Streaming cleanup: if an exception is propagating AND the
-            # deferred streaming closure is still set, no streaming route
-            # will consume the CSW — the closure is orphaned.  Clear it
-            # and fire logging directly to avoid silent loss.
+            # Streaming cleanup: if an exception occurred AND the deferred
+            # streaming closure is still set, no streaming route will
+            # consume the CSW — the closure is orphaned.  Clear it and
+            # fire logging directly to avoid silent loss.
             #
             # On normal streaming returns the closure must stay: CSW calls
-            # it at stream end.  sys.exc_info()[1] is None for normal
-            # returns, non-None only when an exception is propagating.
-            if sys.exc_info()[1] is not None:
+            # it at stream end.  _exception_raised is function-scoped and
+            # immune to outer exception context, avoiding false positives.
+            if _exception_raised:
                 _deferred_fn = getattr(
                     logging_obj, "_on_deferred_stream_complete", None
                 )
