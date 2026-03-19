@@ -640,9 +640,7 @@ async def _load_sso_settings_from_db() -> Optional[dict]:
         if sso_db_record and sso_db_record.sso_settings:
             return dict(sso_db_record.sso_settings)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Could not load SSO settings from database: {e}."
-        )
+        verbose_proxy_logger.debug(f"Could not load SSO settings from database: {e}.")
 
     return None
 
@@ -766,24 +764,6 @@ async def _setup_all_sso_mappings() -> Tuple[
     team_mappings = _parse_team_mappings_from_settings(sso_settings_dict)
     attribute_mappings = _parse_attribute_mappings_from_settings(sso_settings_dict)
     return role_mappings, team_mappings, attribute_mappings
-
-
-async def _setup_team_mappings() -> Optional["TeamMappings"]:
-    """Setup team mappings from SSO database settings."""
-    sso_settings_dict = await _load_sso_settings_from_db()
-    return _parse_team_mappings_from_settings(sso_settings_dict)
-
-
-async def _setup_role_mappings() -> Optional["RoleMappings"]:
-    """Setup role mappings from SSO database settings."""
-    sso_settings_dict = await _load_sso_settings_from_db()
-    return _parse_role_mappings_from_settings(sso_settings_dict)
-
-
-async def _setup_attribute_mappings() -> Optional["AttributeMappings"]:
-    """Setup attribute mappings from SSO database settings."""
-    sso_settings_dict = await _load_sso_settings_from_db()
-    return _parse_attribute_mappings_from_settings(sso_settings_dict)
 
 
 def _parse_generic_sso_headers() -> dict:
@@ -3303,7 +3283,11 @@ class MicrosoftSSOHandler:
             return original_msft_result or {}
 
         # Load DB-configurable attribute mappings (same as generic SSO)
-        attribute_mappings = await _setup_attribute_mappings()
+        (
+            _role_mappings,
+            _team_mappings,
+            attribute_mappings,
+        ) = await _setup_all_sso_mappings()
 
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
@@ -3342,9 +3326,7 @@ class MicrosoftSSOHandler:
                 last_name_attr = attribute_mappings.user_last_name_attribute
 
         openid_response = CustomOpenID(
-            email=normalize_email(
-                response.get(email_attr) or response.get("mail")
-            ),
+            email=normalize_email(response.get(email_attr) or response.get("mail")),
             display_name=response.get(display_name_attr),
             provider="microsoft",
             id=response.get(id_attr),
