@@ -253,6 +253,15 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
+  // Redirect legacy query-param pages to their new path-based routes
+  const isLegacyRedirect = page in LEGACY_REDIRECTS;
+  useEffect(() => {
+    if (isLegacyRedirect) {
+      const base = (proxyBaseUrl || "") + "/ui";
+      router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+    }
+  }, [isLegacyRedirect, page, router]);
+
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
   useEffect(() => {
@@ -437,14 +446,7 @@ function CreateKeyPageContent() {
     setShowClaudeCodePrompt(true);
   };
 
-  if (authLoading || redirectToLogin) {
-    return <LoadingScreen />;
-  }
-
-  // Redirect legacy query-param pages to their new path-based routes
-  if (page in LEGACY_REDIRECTS) {
-    const base = (proxyBaseUrl || "") + "/ui";
-    router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+  if (authLoading || redirectToLogin || isLegacyRedirect) {
     return <LoadingScreen />;
   }
 
