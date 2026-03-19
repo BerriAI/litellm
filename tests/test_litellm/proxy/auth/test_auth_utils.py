@@ -71,6 +71,19 @@ class TestGetKeyModelRpmLimit:
         assert result is None
 
 
+    def test_team_metadata_empty_rpm_dict_falls_through_to_deployment_default(self):
+        """Explicitly empty team model_rpm_limit ({}) should be returned as-is, not fallen through."""
+        # An empty dict is a valid team limit map (no per-model limits configured).
+        # It should be returned directly rather than falling through to deployment defaults,
+        # so a team with an empty map is treated as unconstrained at the team level.
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={"model_rpm_limit": {}},
+        )
+        result = get_key_model_rpm_limit(user_api_key_dict)
+        assert result == {}
+
+
 class TestGetKeyModelTpmLimit:
     """Tests for get_key_model_tpm_limit function."""
 
@@ -135,6 +148,33 @@ class TestGetKeyModelTpmLimit:
         )
         result = get_key_model_tpm_limit(user_api_key_dict)
         assert result == {"gpt-4": 10000}
+
+
+    def test_team_metadata_empty_tpm_dict_falls_through_to_deployment_default(self):
+        """Explicitly empty team model_tpm_limit ({}) should be returned as-is, not fallen through."""
+        # An empty dict is a valid team limit map (no per-model limits configured).
+        # It should be returned directly rather than falling through to deployment defaults,
+        # so a team with an empty map is treated as unconstrained at the team level.
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={"model_tpm_limit": {}},
+        )
+        result = get_key_model_tpm_limit(user_api_key_dict)
+        assert result == {}
+
+
+    def test_skips_deployments_with_malformed_limit_value(self):
+        """Deployments with non-integer-parseable limit values are skipped without raising."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {"model_name": "model1", "litellm_params": {"default_api_key_tpm_limit": "not-a-number"}},
+            _make_deployment_dict("model1", tpm=500),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_tpm_limit(user_api_key_dict, model_name="model1")
+        # The malformed deployment is skipped; the valid one provides 500
+        assert result == {"model1": 500}
 
 
 class TestGetCustomerIdFromStandardHeaders:
@@ -412,6 +452,20 @@ class TestDeploymentDefaultRpmLimit:
         with patch(_ROUTER_PATCH, mock_router):
             result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
         assert result == {"model1": 75}
+
+
+    def test_skips_deployments_with_malformed_limit_value(self):
+        """Deployments with non-integer-parseable limit values are skipped without raising."""
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {"model_name": "model1", "litellm_params": {"default_api_key_rpm_limit": "not-a-number"}},
+            _make_deployment_dict("model1", rpm=100),
+        ]
+        with patch(_ROUTER_PATCH, mock_router):
+            result = get_key_model_rpm_limit(user_api_key_dict, model_name="model1")
+        # The malformed deployment is skipped; the valid one provides 100
+        assert result == {"model1": 100}
 
 
 class TestDeploymentDefaultTpmLimit:

@@ -555,11 +555,14 @@ def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
     deployments = llm_router.get_model_list(model_name=model_name)
     if not deployments:
         return None
-    limits = [
-        int(deployment.get("litellm_params", {}).get(field))
-        for deployment in deployments
-        if deployment.get("litellm_params", {}).get(field) is not None
-    ]
+    limits = []
+    for deployment in deployments:
+        raw = deployment.get("litellm_params", {}).get(field)
+        if raw is not None:
+            try:
+                limits.append(int(raw))
+            except (ValueError, TypeError):
+                pass
     return min(limits) if limits else None
 
 
@@ -602,7 +605,7 @@ def get_key_model_rpm_limit(
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
         team_limit = user_api_key_dict.team_metadata.get("model_rpm_limit")
-        if team_limit:
+        if team_limit is not None:
             return team_limit
 
     # 4. Fallback to deployment default_api_key_rpm_limit
@@ -645,7 +648,7 @@ def get_key_model_tpm_limit(
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
         team_limit = user_api_key_dict.team_metadata.get("model_tpm_limit")
-        if team_limit:
+        if team_limit is not None:
             return team_limit
 
     # 4. Fallback to deployment default_api_key_tpm_limit
