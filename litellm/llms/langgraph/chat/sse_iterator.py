@@ -6,15 +6,12 @@ Handles Server-Sent Events (SSE) streaming responses from LangGraph.
 
 import json
 import uuid
-from typing import TYPE_CHECKING, Optional
+from typing import Any, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
-
-if TYPE_CHECKING:
-    pass
 
 
 class LangGraphSSEStreamIterator:
@@ -22,10 +19,18 @@ class LangGraphSSEStreamIterator:
     Iterator for LangGraph SSE streaming responses.
     Supports both sync and async iteration.
 
-    LangGraph stream format with stream_mode="messages-tuple":
-    Each SSE event is a tuple: (event_type, data)
-    Common event types: "messages", "metadata"
+    Supports two LangGraph SSE formats:
+
+    1. Standard SSE (``stream_mode="messages"``):
+       ``event: messages\\ndata: [{message_obj}, {metadata}]``
+
+    2. Legacy tuple format (``stream_mode="messages-tuple"``):
+       ``data: ["messages", payload]``
     """
+
+    # Event types we act on
+    _MESSAGE_EVENTS = frozenset({"messages", "messages/partial", "messages/complete"})
+    _METADATA_EVENTS = frozenset({"metadata"})
 
     def __init__(self, response: httpx.Response, model: str):
         self.response = response
@@ -33,6 +38,8 @@ class LangGraphSSEStreamIterator:
         self.finished = False
         self.line_iterator = None
         self.async_line_iterator = None
+        # Tracks the most recent ``event:`` header across SSE lines
+        self._current_event_type: Optional[str] = None
 
     def __iter__(self):
         """Initialize sync iteration."""
@@ -46,17 +53,30 @@ class LangGraphSSEStreamIterator:
 
     def _parse_sse_line(self, line: str) -> Optional[ModelResponseStream]:
         """
-        Parse a single SSE line and return a ModelResponse chunk if applicable.
+        Parse a single SSE line.
 
-        LangGraph SSE format can vary:
-        - data: [...] (tuple format)
-        - event: ...\ndata: ...
+        Per the SSE specification an event block looks like::
+
+            event: <type>\\n
+            data: <payload>\\n
+            \\n
+
+        The ``event:`` line is optional; when absent the event type defaults
+        to ``"message"``.  We track event type across calls so that when
+        ``data:`` arrives we already know the type.
         """
         line = line.strip()
         if not line:
+            # Blank line = end of SSE event block; reset tracked type
+            self._current_event_type = None
             return None
 
-        # Handle SSE data lines
+        # Capture ``event:`` header for the next ``data:`` line
+        if line.startswith("event:"):
+            self._current_event_type = line[6:].strip()
+            return None
+
+        # Handle ``data:`` lines
         if line.startswith("data:"):
             json_str = line[5:].strip()
             if not json_str:
@@ -64,68 +84,106 @@ class LangGraphSSEStreamIterator:
 
             try:
                 data = json.loads(json_str)
-                return self._process_data(data)
             except json.JSONDecodeError:
                 verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                 return None
 
+            result = self._process_data(data, self._current_event_type)
+            # Reset after consuming so repeated calls don't re-use a stale type
+            self._current_event_type = None
+            return result
+
         return None
 
-    def _process_data(self, data) -> Optional[ModelResponseStream]:
-        """
-        Process parsed data from SSE stream.
+    # Data processing
 
-        LangGraph uses tuple format: [event_type, payload]
+    def _process_data(
+        self, data: Any, event_type: Optional[str] = None
+    ) -> Optional[ModelResponseStream]:
         """
-        # Handle tuple format: ["messages", ...]
-        if isinstance(data, list) and len(data) >= 2:
-            event_type = data[0]
+        Route parsed JSON *data* using *event_type* (from ``event:`` header).
+
+        Backward-compatible: when no ``event:`` header was present and *data*
+        is a list whose first element is a string, we fall back to the legacy
+        tuple format ``["messages", payload]``.
+        """
+
+        # Legacy tuple format: ["messages", payload]
+        if isinstance(data, list) and len(data) >= 2 and isinstance(data[0], str):
+            legacy_event = data[0]
             payload = data[1]
-
-            if event_type == "messages":
+            if legacy_event == "messages":
                 return self._process_messages_event(payload)
-            elif event_type == "metadata":
-                # Metadata event, might contain usage info
+            if legacy_event == "metadata":
                 return self._process_metadata_event(payload)
+            return None
 
-        # Handle dict format (alternative response format)
-        elif isinstance(data, dict):
+        # Standard SSE: event type comes from the header 
+        if event_type is not None:
+            if event_type in self._MESSAGE_EVENTS:
+                return self._process_messages_event(data)
+            if event_type in self._METADATA_EVENTS:
+                return self._process_metadata_event(data)
+            # Unknown event type – fall through to heuristic handling
+            verbose_logger.debug(f"Ignoring unknown LangGraph event type: {event_type}")
+
+        # Heuristic fallback for headerless dict payloads
+        if isinstance(data, dict):
             if "content" in data:
-                return self._create_content_chunk(data.get("content", ""))
-            elif "messages" in data:
-                messages = data.get("messages", [])
-                if messages:
-                    last_msg = messages[-1]
-                    if isinstance(last_msg, dict) and last_msg.get("type") == "ai":
-                        return self._create_content_chunk(last_msg.get("content", ""))
+                return self._create_content_chunk(data["content"])
+            messages = data.get("messages")
+            if messages and isinstance(messages, list):
+                last_msg = messages[-1]
+                if isinstance(last_msg, dict) and last_msg.get("type") == "ai":
+                    return self._create_content_chunk(last_msg.get("content", ""))
+
+        # Headerless list of message objects (no tuple string key)
+        if isinstance(data, list) and event_type is None:
+            # Attempt to treat as a messages payload directly
+            return self._process_messages_event(data)
 
         return None
 
-    def _process_messages_event(self, payload) -> Optional[ModelResponseStream]:
+    def _process_messages_event(self, payload: Any) -> Optional[ModelResponseStream]:
         """
         Process a messages event from the stream.
 
-        payload format: [[message_object, metadata], ...]
+        Handles multiple payload shapes emitted by LangGraph:
+
+        * Flat list of message objects:
+          ``[{message_obj}, {metadata}]``
+        * Nested list (legacy ``messages-tuple`` second element):
+          ``[[message_obj, metadata], ...]``
+        * Single message dict
         """
+        if isinstance(payload, dict):
+            return self._extract_ai_content(payload)
+
         if isinstance(payload, list):
             for item in payload:
+                # Nested list: [[msg, meta], ...]
                 if isinstance(item, list) and len(item) >= 1:
-                    msg = item[0]
-                    if isinstance(msg, dict):
-                        msg_type = msg.get("type", "")
-                        content = msg.get("content", "")
-
-                        # Only return AI messages with content
-                        if msg_type == "ai" and content:
-                            return self._create_content_chunk(content)
-                        elif msg_type == "AIMessageChunk" and content:
-                            return self._create_content_chunk(content)
+                    result = self._extract_ai_content(item[0])
+                    if result is not None:
+                        return result
+                # Flat list of dicts: [{msg}, {meta}]
                 elif isinstance(item, dict):
-                    msg_type = item.get("type", "")
-                    content = item.get("content", "")
-                    if msg_type in ("ai", "AIMessageChunk") and content:
-                        return self._create_content_chunk(content)
+                    result = self._extract_ai_content(item)
+                    if result is not None:
+                        return result
 
+        return None
+
+    def _extract_ai_content(self, msg: Any) -> Optional[ModelResponseStream]:
+        """
+        Return a content chunk if *msg* is an AI message dict with content.
+        """
+        if not isinstance(msg, dict):
+            return None
+        msg_type = msg.get("type", "")
+        content = msg.get("content", "")
+        if msg_type in ("ai", "AIMessageChunk") and content:
+            return self._create_content_chunk(content)
         return None
 
     def _process_metadata_event(self, payload) -> Optional[ModelResponseStream]:
