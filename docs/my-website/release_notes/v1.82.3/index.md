@@ -273,7 +273,7 @@ pip install litellm==1.82.3
     - Model cost aliases expansion — define aliases in the cost map that inherit pricing from a parent model - [PR #23314](https://github.com/BerriAI/litellm/pull/23314), [PR #23457](https://github.com/BerriAI/litellm/pull/23457)
     - Wildcards model support for the Files API - [PR #22740](https://github.com/BerriAI/litellm/pull/22740)
 
-#### Bug Fixes
+#### Bugs
 
 - **[Anthropic](../../docs/providers/anthropic)**
     - Preserve native tool format (web_search, bash, tool_search, etc.) when guardrails convert tools for the Anthropic Messages API - [PR #23526](https://github.com/BerriAI/litellm/pull/23526)
@@ -355,11 +355,6 @@ pip install litellm==1.82.3
 - **Vector Stores**
     - Vector Store management endpoints — retrieve, list, update, and delete vector stores via `/v1/vector_stores/*` - [PR #23435](https://github.com/BerriAI/litellm/pull/23435)
 
-- **MCP Servers**
-    - Token authentication support for MCP servers — configure `auth_type: "bearer"` per MCP server - [PR #23260](https://github.com/BerriAI/litellm/pull/23260)
-    - Team-scoped MCP server filtering for key creation — keys only see MCP servers available to their team - [PR #23323](https://github.com/BerriAI/litellm/pull/23323)
-    - Per-server health recheck in the UI - [PR #23328](https://github.com/BerriAI/litellm/pull/23328)
-
 - **Teams**
     - Batch expiry setting for teams — configure a default expiry duration for all team keys - [PR #22705](https://github.com/BerriAI/litellm/pull/22705)
     - Team Admin can reset key spend - [PR #22725](https://github.com/BerriAI/litellm/pull/22725)
@@ -397,8 +392,6 @@ pip install litellm==1.82.3
 - Fix all proxy models not including model access groups in key creation - [PR #23236](https://github.com/BerriAI/litellm/pull/23236)
 - Fix admin viewers unable to see all organizations - [PR #22940](https://github.com/BerriAI/litellm/pull/22940)
 - Fix Audit Logs UI: added server-side pagination, filtering, and drawer view - [PR #22476](https://github.com/BerriAI/litellm/pull/22476)
-- Fix MCP server URL and tools management issues - [PR #22751](https://github.com/BerriAI/litellm/pull/22751)
-- Fix MCP server health checks triggering on server deletion - [PR #23063](https://github.com/BerriAI/litellm/pull/23063)
 - Fix virtual keys in teams view not applying the team filter correctly - [PR #23065](https://github.com/BerriAI/litellm/pull/23065)
 - Fix team expiry enforcement validation - [PR #22728](https://github.com/BerriAI/litellm/pull/22728)
 
@@ -434,11 +427,26 @@ No major prompt management changes in this release.
 
 ### Secret Managers
 
-- **[Hashicorp Vault](../../docs/secret)** — Full Hashicorp Vault integration as a config override backend — secrets defined in Vault are fetched at startup and override `config.yaml` values. UI support for managing vault-sourced credentials included - [PR #22939](https://github.com/BerriAI/litellm/pull/22939), [PR #23036](https://github.com/BerriAI/litellm/pull/23036)
+- **[Hashicorp Vault](../../docs/secret_managers)** — Full Hashicorp Vault integration as a config override backend — secrets defined in Vault are fetched at startup and override `config.yaml` values. UI support for managing vault-sourced credentials included - [PR #22939](https://github.com/BerriAI/litellm/pull/22939), [PR #23036](https://github.com/BerriAI/litellm/pull/23036)
 
 ---
 
-## Spend Tracking
+## MCP Gateway
+
+#### Features
+
+- **Token authentication for MCP servers** — configure `auth_type: "bearer"` per MCP server to require token-based auth on tool calls - [PR #23260](https://github.com/BerriAI/litellm/pull/23260)
+- **Team-scoped MCP server filtering** — keys created under a team only see MCP servers available to that team - [PR #23323](https://github.com/BerriAI/litellm/pull/23323)
+- **Per-server health recheck in UI** — trigger a health check for individual MCP servers without reloading all servers - [PR #23328](https://github.com/BerriAI/litellm/pull/23328)
+
+#### Bugs
+
+- Fix MCP server URL and tools management issues causing tool discovery to fail - [PR #22751](https://github.com/BerriAI/litellm/pull/22751)
+- Fix MCP server health checks triggering on server deletion - [PR #23063](https://github.com/BerriAI/litellm/pull/23063)
+
+---
+
+## Spend Tracking, Budgets and Rate Limiting
 
 - **Fix budget-linked keys never having spend reset** — Keys linked to budget objects were not having their spend reset on the configured reset interval - [PR #20688](https://github.com/BerriAI/litellm/pull/20688)
 - **Flex pricing support** — Add `flex_pricing` field to cost map for providers that offer dynamic pricing tiers - [PR #22992](https://github.com/BerriAI/litellm/pull/22992)
@@ -477,6 +485,16 @@ No major prompt management changes in this release.
 
 ---
 
+## Documentation Updates
+
+- Add Anthropic `/v1/messages` → `/responses` parameter mapping reference - [PR #22893](https://github.com/BerriAI/litellm/pull/22893)
+- Update Okta SSO docs and custom SSO handler example - [PR #22786](https://github.com/BerriAI/litellm/pull/22786)
+- Add `LITELLM_MAX_BUDGET_PER_SESSION_TTL` to environment variables reference - [PR #23186](https://github.com/BerriAI/litellm/pull/23186)
+- Add DB query performance guidelines to `CLAUDE.md` - [PR #23196](https://github.com/BerriAI/litellm/pull/23196)
+- Add Gemini Vertex AI PayGo/priority cost tracking docs - [PR #22948](https://github.com/BerriAI/litellm/pull/22948)
+
+---
+
 ## New Contributors
 
 * @ryanh-ai made their first contribution in [PR #21542](https://github.com/BerriAI/litellm/pull/21542)
@@ -499,12 +517,12 @@ No major prompt management changes in this release.
 * LLM API Endpoints: 37
 * Management Endpoints / UI: 31
 * AI Integrations: 8
-* Guardrails: 4
-* Secret Managers: 1
-* Spend Tracking: 5
-* Performance / Reliability: 9
+* MCP Gateway: 5
+* Spend Tracking, Budgets and Rate Limiting: 5
+* Performance / Loadbalancing / Reliability improvements: 9
 * Security: 3
 * Database / Proxy Operations: 2
+* Documentation Updates: 5
 
 ---
 
