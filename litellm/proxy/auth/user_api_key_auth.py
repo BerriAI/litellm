@@ -1438,10 +1438,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             ):  # user set proxy max budget
                 cache_key = "{}:spend".format(litellm_proxy_admin_name)
                 with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
-                    global_proxy_spend = await _fetch_global_spend_with_event_coordination(
-                        cache_key=cache_key,
-                        user_api_key_cache=user_api_key_cache,
-                        prisma_client=prisma_client,
+                    global_proxy_spend = (
+                        await _fetch_global_spend_with_event_coordination(
+                            cache_key=cache_key,
+                            user_api_key_cache=user_api_key_cache,
+                            prisma_client=prisma_client,
+                        )
                     )
 
                 if global_proxy_spend is not None:
