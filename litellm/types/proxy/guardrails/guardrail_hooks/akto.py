@@ -6,12 +6,12 @@ from .base import GuardrailConfigModel
 
 
 class AktoConfigModel(GuardrailConfigModel):
-    """
-    Config for the Akto guardrail.
+    """Config for the Akto guardrail.
 
-    Use two separate config entries to control behaviour:
-      akto-validate (mode: pre_call)  -> check guardrails, block if flagged
-      akto-ingest   (mode: post_call) -> ingest request+response data
+    Modes:
+      pre_call       -> validate request, block if flagged
+      logging_only   -> non-blocking ingestion of request+response
+      [pre_call, logging_only] -> both (recommended)
     """
 
     akto_base_url: Optional[str] = Field(
@@ -47,7 +47,7 @@ class AktoConfigModel(GuardrailConfigModel):
 
     guardrail_timeout: Optional[int] = Field(
         default=None,
-        description="HTTP timeout in seconds. Default: 5.",
+        description="HTTP timeout in seconds for pre_call validation. Default: 5.",
     )
 
     @staticmethod
