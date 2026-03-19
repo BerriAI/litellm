@@ -1791,11 +1791,7 @@ class SSOAuthenticationHandler:
                 detail="return_to is not allowed: control_plane_url is not configured",
             )
 
-        parsed_cp = urlparse(control_plane_url)
-        parsed_return = urlparse(return_to)
-        cp_origin = f"{parsed_cp.scheme}://{parsed_cp.netloc}"
-        return_origin = f"{parsed_return.scheme}://{parsed_return.netloc}"
-        if cp_origin != return_origin:
+        if urlparse(return_to).hostname != urlparse(control_plane_url).hostname:
             raise HTTPException(
                 status_code=400,
                 detail="return_to does not match the configured control_plane_url",

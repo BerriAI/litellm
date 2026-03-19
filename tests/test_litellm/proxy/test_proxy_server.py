@@ -236,8 +236,25 @@ def test_login_v2_returns_json_on_invalid_json_body(monkeypatch):
     assert isinstance(data["error"], dict)
 
 
-def test_login_v3_always_includes_token_in_body(monkeypatch):
-    """v3/login always returns token in body, even without worker_registry."""
+def test_login_v3_rejected_without_control_plane_url(monkeypatch):
+    """v3/login returns 404 when control_plane_url is not configured."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 404
+    assert "control_plane_url" in response.json()["error"]["message"]
+
+
+def test_login_v3_includes_token_in_body(monkeypatch):
+    """v3/login returns token in body when control_plane_url is configured."""
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
@@ -249,7 +266,10 @@ def test_login_v3_always_includes_token_in_body(monkeypatch):
     )
     monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_config = MagicMock()
@@ -289,6 +309,10 @@ def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
         mock_authenticate_user,
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     client = TestClient(app)

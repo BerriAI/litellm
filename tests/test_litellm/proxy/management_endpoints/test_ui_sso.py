@@ -5211,3 +5211,12 @@ class TestValidateReturnTo:
             SSOAuthenticationHandler._validate_return_to("https://evil.com/phish")
         assert exc_info.value.status_code == 400
 
+    def test_case_insensitive_hostname(self, monkeypatch):
+        """Hostname comparison should be case-insensitive per RFC 3986."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://CP.Example.COM"},
+        )
+        # Should not raise
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+
