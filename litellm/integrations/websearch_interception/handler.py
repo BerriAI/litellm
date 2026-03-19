@@ -8,6 +8,7 @@ server-side using litellm router's search tools.
 
 import asyncio
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -110,7 +111,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
 
         # Extract search query from the last user message
-        query = self._extract_search_query(messages)
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        query = get_last_user_message(messages)
         if not query:
             return None
 
@@ -129,10 +134,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_result_text = f"Search failed: {e}"
 
         # Build synthetic Anthropic response
-        from uuid import uuid4
-
         response: Dict[str, Any] = {
-            "id": f"msg_{uuid4().hex[:24]}",
+            "id": f"msg_{str(uuid.uuid4())}",
             "type": "message",
             "role": "assistant",
             "model": model,
@@ -147,39 +150,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"returning synthetic response ({len(search_result_text)} chars)"
         )
         return response
-
-    @staticmethod
-    def _extract_search_query(messages: List[Dict]) -> Optional[str]:
-        """
-        Extract the search query from messages.
-
-        Looks at the last user message content for the search query text.
-        """
-        if not messages:
-            return None
-
-        # Find the last user message
-        for msg in reversed(messages):
-            if msg.get("role") != "user":
-                continue
-
-            content = msg.get("content")
-            if isinstance(content, str):
-                return content.strip() or None
-
-            # Handle list-of-blocks content
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = block.get("text", "").strip()
-                        if text:
-                            return text
-                    elif isinstance(block, str):
-                        text = block.strip()
-                        if text:
-                            return text
-
-        return None
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[Any]
