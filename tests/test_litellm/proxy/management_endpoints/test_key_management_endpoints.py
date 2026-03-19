@@ -1679,6 +1679,56 @@ async def test_unblock_key_nonexistent_key_returns_404(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_nonexistent_key_returns_404(monkeypatch):
+    """
+    Test that update_key_fn returns 404 (not misleading 401) when the body
+    key doesn't exist in the database, even when the caller is authenticated
+    as a proxy admin via the Authorization header.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # find_unique returns None → key does not exist
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin_user"
+    )
+
+    data = UpdateKeyRequest(key="sk-does-not-exist-key")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=mock_request,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert exc_info.value.code == "404"
+    assert "not found" in str(exc_info.value.message).lower()
+    assert "Authentication Error" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
 async def test_block_key_existing_key_succeeds(monkeypatch):
     """
     Test that block_key successfully blocks an existing key and

@@ -1654,7 +1654,7 @@ async def _get_and_validate_existing_key(
         LiteLLM_VerificationToken: The existing key row
 
     Raises:
-        HTTPException: If key is not found
+        ProxyException: 404 if key is not found
     """
     if prisma_client is None:
         raise HTTPException(
@@ -1662,16 +1662,18 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    existing_key_row = await prisma_client.get_data(
-        token=token,
-        table_name="key",
-        query_type="find_unique",
+    hashed_token = _hash_token_if_needed(token=token)
+
+    existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
     )
 
     if existing_key_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Key not found: {token}"},
+        raise ProxyException(
+            message=f"Key not found. Passed key={token}",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
 
     return existing_key_row
@@ -2109,18 +2111,10 @@ async def update_key_fn(
         key = data_json.pop("key")
 
         # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        existing_key_row = await prisma_client.get_data(
-            token=data.key, table_name="key", query_type="find_unique"
+        existing_key_row = await _get_and_validate_existing_key(
+            token=data.key,
+            prisma_client=prisma_client,
         )
-
-        if existing_key_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Team not found, passed team_id={data.team_id}"},
-            )
 
         await _validate_update_key_data(
             data=data,
