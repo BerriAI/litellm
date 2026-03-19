@@ -2150,6 +2150,8 @@ async def update_key_fn(
         )
 
         _data = {**non_default_values, "token": key}
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
         response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
