@@ -39,6 +39,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionSystemMessage,
@@ -1682,6 +1684,48 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
+    @staticmethod
+    def _translate_anthropic_citation_to_openai_annotation(
+        citation: dict,
+    ) -> Optional[ChatCompletionAnnotation]:
+        citation_type = citation.get("type")
+
+        if citation_type == "web_search_result_location":
+            url = citation.get("url")
+            if url is None:
+                return None
+            url_citation = ChatCompletionAnnotationURLCitation(
+                url=url,
+                title=citation.get("title"),
+            )
+        else:
+            return None
+
+        return ChatCompletionAnnotation(
+            type="url_citation",
+            url_citation=url_citation,
+        )
+
+    @staticmethod
+    def _translate_anthropic_citations_to_openai_annotations(
+        citations: Optional[List[List[dict]]],
+    ) -> Optional[List[ChatCompletionAnnotation]]:
+        if not citations:
+            return None
+
+        annotations: List[ChatCompletionAnnotation] = []
+        for citation_group in citations:
+            for citation in citation_group:
+                annotation = (
+                    AnthropicConfig._translate_anthropic_citation_to_openai_annotation(
+                        citation
+                    )
+                )
+                if annotation is not None:
+                    annotations.append(annotation)
+
+        return annotations if annotations else None
+
     def transform_parsed_response(
         self,
         completion_response: dict,
@@ -1754,12 +1798,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if compaction_blocks is not None:
                 provider_specific_fields["compaction_blocks"] = compaction_blocks
 
+            annotations = (
+                AnthropicConfig._translate_anthropic_citations_to_openai_annotations(
+                    citations
+                )
+            )
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
                 provider_specific_fields=provider_specific_fields,
                 thinking_blocks=thinking_blocks,
                 reasoning_content=reasoning_content,
+                annotations=annotations,
             )
             _message.provider_specific_fields = provider_specific_fields
 

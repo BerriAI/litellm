@@ -43,6 +43,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -538,6 +539,8 @@ class ModelResponseIterator:
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: List[Dict[str, Any]] = []
 
+        self._accumulated_annotations: List[ChatCompletionAnnotation] = []
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -609,6 +612,13 @@ class ModelResponseIterator:
                 )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
+            annotation = (
+                AnthropicConfig._translate_anthropic_citation_to_openai_annotation(
+                    content_block["delta"]["citation"]
+                )
+            )
+            if annotation is not None:
+                self._accumulated_annotations.append(annotation)
         elif (
             "thinking" in content_block["delta"]
             or "signature" in content_block["delta"]
@@ -699,6 +709,7 @@ class ModelResponseIterator:
                     ]
                 ]
             ] = None
+            annotations_to_emit: Optional[List[ChatCompletionAnnotation]] = None
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
             index = 0
@@ -840,6 +851,9 @@ class ModelResponseIterator:
                 finish_reason, usage, container = self._handle_message_delta(chunk)
                 if container:
                     provider_specific_fields["container"] = container
+                if self._accumulated_annotations:
+                    annotations_to_emit = list(self._accumulated_annotations)
+                    self._accumulated_annotations = []
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -894,6 +908,7 @@ class ModelResponseIterator:
                                 thinking_blocks if thinking_blocks else None
                             ),
                             reasoning_content=reasoning_content,
+                            annotations=annotations_to_emit,
                         ),
                         finish_reason=finish_reason,
                     )
