@@ -297,6 +297,13 @@ pip install litellm==1.82.3
 
 ### Logging
 
+- **[Helicone](../../docs/observability/helicone_integration)**
+    - Add Gemini and Vertex AI support to HeliconeLogger — routes Gemini and Vertex AI requests through the correct Helicone provider URL - [PR #19288](https://github.com/BerriAI/litellm/pull/19288)
+    - Fix correct provider URL for Vertex AI Gemini models - [PR #22603](https://github.com/BerriAI/litellm/pull/22603)
+
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
+    - Fix failure path kwargs inconsistency causing dropped traces on failed requests - [PR #22390](https://github.com/BerriAI/litellm/pull/22390)
+
 - **[Vantage](https://vantage.sh)**
     - Add Vantage integration for FOCUS 1.2 CSV export — export LiteLLM proxy spend data as FinOps Open Cost & Usage Specification reports, with time-windowed filenames to prevent overwrites - [PR #23333](https://github.com/BerriAI/litellm/pull/23333)
 
@@ -363,7 +370,7 @@ No major secret manager changes in this release.
 * New Models / Updated Models: 116 new, 132 removed
 * LLM API Endpoints: 5
 * Management Endpoints / UI: 11
-* AI Integrations: 2
+* AI Integrations: 4
 * Performance / Reliability: 5
 * Security: 3
 * Database / Proxy Operations: 2
