@@ -1107,3 +1107,27 @@ class TestPassthroughAuthToken:
 
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
+
+    def test_passthrough_get_complete_url_honours_base_url_env(self):
+        """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "https://custom.example.com"},
+            clear=True,
+        ):
+            url = config.get_complete_url(
+                api_base=None,
+                api_key=FAKE_REGULAR_KEY,
+                model="claude-sonnet-4-5-20250929",
+                optional_params={},
+                litellm_params={},
+            )
+
+        assert url == "https://custom.example.com/v1/messages"
