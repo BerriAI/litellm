@@ -108,7 +108,8 @@ class TestPollingEndpointPreCallGuard:
 
     @pytest.mark.asyncio
     async def test_rate_limit_error_prevents_polling_id_creation(self):
-        """When pre-call checks raise, generate_polling_id must not be called"""
+        """responses_api() must raise 429 and never call generate_polling_id when rate-limited"""
+        from litellm.proxy.response_api_endpoints.endpoints import responses_api
         from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
         rate_limit_exc = litellm.RateLimitError(
@@ -116,10 +117,37 @@ class TestPollingEndpointPreCallGuard:
             llm_provider="",
             model="gpt-4",
         )
-
         generate_polling_id_mock = MagicMock(return_value="litellm_poll_test")
 
+        proxy_server_patches = {
+            "litellm.proxy.proxy_server._read_request_body": AsyncMock(
+                return_value={"model": "gpt-4", "background": True}
+            ),
+            "litellm.proxy.proxy_server.general_settings": {},
+            "litellm.proxy.proxy_server.llm_router": MagicMock(),
+            "litellm.proxy.proxy_server.native_background_mode": None,
+            "litellm.proxy.proxy_server.polling_cache_ttl": 3600,
+            "litellm.proxy.proxy_server.polling_via_cache_enabled": True,
+            "litellm.proxy.proxy_server.proxy_config": MagicMock(),
+            "litellm.proxy.proxy_server.proxy_logging_obj": AsyncMock(),
+            "litellm.proxy.proxy_server.redis_usage_cache": AsyncMock(),
+            "litellm.proxy.proxy_server.select_data_generator": None,
+            "litellm.proxy.proxy_server.user_api_base": None,
+            "litellm.proxy.proxy_server.user_max_tokens": None,
+            "litellm.proxy.proxy_server.user_model": None,
+            "litellm.proxy.proxy_server.user_request_timeout": None,
+            "litellm.proxy.proxy_server.user_temperature": None,
+            "litellm.proxy.proxy_server.version": "1.0.0",
+        }
+
         with (
+            patch.multiple("litellm.proxy.proxy_server", **{
+                k.split(".")[-1]: v for k, v in proxy_server_patches.items()
+            }),
+            patch(
+                "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+                return_value=True,
+            ),
             patch.object(
                 ProxyBaseLLMRequestProcessing,
                 "common_processing_pre_call_logic",
@@ -133,33 +161,22 @@ class TestPollingEndpointPreCallGuard:
                 return_value=HTTPException(status_code=429, detail="Rate limit exceeded"),
             ),
             patch.object(ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock),
+            # Prevent background task from running (avoids noise from incomplete mocks)
+            patch("asyncio.create_task"),
+            patch.object(
+                ResponsePollingHandler,
+                "create_initial_state",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
         ):
-            # Simulate the endpoint logic directly (avoids proxy_server import complexity)
-            data = {"model": "gpt-4", "background": True}
-            processor = ProxyBaseLLMRequestProcessing(data=data)
-
-            raised_exc = None
-            try:
-                await processor.common_processing_pre_call_logic(
+            with pytest.raises(HTTPException) as exc_info:
+                await responses_api(
                     request=MagicMock(spec=Request),
-                    general_settings={},
-                    proxy_logging_obj=AsyncMock(),
+                    fastapi_response=MagicMock(spec=Response),
                     user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-                    version="1.0.0",
-                    proxy_config=MagicMock(),
-                    user_model=None,
-                    user_temperature=None,
-                    user_request_timeout=None,
-                    user_max_tokens=None,
-                    user_api_base=None,
-                    model=None,
-                    route_type="aresponses",
-                    llm_router=MagicMock(),
                 )
-            except litellm.RateLimitError as e:
-                raised_exc = e
 
-            # The exception was raised before generate_polling_id could be called
-            assert raised_exc is not None
-            generate_polling_id_mock.assert_not_called()
+        assert exc_info.value.status_code == 429
+        generate_polling_id_mock.assert_not_called()
 
