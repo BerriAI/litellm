@@ -48,6 +48,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_project_object,
     get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1209,6 +1210,7 @@ async def generate_key_fn(
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
+            proxy_logging_obj,
             user_api_key_cache,
             user_custom_key_generate,
         )
@@ -1285,9 +1287,17 @@ async def generate_key_fn(
         # Reject key creation for blocked user/team (exception: UI session keys)
         if data.team_id != UI_SESSION_TOKEN_TEAM_ID:
             if data.user_id is not None:
-                user_row = await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_id": data.user_id}
-                )
+                try:
+                    user_row = await get_user_object(
+                        user_id=data.user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=False,
+                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except Exception:
+                    user_row = None
                 if user_row is not None and getattr(user_row, "blocked", False):
                     raise HTTPException(
                         status_code=400,
