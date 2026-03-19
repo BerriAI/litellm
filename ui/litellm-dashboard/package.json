@@ -17,7 +17,10 @@
     "e2e": "playwright test --config e2e_tests/playwright.config.ts",
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
     "knip": "knip",
-    "knip:fix": "knip --fix"
+    "knip:fix": "knip --fix",
+    "generate:schema": "python ../../scripts/export_openapi.py",
+    "generate:types": "openapi-typescript ./openapi.json -o src/types/api.generated.ts",
+    "generate:all": "npm run generate:schema && npm run generate:types"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
@@ -74,6 +77,7 @@
     "eslint-plugin-unused-imports": "^4.2.0",
     "jsdom": "^27.0.0",
     "knip": "^5.83.1",
+    "openapi-typescript": "^7.13.0",
     "postcss": "^8.4.33",
     "prettier": "3.2.5",
     "tailwindcss": "^3.4.1",
