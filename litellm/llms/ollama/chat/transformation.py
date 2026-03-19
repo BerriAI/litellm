@@ -370,6 +370,20 @@ class OllamaChatConfig(BaseConfig):
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 
+        # Normalize tool_calls: Ollama returns arguments as a dict,
+        # but LiteLLM expects arguments to be a JSON-serialized string.
+        # See: https://github.com/BerriAI/litellm/issues/24091
+        if response_json_message is not None and response_json_message.get("tool_calls"):
+            for _tc in response_json_message["tool_calls"]:
+                _func = _tc.get("function") if isinstance(_tc, dict) else None
+                if _func and isinstance(_func.get("arguments"), dict):
+                    _func["arguments"] = json.dumps(_func["arguments"])
+                # Ensure each tool_call has an id field
+                if isinstance(_tc, dict) and not _tc.get("id"):
+                    _tc["id"] = f"call_{str(uuid.uuid4())}"
+                if isinstance(_tc, dict) and not _tc.get("type"):
+                    _tc["type"] = "function"
+
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
@@ -489,13 +503,23 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             tool_calls = chunk["message"].get("tool_calls")
             if tool_calls is not None:
                 for tool_call in tool_calls:
-                    function_args = tool_call.get("function").get("arguments")
-                    if function_args is not None and len(function_args) > 0:
-                        is_function_call_complete = self._is_function_call_complete(
-                            function_args
-                        )
-                        if is_function_call_complete:
-                            tool_call["id"] = str(uuid.uuid4())
+                    function_args = tool_call.get("function", {}).get("arguments")
+                    if function_args is not None:
+                        # Normalize: Ollama may return arguments as a dict,
+                        # but LiteLLM expects a JSON string.
+                        # See: https://github.com/BerriAI/litellm/issues/24091
+                        if isinstance(function_args, dict):
+                            tool_call["function"]["arguments"] = json.dumps(function_args)
+                            function_args = tool_call["function"]["arguments"]
+                        if len(function_args) > 0:
+                            is_function_call_complete = self._is_function_call_complete(
+                                function_args
+                            )
+                            if is_function_call_complete:
+                                tool_call["id"] = str(uuid.uuid4())
+                    # Ensure type field is present
+                    if not tool_call.get("type"):
+                        tool_call["type"] = "function"
 
             # PROCESS REASONING CONTENT
             reasoning_content: Optional[str] = None
