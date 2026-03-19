@@ -52,17 +52,30 @@ export function clearTokenCookies() {
 }
 
 /**
- * Stores the login token in sessionStorage.
- * This ensures the token is available even when a reverse proxy adds HttpOnly
- * to server-set cookies, making them invisible to JavaScript.
+ * Stores the login token so the UI can read it even when a reverse proxy
+ * (e.g. nginx-ingress) adds HttpOnly to the server-set cookie.
  *
- * Note: sessionStorage is per-tab, so users behind an HttpOnly proxy must log
- * in once per tab. We intentionally avoid localStorage here because it persists
- * after browser close and is readable by any injected script (XSS).
+ * Strategy:
+ *  1. Set a JS-accessible cookie at path "/ui". Because nginx only modifies
+ *     server-set Set-Cookie headers, a cookie created via document.cookie will
+ *     never carry HttpOnly. Using path "/ui" avoids colliding with the
+ *     server-set HttpOnly cookie at path "/".
+ *  2. Also store in sessionStorage as a secondary fallback.
  */
 export function storeLoginToken(token: string) {
   if (typeof window === "undefined") return;
   if (!token || !token.trim()) return;
+
+  // 1. JS-accessible cookie at /ui — survives same-tab navigations and
+  //    is readable by getCookie() via document.cookie.
+  try {
+    const secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `token=${encodeURIComponent(token)}; path=/ui; SameSite=Lax${secure}`;
+  } catch {
+    // cookie setting may fail in restrictive environments
+  }
+
+  // 2. sessionStorage backup
   try {
     sessionStorage.setItem("token", token);
   } catch {

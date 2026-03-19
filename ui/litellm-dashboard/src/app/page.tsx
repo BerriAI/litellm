@@ -56,7 +56,9 @@ import { ConfigProvider, theme } from "antd";
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
+  // Also clear the JS-set cookie at /ui (used to work around HttpOnly proxies)
   if (name === "token") {
+    document.cookie = `${name}=; Max-Age=0; Path=/ui`;
     try {
       sessionStorage.removeItem(name);
     } catch {
