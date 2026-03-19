@@ -336,9 +336,7 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, Dict]: (url, data) for the POST request
         """
-        raise NotImplementedError(
-            "video edit is not supported for this provider"
-        )
+        raise NotImplementedError("video edit is not supported for this provider")
 
     def transform_video_edit_response(
         self,
@@ -346,9 +344,7 @@ class BaseVideoConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
-        raise NotImplementedError(
-            "video edit is not supported for this provider"
-        )
+        raise NotImplementedError("video edit is not supported for this provider")
 
     def transform_video_extension_request(
         self,
@@ -366,9 +362,7 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, Dict]: (url, data) for the POST request
         """
-        raise NotImplementedError(
-            "video extension is not supported for this provider"
-        )
+        raise NotImplementedError("video extension is not supported for this provider")
 
     def transform_video_extension_response(
         self,
@@ -376,9 +370,7 @@ class BaseVideoConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
-        raise NotImplementedError(
-            "video extension is not supported for this provider"
-        )
+        raise NotImplementedError("video extension is not supported for this provider")
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

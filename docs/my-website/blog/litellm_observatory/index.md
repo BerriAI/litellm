@@ -3,18 +3,9 @@ slug: litellm-observatory
 title: "Improve release stability with 24 hour load tests"
 date: 2026-02-06T10:00:00
 authors:
-  - name: Alexsander Hamir
-    title: "Performance Engineer, LiteLLM"
-    url: https://www.linkedin.com/in/alexsander-baptista/
-    image_url: https://github.com/AlexsanderHamir.png
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - alexsander
+  - krrish
+  - ishaan-alt
 description: "How we built a long-running, release-validation system to catch regressions before they reach users."
 tags: [testing, observability, reliability, releases]
 hide_table_of_contents: false
@@ -27,6 +18,8 @@ hide_table_of_contents: false
 As LiteLLM adoption has grown, so have expectations around reliability, performance, and operational safety. Meeting those expectations requires more than correctness-focused tests, it requires validating how the system behaves over time, under real-world conditions.
 
 This post introduces **LiteLLM Observatory**, a long-running release-validation system we built to catch regressions before they reach users.
+
+{/* truncate */}
 
 ---
 
@@ -133,4 +126,3 @@ Reliability is an ongoing investment.
 LiteLLM Observatory is one of several systems we’re building to continuously raise the bar on release quality and operational safety. As LiteLLM evolves, so will our validation tooling, informed by real-world usage and lessons learned.
 
 We’ll continue to share those improvements openly as we go.
-

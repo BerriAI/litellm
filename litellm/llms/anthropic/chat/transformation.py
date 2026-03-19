@@ -1524,7 +1524,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         tool_results = []
                     tool_results.append(content)
 
-            elif content.get("thinking", None) is not None:
+            elif content.get("type") == "thinking":
                 if thinking_blocks is None:
                     thinking_blocks = []
                 thinking_blocks.append(cast(ChatCompletionThinkingBlock, content))

@@ -146,6 +146,10 @@ model LiteLLM_TeamTable {
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
     projects LiteLLM_ProjectTable[]
+
+    @@index([organization_id])
+    @@index([team_alias])
+    @@index([created_at])
 }
 
 // Projects sit between teams and keys for use-case management
