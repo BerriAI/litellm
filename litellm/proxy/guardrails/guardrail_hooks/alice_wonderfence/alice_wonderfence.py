@@ -57,7 +57,9 @@ class WonderFenceGuardrail(CustomGuardrail):
         app_name: Optional[str] = None,
         api_timeout: float = 20.0,
         platform: Optional[str] = None,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        event_hook: Optional[
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+        ] = None,
         default_on: bool = True,
         fail_open: bool = False,
         **kwargs,
@@ -142,7 +144,9 @@ class WonderFenceGuardrail(CustomGuardrail):
         from wonderfence_sdk.models import AnalysisContext
 
         # request_data contains: model, metadata, litellm_metadata (with user_api_key_* fields)
-        metadata = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+        metadata = (
+            request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+        )
         model_str = request_data.get("model", "")
 
         # Extract provider and clean model name
@@ -179,7 +183,9 @@ class WonderFenceGuardrail(CustomGuardrail):
         )
 
     def _extract_relevant_text(
-        self, inputs: GenericGuardrailAPIInputs, input_type: Literal["request", "response"]
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
     ) -> Optional[str]:
         """
         Extract the relevant text based on input_type.
@@ -268,9 +274,15 @@ class WonderFenceGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     f"Alice WonderFence (apply_guardrail): Evaluating response for {self.guardrail_name}"
                 )
-                result = await self.client.evaluate_response(response=text, context=context)
+                result = await self.client.evaluate_response(
+                    response=text, context=context
+                )
 
-            action = result.action.value if hasattr(result.action, "value") else result.action
+            action = (
+                result.action.value
+                if hasattr(result.action, "value")
+                else result.action
+            )
 
             if action == "BLOCK":
                 # Hard block - raise dedicated error (always enforced, even with fail_open)

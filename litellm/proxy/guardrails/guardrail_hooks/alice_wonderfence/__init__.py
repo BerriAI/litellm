@@ -31,7 +31,9 @@ def initialize_guardrail(
         api_timeout=getattr(litellm_params, "api_timeout", None) or 20.0,
         platform=getattr(litellm_params, "platform", None),
         event_hook=litellm_params.mode,  # type: ignore[arg-type]
-        default_on=litellm_params.default_on if litellm_params.default_on is not None else True,
+        default_on=(
+            litellm_params.default_on if litellm_params.default_on is not None else True
+        ),
         fail_open=getattr(litellm_params, "fail_open", False),
     )
 
