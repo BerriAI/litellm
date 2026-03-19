@@ -11,7 +11,8 @@ sys.path.insert(
 import time
 
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
-from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.litellm_logging import \
+    Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
@@ -139,7 +140,8 @@ def test_sentry_environment():
 
 
 def test_use_custom_pricing_for_model():
-    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+    from litellm.litellm_core_utils.litellm_logging import \
+        use_custom_pricing_for_model
 
     litellm_params = {
         "custom_llm_provider": "azure",
@@ -154,7 +156,8 @@ def test_use_custom_pricing_for_model_via_litellm_metadata():
     Generic API call routes (/messages, /responses) store model_info
     under litellm_metadata, not metadata. Regression test for #23185.
     """
-    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+    from litellm.litellm_core_utils.litellm_logging import \
+        use_custom_pricing_for_model
 
     litellm_params = {
         "litellm_metadata": {
@@ -170,7 +173,8 @@ def test_use_custom_pricing_for_model_via_litellm_metadata():
 
 def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
     """Should return False when litellm_metadata.model_info has no pricing keys."""
-    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+    from litellm.litellm_core_utils.litellm_logging import \
+        use_custom_pricing_for_model
 
     litellm_params = {
         "litellm_metadata": {
@@ -178,6 +182,198 @@ def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
         },
     }
     assert use_custom_pricing_for_model(litellm_params) is False
+
+
+def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
+    """_response_cost_calculator should extract router_model_id from
+    litellm_params.litellm_metadata.model_info.id when the result object
+    does not carry _hidden_params (e.g. ResponsesAPIResponse from /v1/responses
+    streaming). Regression test for custom pricing on streaming responses."""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    custom_model_id = "gpt-5-custom-pricing"
+    custom_input_cost = 125.0
+    custom_output_cost = 10.0
+
+    litellm.register_model(
+        model_cost={
+            custom_model_id: {
+                "input_cost_per_token": custom_input_cost,
+                "output_cost_per_token": custom_output_cost,
+                "max_tokens": 128000,
+                "max_input_tokens": 128000,
+                "max_output_tokens": 16384,
+                "litellm_provider": "openai",
+            }
+        }
+    )
+
+    try:
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=time.time(),
+            litellm_call_id="test-123",
+            function_id="test-fn",
+        )
+
+        logging_obj.update_environment_variables(
+            model="gpt-5",
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "litellm_metadata": {
+                    "model_info": {
+                        "id": custom_model_id,
+                        "input_cost_per_token": custom_input_cost,
+                        "output_cost_per_token": custom_output_cost,
+                    },
+                },
+            },
+        )
+
+        response_obj = ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=1234567890,
+            model="gpt-5",
+            output=[],
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        )
+
+        cost = logging_obj._response_cost_calculator(result=response_obj)
+
+        assert cost is not None, "Cost should not be None"
+        expected_cost = (10 * custom_input_cost) + (5 * custom_output_cost)
+        assert cost == pytest.approx(
+            expected_cost
+        ), f"Expected {expected_cost}, got {cost}"
+    finally:
+        litellm.model_cost.pop(custom_model_id, None)
+
+
+class TestGetRouterModelId:
+    """Tests for the get_router_model_id helper method."""
+
+    def test_returns_id_from_litellm_metadata(self, logging_obj):
+        """Should extract model_info.id from litellm_metadata."""
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {"id": "custom-deploy-1"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "custom-deploy-1"
+
+    def test_returns_id_from_metadata(self, logging_obj):
+        """Should fall back to metadata when litellm_metadata has no model_info."""
+        logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {"id": "custom-deploy-2"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "custom-deploy-2"
+
+    def test_prefers_litellm_metadata_over_metadata(self, logging_obj):
+        """litellm_metadata should take priority over metadata."""
+        logging_obj.litellm_params = {
+            "litellm_metadata": {
+                "model_info": {"id": "from-litellm-meta"},
+            },
+            "metadata": {
+                "model_info": {"id": "from-meta"},
+            },
+        }
+        assert logging_obj.get_router_model_id() == "from-litellm-meta"
+
+    def test_returns_none_when_no_model_info(self, logging_obj):
+        """Should return None when no model_info is present."""
+        logging_obj.litellm_params = {"api_base": ""}
+        assert logging_obj.get_router_model_id() is None
+
+    def test_returns_none_when_no_litellm_params(self):
+        """Should return None when litellm_params is not set."""
+        from litellm.litellm_core_utils.litellm_logging import \
+            Logging as LiteLLMLoggingObj
+
+        obj = LiteLLMLoggingObj(
+            model="test",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="x",
+            function_id="x",
+        )
+        # litellm_params exists but is empty by default
+        assert obj.get_router_model_id() is None
+
+
+class TestAnthropicPassthroughCustomPricing:
+    """Verify the Anthropic pass-through handler forwards custom pricing."""
+
+    def test_completion_cost_receives_custom_pricing_args(self):
+        """_create_anthropic_response_logging_payload should pass
+        custom_pricing and router_model_id to litellm.completion_cost
+        when the logging object carries custom pricing in model_info."""
+        from unittest.mock import patch
+
+        from litellm.litellm_core_utils.litellm_logging import \
+            Logging as LiteLLMLoggingObj
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import \
+            AnthropicPassthroughLoggingHandler
+
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=time.time(),
+            litellm_call_id="test-456",
+            function_id="test-fn",
+        )
+        logging_obj.update_environment_variables(
+            model="claude-sonnet-4-20250514",
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "litellm_metadata": {
+                    "model_info": {
+                        "id": "claude-custom-pricing",
+                        "input_cost_per_token": 0.5,
+                        "output_cost_per_token": 1.5,
+                    },
+                },
+            },
+        )
+        logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+        mock_response = ModelResponse()
+        mock_response.usage = {"prompt_tokens": 10, "completion_tokens": 5}  # type: ignore
+
+        with patch("litellm.completion_cost", return_value=42.0) as mock_cost:
+            AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+                litellm_model_response=mock_response,
+                model="claude-sonnet-4-20250514",
+                kwargs={},
+                start_time=time.time(),
+                end_time=time.time(),
+                logging_obj=logging_obj,
+            )
+
+            mock_cost.assert_called_once()
+            call_kwargs = mock_cost.call_args
+            assert call_kwargs.kwargs.get("custom_pricing") is True
+            assert call_kwargs.kwargs.get("router_model_id") == "claude-custom-pricing"
 
 
 class TestUpdateFromKwargs:
@@ -245,9 +441,8 @@ class TestUpdateFromKwargs:
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
-        from litellm.litellm_core_utils.litellm_logging import (
-            use_custom_pricing_for_model,
-        )
+        from litellm.litellm_core_utils.litellm_logging import \
+            use_custom_pricing_for_model
 
         lm_meta = {
             "model_info": {
@@ -306,7 +501,8 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
     monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
 
     from litellm.integrations.datadog.datadog import DataDogLogger
-    from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+    from litellm.integrations.datadog.datadog_llm_obs import \
+        DataDogLLMObsLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
@@ -347,7 +543,8 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     )  # no trailing slash on purpose
 
     # Import after env vars are set (important if module-level caching exists)
-    from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
+    from litellm.integrations.opentelemetry import \
+        OpenTelemetry  # logger class
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
@@ -676,7 +873,8 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
 
 
 def test_get_user_agent_tags():
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     tags = StandardLoggingPayloadSetup._get_user_agent_tags(
         proxy_server_request={
@@ -691,7 +889,8 @@ def test_get_user_agent_tags():
 
 
 def test_get_request_tags():
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     tags = StandardLoggingPayloadSetup._get_request_tags(
         litellm_params={"metadata": {"tags": ["test-tag"]}},
@@ -718,7 +917,8 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     4. No tags in either
     5. None values for metadata/litellm_metadata
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Test case 1: Tags in metadata only
     tags = StandardLoggingPayloadSetup._get_request_tags(
@@ -799,7 +999,8 @@ def test_get_request_tags_does_not_mutate_original_tags():
     would cause User-Agent tags to be duplicated because the function was mutating
     the original tags list instead of creating a copy.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create metadata with original tags
     original_tags = ["custom-tag-1", "custom-tag-2"]
@@ -859,7 +1060,8 @@ def test_get_request_tags_does_not_mutate_original_tags():
 def test_get_extra_header_tags():
     """Test the _get_extra_header_tags method with various scenarios."""
     import litellm
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Store original value to restore later
     original_extra_headers = getattr(litellm, "extra_spend_tag_headers", None)
@@ -1080,7 +1282,8 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     from datetime import datetime, timezone
     from unittest.mock import patch
 
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create test data
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
@@ -1122,7 +1325,8 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     from datetime import datetime, timezone
     from unittest.mock import MagicMock, patch
 
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create test data
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
@@ -1173,7 +1377,8 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     from datetime import datetime, timezone
     from unittest.mock import MagicMock, patch
 
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create test data
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
@@ -1220,7 +1425,8 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     from unittest.mock import patch
 
     import litellm
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create test data
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
@@ -1244,7 +1450,8 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
 
     When response_obj is empty (falsy), the method should return init_response_obj if it's a list.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Create test objects
     class TestObject1:
@@ -1280,7 +1487,8 @@ def test_get_usage_as_dict():
     """
     Test get_usage_as_dict returns usage as plain dict from response_obj or combined_usage_object.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
     from litellm.types.utils import Usage
 
     # Test case 1: None response_obj returns empty usage dict
@@ -1318,7 +1526,8 @@ def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Test case 1: system in kwargs with existing messages
     kwargs = {"system": "You are a helpful assistant"}
@@ -1389,7 +1598,8 @@ async def test_async_success_handler_sets_standard_logging_object_for_pass_throu
     from datetime import datetime
     from unittest.mock import patch
 
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardPassThroughResponseObject
 
     # Create a logging object for a pass-through endpoint
@@ -1470,7 +1680,8 @@ async def test_async_success_handler_prevents_reprocessing_for_pass_through_endp
     from datetime import datetime
     from unittest.mock import patch
 
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardPassThroughResponseObject
 
     # Create a logging object for a pass-through endpoint
@@ -1546,7 +1757,8 @@ async def test_async_success_handler_sets_standard_logging_object_for_streaming_
     from datetime import datetime
     from unittest.mock import patch
 
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardPassThroughResponseObject
 
     # Create a logging object for a streaming pass-through endpoint
@@ -1602,7 +1814,8 @@ def test_get_error_information_error_code_priority():
     Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
     and handles edge cases like empty strings and "None" string values.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.litellm_logging import \
+        StandardLoggingPayloadSetup
 
     # Test case 1: Exception with 'code' attribute (ProxyException style)
     class ProxyException(Exception):
@@ -1795,7 +2008,8 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     by pass-through handlers (Gemini/Vertex)."""
     from datetime import datetime
 
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
     from litellm.types.utils import ModelResponse, Usage
 
     logging_obj = LiteLLMLoggingObj(
