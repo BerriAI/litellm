@@ -3,6 +3,7 @@ Tests verifying that default_api_key_tpm_limit and default_api_key_rpm_limit set
 litellm_params are returned by the /model/info endpoint.
 """
 
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,8 +14,8 @@ from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 def _make_deployment(
     model_name: str,
-    default_tpm: int = None,
-    default_rpm: int = None,
+    default_tpm: Optional[int] = None,
+    default_rpm: Optional[int] = None,
 ) -> Deployment:
     params: dict = {"model": f"openai/{model_name}"}
     if default_tpm is not None:
