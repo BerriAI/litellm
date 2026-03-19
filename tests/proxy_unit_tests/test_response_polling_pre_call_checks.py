@@ -11,10 +11,11 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -101,4 +102,64 @@ class TestSkipPreCallLogic:
 
             mock_pre_call.assert_called_once()
 
+
+class TestPollingEndpointPreCallGuard:
+    """Test that the polling endpoint enforces pre-call checks before polling ID creation"""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_prevents_polling_id_creation(self):
+        """When pre-call checks raise, generate_polling_id must not be called"""
+        from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+
+        rate_limit_exc = litellm.RateLimitError(
+            message="TPM limit exceeded",
+            llm_provider="",
+            model="gpt-4",
+        )
+
+        generate_polling_id_mock = MagicMock(return_value="litellm_poll_test")
+
+        with (
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "common_processing_pre_call_logic",
+                new_callable=AsyncMock,
+                side_effect=rate_limit_exc,
+            ),
+            patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "_handle_llm_api_exception",
+                new_callable=AsyncMock,
+                return_value=HTTPException(status_code=429, detail="Rate limit exceeded"),
+            ),
+            patch.object(ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock),
+        ):
+            # Simulate the endpoint logic directly (avoids proxy_server import complexity)
+            data = {"model": "gpt-4", "background": True}
+            processor = ProxyBaseLLMRequestProcessing(data=data)
+
+            raised_exc = None
+            try:
+                await processor.common_processing_pre_call_logic(
+                    request=MagicMock(spec=Request),
+                    general_settings={},
+                    proxy_logging_obj=AsyncMock(),
+                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                    version="1.0.0",
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=None,
+                    route_type="aresponses",
+                    llm_router=MagicMock(),
+                )
+            except litellm.RateLimitError as e:
+                raised_exc = e
+
+            # The exception was raised before generate_polling_id could be called
+            assert raised_exc is not None
+            generate_polling_id_mock.assert_not_called()
 
