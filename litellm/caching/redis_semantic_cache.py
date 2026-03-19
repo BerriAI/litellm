@@ -44,6 +44,8 @@ class RedisSemanticCache(BaseCache):
         redis_url: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         embedding_model: str = "text-embedding-ada-002",
+        embedding_api_base: Optional[str] = None,
+        embedding_api_key: Optional[str] = None,
         index_name: Optional[str] = None,
         **kwargs,
     ):
@@ -86,6 +88,8 @@ class RedisSemanticCache(BaseCache):
         # While similarity: 1 = most similar, 0 = least similar
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_api_base = embedding_api_base
+        self.embedding_api_key = embedding_api_key
 
         # Set up Redis connection
         if redis_url is None:
@@ -143,13 +147,18 @@ class RedisSemanticCache(BaseCache):
             List[float]: The embedding vector
         """
         # Create an embedding from prompt
+        embed_kwargs: dict = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if self.embedding_api_base is not None:
+            embed_kwargs["api_base"] = self.embedding_api_base
+        if self.embedding_api_key is not None:
+            embed_kwargs["api_key"] = self.embedding_api_key
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embed_kwargs),
         )
         embedding = embedding_response["data"][0]["embedding"]
         return embedding
