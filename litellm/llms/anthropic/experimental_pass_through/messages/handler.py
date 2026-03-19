@@ -186,6 +186,12 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
+    # Save original stream flag before pre-request hooks can convert it.
+    # The websearch interception hook converts stream=True → stream=False
+    # for the agentic loop, but the short-circuit path needs to know
+    # whether the caller originally requested streaming.
+    original_stream = stream
+
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
@@ -199,6 +205,11 @@ async def anthropic_messages(
     # Extract modified parameters
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
+    # Propagate the provider derived inside pre-request hooks, if not already set
+    if not custom_llm_provider:
+        custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
+            "custom_llm_provider"
+        )
     # Remove litellm_params from kwargs (only needed for hooks)
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications
@@ -207,12 +218,14 @@ async def anthropic_messages(
     # Short-circuit web-search-only requests: detect the pattern, execute
     # search directly via Tavily/Perplexity, and return a synthetic response
     # without ever touching the backend LLM or the adapter path.
+    # Use original_stream (not the hook-converted stream) so streaming
+    # callers get SSE events instead of a plain dict.
     short_circuit_response = await _try_websearch_short_circuit(
         model=model,
         messages=messages,
         tools=tools,
         custom_llm_provider=custom_llm_provider,
-        stream=stream,
+        stream=original_stream,
     )
     if short_circuit_response is not None:
         return short_circuit_response
