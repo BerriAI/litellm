@@ -51,7 +51,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/generateContent",
                 request_body=self.request_body or {},
-                endpoint_type=EndpointType.VERTEX_AI,
+                endpoint_type=EndpointType.GOOGLE_GENAI,
                 start_time=self.start_time,
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
