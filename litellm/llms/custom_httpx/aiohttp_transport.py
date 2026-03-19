@@ -265,12 +265,18 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
         
-        # Derive a `total` deadline from the per-phase values so that
-        # aiohttp doesn't leave it as None.  Without this, long-running
-        # reasoning models (e.g. GPT-5-PRO) can hit infrastructure idle
-        # timeouts (~60s) before the model responds.
-        _phase_values = [v for v in timeout.values() if v is not None]
-        _total = max(_phase_values) if _phase_values else None
+        # Set total = max(pool, connect) + read so aiohttp has a finite overall
+        # deadline.  Per the aiohttp docs, `connect` (pool acquisition) already
+        # encompasses `sock_connect` (TCP handshake) for new connections, so
+        # they are not additive.  `write` is excluded — aiohttp has no
+        # corresponding ClientTimeout field.
+        _sock_connect = timeout.get("connect")
+        _sock_read = timeout.get("read")
+        _pool = timeout.get("pool")
+        _conn_phase_values = [v for v in (_sock_connect, _pool) if v is not None]
+        _conn_phase = max(_conn_phase_values) if _conn_phase_values else None
+        _total_values = [v for v in (_conn_phase, _sock_read) if v is not None]
+        _total = sum(_total_values) if _total_values else None
 
         request_kwargs: Dict[str, Any] = {
             "method": request.method,
@@ -281,9 +287,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             "auto_decompress": False,
             "timeout": ClientTimeout(
                 total=_total,
-                sock_connect=timeout.get("connect"),
-                sock_read=timeout.get("read"),
-                connect=timeout.get("pool"),
+                sock_connect=_sock_connect,
+                sock_read=_sock_read,
+                connect=_pool,
             ),
             "proxy": proxy,
             "server_hostname": sni_hostname,

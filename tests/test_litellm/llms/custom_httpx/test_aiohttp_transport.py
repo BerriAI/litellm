@@ -5,6 +5,7 @@ import sys
 import aiohttp
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
+from aiohttp import ClientTimeout
 import httpx
 import pytest
 
@@ -556,19 +557,56 @@ async def test_handle_closed_session_before_request():
     assert response.status_code == 200
 
 
-@pytest.mark.asyncio
-async def test_client_timeout_total_set_to_max_phase_value():
+def test_aiohttp_client_timeout_total_none_is_the_bug():
     """
-    Regression test for issue #22747: ClientTimeout.total must be set to the
-    maximum phase timeout so aiohttp has an overall deadline.
+    Directly demonstrates the bug from issue #22747 using aiohttp's API.
+
+    Building a ClientTimeout without ``total=...`` leaves ``total`` as None,
+    giving aiohttp no overall request deadline.  This is exactly what the old
+    transport produced for every user request, regardless of their configured
+    timeout value.
+
+    The fix derives ``total`` from the three phases that aiohttp uses
+    (sock_connect, sock_read, connect/pool) using sum(), which is the safe
+    upper bound.  max() would prematurely abort requests where multiple phases
+    each approach their individual limits.
+    """
+    # What the OLD transport code produced for timeout=300 (the bug):
+    old_timeout = ClientTimeout(
+        sock_connect=300.0,
+        sock_read=300.0,
+        connect=300.0,
+        # total was never set — this is the bug
+    )
+    assert old_timeout.total is None  # no overall deadline!
+
+    # What the NEW transport code produces for timeout=300 (the fix):
+    # connection phase = max(sock_connect=300, connect=300) = 300
+    # total = connection_phase + sock_read = 300 + 300 = 600 s
+    new_timeout = ClientTimeout(
+        total=600.0,
+        sock_connect=300.0,
+        sock_read=300.0,
+        connect=300.0,
+    )
+    assert new_timeout.total == 600.0  # finite, safe upper-bound deadline
+
+
+@pytest.mark.asyncio
+async def test_client_timeout_total_derived_from_connection_and_read_phases():
+    """
+    Regression test for issue #22747: ClientTimeout.total must be set so that
+    aiohttp has a finite overall request deadline.
 
     Without this fix, total=None caused aiohttp to have no overall deadline,
-    allowing infrastructure idle timeouts (~60s) to kill connections before
+    allowing infrastructure idle-timeouts (~60 s) to kill connections before
     long-running reasoning models (e.g. GPT-5-PRO) responded.
 
     httpx converts ``timeout=300`` into all four phase keys set to 300.
-    The ``write`` key is included in ``_phase_values`` via ``.values()`` but is
-    not mapped to any aiohttp ``ClientTimeout`` field — that's expected and fine.
+    Per the aiohttp docs, sock_connect is nested inside connect (they are not
+    additive for new connections), so total = max(pool, connect) + read.
+    ``write`` is excluded — it has no corresponding aiohttp field.
+    Expected total = max(300, 300) + 300 = 600.
     """
     captured: dict = {}
     transport = LiteLLMAiohttpTransport(client=lambda: _make_capturing_session(captured))  # type: ignore
@@ -576,33 +614,44 @@ async def test_client_timeout_total_set_to_max_phase_value():
     request.extensions["timeout"] = {
         "connect": 300.0,
         "read": 300.0,
-        "write": 300.0,
+        "write": 300.0,  # excluded — not mapped to any aiohttp field
         "pool": 300.0,
     }
     await transport.handle_async_request(request)
 
     timeout = captured["timeout"]
     assert timeout is not None
-    assert timeout.total == 300.0, f"Expected total=300.0, got total={timeout.total}"
+    assert timeout.total == 600.0, f"Expected total=600.0, got total={timeout.total}"
     assert timeout.sock_connect == 300.0
     assert timeout.sock_read == 300.0
 
 
 @pytest.mark.asyncio
-async def test_client_timeout_total_uses_max_when_phases_differ():
-    """total should be the max of all provided phase timeouts."""
+async def test_client_timeout_total_no_false_timeout_when_phases_differ():
+    """
+    total must not prematurely abort a request where multiple phases each
+    approach their individual limits.
+
+    With connect=10 s (TCP) and pool=5 s (pool acquisition), the effective
+    connection limit is max(10, 5) = 10 s, because sock_connect is nested
+    inside connect per the aiohttp docs.  Then read=600 s follows.
+    Expected total = max(10, 5) + 600 = 610 s.
+
+    Using plain max() of all phases would give total=600 s, which would
+    false-timeout a request that takes 9 s to connect + 602 s to read.
+    """
     captured: dict = {}
     transport = LiteLLMAiohttpTransport(client=lambda: _make_capturing_session(captured))  # type: ignore
     request = httpx.Request("GET", "http://example.com")
     request.extensions["timeout"] = {
         "connect": 10.0,
-        "read": 600.0,  # Longest — should become total
+        "read": 600.0,
         "pool": 5.0,
     }
     await transport.handle_async_request(request)
 
     timeout = captured["timeout"]
-    assert timeout.total == 600.0, f"Expected total=600.0, got total={timeout.total}"
+    assert timeout.total == 610.0, f"Expected total=610.0, got total={timeout.total}"
 
 
 @pytest.mark.asyncio
