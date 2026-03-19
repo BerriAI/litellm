@@ -1282,6 +1282,23 @@ async def generate_key_fn(
                         detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot create keys for non-existent teams.",
                     )
 
+        # Reject key creation for blocked user/team (exception: UI session keys)
+        if data.team_id != UI_SESSION_TOKEN_TEAM_ID:
+            if data.user_id is not None:
+                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": data.user_id}
+                )
+                if user_row is not None and getattr(user_row, "blocked", False):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="User is blocked. Cannot create keys for blocked users.",
+                    )
+            if team_table is not None and getattr(team_table, "blocked", False):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Team is blocked. Cannot create keys for blocked teams.",
+                )
+
         key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
@@ -4910,7 +4927,7 @@ async def block_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can block keys.
+    Note: Only proxy admins can block keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -4920,6 +4937,12 @@ async def block_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /key/block.",
+        )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -4936,27 +4959,27 @@ async def block_key(
     else:
         hashed_token = data.key
 
-    # Admin-only: only proxy admins, team admins, or org admins can block keys
-    await _check_key_admin_access(
-        user_api_key_dict=user_api_key_dict,
-        hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        route="/key/block",
+    key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
     )
+    if key_row is None:
+        raise ProxyException(
+            message=f"Key {data.key} not found",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+    if key_row.user_id:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": key_row.user_id}
+        )
+        if user_row is not None and getattr(user_row, "user_role", None) == "proxy_admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot block proxy admin keys.",
+            )
 
     if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
-        )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -4970,7 +4993,7 @@ async def block_key(
                     object_id=hashed_token,
                     action="blocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=key_row.model_dump_json(),
                 )
             )
         )
@@ -5033,7 +5056,7 @@ async def unblock_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can unblock keys.
+    Note: Only proxy admins can unblock keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -5043,6 +5066,12 @@ async def unblock_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /key/unblock.",
+        )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5058,15 +5087,6 @@ async def unblock_key(
         hashed_token = hash_token(token=data.key)
     else:
         hashed_token = data.key
-
-    # Admin-only: only proxy admins, team admins, or org admins can unblock keys
-    await _check_key_admin_access(
-        user_api_key_dict=user_api_key_dict,
-        hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        route="/key/unblock",
-    )
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

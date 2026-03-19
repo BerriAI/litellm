@@ -2973,8 +2973,10 @@ class PrismaClient:
                             o.metadata as organization_metadata,
                             b2.max_budget as organization_max_budget,
                             b2.tpm_limit as organization_tpm_limit,
-                            b2.rpm_limit as organization_rpm_limit
+                            b2.rpm_limit as organization_rpm_limit,
+                            u.blocked AS user_blocked
                         FROM "LiteLLM_VerificationToken" AS v
+                        LEFT JOIN "LiteLLM_UserTable" AS u ON v.user_id = u.user_id
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
@@ -3017,6 +3019,8 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
+                        if response.get("user_blocked") is None:
+                            response["user_blocked"] = False
 
                         team_member: Optional[Member] = None
                         if (

@@ -62,8 +62,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
     allowed_route_check_inside_route,
     can_org_access_model,
+    get_key_object,
     get_org_object,
     get_team_object,
     get_user_object,
@@ -3070,6 +3072,9 @@ async def team_info(
         )
 
 
+BLOCK_UNBLOCK_KEYS_HARD_LIMIT = 20_000
+
+
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -3080,42 +3085,70 @@ async def block_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Blocks all calls from keys with this team id.
+    Blocks the team and all keys belonging to it (up to 20k keys). Only proxy admins.
 
     Parameters:
     - team_id: str - Required. The unique identifier of the team to block.
-
-    Example:
-    ```
-    curl --location 'http://0.0.0.0:4000/team/block' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "team_id": "team-1234"
-    }'
-    ```
-
-    Returns:
-    - The updated team record with blocked=True
-
-
-
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /team/block.",
+        )
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
-
-    if record is None:
+    if team_row is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
+    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": data.team_id},
+        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+    )
+    token_list = [k.token for k in keys_to_update]
+
+    async with prisma_client.db.tx() as tx:
+        await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+        )
+        if token_list:
+            await tx.litellm_verificationtoken.update_many(
+                where={"token": {"in": token_list}},
+                data={"blocked": True},  # type: ignore
+            )
+
+    for hashed_token in token_list:
+        try:
+            key_object = await get_key_object(
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object.blocked = True
+            await _cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_obj=key_object,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "team/block: cache refresh for key %s: %s", hashed_token, e
+            )
+
+    record = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
     return record
 
 
@@ -3129,36 +3162,67 @@ async def unblock_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Blocks all calls from keys with this team id.
-
-    Parameters:
-    - team_id: str - Required. The unique identifier of the team to unblock.
-
-    Example:
-    ```
-    curl --location 'http://0.0.0.0:4000/team/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "team_id": "team-1234"
-    }'
-    ```
+    Unblocks the team and up to 20k keys belonging to it. Only proxy admins.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /team/unblock.",
+        )
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
-
-    if record is None:
+    if team_row is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
+    keys_to_update = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": data.team_id},
+        take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+    )
+    token_list = [k.token for k in keys_to_update]
+
+    async with prisma_client.db.tx() as tx:
+        await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+        )
+        if token_list:
+            await tx.litellm_verificationtoken.update_many(
+                where={"token": {"in": token_list}},
+                data={"blocked": False},  # type: ignore
+            )
+
+    for hashed_token in token_list:
+        try:
+            key_object = await get_key_object(
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object.blocked = False
+            await _cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_obj=key_object,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "team/unblock: cache refresh for key %s: %s", hashed_token, e
+            )
+
+    record = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
     return record
 
 
