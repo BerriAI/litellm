@@ -6,8 +6,6 @@ Root cause: streaming_iterator tagged endpoint as VERTEX_AI instead of GOOGLE_GE
 so _route_streaming_logging_to_handler had no branch for it and skipped all callbacks.
 
 Run:
-    cd /Users/awais.qureshi/Documents/devstack/forks/litellm
-    pyenv activate wagtail-chat-env
     python -m pytest tests/test_litellm/proxy/pass_through_endpoints/llm_provider_handlers/test_google_genai_success_callbacks.py -v
 """
 
@@ -17,7 +15,7 @@ import os
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +117,11 @@ class TestStreamingHandlerGoogleGenAIRouting:
                 endpoint_type=EndpointType.GOOGLE_GENAI,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                raw_bytes=b"data: {}\n",
+                raw_bytes=[b"data: {}\n"],
                 model="gemini-1.5-flash",
             )
 
-            mock_gemini.assert_called_once(), (
+            assert mock_gemini.call_count == 1, (
                 "GeminiPassthroughLoggingHandler was NOT called for GOOGLE_GENAI endpoint — "
                 "callbacks would be silently skipped (issue #24097 not fixed)"
             )
@@ -168,11 +166,11 @@ class TestStreamingHandlerGoogleGenAIRouting:
                 endpoint_type=EndpointType.VERTEX_AI,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                raw_bytes=b"data: {}\n",
+                raw_bytes=[b"data: {}\n"],
                 model="gemini-1.5-pro",
             )
 
-            mock_gemini.assert_not_called(), (
+            assert mock_gemini.call_count == 0, (
                 "GeminiPassthroughLoggingHandler was called for VERTEX_AI endpoint — "
                 "routing regression detected"
             )

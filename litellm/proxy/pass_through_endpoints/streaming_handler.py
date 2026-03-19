@@ -194,6 +194,9 @@ class PassThroughStreamingHandler:
                 )
             # Set async_complete_streaming_response so function-based success_callbacks
             # are not silently skipped when self.stream is True (see async_success_handler).
+            # This intentionally applies to ALL passthrough endpoint types: the guard in
+            # async_success_handler skips function callbacks for any streaming response
+            # that lacks this key, so all providers require it.
             litellm_logging_obj.model_call_details[
                 "async_complete_streaming_response"
             ] = standard_logging_response_object

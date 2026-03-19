@@ -49,7 +49,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-                url_route="/v1/generateContent",
+                url_route=f"/models/{self.model}:streamGenerateContent",
                 request_body=self.request_body or {},
                 endpoint_type=EndpointType.GOOGLE_GENAI,
                 start_time=self.start_time,
