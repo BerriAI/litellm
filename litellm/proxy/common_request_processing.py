@@ -1168,9 +1168,16 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
             ### CALL HOOKS ### - modify outgoing data
-            response = await proxy_logging_obj.post_call_success_hook(
-                data=self.data, user_api_key_dict=user_api_key_dict, response=response
-            )
+            # Skip when the deferred streaming closure is set on a CSW
+            # response — the closure will run post_call_success_hook on the
+            # assembled response at stream end.  Running it here too would
+            # double-invoke guardrails (side effects, billing, audit logs).
+            # Non-CSW responses (dict fallthroughs) always reach here without
+            # the closure, so the hook runs inline as before.
+            if not getattr(logging_obj, "_on_deferred_stream_complete", None):
+                response = await proxy_logging_obj.post_call_success_hook(
+                    data=self.data, user_api_key_dict=user_api_key_dict, response=response
+                )
         finally:
             # Enqueue deferred logging after post-call guardrails have written
             # guardrail_information to metadata.  The finally block ensures
