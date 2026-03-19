@@ -153,17 +153,31 @@ class LangsmithLogger(CustomBatchLogger):
                     if key in requester_metadata and key not in extra_metadata:
                         extra_metadata[key] = requester_metadata[key]
 
+            _response = payload["response"]
+            outputs = dict(_response) if isinstance(_response, dict) else _response
+
             data = {
                 "name": run_name,
                 "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
                 "inputs": payload,
-                "outputs": payload["response"],
+                "outputs": outputs,
                 "session_name": project_name,
                 "start_time": payload["startTime"],
                 "end_time": payload["endTime"],
                 "tags": payload["request_tags"],
                 "extra": extra_metadata,
             }
+
+            if isinstance(data.get("outputs"), dict):
+                cost_breakdown = payload.get("cost_breakdown") or {}
+                data["outputs"]["usage_metadata"] = {
+                    "input_tokens": payload.get("prompt_tokens") or 0,
+                    "output_tokens": payload.get("completion_tokens") or 0,
+                    "total_tokens": payload.get("total_tokens") or 0,
+                    "input_cost": cost_breakdown.get("input_cost") or 0.0,
+                    "output_cost": cost_breakdown.get("output_cost") or 0.0,
+                    "total_cost": payload.get("response_cost") or 0.0,
+                }
 
             if payload["error_str"] is not None and payload["status"] == "failure":
                 data["error"] = payload["error_str"]
