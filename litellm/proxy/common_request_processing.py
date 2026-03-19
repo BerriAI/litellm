@@ -1345,76 +1345,81 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.proxy.utils import _check_and_merge_model_level_guardrails
 
         _response = assembled_response
-        _unified_guardrail = UnifiedLLMGuardrails()
-        guardrail_data = _check_and_merge_model_level_guardrails(
-            data=captured_data, llm_router=_global_llm_router
-        )
-        for cb in litellm.callbacks:
-            if not isinstance(cb, CustomGuardrail):
-                continue
-            if not cb.should_run_guardrail(
-                data=guardrail_data,
-                event_type=GuardrailEventHooks.post_call,
-            ):
-                continue
-            try:
-                guardrail_result = None
-                if "apply_guardrail" in type(cb).__dict__:
-                    guardrail_data["guardrail_to_apply"] = cb
-                    guardrail_result = (
-                        await _unified_guardrail.async_post_call_success_hook(
+        try:
+            _unified_guardrail = UnifiedLLMGuardrails()
+            guardrail_data = _check_and_merge_model_level_guardrails(
+                data=captured_data, llm_router=_global_llm_router
+            )
+            for cb in litellm.callbacks:
+                if not isinstance(cb, CustomGuardrail):
+                    continue
+                if not cb.should_run_guardrail(
+                    data=guardrail_data,
+                    event_type=GuardrailEventHooks.post_call,
+                ):
+                    continue
+                try:
+                    guardrail_result = None
+                    if "apply_guardrail" in type(cb).__dict__:
+                        guardrail_data["guardrail_to_apply"] = cb
+                        guardrail_result = (
+                            await _unified_guardrail.async_post_call_success_hook(
+                                user_api_key_dict=captured_user_api_key_dict,
+                                data=guardrail_data,
+                                response=_response,
+                            )
+                        )
+                    else:
+                        guardrail_result = await cb.async_post_call_success_hook(
                             user_api_key_dict=captured_user_api_key_dict,
                             data=guardrail_data,
                             response=_response,
                         )
+                    if guardrail_result is not None:
+                        _response = guardrail_result
+                except Exception as e:
+                    verbose_proxy_logger.exception(
+                        "Error running post-call guardrail %s on streaming response: %s",
+                        getattr(cb, "guardrail_name", type(cb).__name__),
+                        e,
                     )
-                else:
-                    guardrail_result = await cb.async_post_call_success_hook(
-                        user_api_key_dict=captured_user_api_key_dict,
-                        data=guardrail_data,
-                        response=_response,
+                    if isinstance(e, HTTPException) and hasattr(
+                        captured_logging_obj, "model_call_details"
+                    ):
+                        captured_logging_obj.model_call_details.setdefault(
+                            "metadata", {}
+                        )["guardrail_blocked"] = True
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in deferred streaming guardrail initialization: %s", e,
+            )
+        finally:
+            try:
+                asyncio.create_task(
+                    captured_logging_obj.async_success_handler(
+                        _response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
                     )
-                if guardrail_result is not None:
-                    _response = guardrail_result
+                )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error running post-call guardrail %s on streaming response: %s",
-                    getattr(cb, "guardrail_name", type(cb).__name__),
-                    e,
+                    "Error in deferred streaming async logging: %s", e,
                 )
-                if isinstance(e, HTTPException) and hasattr(
-                    captured_logging_obj, "model_call_details"
-                ):
-                    captured_logging_obj.model_call_details.setdefault(
-                        "metadata", {}
-                    )["guardrail_blocked"] = True
 
-        try:
-            asyncio.create_task(
-                captured_logging_obj.async_success_handler(
+            try:
+                executor.submit(
+                    captured_logging_obj.success_handler,
                     _response,
                     cache_hit=cache_hit,
                     start_time=None,
                     end_time=None,
                 )
-            )
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error in deferred streaming async logging: %s", e,
-            )
-
-        try:
-            executor.submit(
-                captured_logging_obj.success_handler,
-                _response,
-                cache_hit=cache_hit,
-                start_time=None,
-                end_time=None,
-            )
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error in deferred streaming sync logging: %s", e,
-            )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "Error in deferred streaming sync logging: %s", e,
+                )
 
     async def _handle_llm_api_exception(
         self,
