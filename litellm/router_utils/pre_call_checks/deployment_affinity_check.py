@@ -38,6 +38,9 @@ class DeploymentAffinityCheck(CustomLogger):
     """
 
     CACHE_KEY_PREFIX = "deployment_affinity:v1"
+    VALID_FLAGS = frozenset(
+        {"deployment_affinity", "responses_api_deployment_check", "session_affinity"}
+    )
 
     def __init__(
         self,
@@ -57,6 +60,15 @@ class DeploymentAffinityCheck(CustomLogger):
         self.model_group_affinity_config: Dict[str, List[str]] = (
             model_group_affinity_config or {}
         )
+        for group, flags in self.model_group_affinity_config.items():
+            unknown = set(flags) - self.VALID_FLAGS
+            if unknown:
+                verbose_router_logger.warning(
+                    "DeploymentAffinityCheck: unknown flag(s) %s for model group '%s'; will be ignored. Valid flags: %s",
+                    unknown,
+                    group,
+                    self.VALID_FLAGS,
+                )
 
     def _get_effective_flags(
         self, model_group: str
@@ -440,6 +452,9 @@ class DeploymentAffinityCheck(CustomLogger):
                 break
 
         if not deployment_model_name:
+            verbose_router_logger.debug(
+                "DeploymentAffinityCheck: deployment_model_name missing in metadata; skipping affinity cache update."
+            )
             return None
 
         # Resolve effective flags for this model group
