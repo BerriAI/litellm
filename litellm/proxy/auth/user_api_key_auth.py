@@ -1169,9 +1169,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token
             )  # updating it here, allows all downstream reporting / checks to use the updated budget
 
-            # Populate team_member_rpm_limit / team_member_tpm_limit for Virtual Key auth.
-            # JWT auth flow already gets this from JWTAuthManager.auth_builder(),
-            # but Virtual Key flow never queries team membership. Fix that here.
+            # Bug fix: Populate team_member_rpm_limit / team_member_tpm_limit for Virtual Key auth.
+            #
+            # This is a pure bug fix, not a behaviour change. The JWT auth flow already
+            # enforces per-member rate limits via JWTAuthManager.auth_builder() (see #13601).
+            # The Virtual Key flow was simply missing the equivalent query, causing
+            # team_member_rpm_limit / team_member_tpm_limit to be silently ignored for
+            # all virtual-key requests. Operators who configured per-member limits
+            # always expected them to be enforced; this restores parity between the
+            # two auth paths. No flag is needed because the previous behaviour
+            # (limits not enforced) was unintentional.
             if (
                 valid_token.user_id is not None
                 and valid_token.team_id is not None
