@@ -524,6 +524,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             optional_params.api_base
             or litellm.api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
         )
         api_key = (
             optional_params.api_key
