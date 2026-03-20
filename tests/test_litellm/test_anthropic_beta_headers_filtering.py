@@ -17,6 +17,7 @@ import pytest
 import litellm
 from litellm.anthropic_beta_headers_manager import (
     filter_and_transform_beta_headers,
+    update_request_with_filtered_beta,
 )
 
 
@@ -24,8 +25,15 @@ class TestAnthropicBetaHeadersFiltering:
     """Test beta header filtering and mapping for all providers."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, monkeypatch):
         """Load the beta headers config for testing."""
+        # Force use of local config file for tests
+        monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+        
+        # Clear the cached config to ensure fresh load with local config
+        from litellm import anthropic_beta_headers_manager
+        anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+        
         config_path = os.path.join(
             os.path.dirname(litellm.__file__),
             "anthropic_beta_headers_config.json",
@@ -108,6 +116,32 @@ class TestAnthropicBetaHeadersFiltering:
             assert (
                 unknown not in filtered
             ), f"Unknown header '{unknown}' should be filtered out for {provider}"
+
+    def test_update_request_with_filtered_beta_vertex_ai(self):
+        """Test combined filtering for both HTTP headers and request body betas."""
+        headers = {
+            "anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"
+        }
+        request_data = {
+            "anthropic_beta": [
+                "files-api-2025-04-14",
+                "context-management-2025-06-27",
+                "code-execution-2025-05-22",
+            ]
+        }
+
+        filtered_headers, filtered_request_data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=request_data,
+            provider="vertex_ai",
+        )
+
+        assert (
+            filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
+        )
+        assert filtered_request_data.get("anthropic_beta") == [
+            "context-management-2025-06-27"
+        ]
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_http_headers_filtering(self):

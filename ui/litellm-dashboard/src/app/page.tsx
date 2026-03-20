@@ -13,6 +13,7 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
+import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -22,7 +23,7 @@ import Navbar from "@/components/navbar";
 import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
-import { fetchUserModels } from "@/components/organisms/create_key_button";
+import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
 import PassThroughSettings from "@/components/pass_through_settings";
 import PromptsPanel from "@/components/prompts";
@@ -35,16 +36,20 @@ import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
+import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
+import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
+import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { isAdminRole } from "@/utils/roles";
+import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
 function getCookie(name: string) {
@@ -64,42 +69,11 @@ function deleteCookie(name: string, path = "/") {
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
 }
 
-function formatUserRole(userRole: string) {
-  if (!userRole) {
-    return "Undefined Role";
-  }
-  switch (userRole.toLowerCase()) {
-    case "app_owner":
-      return "App Owner";
-    case "demo_app_owner":
-      return "App Owner";
-    case "app_admin":
-      return "Admin";
-    case "proxy_admin":
-      return "Admin";
-    case "proxy_admin_viewer":
-      return "Admin Viewer";
-    case "org_admin":
-      return "Org Admin";
-    case "internal_user":
-      return "Internal User";
-    case "internal_user_viewer":
-    case "internal_viewer": // TODO:remove if deprecated
-      return "Internal Viewer";
-    case "app_user":
-      return "App User";
-    default:
-      return "Unknown Role";
-  }
-}
-
 interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
-
-const queryClient = new QueryClient();
 
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
@@ -140,6 +114,58 @@ function CreateKeyPageContent() {
 
   const invitation_id = searchParams.get("invitation_id");
 
+  // Parse URL query parameters for pre-filling the create key form
+  // Includes validation to prevent injection and DoS attacks
+  const autoOpenCreate = searchParams.get("create") === "true";
+  const prefillData: CreateKeyPrefillData | undefined = useMemo(() => {
+    if (!autoOpenCreate) return undefined;
+
+    const ownedBy = searchParams.get("owned_by");
+    const teamId = searchParams.get("team_id");
+    const keyAlias = searchParams.get("key_alias");
+    const modelsParam = searchParams.get("models");
+    const keyType = searchParams.get("key_type");
+
+    // Only return prefill data if at least one field is provided
+    if (!ownedBy && !teamId && !keyAlias && !modelsParam && !keyType) {
+      return undefined;
+    }
+
+    // Validate owned_by against allowed values
+    const validOwnedByValues = ["you", "service_account", "another_user"];
+    const validatedOwnedBy = ownedBy && validOwnedByValues.includes(ownedBy)
+      ? (ownedBy as CreateKeyPrefillData["owned_by"])
+      : undefined;
+
+    // Validate key_type against allowed values
+    const validKeyTypes = ["default", "llm_api", "management"];
+    const validatedKeyType = keyType && validKeyTypes.includes(keyType)
+      ? (keyType as CreateKeyPrefillData["key_type"])
+      : undefined;
+
+    // Sanitize key_alias (limit length, trim whitespace)
+    const sanitizedKeyAlias = keyAlias
+      ? keyAlias.trim().slice(0, 256) // Reasonable max length
+      : undefined;
+
+    // Sanitize models (limit array size and individual model name length)
+    const sanitizedModels = modelsParam
+      ? modelsParam
+          .split(",")
+          .slice(0, 100) // Limit number of models to prevent DoS
+          .map(m => m.trim().slice(0, 256)) // Limit individual model name length
+          .filter(m => m.length > 0) // Remove empty strings
+      : undefined;
+
+    return {
+      owned_by: validatedOwnedBy,
+      team_id: teamId?.trim() || undefined,
+      key_alias: sanitizedKeyAlias,
+      models: sanitizedModels && sanitizedModels.length > 0 ? sanitizedModels : undefined,
+      key_type: validatedKeyType,
+    };
+  }, [searchParams, autoOpenCreate]);
+
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
@@ -159,6 +185,9 @@ function CreateKeyPageContent() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Track if we've already attempted a return URL redirect to prevent race conditions
+  const hasAttemptedReturnRedirectRef = useRef(false);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(!sidebarCollapsed);
@@ -204,11 +233,47 @@ function CreateKeyPageContent() {
 
   useEffect(() => {
     if (redirectToLogin) {
+      // Store the current URL so we can redirect back after login
+      storeReturnUrl();
+      // Build login URL with return URL parameter
+      const baseLoginUrl = (proxyBaseUrl || "") + "/ui/login";
+      const dest = buildLoginUrlWithReturn(baseLoginUrl);
       // Replace instead of assigning to avoid back-button loops
-      const dest = (proxyBaseUrl || "") + "/ui/login";
       window.location.replace(dest);
     }
   }, [redirectToLogin]);
+
+  // Check for a stored return URL after successful authentication
+  // This handles the case where user comes back from SSO and we need to redirect to the original URL
+  useEffect(() => {
+    // Skip if still loading, no token, or we've already attempted a redirect
+    if (authLoading || !token || hasAttemptedReturnRedirectRef.current) {
+      return;
+    }
+
+    // Mark that we've attempted the redirect to prevent race conditions
+    // This prevents duplicate redirects if token changes (e.g., refresh)
+    hasAttemptedReturnRedirectRef.current = true;
+
+    // Check for a stored return URL
+    const returnUrl = consumeReturnUrl();
+    if (returnUrl) {
+      const currentUrl = window.location.href;
+      const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
+      const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
+      // Only redirect if the return URL is different from the current URL
+      // This prevents infinite redirect loops
+      if (normalizedReturnUrl !== normalizedCurrentUrl) {
+        window.location.replace(returnUrl);
+      }
+    }
+  }, [authLoading, token]);
+
+  useEffect(() => {
+    if (!token) {
+      hasAttemptedReturnRedirectRef.current = false;
+    }
+  }, [token]);
 
   useEffect(() => {
     if (!token) {
@@ -368,8 +433,7 @@ function CreateKeyPageContent() {
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <QueryClientProvider client={queryClient}>
-        <ConfigProvider theme={{
+      <ConfigProvider theme={{
           algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
         }}>
           <ThemeProvider accessToken={accessToken}>
@@ -407,9 +471,8 @@ function CreateKeyPageContent() {
                 />
                 <div className="flex flex-1">
                   <div className="mt-2">
-                    <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-                  </div>
-
+                  <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
+                </div>
                   {page == "api-keys" ? (
                     <UserDashboard
                       userID={userID}
@@ -425,6 +488,8 @@ function CreateKeyPageContent() {
                       organizations={organizations}
                       addKey={addKey}
                       createClicked={createClicked}
+                      autoOpenCreate={autoOpenCreate}
+                      prefillData={prefillData}
                     />
                   ) : page == "models" ? (
                     <OldModelDashboard
@@ -482,7 +547,7 @@ function CreateKeyPageContent() {
                   ) : page == "policies" ? (
                     <PoliciesPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "agents" ? (
-                    <AgentsPanel accessToken={accessToken} userRole={userRole} />
+                    <AgentsPanel accessToken={accessToken} userRole={userRole} teams={teams} />
                   ) : page == "prompts" ? (
                     <PromptsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "transform-request" ? (
@@ -542,8 +607,16 @@ function CreateKeyPageContent() {
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "access-groups" ? (
+                    <AccessGroupsPage />
+                  ) : page == "projects" ? (
+                    <ProjectsPage />
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "tool-policies" ? (
+                    <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
+                  ) : page == "guardrails-monitor" ? (
+                    <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
                     <NewUsagePage
                       teams={(teams as Team[]) ?? []}
@@ -588,7 +661,6 @@ function CreateKeyPageContent() {
             )}
           </ThemeProvider>
         </ConfigProvider>
-      </QueryClientProvider>
     </Suspense>
   );
 }

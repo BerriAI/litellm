@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -615,6 +615,79 @@ def test_streaming_handler_with_stop_chunk(
     assert returned_chunk is None
 
 
+def test_finish_reason_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444:
+    Preserve upstream non-OpenAI attributes on final finish_reason chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        created=1742093326,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
+def test_finish_reason_with_holding_chunk_preserves_non_openai_attributes(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #23444 holding-chunk path:
+    preserve custom attributes when _is_delta_empty is False after flushing
+    holding_chunk.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.holding_chunk = "filtered text"
+
+    original_chunk = ModelResponseStream(
+        id="chatcmpl-test-2",
+        created=1742093327,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+    )
+    setattr(original_chunk, "custom_field", {"key": "value"})
+
+    returned_chunk = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": ""},
+        response_obj={"original_chunk": original_chunk},
+        model_response=ModelResponseStream(),
+    )
+
+    assert returned_chunk is not None
+    assert returned_chunk.choices[0].delta.content == "filtered text"
+    assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
+
+
 def test_set_response_id_propagation_empty_to_valid(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -709,6 +782,86 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
     with pytest.raises(litellm.BadRequestError) as excinfo:
         await response.__anext__()
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20870
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure __next__ raises MidStreamFallbackError on 429, not RateLimitError.
+
+    This is the sync-streaming equivalent of the async test above.  Before
+    this fix, __next__ would raise RateLimitError directly, bypassing the
+    Router's fallback chain entirely.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_rate_limit(**kwargs):
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(response)
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
+def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
+
+    Non-retriable 4xx errors should surface immediately to the caller.
+    """
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        next(response)
 
     assert getattr(excinfo.value, "status_code", None) == 400
     assert "invalid maxOutputTokens" in str(excinfo.value)
@@ -1185,3 +1338,344 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
+def _make_chunk(content: Optional[str]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=content))],
+    )
+
+
+def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
+    """
+    Build a list of chunks based on a pattern specification.
+    """
+    chunks = []
+    for i, p in enumerate(pattern):
+        if p == "same":
+            chunks.append(_make_chunk("same_chunk"))
+        elif p == "diff":
+            chunks.append(_make_chunk(f"chunk_{i}"))
+        else:
+            chunks.append(_make_chunk(p))
+    return chunks
+
+_REPETITION_TEST_CASES = [
+    # Basic cases
+    pytest.param(
+        ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        True,
+        id="all_identical_raises",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="below_threshold_no_raise",
+    ),
+    pytest.param(
+        [None] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="none_content_no_raise",
+    ),
+    pytest.param(
+        [""] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="empty_content_no_raise",
+    ),
+    # Short content (len <= 2) should not raise
+    pytest.param(
+        ["##"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_no_raise",
+    ),
+    pytest.param(
+        ["{"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_1char_no_raise",
+    ),
+    pytest.param(
+        ["ab"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_ab_no_raise",
+    ),
+    # All different chunks
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="all_different_no_raise",
+    ),
+    # One chunk different at various positions
+    pytest.param(
+        ["different_first"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="first_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1) + ["different_last"],
+        False,
+        id="last_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        False,
+        id="middle_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 2) + ["diff", "diff"],
+        False,
+        id="last_two_different_no_raise",
+    ),
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        True,
+        id="in_between_same_and_diff_raise",
+    ),
+]
+
+
+@pytest.mark.parametrize("chunks_pattern,should_raise", _REPETITION_TEST_CASES)
+def test_raise_on_model_repetition(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    chunks_pattern: list,
+    should_raise: bool,
+):
+    wrapper = initialized_custom_stream_wrapper
+    chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
+
+    if should_raise:
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            for chunk in chunks:
+                wrapper.chunks.append(chunk)
+                wrapper.raise_on_model_repetition()
+        assert "repeating the same chunk" in str(exc_info.value)
+    else:
+        for chunk in chunks:
+            wrapper.chunks.append(chunk)
+            wrapper.raise_on_model_repetition()
+def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
+    """
+    Test that provider-reported usage from a post-finish_reason chunk
+    is surfaced in _hidden_params even when stream_options is NOT set.
+
+    Reproduces issue #20760: OpenRouter sends a final chunk with usage data
+    after the finish_reason chunk.  The hidden_params["usage"] on the last
+    user-visible chunk was being calculated before this usage chunk arrived,
+    resulting in zeros.  The fix recalculates it in the StopIteration handler
+    after stream_chunk_builder processes all chunks.
+    """
+    # Simulate OpenRouter's actual streaming pattern:
+    # 1) content chunk
+    # 2) finish_reason chunk  (content="")
+    # 3) usage chunk  (content="", finish_reason=None, usage={...})
+    chunks = [
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=""),
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="gen-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="openrouter/openai/gpt-4o-mini",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content=""),
+                    finish_reason=None,
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=20,
+                completion_tokens=135,
+                total_tokens=155,
+            ),
+        ),
+    ]
+
+    # Create a CustomStreamWrapper with NO stream_options
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="openrouter/openai/gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openrouter",
+        stream_options=None,
+    )
+
+    # Consume the stream
+    collected = []
+    for chunk in wrapper:
+        collected.append(chunk)
+
+    # The last user-visible chunk's _hidden_params["usage"] should
+    # contain the provider-reported values, not zeros.
+    last_chunk = collected[-1]
+    hidden_usage = last_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None, "Expected usage in _hidden_params"
+    assert hidden_usage.prompt_tokens == 20, (
+        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    )
+    assert hidden_usage.completion_tokens == 135, (
+        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+    )
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose():
+    """Test that aclose() delegates to the underlying completion_stream's aclose()"""
+    mock_stream = AsyncMock()
+    mock_stream.aclose = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    await wrapper.aclose()
+    mock_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_no_underlying():
+    """Test that aclose() is safe when completion_stream has no aclose method"""
+    mock_stream = MagicMock(spec=[])  # No aclose attribute
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_none_stream():
+    """Test that aclose() is safe when completion_stream is None"""
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
+
+
+def test_content_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: Vertex AI Claude streaming truncation.
+
+    When content_block_delta and message_delta arrive in rapid succession,
+    received_finish_reason can be set BEFORE the last content chunk is
+    processed. The old code raised StopIteration unconditionally, dropping
+    content. The fix checks for text/tool_use content before stopping.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    content_chunk = {
+        "text": "world!",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — content was dropped (issue #22098)"
+    )
+    assert result.choices[0].delta.content == "world!"
+
+
+def test_empty_chunk_still_stops_after_finish_reason_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion test for #22098: an empty GenericStreamingChunk must still
+    raise StopIteration when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    empty_chunk = {
+        "text": "",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
+
+
+def test_tool_use_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #22098: tool_use-only chunks must not be dropped
+    when received_finish_reason is already set.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    tool_chunk = {
+        "text": "",
+        "tool_use": {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None — tool_use data was dropped"
+    )
+
+    tool_calls = result.choices[0].delta.tool_calls
+    assert tool_calls is not None and len(tool_calls) > 0, (
+        "tool_calls should contain at least one tool call"
+    )
+    assert tool_calls[0].id == "call_1"
+    assert tool_calls[0].function.name == "get_weather"

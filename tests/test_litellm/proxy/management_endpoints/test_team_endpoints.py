@@ -1000,6 +1000,7 @@ async def test_validate_team_member_add_permissions_non_admin():
     team = MagicMock(spec=LiteLLM_TeamTable)
     team.team_id = "test-team-123"
     team.members_with_roles = []
+    team.organization_id = None
 
     # Mock the helper functions to return False
     with patch(
@@ -2061,7 +2062,14 @@ async def test_list_team_v2_security_check_non_admin_user():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
+         patch(
+             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+             new_callable=AsyncMock,
+             return_value=None,
+         ):
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -2102,7 +2110,14 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
+         patch(
+             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+             new_callable=AsyncMock,
+             return_value=None,
+         ):
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -2141,19 +2156,21 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"):
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
-        # Mock user lookup
-        mock_user_object = Mock()
-        mock_user_object.model_dump.return_value = {
-            "user_id": "non_admin_user_123",
-            "teams": ["team_1", "team_2"],
-        }
-        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
-        
+
+        # Mock get_user_object to return a user with teams
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        mock_user = LiteLLM_UserTable(
+            user_id="non_admin_user_123",
+            teams=["team_1", "team_2"],
+        )
+
         # Mock team lookup
         mock_teams = [
             Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
@@ -2162,21 +2179,26 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
 
-        # Should NOT raise an exception
-        result = await list_team_v2(
-            http_request=mock_request,
-            user_id="non_admin_user_123",  # Non-admin querying their own teams
-            user_api_key_dict=mock_user_api_key_dict_non_admin,
-            team_id=None,
-            page=1,
-            page_size=10,
-            status=None,
-        )
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user,
+        ):
+            # Should NOT raise an exception
+            result = await list_team_v2(
+                http_request=mock_request,
+                user_id="non_admin_user_123",  # Non-admin querying their own teams
+                user_api_key_dict=mock_user_api_key_dict_non_admin,
+                team_id=None,
+                page=1,
+                page_size=10,
+                status=None,
+            )
 
-        # Should return results without error
-        assert "teams" in result
-        assert "total" in result
-        assert result["total"] == 2
+            # Should return results without error
+            assert "teams" in result
+            assert "total" in result
+            assert result["total"] == 2
 
 
 @pytest.mark.asyncio
@@ -2293,26 +2315,279 @@ async def test_list_team_v2_with_status_deleted():
 
 
 @pytest.mark.asyncio
+async def test_list_team_v2_org_admin_sees_org_teams():
+    """
+    Test that an org admin (internal_user role with org_admin membership)
+    can list teams scoped to their organisations without getting a 401.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org_admin_user",
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="org_admin_user",
+        teams=[],
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org_admin_user",
+                organization_id="org_A",
+                user_role="org_admin",
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
+         patch(
+             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+             new_callable=AsyncMock,
+             return_value=mock_user,
+         ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        mock_team = Mock()
+        mock_team.model_dump.return_value = {
+            "team_id": "team_in_org_A",
+            "team_alias": "Org A Team",
+            "organization_id": "org_A",
+            "members_with_roles": [{"user_id": "u1", "role": "user"}],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            sort_by=None,
+            sort_order="asc",
+            status=None,
+        )
+
+        assert result["total"] == 1
+        assert len(result["teams"]) == 1
+        assert result["teams"][0].members_count == 1
+
+        # Verify org-scoped where clause
+        where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
+        assert where["organization_id"] == {"in": ["org_A"]}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_org_admin_cannot_view_other_orgs():
+    """
+    Test that an org admin is rejected with 403 when filtering by an
+    organisation they do not administer.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org_admin_user",
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="org_admin_user",
+        teams=[],
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org_admin_user",
+                organization_id="org_A",
+                user_role="org_admin",
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
+         patch(
+             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+             new_callable=AsyncMock,
+             return_value=mock_user,
+         ):
+        mock_prisma.db = Mock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await list_team_v2(
+                http_request=mock_request,
+                user_id=None,
+                organization_id="org_B",  # not their org
+                team_id=None,
+                team_alias=None,
+                user_api_key_dict=mock_user_api_key_dict,
+                page=1,
+                page_size=10,
+                sort_by=None,
+                sort_order="asc",
+                status=None,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "only view teams within your organizations" in str(
+            exc_info.value.detail
+        ).lower()
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
+    """
+    Test that an org admin passing user_id gets that user's direct team
+    memberships (not all org teams).
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org_admin_user",
+    )
+
+    mock_org_admin = LiteLLM_UserTable(
+        user_id="org_admin_user",
+        teams=["team_1"],
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org_admin_user",
+                organization_id="org_A",
+                user_role="org_admin",
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    # The target user whose teams we want to list
+    mock_target_user = LiteLLM_UserTable(
+        user_id="target_user",
+        teams=["team_X", "team_Y"],
+    )
+
+    call_count = 0
+
+    async def mock_get_user_object(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First call: org admin lookup in list_team_v2
+        # Second call: target user lookup in _build_team_list_where_conditions
+        if call_count == 1:
+            return mock_org_admin
+        return mock_target_user
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
+         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
+         patch(
+             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+             side_effect=mock_get_user_object,
+         ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        mock_team = Mock()
+        mock_team.model_dump.return_value = {
+            "team_id": "team_X",
+            "team_alias": "Target Team",
+            "members_with_roles": [{"user_id": "target_user", "role": "user"}],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id="target_user",
+            organization_id=None,
+            team_id=None,
+            team_alias=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            sort_by=None,
+            sort_order="asc",
+            status=None,
+        )
+
+        assert result["total"] == 1
+
+        # Verify the where clause filters by user's teams, not org scope
+        where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
+        assert where["team_id"] == {"in": ["team_X", "team_Y"]}
+        assert "organization_id" not in where
+
+
+@pytest.mark.asyncio
 async def test_list_team_v2_with_invalid_status():
     """
     Test that invalid status parameter raises HTTPException.
     """
     from unittest.mock import Mock, patch
-    
+
     from fastapi import HTTPException, Request
-    
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
-    
+
     # Mock request
     mock_request = Mock(spec=Request)
-    
+
     # Mock admin user
     mock_user_api_key_dict_admin = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="admin_user_123",
     )
-    
+
     mock_prisma_client = Mock()
     
     # Mock prisma_client to be non-None
@@ -5497,6 +5772,190 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
 
 
 @pytest.mark.asyncio
+async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
+    mock_db_client,
+):
+    """
+    Test that non-admin team members with /team/daily/activity permission
+    can see all team spend (no API key filtering), same as team admins.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    # Create a non-admin user
+    user_id = "test_user_with_perm_123"
+    team_id = "test_team_789"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    # Mock user info
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=[team_id],
+        max_budget=1000.0,
+        spend=0.0,
+        user_email="member@example.com",
+        user_role="internal_user",
+    )
+
+    # Mock team with user as non-admin member AND /team/daily/activity permission
+    mock_team_member = Member(user_id=user_id, role="user")
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = team_id
+    mock_team.team_alias = "Test Team"
+    mock_team.members_with_roles = [mock_team_member]
+    mock_team.team_member_permissions = ["/team/daily/activity"]
+    mock_team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "Test Team",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+        "team_member_permissions": ["/team/daily/activity"],
+    }
+
+    # Setup mocks
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[mock_team]
+    )
+
+    # Mock get_user_object
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+    ) as mock_get_user_object:
+        mock_get_user_object.return_value = mock_user_info
+
+        # Mock get_daily_activity to capture the api_key parameter
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            new_callable=AsyncMock,
+        ) as mock_get_daily_activity:
+            mock_get_daily_activity.return_value = MagicMock()
+
+            # Call the endpoint
+            await get_team_daily_activity(
+                team_ids=team_id,
+                start_date="2024-01-01",
+                end_date="2024-01-02",
+                model=None,
+                api_key=None,
+                page=1,
+                page_size=10,
+                exclude_team_ids=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            # Verify get_daily_activity was called WITHOUT API key filtering
+            mock_get_daily_activity.assert_called_once()
+            call_kwargs = mock_get_daily_activity.call_args[1]
+            assert call_kwargs["api_key"] is None
+            assert call_kwargs["entity_id"] == [team_id]
+
+            # Verify user's API keys were NOT fetched
+            if hasattr(
+                mock_db_client.db.litellm_verificationtoken, "find_many"
+            ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
+                assert (
+                    False
+                ), "API keys should not be fetched for members with /team/daily/activity permission"
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_member_without_permission_filters_by_keys(
+    mock_db_client,
+):
+    """
+    Test that non-admin team members WITHOUT /team/daily/activity permission
+    still have their results filtered by their own API keys.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    # Create a non-admin user
+    user_id = "test_user_no_perm_123"
+    team_id = "test_team_789"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    # Mock user info
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=[team_id],
+        max_budget=1000.0,
+        spend=0.0,
+        user_email="member@example.com",
+        user_role="internal_user",
+    )
+
+    # Mock team with user as non-admin member and NO usage permission
+    mock_team_member = Member(user_id=user_id, role="user")
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = team_id
+    mock_team.team_alias = "Test Team"
+    mock_team.members_with_roles = [mock_team_member]
+    mock_team.team_member_permissions = ["/key/info"]
+    mock_team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "Test Team",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+        "team_member_permissions": ["/key/info"],
+    }
+
+    # Mock user's API keys
+    user_api_key_1 = MagicMock()
+    user_api_key_1.token = "user_key_abc"
+    user_api_key_2 = MagicMock()
+    user_api_key_2.token = "user_key_def"
+
+    # Setup mocks
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[mock_team]
+    )
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[user_api_key_1, user_api_key_2]
+    )
+
+    # Mock get_user_object
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+    ) as mock_get_user_object:
+        mock_get_user_object.return_value = mock_user_info
+
+        # Mock get_daily_activity to capture the api_key parameter
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
+            new_callable=AsyncMock,
+        ) as mock_get_daily_activity:
+            mock_get_daily_activity.return_value = MagicMock()
+
+            # Call the endpoint
+            await get_team_daily_activity(
+                team_ids=team_id,
+                start_date="2024-01-01",
+                end_date="2024-01-02",
+                model=None,
+                api_key=None,
+                page=1,
+                page_size=10,
+                exclude_team_ids=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            # Verify get_daily_activity was called WITH API key filtering
+            mock_get_daily_activity.assert_called_once()
+            call_kwargs = mock_get_daily_activity.call_args[1]
+            assert call_kwargs["api_key"] == ["user_key_abc", "user_key_def"]
+            assert call_kwargs["entity_id"] == [team_id]
+
+            # Verify user's API keys were fetched
+            mock_db_client.db.litellm_verificationtoken.find_many.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_router_settings(mock_db_client, mock_admin_auth):
     """
     Test that /team/update correctly handles router_settings by:
@@ -5906,3 +6365,79 @@ async def test_list_available_teams_returns_empty_list_when_none_configured():
         assert result == []
 
         litellm.default_internal_user_params = original
+
+
+@pytest.mark.asyncio
+async def test_list_team_v1_batches_key_queries():
+    """
+    Test that list_team fetches all keys in a single batched query
+    instead of issuing one query per team (N+1).
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        LitellmUserRoles,
+        TeamListResponseObject,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+    mock_request = Mock(spec=Request)
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    # Two teams
+    team1 = LiteLLM_TeamTable(team_id="team-1", team_alias="Team One")
+    team2 = LiteLLM_TeamTable(team_id="team-2", team_alias="Team Two")
+
+    # Mock keys belonging to different teams
+    key1 = MagicMock()
+    key1.team_id = "team-1"
+    key2 = MagicMock()
+    key2.team_id = "team-1"
+    key3 = MagicMock()
+    key3.team_id = "team-2"
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client"
+    ) as mock_prisma_client, patch(
+        "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
+        new_callable=AsyncMock,
+        return_value=[team1, team2],
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        async def filtered_find_many(**kwargs):
+            where = kwargs.get("where", {})
+            tid = where.get("team_id")
+            if tid == "team-1":
+                return [key1, key2]
+            elif tid == "team-2":
+                return [key3]
+            return [key1, key2, key3]
+
+        mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+            side_effect=filtered_find_many
+        )
+
+        result = await list_team(
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # Verify keys are correctly distributed
+        assert len(result) == 2
+        # Results are sorted by team_alias
+        assert result[0].team_id == "team-1"
+        assert result[0].keys == [key1, key2]
+        assert result[1].team_id == "team-2"
+        assert result[1].keys == [key3]

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -7,14 +7,18 @@ from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    NewProjectRequest,
+    UpdateProjectRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _premium_user_check
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -34,6 +38,62 @@ def _is_user_team_admin(
         ) and member.role == "admin":
             return True
 
+    return False
+
+
+async def _is_user_org_admin_for_team(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> bool:
+    """
+    Check if user is an org admin for the team's organization.
+
+    Returns True if:
+    - The team belongs to an organization, AND
+    - The user has org_admin role in that organization
+    """
+    if not team_obj.organization_id or not user_api_key_dict.user_id:
+        return False
+
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    caller_user = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if caller_user is None:
+        return False
+
+    for m in caller_user.organization_memberships or []:
+        if (
+            m.organization_id == team_obj.organization_id
+            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ):
+            return True
+
+    return False
+
+
+def _team_member_has_permission(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_obj: LiteLLM_TeamTable,
+    permission: str,
+) -> bool:
+    """Check if a non-admin team member has a specific permission on a team."""
+    if not team_obj.team_member_permissions:
+        return False
+    if permission not in team_obj.team_member_permissions:
+        return False
+    for member in team_obj.members_with_roles:
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+            return True
     return False
 
 
@@ -262,6 +322,9 @@ def _set_object_metadata_field(
         LiteLLM_TeamTable,
         KeyRequestBase,
         LiteLLM_OrganizationTable,
+        LiteLLM_ProjectTable,
+        "NewProjectRequest",
+        "UpdateProjectRequest",
     ],
     field_name: str,
     value: Any,
@@ -270,7 +333,7 @@ def _set_object_metadata_field(
     Helper function to set metadata fields that require premium user checks
 
     Args:
-        object_data: The team data object to modify
+        object_data: The team/key/organization/project data object to modify
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """
@@ -381,6 +444,17 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"][field_name] = _value
         else:
             updated_kv["metadata"] = {field_name: _value}
+
+
+def _has_non_empty_value(value: Any) -> bool:
+    """Check if a value has real content (not None, not empty list, not blank string)."""
+    if value is None:
+        return False
+    if isinstance(value, list) and len(value) == 0:
+        return False
+    if isinstance(value, str) and value.strip() == "":
+        return False
+    return True
 
 
 def _update_metadata_fields(updated_kv: dict) -> None:

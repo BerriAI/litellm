@@ -19,6 +19,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.utils import ModelResponse
+from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     pass
@@ -63,10 +64,20 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return
 
         model = completion_kwargs.get("model")
+        try:
+            model_info = get_model_info(
+                model=cast(str, model), custom_llm_provider=custom_llm_provider
+            )
+            if model_info and model_info.get("supports_reasoning") is False:
+                # Model doesn't support reasoning/responses API, don't route
+                return
+        except Exception:
+            pass
+
         if isinstance(model, str) and model and not model.startswith("responses/"):
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
-            
+
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         if isinstance(reasoning_effort, str) and reasoning_effort:
             completion_kwargs["reasoning_effort"] = {
@@ -139,7 +150,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if output_format:
             request_data["output_format"] = output_format
 
-        openai_request, tool_name_mapping = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+        (
+            openai_request,
+            tool_name_mapping,
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data
         )
 
@@ -201,24 +215,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
-        completion_kwargs, tool_name_mapping = (
-            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=system,
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                output_format=output_format,
-                extra_kwargs=kwargs,
-            )
+        (
+            completion_kwargs,
+            tool_name_mapping,
+        ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=system,
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            output_format=output_format,
+            extra_kwargs=kwargs,
         )
 
         completion_response = await litellm.acompletion(**completion_kwargs)
@@ -235,11 +250,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            anthropic_response = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response),
-                    tool_name_mapping=tool_name_mapping,
-                )
+            anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
+                cast(ModelResponse, completion_response),
+                tool_name_mapping=tool_name_mapping,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -288,24 +301,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_kwargs, tool_name_mapping = (
-            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                metadata=metadata,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=system,
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                output_format=output_format,
-                extra_kwargs=kwargs,
-            )
+        (
+            completion_kwargs,
+            tool_name_mapping,
+        ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=max_tokens,
+            messages=messages,
+            model=model,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=stream,
+            system=system,
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            output_format=output_format,
+            extra_kwargs=kwargs,
         )
 
         completion_response = litellm.completion(**completion_kwargs)
@@ -322,11 +336,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            anthropic_response = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response),
-                    tool_name_mapping=tool_name_mapping,
-                )
+            anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
+                cast(ModelResponse, completion_response),
+                tool_name_mapping=tool_name_mapping,
             )
             if anthropic_response is not None:
                 return anthropic_response

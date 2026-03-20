@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { testMCPToolsListRequest } from "../components/networking";
-import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT } from "@/components/mcp_tools/types";
 
 interface MCPServerConfig {
   server_id?: string;
   server_name?: string;
   url?: string;
+  spec_path?: string;
   transport?: string;
   auth_type?: string;
   authorization_url?: string;
@@ -55,23 +56,31 @@ export const useTestMCPConnection = ({
   const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
     && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
   const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
-  const canFetchTools = !!(
-    formValues.url &&
-    formValues.transport &&
-    formValues.auth_type &&
-    accessToken &&
-    (!requiresOAuthToken || oauthAccessToken)
-  );
+  const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
+  const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
+
+  // For OpenAPI: tools are derived from the spec itself — no auth needed to load them.
+  // For other transports: auth_type is required, and OAuth interactive flows need a token.
+  const canFetchTools = isOpenAPITransport
+    ? !!(hasEndpoint && accessToken)
+    : !!(
+        hasEndpoint &&
+        formValues.transport &&
+        formValues.auth_type &&
+        accessToken &&
+        (!requiresOAuthToken || oauthAccessToken)
+      );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
-    if (!accessToken || !formValues.url) {
+    if (!accessToken || (!formValues.url && !formValues.spec_path)) {
       return;
     }
 
-    if (requiresOAuthToken && !oauthAccessToken) {
+    // For OpenAPI transport, tools are derived from the spec — no OAuth token needed.
+    if (requiresOAuthToken && !oauthAccessToken && !isOpenAPITransport) {
       return;
     }
 
@@ -125,11 +134,15 @@ export const useTestMCPConnection = ({
             )
           : undefined;
 
+      // For OpenAPI transport, map to "http" for backend compatibility
+      const effectiveTransport = formValues.transport === TRANSPORT.OPENAPI ? "http" : formValues.transport;
+
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
         url: formValues.url,
-        transport: formValues.transport,
+        spec_path: formValues.spec_path,
+        transport: effectiveTransport,
         auth_type: formValues.auth_type,
         authorization_url: formValues.authorization_url,
         token_url: formValues.token_url,
@@ -190,6 +203,7 @@ export const useTestMCPConnection = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     formValues.url,
+    formValues.spec_path,
     formValues.transport,
     formValues.auth_type,
     accessToken,
