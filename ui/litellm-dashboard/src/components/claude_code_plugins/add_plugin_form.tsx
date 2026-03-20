@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Modal, Form, Input, Select, message } from "antd";
+import { Modal, Form, Input, Select } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
 import {
@@ -43,13 +44,13 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
   const handleSubmit = async (values: any) => {
     if (!accessToken) {
-      message.error("No access token available");
+      MessageManager.error("No access token available");
       return;
     }
 
     // Validate plugin name
     if (!validatePluginName(values.name)) {
-      message.error(
+      MessageManager.error(
         "Plugin name must be kebab-case (lowercase letters, numbers, and hyphens only)"
       );
       return;
@@ -57,7 +58,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
     // Validate semantic version if provided
     if (values.version && !isValidSemanticVersion(values.version)) {
-      message.error(
+      MessageManager.error(
         "Version must be in semantic versioning format (e.g., 1.0.0)"
       );
       return;
@@ -65,13 +66,13 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
     // Validate email if provided
     if (values.authorEmail && !isValidEmail(values.authorEmail)) {
-      message.error("Invalid email format");
+      MessageManager.error("Invalid email format");
       return;
     }
 
     // Validate homepage URL if provided
     if (values.homepage && !isValidUrl(values.homepage)) {
-      message.error("Invalid homepage URL format");
+      MessageManager.error("Invalid homepage URL format");
       return;
     }
 
@@ -119,14 +120,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
       }
 
       await registerClaudeCodePlugin(accessToken, pluginData);
-      message.success("Plugin registered successfully");
+      MessageManager.success("Plugin registered successfully");
       form.resetFields();
       setSourceType("github");
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error registering plugin:", error);
-      message.error("Failed to register plugin");
+      MessageManager.error("Failed to register plugin");
     } finally {
       setIsSubmitting(false);
     }
