@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import ChatCompletionToolParam
@@ -31,6 +32,8 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+
+GUARDRAIL_DELETED_KEY = "guardrail_deleted"
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -106,7 +109,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = guardrailed_tools
@@ -120,12 +123,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to messages
-            if guardrailed_tool_calls:
-                # Note: The guardrail may modify tool_calls_to_check in place
-                # or we may need to handle returned tool calls differently
+            # Use guardrailed results if returned, otherwise fall back to originals.
+            # Note: `is not None` (not `or`) so an empty list from the guardrail
+            # correctly signals "all tool calls deleted" rather than falling back.
+            if tool_calls_to_check:
+                resolved_tool_calls = guardrailed_tool_calls if guardrailed_tool_calls is not None else tool_calls_to_check
                 await self._apply_guardrail_responses_to_input_tool_calls(
                     messages=messages,
-                    tool_calls=guardrailed_tool_calls,  # type: ignore
+                    tool_calls=resolved_tool_calls,  # type: ignore
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -243,9 +248,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize how tool call responses are applied.
         """
+        # Collect indices to delete, grouped by msg_idx
+        deletions_by_msg: Dict[int, List[int]] = {}
+
         for task_idx, (msg_idx, tool_call_idx) in enumerate(task_mappings):
             if task_idx < len(tool_calls):
                 guardrailed_tool_call = tool_calls[task_idx]
+
+                if guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True:
+                    deletions_by_msg.setdefault(msg_idx, []).append(tool_call_idx)
+                    continue
+
                 message_tool_calls = messages[msg_idx].get("tool_calls", None)
                 if message_tool_calls is not None and isinstance(
                     message_tool_calls, list
@@ -253,6 +266,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if tool_call_idx < len(message_tool_calls):
                         # Replace the tool call with the guardrailed version
                         message_tool_calls[tool_call_idx] = guardrailed_tool_call
+
+        # Apply deletions in reverse index order to preserve indices
+        for msg_idx, indices_to_delete in deletions_by_msg.items():
+            message_tool_calls = messages[msg_idx].get("tool_calls", None)
+            if message_tool_calls is not None and isinstance(
+                message_tool_calls, list
+            ):
+                remove_items_at_indices(message_tool_calls, indices_to_delete)
+
+                if not message_tool_calls:
+                    messages[msg_idx].pop("tool_calls", None)
 
     async def process_output_response(
         self,
@@ -345,10 +369,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to response
+            # Use guardrailed results if returned, otherwise fall back to originals.
+            # Note: `is not None` (not `or`) so an empty list from the guardrail
+            # correctly signals "all tool calls deleted" rather than falling back.
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
             if tool_calls_to_check:
+                resolved_tool_calls = guardrailed_tool_calls if guardrailed_tool_calls is not None else tool_calls_to_check
                 await self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,
-                    tool_calls=tool_calls_to_check,
+                    tool_calls=resolved_tool_calls,  # type: ignore
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -706,9 +735,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize how tool call responses are applied.
         """
+        # Collect indices to delete, grouped by choice_idx
+        deletions_by_choice: Dict[int, List[int]] = {}
+
         for task_idx, (choice_idx, tool_call_idx) in enumerate(task_mappings):
             if task_idx < len(tool_calls):
                 guardrailed_tool_call = tool_calls[task_idx]
+
+                if guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True:
+                    deletions_by_choice.setdefault(choice_idx, []).append(
+                        tool_call_idx
+                    )
+                    continue
+
                 choice = cast(Choices, response.choices[choice_idx])
                 choice_tool_calls = choice.message.tool_calls
 
@@ -727,6 +766,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 ]
                             if "name" in func_dict:
                                 existing_tool_call.function.name = func_dict["name"]
+
+        # Apply deletions in reverse index order to preserve indices
+        for choice_idx, indices_to_delete in deletions_by_choice.items():
+            choice = cast(Choices, response.choices[choice_idx])
+            choice_tool_calls = choice.message.tool_calls
+            if choice_tool_calls is not None and isinstance(choice_tool_calls, list):
+                remove_items_at_indices(choice_tool_calls, indices_to_delete)
+
+                if not choice_tool_calls:
+                    choice.message.tool_calls = None
+                    if choice.finish_reason == "tool_calls":
+                        choice.finish_reason = "stop"
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,

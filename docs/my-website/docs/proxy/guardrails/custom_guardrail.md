@@ -405,6 +405,50 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 
 </details>
 
+## Handling Tool Calls
+
+When the LLM request or response contains tool calls, they are passed to `apply_guardrail` via `inputs["tool_calls"]` as a list of dicts. You can:
+
+- **Modify** a tool call by changing its fields (e.g. redact arguments)
+- **Block** the entire request by raising an exception
+- **Delete** individual tool calls by setting `"guardrail_deleted": True` on the dict
+
+### Deleting Tool Calls
+
+To selectively remove tool calls that violate policy while keeping the rest, set `"guardrail_deleted": True` on the tool call dict:
+
+```python
+from typing import Any, Literal, Optional
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+BLOCKED_TOOLS = {"run_shell_command", "delete_database"}
+
+class ToolFilterGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                name = tc.get("function", {}).get("name", "")
+                if name in BLOCKED_TOOLS:
+                    tc["guardrail_deleted"] = True
+
+        return inputs
+```
+
+**Behavior when tool calls are deleted:**
+
+- **Partial deletion**: Only the marked tool calls are removed; the rest remain in the request/response.
+- **Full deletion (all tool calls removed)**:
+  - For **input** messages: the `"tool_calls"` key is removed from the message dict.
+  - For **output** responses: `tool_calls` is set to `None` and `finish_reason` is changed from `"tool_calls"` to `"stop"`.
+
 ## ✨ Pass additional parameters to guardrail
 
 :::info

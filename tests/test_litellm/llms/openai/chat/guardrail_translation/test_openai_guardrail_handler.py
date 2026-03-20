@@ -881,6 +881,424 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
 
+class MockDeletingGuardrail(CustomGuardrail):
+    """Mock guardrail that deletes tool calls based on function name"""
+
+    def __init__(
+        self,
+        names_to_delete: List[str],
+        names_to_modify: Optional[List[str]] = None,
+        guardrail_name: str = "test-deleter",
+    ):
+        super().__init__(guardrail_name=guardrail_name)
+        self.names_to_delete = names_to_delete
+        self.names_to_modify = names_to_modify or []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                name = tc.get("function", {}).get("name", "")
+                if name in self.names_to_delete:
+                    tc["guardrail_deleted"] = True
+                elif name in self.names_to_modify:
+                    tc["function"]["arguments"] = '{"modified": true}'
+
+        result: GenericGuardrailAPIInputs = {"texts": inputs.get("texts", [])}
+        if tool_calls:
+            result["tool_calls"] = tool_calls  # type: ignore
+        return result
+
+
+class TestGuardrailDeletedOutputToolCalls:
+    """Test guardrail_deleted support for output (response) tool calls"""
+
+    @pytest.mark.asyncio
+    async def test_partial_deletion_output(self):
+        """One of two tool calls is deleted; the other remains"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(names_to_delete=["dangerous_func"])
+
+        response = ModelResponse(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_safe",
+                                type="function",
+                                function=Function(
+                                    name="safe_func",
+                                    arguments='{"x": 1}',
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_bad",
+                                type="function",
+                                function=Function(
+                                    name="dangerous_func",
+                                    arguments='{"y": 2}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert response.choices[0].message.tool_calls[0].function.name == "safe_func"
+        assert response.choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_full_deletion_output(self):
+        """All tool calls deleted → tool_calls=None, finish_reason='stop'"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(
+            names_to_delete=["func_a", "func_b"]
+        )
+
+        response = ModelResponse(
+            id="chatcmpl-2",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_a",
+                                type="function",
+                                function=Function(
+                                    name="func_a",
+                                    arguments="{}",
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_b",
+                                type="function",
+                                function=Function(
+                                    name="func_b",
+                                    arguments="{}",
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert response.choices[0].message.tool_calls is None
+        assert response.choices[0].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_no_deletion_regression(self):
+        """No guardrail_deleted field → existing behavior unchanged"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(names_to_delete=[])  # deletes nothing
+
+        response = ModelResponse(
+            id="chatcmpl-3",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"loc": "NYC"}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+        assert response.choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_mixed_modify_and_delete_output(self):
+        """Some tool calls modified, some deleted"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(
+            names_to_delete=["bad_func"],
+            names_to_modify=["good_func"],
+        )
+
+        response = ModelResponse(
+            id="chatcmpl-4",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_good",
+                                type="function",
+                                function=Function(
+                                    name="good_func",
+                                    arguments='{"original": true}',
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_bad",
+                                type="function",
+                                function=Function(
+                                    name="bad_func",
+                                    arguments='{"secret": "data"}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert len(response.choices[0].message.tool_calls) == 1
+        remaining = response.choices[0].message.tool_calls[0]
+        assert remaining.function.name == "good_func"
+        assert remaining.function.arguments == '{"modified": true}'
+        assert response.choices[0].finish_reason == "tool_calls"
+
+
+class TestGuardrailDeletedInputToolCalls:
+    """Test guardrail_deleted support for input (request) tool calls"""
+
+    @pytest.mark.asyncio
+    async def test_partial_deletion_input(self):
+        """One of two input tool calls is deleted"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(names_to_delete=["banned_tool"])
+
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_ok",
+                            "type": "function",
+                            "function": {
+                                "name": "allowed_tool",
+                                "arguments": '{"a": 1}',
+                            },
+                        },
+                        {
+                            "id": "call_ban",
+                            "type": "function",
+                            "function": {
+                                "name": "banned_tool",
+                                "arguments": '{"b": 2}',
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        tool_calls = data["messages"][0]["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "allowed_tool"
+
+    @pytest.mark.asyncio
+    async def test_full_deletion_input(self):
+        """All input tool calls deleted → tool_calls key removed from message"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(names_to_delete=["func_x"])
+
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_x",
+                            "type": "function",
+                            "function": {
+                                "name": "func_x",
+                                "arguments": "{}",
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert "tool_calls" not in data["messages"][0]
+
+
+class MockFalseDeleteGuardrail(CustomGuardrail):
+    """Mock guardrail that sets guardrail_deleted to False (should NOT delete)"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                tc["guardrail_deleted"] = False
+        result: GenericGuardrailAPIInputs = {"texts": inputs.get("texts", [])}
+        if tool_calls:
+            result["tool_calls"] = tool_calls  # type: ignore
+        return result
+
+
+class TestGuardrailDeletedEdgeCases:
+    """Edge case tests for guardrail_deleted behavior"""
+
+    @pytest.mark.asyncio
+    async def test_guardrail_deleted_false_does_not_delete(self):
+        """guardrail_deleted: False should NOT delete tool calls"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockFalseDeleteGuardrail(guardrail_name="test-false")
+
+        response = ModelResponse(
+            id="chatcmpl-false",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="some_func",
+                                    arguments='{"a": 1}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert response.choices[0].message.tool_calls[0].function.name == "some_func"
+        assert response.choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_non_contiguous_deletion_output(self):
+        """Delete indices 0 and 2, keep index 1"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletingGuardrail(
+            names_to_delete=["func_a", "func_c"]
+        )
+
+        response = ModelResponse(
+            id="chatcmpl-noncontig",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_a",
+                                type="function",
+                                function=Function(
+                                    name="func_a",
+                                    arguments="{}",
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_b",
+                                type="function",
+                                function=Function(
+                                    name="func_b",
+                                    arguments="{}",
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_c",
+                                type="function",
+                                function=Function(
+                                    name="func_c",
+                                    arguments="{}",
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert response.choices[0].message.tool_calls[0].function.name == "func_b"
+        assert response.choices[0].message.tool_calls[0].id == "call_b"
+        assert response.choices[0].finish_reason == "tool_calls"
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
