@@ -545,6 +545,11 @@ async def test_mcp_sensitive_headers_not_in_logging_callback():
             raw_headers = {
                 "authorization": "Bearer secret-token",
                 "x-litellm-api-key": "sk-secret-key",
+                "x-api-key": "provider-api-key",
+                "x-goog-api-key": "google-api-key",
+                "x-mcp-auth": "legacy-mcp-auth",
+                "x-mcp-servers": "server1,server2",
+                "x-mcp-access-groups": "group1",
                 "x-mcp-github-authorization": "Bearer gh-token",
                 "x-mcp-zapier-x-api-key": "zapier-secret",
                 "x-custom-safe-header": "safe-value",
@@ -585,9 +590,15 @@ async def test_mcp_sensitive_headers_not_in_logging_callback():
 
             # Sensitive headers must NOT appear
             assert "authorization" not in custom_headers
-            # x-litellm-api-key is stripped by clean_headers (SpecialHeaders)
+            # Auth headers stripped by clean_headers + regex denylist
             assert "x-litellm-api-key" not in custom_headers
-            # Server-specific MCP auth headers are filtered by regex
+            assert "x-api-key" not in custom_headers
+            assert "x-goog-api-key" not in custom_headers
+            # MCP config headers stripped by clean_headers + regex denylist
+            assert "x-mcp-auth" not in custom_headers
+            assert "x-mcp-servers" not in custom_headers
+            assert "x-mcp-access-groups" not in custom_headers
+            # Server-specific MCP auth headers filtered by regex
             assert "x-mcp-github-authorization" not in custom_headers
             assert "x-mcp-zapier-x-api-key" not in custom_headers
 
