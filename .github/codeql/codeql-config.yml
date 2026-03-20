@@ -15,7 +15,7 @@ query-filters:
   - exclude:
       id: py/polynomial-redos                   # CWE-730 — > 2 GiB result set
 paths:
-  - "litellm/ui/litellm-dashboard/src/components"
+  - "ui/litellm-dashboard/src/components"
 paths-ignore:
   - tests
   - docs
