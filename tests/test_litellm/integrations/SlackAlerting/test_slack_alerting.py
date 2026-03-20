@@ -172,7 +172,22 @@ class TestSlackAlerting(unittest.TestCase):
 
         self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
         assert self.slack_alerting.periodic_started == True
-        
+
+    # Repeated calls to update_values should not spawn additional periodic_flush tasks
+    @patch("asyncio.create_task")
+    def test_update_values_does_not_leak_periodic_tasks(self, mock_create_task):
+        mock_create_task.return_value = AsyncMock()
+
+        self.slack_alerting.update_values(alerting=["slack"])
+        assert self.slack_alerting.periodic_started == True
+        assert mock_create_task.call_count == 1
+
+        # Simulate repeated calls from add_deployment scheduler (runs every 30s)
+        self.slack_alerting.update_values(alerting=["slack"])
+        self.slack_alerting.update_values(alerting=["slack"])
+        self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
+        assert mock_create_task.call_count == 1
+
     @patch("litellm.integrations.SlackAlerting.slack_alerting.datetime")
     def test_alert_type_in_formatted_message(self, mock_datetime):
         # Setup mocks
