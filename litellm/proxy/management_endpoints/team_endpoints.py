@@ -934,6 +934,7 @@ async def new_team(  # noqa: PLR0915
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
+            team_member_budget_duration=data.team_member_budget_duration,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
@@ -942,6 +943,7 @@ async def new_team(  # noqa: PLR0915
                 team_member_budget=data.team_member_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
+                team_member_budget_duration=data.team_member_budget_duration,
             )
 
         ## ADD TO TEAM TABLE
