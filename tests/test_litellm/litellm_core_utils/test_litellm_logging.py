@@ -467,6 +467,19 @@ class TestUpdateFromKwargs:
         assert result_meta["from_caller"] is True
         assert result_meta["user_api_key_hash"] == "hashed-xyz"
 
+    def test_merge_handles_metadata_none(self, logging_obj):
+        """When metadata=None is explicitly in kwargs alongside litellm_metadata,
+        the merge should not crash (dict(None) would TypeError)."""
+        kwargs = {
+            "metadata": None,
+            "litellm_metadata": {"user_api_key_hash": "hashed-abc"},
+        }
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        result_meta = logging_obj.litellm_params["metadata"]
+        assert result_meta["user_api_key_hash"] == "hashed-abc"
+
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
         """Explicit litellm_params from the caller should override auto-extracted values."""
         kwargs = {"metadata": {"from_kwargs": True}}
