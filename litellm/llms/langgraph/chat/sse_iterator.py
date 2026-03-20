@@ -31,6 +31,7 @@ class LangGraphSSEStreamIterator:
         self.response = response
         self.model = model
         self.finished = False
+        self._has_received_messages = False
         self.line_iterator = None
         self.async_line_iterator = None
         self._current_event_type: Optional[str] = None
@@ -135,13 +136,16 @@ class LangGraphSSEStreamIterator:
 
                         # Only return AI messages with content
                         if msg_type == "ai" and content:
+                            self._has_received_messages = True
                             return self._create_content_chunk(content)
                         elif msg_type == "AIMessageChunk" and content:
+                            self._has_received_messages = True
                             return self._create_content_chunk(content)
                 elif isinstance(item, dict):
                     msg_type = item.get("type", "")
                     content = item.get("content", "")
                     if msg_type in ("ai", "AIMessageChunk") and content:
+                        self._has_received_messages = True
                         return self._create_content_chunk(content)
 
         return None
@@ -151,8 +155,9 @@ class LangGraphSSEStreamIterator:
         Process a metadata event, which may signal the end of the stream.
         """
         if isinstance(payload, dict):
-            # Check if this is a final event
             if "run_id" in payload:
+                if not self._has_received_messages:
+                    return None
                 self.finished = True
                 return self._create_final_chunk()
         return None
