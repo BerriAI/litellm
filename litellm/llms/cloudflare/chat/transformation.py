@@ -159,7 +159,12 @@ class CloudflareChatConfig(BaseConfig):
 
         result = completion_response.get("result") or {}
 
-        model_response.choices[0].message.content = result.get("response", "")  # type: ignore
+        tool_calls = result.get("tool_calls")
+        if tool_calls:
+            model_response.choices[0].message.tool_calls = tool_calls  # type: ignore
+            model_response.choices[0].finish_reason = "tool_calls"
+        else:
+            model_response.choices[0].message.content = result.get("response", "")  # type: ignore
 
         # Use usage from response if available, otherwise estimate
         result_usage = result.get("usage") or {}

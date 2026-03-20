@@ -142,8 +142,12 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
 
             result = response_data.get("result") or {}
             image_data = result.get("image")
-            if image_data:
-                model_response.data.append(ImageObject(b64_json=image_data))
+            if not image_data:
+                raise CloudflareError(
+                    message=f"No image data in Cloudflare response: {response_data}",
+                    status_code=raw_response.status_code,
+                )
+            model_response.data.append(ImageObject(b64_json=image_data))
 
         return model_response
 

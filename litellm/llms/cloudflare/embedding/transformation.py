@@ -111,7 +111,7 @@ class CloudflareEmbeddingConfig(BaseEmbeddingConfig):
             for idx, embedding_values in enumerate(data)
         ]
 
-        # Cloudflare doesn't return token usage, estimate from shape
+        # Cloudflare doesn't return token usage; report vector count as a proxy
         total_vectors = shape[0] if len(shape) > 0 else len(data)
         usage = Usage(
             prompt_tokens=total_vectors,
