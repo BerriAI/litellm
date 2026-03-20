@@ -25,10 +25,10 @@ from litellm.types.utils import (
     Usage,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class MockAsyncStream:
     """Asynchronous mock completion stream."""
@@ -48,7 +48,9 @@ class MockAsyncStream:
         return resp
 
 
-async def _collect_async_chunks(wrapper: AnthropicStreamWrapper) -> List[Dict[str, Any]]:
+async def _collect_async_chunks(
+    wrapper: AnthropicStreamWrapper,
+) -> List[Dict[str, Any]]:
     chunks = []
     async for chunk in wrapper:
         chunks.append(chunk)
