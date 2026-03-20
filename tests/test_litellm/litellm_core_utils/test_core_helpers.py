@@ -59,20 +59,19 @@ VALID_OPENAI_FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", 
 
 
 class TestMapFinishReasonAnthropic:
-    def test_stop_sequence(self):
-        assert map_finish_reason("stop_sequence") == "stop"
-
-    def test_end_turn(self):
-        assert map_finish_reason("end_turn") == "stop"
-
-    def test_max_tokens(self):
-        assert map_finish_reason("max_tokens") == "length"
-
-    def test_tool_use(self):
-        assert map_finish_reason("tool_use") == "tool_calls"
-
-    def test_compaction(self):
-        assert map_finish_reason("compaction") == "length"
+    @pytest.mark.parametrize(
+        "provider_reason,expected",
+        [
+            ("stop_sequence", "stop"),
+            ("end_turn", "stop"),
+            ("max_tokens", "length"),
+            ("tool_use", "tool_calls"),
+            ("compaction", "length"),
+            ("content_filtered", "content_filter"),
+        ],
+    )
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
+        assert map_finish_reason(provider_reason) == expected
 
 
 class TestMapFinishReasonGemini:

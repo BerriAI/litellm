@@ -20,6 +20,9 @@ spec:
   selector:
     matchLabels:
       {{- include "litellm.selectorLabels" . | nindent 6 }}
+  {{- if .Values.deploymentMinReadySeconds }}
+  minReadySeconds: {{ .Values.deploymentMinReadySeconds }}
+  {{- end }}
   template:
     metadata:
       annotations:

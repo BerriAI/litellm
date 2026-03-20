@@ -202,13 +202,16 @@ class TestImageEditCustomPricing:
         mock_logging_obj = MagicMock()
         mock_logging_obj.model_call_details = {}
 
-        original_update = mock_logging_obj.update_environment_variables
+        original_update = mock_logging_obj.update_from_kwargs
 
-        def capturing_update(**kwargs):
-            captured_litellm_params.update(kwargs.get("litellm_params", {}))
-            return original_update(**kwargs)
+        def capturing_update(**update_kwargs):
+            captured_litellm_params.update(update_kwargs.get("litellm_params", {}))
+            inner_kwargs = update_kwargs.get("kwargs", {})
+            if "metadata" in inner_kwargs:
+                captured_litellm_params["metadata"] = inner_kwargs["metadata"]
+            return original_update(**update_kwargs)
 
-        mock_logging_obj.update_environment_variables = capturing_update
+        mock_logging_obj.update_from_kwargs = capturing_update
 
         with patch(
             "litellm.images.main.get_llm_provider",

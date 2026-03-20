@@ -19,7 +19,8 @@ describe("MCPToolPermissions", () => {
   it("should update tool permissions when user selects a tool", async () => {
     /**
      * Tests that clicking a tool checkbox calls onChange with updated permissions.
-     * This is the core functionality of the component.
+     * Pre-populates toolPermissions so the auto-populate logic on fetch is skipped,
+     * and switches to flat view for predictable checkbox ordering.
      */
     const mockOnChange = vi.fn();
     const mockTools = [
@@ -43,11 +44,12 @@ describe("MCPToolPermissions", () => {
       error: false,
     });
 
+    // Pre-populate with all tools selected so auto-populate doesn't fire
     renderWithProviders(
       <MCPToolPermissions
         accessToken={mockAccessToken}
         selectedServers={[mockServerId]}
-        toolPermissions={{}}
+        toolPermissions={{ [mockServerId]: ["read_wiki_structure", "read_wiki_contents", "ask_question"] }}
         onChange={mockOnChange}
       />,
     );
@@ -61,13 +63,17 @@ describe("MCPToolPermissions", () => {
       expect(screen.getByText("read_wiki_structure")).toBeInTheDocument();
     });
 
-    // Get all checkboxes and click the first one (for read_wiki_structure)
+    // Switch to Flat List view for predictable checkbox ordering
+    const flatListOption = screen.getByText("Flat List");
+    await userEvent.click(flatListOption);
+
+    // Click the first checkbox to deselect read_wiki_structure
     const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[0]);
 
-    // Verify onChange was called with correct permissions
+    // Verify onChange was called with read_wiki_structure removed
     expect(mockOnChange).toHaveBeenCalledWith({
-      [mockServerId]: ["read_wiki_structure"],
+      [mockServerId]: ["read_wiki_contents", "ask_question"],
     });
 
     // Verify API calls
