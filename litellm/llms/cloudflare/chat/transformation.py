@@ -157,12 +157,12 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        result = completion_response.get("result", {})
+        result = completion_response.get("result") or {}
 
         model_response.choices[0].message.content = result.get("response", "")  # type: ignore
 
         # Use usage from response if available, otherwise estimate
-        result_usage = result.get("usage", {})
+        result_usage = result.get("usage") or {}
         if result_usage:
             prompt_tokens = result_usage.get("prompt_tokens", 0)
             completion_tokens = result_usage.get("completion_tokens", 0)

@@ -97,7 +97,7 @@ class CloudflareEmbeddingConfig(BaseEmbeddingConfig):
                 message=raw_response.text, status_code=raw_response.status_code
             )
 
-        result = raw_response_json.get("result", {})
+        result = raw_response_json.get("result") or {}
         data = result.get("data", [])
         shape = result.get("shape", [0, 0])
 

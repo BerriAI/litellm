@@ -5467,13 +5467,10 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
                 or get_secret("CLOUDFLARE_API_KEY")
             )
-            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("CLOUDFLARE_API_BASE")
-                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
-            )
+            api_base = api_base or litellm.api_base or get_secret("CLOUDFLARE_API_BASE")
+            if not api_base:
+                account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
+                api_base = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
 
             response = base_llm_http_handler.embedding(
                 model=model,

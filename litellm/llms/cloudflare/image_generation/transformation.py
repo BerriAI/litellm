@@ -57,10 +57,11 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
             raise ValueError(
                 "Missing Cloudflare API Key - A call is being made to cloudflare but no key is set either in the environment variables or via params"
             )
-        headers["accept"] = "application/json"
-        headers["content-type"] = "application/json"
-        headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        return {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
 
     def get_supported_openai_params(
         self, model: str
@@ -77,9 +78,14 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
         supported_params = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k == "size" and isinstance(v, str) and "x" in v:
-                parts = v.split("x")
-                optional_params["width"] = int(parts[0])
-                optional_params["height"] = int(parts[1])
+                parts = v.split("x", 1)
+                try:
+                    optional_params["width"] = int(parts[0])
+                    optional_params["height"] = int(parts[1])
+                except (ValueError, IndexError):
+                    raise ValueError(
+                        f"Invalid size format '{v}'. Expected 'WIDTHxHEIGHT', e.g. '1024x1024'."
+                    )
             elif k == "n":
                 optional_params["num_images"] = v
             elif k in supported_params:
@@ -134,7 +140,7 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
                     status_code=raw_response.status_code,
                 )
 
-            result = response_data.get("result", {})
+            result = response_data.get("result") or {}
             image_data = result.get("image")
             if image_data:
                 model_response.data.append(ImageObject(b64_json=image_data))
