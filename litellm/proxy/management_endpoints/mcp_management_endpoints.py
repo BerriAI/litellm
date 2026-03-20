@@ -112,6 +112,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
+        LiteLLM_TeamTableCachedObj,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
@@ -147,7 +148,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         team_id: Optional[str] = None,
         server_id: Optional[str] = None,
-    ) -> Tuple[str, "LiteLLM_TeamTableCachedObj"]:
+    ) -> Tuple[str, LiteLLM_TeamTableCachedObj]:
         """
         Verify that the caller is an MCP server manager for a team and (for edit/delete)
         that the target server belongs to that team.
@@ -206,7 +207,7 @@ if MCP_AVAILABLE:
     async def _auto_assign_mcp_server_to_team(
         server_id: str,
         team_id: str,
-        team_obj: "LiteLLM_TeamTableCachedObj",
+        team_obj: LiteLLM_TeamTableCachedObj,
         prisma_client: Any,
     ) -> None:
         """
@@ -245,7 +246,7 @@ if MCP_AVAILABLE:
 
     async def _remove_mcp_server_from_team(
         server_id: str,
-        team_obj: "LiteLLM_TeamTableCachedObj",
+        team_obj: LiteLLM_TeamTableCachedObj,
     ) -> None:
         """Remove a server ID from a team's ObjectPermissionTable.mcp_servers list."""
         from litellm.proxy.proxy_server import prisma_client
