@@ -598,6 +598,16 @@ async def get_sso_settings():
         elif isinstance(team_mappings_data, TeamMappings):
             team_mappings = team_mappings_data
 
+    attribute_mappings_data = sso_settings_dict.pop("attribute_mappings", None)
+    attribute_mappings = None
+    if attribute_mappings_data:
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        if isinstance(attribute_mappings_data, dict):
+            attribute_mappings = AttributeMappings(**attribute_mappings_data)
+        elif isinstance(attribute_mappings_data, AttributeMappings):
+            attribute_mappings = attribute_mappings_data
+
     decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(
         environment_variables=sso_settings_dict
     )
@@ -634,6 +644,7 @@ async def get_sso_settings():
         ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
         role_mappings=role_mappings,
         team_mappings=team_mappings,
+        attribute_mappings=attribute_mappings,
     )
 
     # Get the schema for UI display

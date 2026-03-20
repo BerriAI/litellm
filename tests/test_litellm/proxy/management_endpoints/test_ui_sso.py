@@ -4,7 +4,6 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from fastapi import Request
 
@@ -23,12 +22,12 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
-    _setup_team_mappings,
-    determine_role_from_groups,
+    _setup_all_sso_mappings,
     normalize_email,
     process_sso_jwt_access_token,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
+    AttributeMappings,
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
@@ -174,6 +173,79 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
     assert result.first_name == "CustomFirst"
     assert result.last_name == "CustomLast"
     assert result.team_ids == expected_team_ids
+
+
+def test_microsoft_sso_handler_openid_from_response_with_db_attribute_mappings():
+    """
+    Test that MicrosoftSSOHandler.openid_from_response uses DB-configurable
+    attribute_mappings, overriding the env var defaults.
+    """
+    mock_response = {
+        "db_email": "db-mapped@example.com",
+        "db_display": "DB Display Name",
+        "db_id": "db_user_456",
+        "db_first": "DBFirst",
+        "db_last": "DBLast",
+        # Also include default fields — they should be ignored
+        "userPrincipalName": "should-be-ignored@example.com",
+        "displayName": "Should Be Ignored",
+    }
+
+    attribute_mappings = AttributeMappings(
+        user_email_attribute="db_email",
+        user_id_attribute="db_id",
+        user_display_name_attribute="db_display",
+        user_first_name_attribute="db_first",
+        user_last_name_attribute="db_last",
+    )
+
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response,
+        team_ids=["team1"],
+        user_role=None,
+        attribute_mappings=attribute_mappings,
+    )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "db-mapped@example.com"
+    assert result.display_name == "DB Display Name"
+    assert result.id == "db_user_456"
+    assert result.first_name == "DBFirst"
+    assert result.last_name == "DBLast"
+    assert result.provider == "microsoft"
+
+
+def test_microsoft_sso_handler_openid_from_response_db_mappings_partial_override():
+    """
+    Test that partial DB attribute_mappings only override specified fields,
+    falling back to env var defaults for unspecified fields.
+    """
+    mock_response = {
+        "custom_email_field": "custom@example.com",
+        "userPrincipalName": "default@example.com",
+        "displayName": "Default Display",
+        "id": "default_id",
+        "givenName": "DefaultFirst",
+        "surname": "DefaultLast",
+    }
+
+    # Only override email — rest should use env var defaults
+    attribute_mappings = AttributeMappings(
+        user_email_attribute="custom_email_field",
+    )
+
+    result = MicrosoftSSOHandler.openid_from_response(
+        response=mock_response,
+        team_ids=[],
+        user_role=None,
+        attribute_mappings=attribute_mappings,
+    )
+
+    assert result.email == "custom@example.com"
+    assert result.display_name == "Default Display"
+    assert result.id == "default_id"
+    assert result.first_name == "DefaultFirst"
+    assert result.last_name == "DefaultLast"
 
 
 def test_get_microsoft_callback_response():
@@ -1311,7 +1383,9 @@ async def test_get_generic_sso_response_with_additional_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
-    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
+    mock_sso_instance.access_token = (
+        None  # Avoid triggering JWT decode in process_sso_jwt_access_token
+    )
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
@@ -1373,7 +1447,9 @@ async def test_get_generic_sso_response_with_empty_headers():
     # Mock the SSO provider and its methods
     mock_sso_instance = MagicMock()
     mock_sso_instance.verify_and_process = AsyncMock(return_value=mock_sso_response)
-    mock_sso_instance.access_token = None  # Avoid triggering JWT decode in process_sso_jwt_access_token
+    mock_sso_instance.access_token = (
+        None  # Avoid triggering JWT decode in process_sso_jwt_access_token
+    )
 
     mock_sso_class = MagicMock(return_value=mock_sso_instance)
 
@@ -3150,7 +3226,9 @@ class TestPKCEFunctionality:
         )
         mock_cache.async_delete_cache = AsyncMock()
 
-        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+        with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+        ), patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             # Act
             token_params = (
                 await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -3284,7 +3362,9 @@ class TestPKCEFunctionality:
                     stored_value = mock_redis._store[stored_key]
                     # Stored as JSON-serialized dict for Redis compatibility
                     stored_dict = json.loads(stored_value)
-                    assert isinstance(stored_dict, dict) and "code_verifier" in stored_dict
+                    assert (
+                        isinstance(stored_dict, dict) and "code_verifier" in stored_dict
+                    )
                     assert len(stored_dict["code_verifier"]) == 43
 
                     # Pod B: callback with same state, retrieve from "Redis"
@@ -3354,7 +3434,10 @@ class TestPKCEFunctionality:
                         "value"
                     ]
                     assert stored_key == "pkce_verifier:fallback_state_xyz"
-                    assert isinstance(stored_value, dict) and len(stored_value["code_verifier"]) == 43
+                    assert (
+                        isinstance(stored_value, dict)
+                        and len(stored_value["code_verifier"]) == 43
+                    )
 
                     # Same pod: callback retrieves from in-memory cache
                     mock_request = MagicMock(spec=Request)
@@ -3363,7 +3446,9 @@ class TestPKCEFunctionality:
                         request=mock_request, generic_include_client_id=False
                     )
                     assert "code_verifier" in token_params
-                    assert token_params["code_verifier"] == stored_value["code_verifier"]
+                    assert (
+                        token_params["code_verifier"] == stored_value["code_verifier"]
+                    )
                     # Cache key returned for deferred deletion after successful exchange
                     assert token_params["_pkce_cache_key"] == stored_key
                     mock_in_memory.async_get_cache.assert_called_once_with(
@@ -3397,7 +3482,6 @@ class TestPKCEFunctionality:
             mock_redis.async_get_cache.assert_not_called()
             mock_in_memory.async_get_cache.assert_not_called()
 
-
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_basic_auth(self):
         """When include_client_id=False, client credentials go via HTTP Basic Auth."""
@@ -3428,8 +3512,12 @@ class TestPKCEFunctionality:
             # Verify redirect_uri is forwarded (required by strict OAuth providers)
             assert post_data.get("redirect_uri") == "https://proxy.example.com/callback"
             # Verify credentials are NOT double-sent in the POST body when using Basic Auth
-            assert "client_secret" not in post_data, "client_secret must not appear in POST body when using Basic Auth"
-            assert "client_id" not in post_data, "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
+            assert (
+                "client_secret" not in post_data
+            ), "client_secret must not appear in POST body when using Basic Auth"
+            assert (
+                "client_id" not in post_data
+            ), "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
             return mock_response
 
         # get_async_httpx_client returns a client directly (no context manager).
@@ -3460,12 +3548,13 @@ class TestPKCEFunctionality:
         assert result["email"] == "user@example.com"
         # id_token was explicit null in token_response — the merge loop must remove it
         # rather than leaving "id_token": None in the result.
-        assert "id_token" not in result, "null id_token from token endpoint must be absent in merged result"
+        assert (
+            "id_token" not in result
+        ), "null id_token from token endpoint must be absent in merged result"
         # Verify userinfo GET used the correct Bearer token header
         get_call = mock_userinfo_client.get.call_args
         assert get_call is not None
         assert get_call.kwargs["headers"]["Authorization"] == "Bearer tok_abc"
-
 
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_credentials_in_body(self):
@@ -3481,12 +3570,18 @@ class TestPKCEFunctionality:
         async def fake_post(*args, **kwargs):
             headers = kwargs.get("headers", {})
             auth_header = headers.get("Authorization", "")
-            assert not auth_header.startswith("Basic "), "Should NOT use Basic Auth when include_client_id=True"
+            assert not auth_header.startswith(
+                "Basic "
+            ), "Should NOT use Basic Auth when include_client_id=True"
             data = kwargs.get("data", {})
             assert "client_id" in data
             assert "client_secret" in data
-            assert data.get("code_verifier") == "verifier_xyz", "code_verifier must be in POST body"
-            assert data.get("redirect_uri") == "https://proxy.example.com/callback", "redirect_uri must be forwarded"
+            assert (
+                data.get("code_verifier") == "verifier_xyz"
+            ), "code_verifier must be in POST body"
+            assert (
+                data.get("redirect_uri") == "https://proxy.example.com/callback"
+            ), "redirect_uri must be forwarded"
             mock = MagicMock()
             mock.status_code = 200
             mock.json.return_value = token_resp
@@ -3526,13 +3621,15 @@ class TestPKCEFunctionality:
         assert get_call is not None
         assert get_call.kwargs["headers"]["Authorization"] == "Bearer tok_body"
 
-
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_http200_with_error_body(self):
         """Provider returns HTTP 200 but with an error field instead of tokens."""
         from litellm.proxy._types import ProxyException
 
-        error_body = {"error": "invalid_grant", "error_description": "Code already used"}
+        error_body = {
+            "error": "invalid_grant",
+            "error_description": "Code already used",
+        }
 
         with patch(
             "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
@@ -3560,7 +3657,6 @@ class TestPKCEFunctionality:
         assert "invalid_grant" in exc_info.value.message
         assert str(exc_info.value.code) == "401"
 
-
     @pytest.mark.asyncio
     async def test_pkce_userinfo_falls_back_to_id_token(self):
         """When the userinfo endpoint fails, decode the id_token as fallback."""
@@ -3569,9 +3665,11 @@ class TestPKCEFunctionality:
 
         payload = {"sub": "user_from_jwt", "email": "jwt@example.com"}
         # Build a minimal JWT (header.payload.signature — signature not verified)
-        encoded_payload = base64.urlsafe_b64encode(
-            _json.dumps(payload).encode()
-        ).rstrip(b"=").decode()
+        encoded_payload = (
+            base64.urlsafe_b64encode(_json.dumps(payload).encode())
+            .rstrip(b"=")
+            .decode()
+        )
         fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
         with patch(
@@ -3593,7 +3691,6 @@ class TestPKCEFunctionality:
         assert result["sub"] == "user_from_jwt"
         assert result["email"] == "jwt@example.com"
 
-
     @pytest.mark.asyncio
     async def test_pkce_userinfo_uses_id_token_when_no_endpoint(self):
         """When userinfo_endpoint is None, fall back to id_token directly without HTTP call."""
@@ -3604,7 +3701,9 @@ class TestPKCEFunctionality:
 
         payload = {"sub": "id_token_user", "email": "id@example.com"}
         encoded_payload = (
-            base64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b"=").decode()
+            base64.urlsafe_b64encode(_json.dumps(payload).encode())
+            .rstrip(b"=")
+            .decode()
         )
         fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
@@ -3618,7 +3717,6 @@ class TestPKCEFunctionality:
 
         assert result["sub"] == "id_token_user"
         assert result["email"] == "id@example.com"
-
 
     @pytest.mark.asyncio
     async def test_pkce_userinfo_raises_when_both_sources_unavailable(self):
@@ -3672,9 +3770,12 @@ class TestPKCEFunctionality:
                     additional_headers={},
                 )
 
-        assert "unavailable" in exc_info.value.message.lower() or "no userinfo" in exc_info.value.message.lower() or "userinfo" in exc_info.value.message.lower()
+        assert (
+            "unavailable" in exc_info.value.message.lower()
+            or "no userinfo" in exc_info.value.message.lower()
+            or "userinfo" in exc_info.value.message.lower()
+        )
         assert str(exc_info.value.code) == "401"
-
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_raises_proxy_exception(self):
@@ -3705,9 +3806,11 @@ class TestPKCEFunctionality:
                     request=mock_request, generic_include_client_id=False
                 )
 
-        assert "verifier not found" in exc_info.value.message.lower() or "cache" in exc_info.value.message.lower()
+        assert (
+            "verifier not found" in exc_info.value.message.lower()
+            or "cache" in exc_info.value.message.lower()
+        )
         assert str(exc_info.value.code) == "401"
-
 
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_public_client_no_secret(self):
@@ -3725,10 +3828,14 @@ class TestPKCEFunctionality:
         async def fake_post(*args, **kwargs):
             headers = kwargs.get("headers", {})
             auth_header = headers.get("Authorization", "")
-            assert not auth_header.startswith("Basic "), "Public client must not use Basic Auth"
+            assert not auth_header.startswith(
+                "Basic "
+            ), "Public client must not use Basic Auth"
             data = kwargs.get("data", {})
             assert data.get("client_id") == "public_client_id"
-            assert "client_secret" not in data, "No secret should be sent for public client"
+            assert (
+                "client_secret" not in data
+            ), "No secret should be sent for public client"
             assert data.get("code_verifier") == "public_verifier"
             mock = MagicMock()
             mock.status_code = 200
@@ -3765,26 +3872,31 @@ class TestPKCEFunctionality:
         assert result["access_token"] == "tok_public"
         assert result["sub"] == "pubuser"
 
-
     @pytest.mark.asyncio
     async def test_delete_pkce_verifier_swallows_deletion_errors(self):
         """_delete_pkce_verifier must not raise when the cache delete fails
-        (best-effort cleanup — a leftover verifier must not abort a successful SSO login)."""
+        (best-effort cleanup — a leftover verifier must not abort a successful SSO login).
+        """
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         failing_cache = MagicMock()
-        failing_cache.async_delete_cache = AsyncMock(side_effect=Exception("Redis down"))
+        failing_cache.async_delete_cache = AsyncMock(
+            side_effect=Exception("Redis down")
+        )
 
         # Should NOT raise even though the underlying cache delete fails
         with patch("litellm.proxy.proxy_server.redis_usage_cache", None), patch(
             "litellm.proxy.proxy_server.user_api_key_cache", failing_cache
         ):
-            await SSOAuthenticationHandler._delete_pkce_verifier("pkce_verifier:test_state")
+            await SSOAuthenticationHandler._delete_pkce_verifier(
+                "pkce_verifier:test_state"
+            )
 
-        failing_cache.async_delete_cache.assert_called_once_with(key="pkce_verifier:test_state")
-
+        failing_cache.async_delete_cache.assert_called_once_with(
+            key="pkce_verifier:test_state"
+        )
 
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_unexpected_format_raises_proxy_exception(self):
@@ -3818,7 +3930,11 @@ class TestPKCEFunctionality:
                     request=mock_request, generic_include_client_id=False
                 )
 
-        assert "cache" in exc_info.value.message.lower() or "verifier" in exc_info.value.message.lower() or "format" in exc_info.value.message.lower()
+        assert (
+            "cache" in exc_info.value.message.lower()
+            or "verifier" in exc_info.value.message.lower()
+            or "format" in exc_info.value.message.lower()
+        )
         assert str(exc_info.value.code) == "401"
         # Strict mode should also clean up the corrupt cache entry before raising
         mock_cache.async_delete_cache.assert_called_once()
@@ -3826,7 +3942,8 @@ class TestPKCEFunctionality:
     @pytest.mark.asyncio
     async def test_pkce_cache_miss_non_strict_logs_warning_and_continues(self, caplog):
         """Default (non-strict) cache-miss behavior: logs a warning and returns params
-        without code_verifier rather than raising, to preserve backward compatibility."""
+        without code_verifier rather than raising, to preserve backward compatibility.
+        """
         import logging
         import os
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -3864,7 +3981,8 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify the warning was actually logged
         assert any(
-            "verifier not found" in r.message.lower() or "code_verifier" in r.message.lower()
+            "verifier not found" in r.message.lower()
+            or "code_verifier" in r.message.lower()
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected a cache-miss warning. Records: {[r.message for r in caplog.records]}"
@@ -3906,7 +4024,9 @@ class TestPKCEFunctionality:
         assert str(exc_info.value.code) == "401"
 
     @pytest.mark.asyncio
-    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(self, caplog):
+    async def test_pkce_cache_miss_unexpected_format_non_strict_logs_warning(
+        self, caplog
+    ):
         """When cached data has an unexpected format (e.g. integer from corrupt Redis)
         in non-strict mode, prepare_token_exchange_parameters logs a warning and
         returns params without code_verifier rather than raising."""
@@ -3949,7 +4069,9 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify a warning was logged about the unexpected format or cache miss
         assert any(
-            "verifier" in r.message.lower() or "format" in r.message.lower() or "cache" in r.message.lower()
+            "verifier" in r.message.lower()
+            or "format" in r.message.lower()
+            or "cache" in r.message.lower()
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected a format/cache warning. Records: {[r.message for r in caplog.records]}"
@@ -4050,7 +4172,10 @@ class TestPKCEFunctionality:
                     additional_headers={},
                 )
 
-        assert "no access_token" in exc_info.value.message or "access_token" in exc_info.value.message
+        assert (
+            "no access_token" in exc_info.value.message
+            or "access_token" in exc_info.value.message
+        )
         assert str(exc_info.value.code) == "401"
 
 
@@ -4799,8 +4924,8 @@ class TestCustomMicrosoftSSO:
 
 
 @pytest.mark.asyncio
-async def test_setup_team_mappings():
-    """Test _setup_team_mappings function loads team mappings from database."""
+async def test_setup_all_sso_mappings_loads_team_mappings():
+    """Test _setup_all_sso_mappings loads team mappings from database."""
     # Arrange
     mock_prisma = MagicMock()
     mock_sso_config = MagicMock()
@@ -4814,12 +4939,12 @@ async def test_setup_team_mappings():
         return_value=mock_prisma,
     ):
         # Act
-        result = await _setup_team_mappings()
+        _role_mappings, team_mappings, _attr_mappings = await _setup_all_sso_mappings()
 
         # Assert
-        assert result is not None
-        assert isinstance(result, TeamMappings)
-        assert result.team_ids_jwt_field == "groups"
+        assert team_mappings is not None
+        assert isinstance(team_mappings, TeamMappings)
+        assert team_mappings.team_ids_jwt_field == "groups"
         mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
             where={"id": "sso_config"}
         )
@@ -4969,11 +5094,7 @@ def test_process_sso_jwt_access_token_extracts_role_from_nested_field():
 
     access_token_payload = {
         "sub": "user-123",
-        "resource_access": {
-            "my-client": {
-                "roles": ["proxy_admin"]
-            }
-        },
+        "resource_access": {"my-client": {"roles": ["proxy_admin"]}},
     }
     access_token_str = pyjwt.encode(access_token_payload, "secret", algorithm="HS256")
 
@@ -4985,7 +5106,9 @@ def test_process_sso_jwt_access_token_extracts_role_from_nested_field():
         user_role=None,
     )
 
-    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "resource_access.my-client.roles"}):
+    with patch.dict(
+        os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "resource_access.my-client.roles"}
+    ):
         process_sso_jwt_access_token(
             access_token_str=access_token_str,
             sso_jwt_handler=None,
@@ -5040,13 +5163,16 @@ def test_process_sso_jwt_access_token_with_role_mappings():
     # Should get highest privilege role
     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
 
+
 def test_generic_response_convertor_with_extra_attributes(monkeypatch):
     """Test that extra attributes are extracted when GENERIC_USER_EXTRA_ATTRIBUTES is set"""
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
-    
+
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
-    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "custom_field1,custom_field2,custom_field3")
-    
+    monkeypatch.setenv(
+        "GENERIC_USER_EXTRA_ATTRIBUTES", "custom_field1,custom_field2,custom_field3"
+    )
+
     mock_response = {
         "sub": "user-id-123",
         "email": "user@example.com",
@@ -5058,29 +5184,30 @@ def test_generic_response_convertor_with_extra_attributes(monkeypatch):
         "custom_field2": ["item1", "item2"],
         "custom_field3": {"nested": "data"},
     }
-    
+
     mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
-    
+
     result = generic_response_convertor(
         response=mock_response,
         jwt_handler=mock_jwt_handler,
         sso_jwt_handler=None,
         role_mappings=None,
     )
-    
+
     assert result.extra_fields is not None
     assert result.extra_fields["custom_field1"] == "value1"
     assert result.extra_fields["custom_field2"] == ["item1", "item2"]
     assert result.extra_fields["custom_field3"] == {"nested": "data"}
 
+
 def test_generic_response_convertor_without_extra_attributes(monkeypatch):
     """Test backward compatibility - extra_fields is None when env var not set"""
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
-    
+
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
     # Don't set GENERIC_USER_EXTRA_ATTRIBUTES
-    
+
     mock_response = {
         "sub": "user-id-123",
         "email": "user@example.com",
@@ -5091,72 +5218,447 @@ def test_generic_response_convertor_without_extra_attributes(monkeypatch):
         "custom_field1": "value1",
         "custom_field2": "value2",
     }
-    
+
     mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
-    
+
     result = generic_response_convertor(
         response=mock_response,
         jwt_handler=mock_jwt_handler,
         sso_jwt_handler=None,
         role_mappings=None,
     )
-    
+
     assert result.extra_fields is None
+
 
 def test_generic_response_convertor_extra_attributes_with_nested_paths(monkeypatch):
     """Test that nested paths work with dot notation"""
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
-    
+
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
-    monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "org_info.department,org_info.manager")
-    
+    monkeypatch.setenv(
+        "GENERIC_USER_EXTRA_ATTRIBUTES", "org_info.department,org_info.manager"
+    )
+
     mock_response = {
         "sub": "user-id-123",
         "email": "user@example.com",
-        "org_info": {
-            "department": "Engineering",
-            "manager": "Jane Smith"
-        }
+        "org_info": {"department": "Engineering", "manager": "Jane Smith"},
     }
-    
+
     mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
-    
+
     result = generic_response_convertor(
         response=mock_response,
         jwt_handler=mock_jwt_handler,
         sso_jwt_handler=None,
         role_mappings=None,
     )
-    
+
     assert result.extra_fields is not None
     assert result.extra_fields["org_info.department"] == "Engineering"
     assert result.extra_fields["org_info.manager"] == "Jane Smith"
 
+
 def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     """Test that missing fields return None"""
     from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
-    
+
     monkeypatch.setenv("GENERIC_CLIENT_ID", "test_client")
     monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "missing_field,another_missing")
-    
+
     mock_response = {
         "sub": "user-id-123",
         "email": "user@example.com",
     }
-    
+
     mock_jwt_handler = MagicMock(spec=JWTHandler)
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
-    
+
     result = generic_response_convertor(
         response=mock_response,
         jwt_handler=mock_jwt_handler,
         sso_jwt_handler=None,
         role_mappings=None,
     )
-    
+
     assert result.extra_fields is not None
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
 
+
+class TestAttributeMappings:
+    """Tests for DB-configurable attribute mappings (AttributeMappings)."""
+
+    def test_attribute_mappings_override_env_vars(self, monkeypatch):
+        """Test that DB AttributeMappings take precedence over env vars."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        # Set env vars that should be overridden by DB mappings
+        monkeypatch.setenv("GENERIC_USER_ID_ATTRIBUTE", "sub")
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
+
+        mock_response = {
+            "sub": "env-var-id",
+            "email": "env@example.com",
+            "custom_uid": "db-mapped-id",
+            "work_email": "db@example.com",
+            "full_name": "DB User",
+            "fname": "DB",
+            "lname": "User",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        attribute_mappings = AttributeMappings(
+            user_id_attribute="custom_uid",
+            user_email_attribute="work_email",
+            user_display_name_attribute="full_name",
+            user_first_name_attribute="fname",
+            user_last_name_attribute="lname",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        # DB mappings should win over env vars
+        assert result.id == "db-mapped-id"
+        assert result.email == "db@example.com"
+        assert result.display_name == "DB User"
+        assert result.first_name == "DB"
+        assert result.last_name == "User"
+
+    def test_attribute_mappings_partial_override(self, monkeypatch):
+        """Test that unset AttributeMappings fields fall back to env vars."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
+
+        mock_response = {
+            "preferred_username": "fallback-id",
+            "email": "fallback@example.com",
+            "custom_name": "Custom Display",
+            "sub": "sub-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        # Only override display_name, leave others as None (env var fallback)
+        attribute_mappings = AttributeMappings(
+            user_display_name_attribute="custom_name",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        # display_name from DB mapping
+        assert result.display_name == "Custom Display"
+        # email from env var fallback
+        assert result.email == "fallback@example.com"
+        # id from default (preferred_username)
+        assert result.id == "fallback-id"
+
+    def test_attribute_mappings_none_backward_compat(self, monkeypatch):
+        """Test that attribute_mappings=None behaves identically to before."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        monkeypatch.setenv("GENERIC_USER_ID_ATTRIBUTE", "uid")
+        monkeypatch.setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "mail")
+
+        mock_response = {
+            "uid": "legacy-id",
+            "mail": "legacy@example.com",
+            "sub": "sub-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=None,
+        )
+
+        assert result.id == "legacy-id"
+        assert result.email == "legacy@example.com"
+
+    def test_attribute_mappings_extra_attributes_from_db(self, monkeypatch):
+        """Test that user_extra_attributes from DB overrides GENERIC_USER_EXTRA_ATTRIBUTES env var."""
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+        from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+        # Env var would capture "old_field", but DB mapping overrides to "new_field"
+        monkeypatch.setenv("GENERIC_USER_EXTRA_ATTRIBUTES", "old_field")
+
+        mock_response = {
+            "preferred_username": "test-id",
+            "email": "test@example.com",
+            "sub": "sub-value",
+            "old_field": "should-not-appear",
+            "new_field": "db-mapped-value",
+        }
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        attribute_mappings = AttributeMappings(
+            user_extra_attributes="new_field",
+        )
+
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+            attribute_mappings=attribute_mappings,
+        )
+
+        assert result.extra_fields is not None
+        assert "new_field" in result.extra_fields
+        assert result.extra_fields["new_field"] == "db-mapped-value"
+        assert "old_field" not in result.extra_fields
+
+    def test_build_sso_user_update_data_resyncs_sso_attributes(self):
+        """Test that _build_sso_user_update_data stores SSO name fields in metadata."""
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="Test User",
+            first_name="Test",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+            extra_fields={"department": "Engineering"},
+        )
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata={},
+        )
+
+        assert "metadata" in update_data
+        metadata = json.loads(update_data["metadata"])
+        assert "sso_attributes" in metadata
+        assert metadata["sso_attributes"]["display_name"] == "Test User"
+        assert metadata["sso_attributes"]["first_name"] == "Test"
+        assert metadata["sso_attributes"]["last_name"] == "User"
+        assert metadata["sso_attributes"]["extra_fields"] == {
+            "department": "Engineering"
+        }
+
+    def test_build_sso_user_update_data_merges_existing_metadata(self):
+        """Test that SSO attribute re-sync preserves existing metadata keys."""
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="Updated Name",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+        )
+
+        existing_metadata = {
+            "custom_key": "should_be_preserved",
+            "sso_attributes": {"display_name": "Old Name"},
+        }
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata=existing_metadata,
+        )
+
+        metadata = json.loads(update_data["metadata"])
+        # Existing key preserved
+        assert metadata["custom_key"] == "should_be_preserved"
+        # SSO attributes updated
+        assert metadata["sso_attributes"]["display_name"] == "Updated Name"
+
+    @pytest.mark.asyncio
+    async def test_setup_all_sso_mappings_loads_attribute_mappings_from_db(self):
+        """Test that _setup_all_sso_mappings correctly loads attribute mappings from DB."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _setup_all_sso_mappings,
+        )
+
+        mock_sso_record = MagicMock()
+        mock_sso_record.sso_settings = {
+            "attribute_mappings": {
+                "user_id_attribute": "custom_uid",
+                "user_email_attribute": "work_email",
+            }
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_record
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ):
+            _role_mappings, _team_mappings, result = await _setup_all_sso_mappings()
+
+        assert result is not None
+        assert result.user_id_attribute == "custom_uid"
+        assert result.user_email_attribute == "work_email"
+        assert result.user_display_name_attribute is None  # not set
+
+    @pytest.mark.asyncio
+    async def test_setup_all_sso_mappings_returns_none_when_not_configured(self):
+        """Test that _setup_all_sso_mappings returns None for attribute mappings when no mappings in DB."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _setup_all_sso_mappings,
+        )
+
+        mock_sso_record = MagicMock()
+        mock_sso_record.sso_settings = {"google_client_id": "some-id"}
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_record
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ):
+            _role_mappings, _team_mappings, result = await _setup_all_sso_mappings()
+
+        assert result is None
+
+    def test_build_sso_user_update_data_null_existing_metadata(self):
+        """Test that SSO attributes are persisted even when existing metadata is None.
+
+        This covers users created before this feature whose metadata column is NULL.
+        """
+        import json
+
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _build_sso_user_update_data,
+        )
+
+        sso_result = CustomOpenID(
+            id="test-user",
+            email="test@example.com",
+            display_name="New User",
+            first_name="New",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+        )
+
+        update_data = _build_sso_user_update_data(
+            result=sso_result,
+            user_email="test@example.com",
+            user_id="test-user",
+            existing_metadata=None,
+        )
+
+        assert "metadata" in update_data
+        metadata = json.loads(update_data["metadata"])
+        assert metadata["sso_attributes"]["display_name"] == "New User"
+        assert metadata["sso_attributes"]["first_name"] == "New"
+        assert metadata["sso_attributes"]["last_name"] == "User"
+
+    @pytest.mark.asyncio
+    async def test_insert_sso_user_stores_sso_attributes_on_first_login(self):
+        """Test that insert_sso_user persists SSO attributes in metadata on first login.
+
+        Ensures JIT-provisioned users get display_name, first_name, last_name,
+        and extra_fields stored from the very first login, not just on subsequent logins.
+        """
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+        from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+        sso_result = CustomOpenID(
+            id="new-jit-user",
+            email="jit@example.com",
+            display_name="JIT User",
+            first_name="JIT",
+            last_name="User",
+            provider="generic",
+            team_ids=[],
+            user_role=None,
+            extra_fields={"department": "Engineering"},
+        )
+
+        user_defined_values = {
+            "user_id": "new-jit-user",
+            "user_email": "jit@example.com",
+            "user_role": "internal_user",
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        # Mock new_user endpoint
+        mock_response = MagicMock()
+        mock_response.user_id = "new-jit-user"
+
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_new_user:
+            await insert_sso_user(
+                result_openid=sso_result,
+                user_defined_values=user_defined_values,
+            )
+
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            assert new_user_request.metadata is not None
+            assert new_user_request.metadata["auth_provider"] == "generic"
+            assert "sso_attributes" in new_user_request.metadata
+            assert (
+                new_user_request.metadata["sso_attributes"]["display_name"]
+                == "JIT User"
+            )
+            assert new_user_request.metadata["sso_attributes"]["first_name"] == "JIT"
+            assert new_user_request.metadata["sso_attributes"]["last_name"] == "User"
+            assert new_user_request.metadata["sso_attributes"]["extra_fields"] == {
+                "department": "Engineering"
+            }

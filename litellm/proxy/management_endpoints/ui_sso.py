@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import inspect
+import json
 import os
 import secrets
 from copy import deepcopy
@@ -419,31 +420,49 @@ def generic_response_convertor(
     sso_jwt_handler: Optional[JWTHandler] = None,
     role_mappings: Optional["RoleMappings"] = None,
     team_mappings: Optional["TeamMappings"] = None,
+    attribute_mappings: Optional["AttributeMappings"] = None,
 ) -> CustomOpenID:
-    generic_user_id_attribute_name = os.getenv(
-        "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+    # DB attribute_mappings take precedence over env vars
+    generic_user_id_attribute_name = (
+        attribute_mappings.user_id_attribute
+        if attribute_mappings and attribute_mappings.user_id_attribute
+        else os.getenv("GENERIC_USER_ID_ATTRIBUTE", "preferred_username")
     )
-    generic_user_display_name_attribute_name = os.getenv(
-        "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
+    generic_user_display_name_attribute_name = (
+        attribute_mappings.user_display_name_attribute
+        if attribute_mappings and attribute_mappings.user_display_name_attribute
+        else os.getenv("GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub")
     )
-    generic_user_email_attribute_name = os.getenv(
-        "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+    generic_user_email_attribute_name = (
+        attribute_mappings.user_email_attribute
+        if attribute_mappings and attribute_mappings.user_email_attribute
+        else os.getenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email")
     )
-
-    generic_user_first_name_attribute_name = os.getenv(
-        "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+    generic_user_first_name_attribute_name = (
+        attribute_mappings.user_first_name_attribute
+        if attribute_mappings and attribute_mappings.user_first_name_attribute
+        else os.getenv("GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name")
     )
-    generic_user_last_name_attribute_name = os.getenv(
-        "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+    generic_user_last_name_attribute_name = (
+        attribute_mappings.user_last_name_attribute
+        if attribute_mappings and attribute_mappings.user_last_name_attribute
+        else os.getenv("GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name")
     )
-
-    generic_provider_attribute_name = os.getenv(
-        "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+    generic_provider_attribute_name = (
+        attribute_mappings.user_provider_attribute
+        if attribute_mappings and attribute_mappings.user_provider_attribute
+        else os.getenv("GENERIC_USER_PROVIDER_ATTRIBUTE", "provider")
     )
-
-    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
-
-    generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+    generic_user_role_attribute_name = (
+        attribute_mappings.user_role_attribute
+        if attribute_mappings and attribute_mappings.user_role_attribute
+        else os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
+    )
+    generic_user_extra_attributes = (
+        attribute_mappings.user_extra_attributes
+        if attribute_mappings and attribute_mappings.user_extra_attributes
+        else os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+    )
 
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
@@ -602,9 +621,11 @@ def _setup_generic_sso_env_vars(
     )
 
 
-async def _setup_team_mappings() -> Optional["TeamMappings"]:
-    """Setup team mappings from SSO database settings."""
-    team_mappings: Optional["TeamMappings"] = None
+async def _load_sso_settings_from_db() -> Optional[dict]:
+    """Load the SSO settings JSON from DB in a single query.
+
+    Returns the sso_settings dict or None if unavailable.
+    """
     try:
         from litellm.proxy.utils import get_prisma_client_or_throw
 
@@ -617,64 +638,61 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
         )
 
         if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            team_mappings_data = sso_settings_dict.get("team_mappings")
-
-            if team_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
-
-                if isinstance(team_mappings_data, dict):
-                    team_mappings = TeamMappings(**team_mappings_data)
-                elif isinstance(team_mappings_data, TeamMappings):
-                    team_mappings = team_mappings_data
-
-                if team_mappings and team_mappings.team_ids_jwt_field:
-                    verbose_proxy_logger.debug(
-                        f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
-                    )
+            return dict(sso_db_record.sso_settings)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Could not load team_mappings from database: {e}. Continuing with config-based team mapping."
-        )
+        verbose_proxy_logger.debug(f"Could not load SSO settings from database: {e}.")
 
+    return None
+
+
+def _parse_team_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["TeamMappings"]:
+    """Parse team mappings from SSO settings dict."""
+    if not sso_settings_dict:
+        return None
+
+    team_mappings_data = sso_settings_dict.get("team_mappings")
+    if not team_mappings_data:
+        return None
+
+    from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+
+    team_mappings: Optional[TeamMappings] = None
+    if isinstance(team_mappings_data, dict):
+        team_mappings = TeamMappings(**team_mappings_data)
+    elif isinstance(team_mappings_data, TeamMappings):
+        team_mappings = team_mappings_data
+
+    if team_mappings and team_mappings.team_ids_jwt_field:
+        verbose_proxy_logger.debug(
+            f"Loaded team_mappings with team_ids_jwt_field: '{team_mappings.team_ids_jwt_field}'"
+        )
     return team_mappings
 
 
-async def _setup_role_mappings() -> Optional["RoleMappings"]:
-    """Setup role mappings from SSO database settings."""
+def _parse_role_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["RoleMappings"]:
+    """Parse role mappings from SSO settings dict, with env var fallback."""
     role_mappings: Optional["RoleMappings"] = None
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
 
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
+    if sso_settings_dict:
+        role_mappings_data = sso_settings_dict.get("role_mappings")
+        if role_mappings_data:
+            from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
+            if isinstance(role_mappings_data, dict):
+                role_mappings = RoleMappings(**role_mappings_data)
+            elif isinstance(role_mappings_data, RoleMappings):
+                role_mappings = role_mappings_data
 
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            role_mappings_data = sso_settings_dict.get("role_mappings")
+            if role_mappings:
+                verbose_proxy_logger.debug(
+                    f"Loaded role_mappings for provider '{role_mappings.provider}'"
+                )
 
-            if role_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
-
-                if isinstance(role_mappings_data, dict):
-                    role_mappings = RoleMappings(**role_mappings_data)
-                elif isinstance(role_mappings_data, RoleMappings):
-                    role_mappings = role_mappings_data
-
-                if role_mappings:
-                    verbose_proxy_logger.debug(
-                        f"Loaded role_mappings for provider '{role_mappings.provider}'"
-                    )
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
-        )
-
+    # Env var fallback for role mappings
     generic_role_mappings = os.getenv("GENERIC_ROLE_MAPPINGS_ROLES", None)
     generic_role_mappings_group_claim = os.getenv(
         "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
@@ -695,23 +713,57 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             if isinstance(generic_user_role_mappings_data, dict):
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
-                role_mappings_data = {
-                    "provider": "generic",
-                    "group_claim": generic_role_mappings_group_claim,
-                    "default_role": generic_role_mappoings_default_role,
-                    "roles": generic_user_role_mappings_data,
-                }
-
-                role_mappings = RoleMappings(**role_mappings_data)
+                role_mappings = RoleMappings(
+                    provider="generic",
+                    group_claim=generic_role_mappings_group_claim or "",
+                    default_role=generic_role_mappoings_default_role,
+                    roles=generic_user_role_mappings_data,
+                )
                 verbose_proxy_logger.debug(
                     f"Loaded role_mappings from environments for provider '{role_mappings.provider}'."
                 )
-                return role_mappings
         except TypeError as e:
             verbose_proxy_logger.warning(
                 f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic."
             )
     return role_mappings
+
+
+def _parse_attribute_mappings_from_settings(
+    sso_settings_dict: Optional[dict],
+) -> Optional["AttributeMappings"]:
+    """Parse attribute mappings from SSO settings dict."""
+    if not sso_settings_dict:
+        return None
+
+    attribute_mappings_data = sso_settings_dict.get("attribute_mappings")
+    if not attribute_mappings_data:
+        return None
+
+    from litellm.types.proxy.management_endpoints.ui_sso import AttributeMappings
+
+    attribute_mappings: Optional[AttributeMappings] = None
+    if isinstance(attribute_mappings_data, dict):
+        attribute_mappings = AttributeMappings(**attribute_mappings_data)
+    elif isinstance(attribute_mappings_data, AttributeMappings):
+        attribute_mappings = attribute_mappings_data
+
+    if attribute_mappings:
+        verbose_proxy_logger.debug("Loaded attribute_mappings from database")
+    return attribute_mappings
+
+
+async def _setup_all_sso_mappings() -> Tuple[
+    Optional["RoleMappings"],
+    Optional["TeamMappings"],
+    Optional["AttributeMappings"],
+]:
+    """Load all SSO mappings from DB in a single query."""
+    sso_settings_dict = await _load_sso_settings_from_db()
+    role_mappings = _parse_role_mappings_from_settings(sso_settings_dict)
+    team_mappings = _parse_team_mappings_from_settings(sso_settings_dict)
+    attribute_mappings = _parse_attribute_mappings_from_settings(sso_settings_dict)
+    return role_mappings, team_mappings, attribute_mappings
 
 
 def _parse_generic_sso_headers() -> dict:
@@ -817,8 +869,7 @@ async def get_generic_sso_response(
         userinfo_endpoint=generic_userinfo_endpoint,
     )
 
-    role_mappings = await _setup_role_mappings()
-    team_mappings = await _setup_team_mappings()
+    role_mappings, team_mappings, attribute_mappings = await _setup_all_sso_mappings()
 
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
@@ -829,6 +880,7 @@ async def get_generic_sso_response(
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
             team_mappings=team_mappings,
+            attribute_mappings=attribute_mappings,
         )
 
     SSOProvider = create_provider(
@@ -1121,6 +1173,7 @@ def _build_sso_user_update_data(
     result: Optional[Union["CustomOpenID", OpenID, dict]],
     user_email: Optional[str],
     user_id: Optional[str],
+    existing_metadata: Optional[dict] = None,
 ) -> dict:
     """
     Build the update data dictionary for SSO user upsert.
@@ -1129,6 +1182,7 @@ def _build_sso_user_update_data(
         result: The SSO response containing user information
         user_email: The user's email from SSO
         user_id: The user's ID for logging purposes
+        existing_metadata: The user's existing metadata from DB, used to merge SSO attributes
 
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
@@ -1149,6 +1203,26 @@ def _build_sso_user_update_data(
             verbose_proxy_logger.info(
                 f"Updating user {user_id} role from SSO: {sso_role_str}"
             )
+
+    # Re-sync SSO-provided attributes into metadata.sso_attributes
+    sso_attrs: dict = {}
+    display_name = getattr(result, "display_name", None)
+    if isinstance(display_name, str) and display_name:
+        sso_attrs["display_name"] = display_name
+    first_name = getattr(result, "first_name", None)
+    if isinstance(first_name, str) and first_name:
+        sso_attrs["first_name"] = first_name
+    last_name = getattr(result, "last_name", None)
+    if isinstance(last_name, str) and last_name:
+        sso_attrs["last_name"] = last_name
+    extra_fields = getattr(result, "extra_fields", None)
+    if isinstance(extra_fields, dict) and extra_fields:
+        sso_attrs["extra_fields"] = extra_fields
+
+    if sso_attrs:
+        merged_metadata = dict(existing_metadata) if existing_metadata else {}
+        merged_metadata["sso_attributes"] = sso_attrs
+        update_data["metadata"] = json.dumps(merged_metadata)
 
     return update_data
 
@@ -1622,10 +1696,30 @@ async def insert_sso_user(
         auto_create_key=False,
     )
 
-    if result_openid and hasattr(result_openid, "provider"):
-        new_user_request.metadata = {
-            "auth_provider": getattr(result_openid, "provider")
-        }
+    if result_openid:
+        metadata: dict = {}
+        if hasattr(result_openid, "provider"):
+            metadata["auth_provider"] = getattr(result_openid, "provider")
+
+        # Persist SSO attributes on first login (JIT provisioning)
+        sso_attrs: dict = {}
+        display_name = getattr(result_openid, "display_name", None)
+        if isinstance(display_name, str) and display_name:
+            sso_attrs["display_name"] = display_name
+        first_name = getattr(result_openid, "first_name", None)
+        if isinstance(first_name, str) and first_name:
+            sso_attrs["first_name"] = first_name
+        last_name = getattr(result_openid, "last_name", None)
+        if isinstance(last_name, str) and last_name:
+            sso_attrs["last_name"] = last_name
+        extra_fields = getattr(result_openid, "extra_fields", None)
+        if isinstance(extra_fields, dict) and extra_fields:
+            sso_attrs["extra_fields"] = extra_fields
+        if sso_attrs:
+            metadata["sso_attributes"] = sso_attrs
+
+        if metadata:
+            new_user_request.metadata = metadata
 
     response = await new_user(
         data=new_user_request,
@@ -2083,10 +2177,21 @@ class SSOAuthenticationHandler:
         try:
             if user_info is not None:
                 user_id = user_info.user_id
+                raw_metadata = getattr(user_info, "metadata", None)
+                if isinstance(raw_metadata, str):
+                    try:
+                        existing_metadata: dict = json.loads(raw_metadata)
+                    except (json.JSONDecodeError, TypeError):
+                        existing_metadata = {}
+                elif isinstance(raw_metadata, dict):
+                    existing_metadata = raw_metadata
+                else:
+                    existing_metadata = {}
                 update_data = _build_sso_user_update_data(
                     result=result,
                     user_email=user_email,
                     user_id=user_id,
+                    existing_metadata=existing_metadata,
                 )
 
                 await prisma_client.db.litellm_usertable.update_many(
@@ -3177,10 +3282,18 @@ class MicrosoftSSOHandler:
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
+        # Load DB-configurable attribute mappings (same as generic SSO)
+        (
+            _role_mappings,
+            _team_mappings,
+            attribute_mappings,
+        ) = await _setup_all_sso_mappings()
+
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
             user_role=user_role,
+            attribute_mappings=attribute_mappings,
         )
         return result
 
@@ -3189,18 +3302,36 @@ class MicrosoftSSOHandler:
         response: Optional[dict],
         team_ids: List[str],
         user_role: Optional[LitellmUserRoles],
+        attribute_mappings: Optional["AttributeMappings"] = None,
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
+
+        # DB attribute_mappings override env var defaults for Microsoft SSO
+        email_attr = MICROSOFT_USER_EMAIL_ATTRIBUTE
+        id_attr = MICROSOFT_USER_ID_ATTRIBUTE
+        display_name_attr = MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE
+        first_name_attr = MICROSOFT_USER_FIRST_NAME_ATTRIBUTE
+        last_name_attr = MICROSOFT_USER_LAST_NAME_ATTRIBUTE
+        if attribute_mappings is not None:
+            if attribute_mappings.user_email_attribute:
+                email_attr = attribute_mappings.user_email_attribute
+            if attribute_mappings.user_id_attribute:
+                id_attr = attribute_mappings.user_id_attribute
+            if attribute_mappings.user_display_name_attribute:
+                display_name_attr = attribute_mappings.user_display_name_attribute
+            if attribute_mappings.user_first_name_attribute:
+                first_name_attr = attribute_mappings.user_first_name_attribute
+            if attribute_mappings.user_last_name_attribute:
+                last_name_attr = attribute_mappings.user_last_name_attribute
+
         openid_response = CustomOpenID(
-            email=normalize_email(
-                response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")
-            ),
-            display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
+            email=normalize_email(response.get(email_attr) or response.get("mail")),
+            display_name=response.get(display_name_attr),
             provider="microsoft",
-            id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),
-            first_name=response.get(MICROSOFT_USER_FIRST_NAME_ATTRIBUTE),
-            last_name=response.get(MICROSOFT_USER_LAST_NAME_ATTRIBUTE),
+            id=response.get(id_attr),
+            first_name=response.get(first_name_attr),
+            last_name=response.get(last_name_attr),
             team_ids=team_ids,
             user_role=user_role,
         )

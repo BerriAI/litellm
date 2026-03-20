@@ -100,6 +100,48 @@ class TeamMappings(LiteLLMPydanticObjectBase):
     )
 
 
+class AttributeMappings(LiteLLMPydanticObjectBase):
+    """
+    Configuration for mapping IdP response fields to LiteLLM user attributes.
+
+    Each field specifies the IdP response field name (supports dot notation for nested fields).
+    When set, takes precedence over the corresponding GENERIC_USER_*_ATTRIBUTE environment variable.
+    """
+
+    user_id_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for user ID. Supports dot notation (e.g., 'user.id'). Env fallback: GENERIC_USER_ID_ATTRIBUTE, default: 'preferred_username'",
+    )
+    user_email_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for email. Supports dot notation. Env fallback: GENERIC_USER_EMAIL_ATTRIBUTE, default: 'email'",
+    )
+    user_display_name_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for display name. Supports dot notation. Env fallback: GENERIC_USER_DISPLAY_NAME_ATTRIBUTE, default: 'sub'",
+    )
+    user_first_name_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for first name. Supports dot notation. Env fallback: GENERIC_USER_FIRST_NAME_ATTRIBUTE, default: 'first_name'",
+    )
+    user_last_name_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for last name. Supports dot notation. Env fallback: GENERIC_USER_LAST_NAME_ATTRIBUTE, default: 'last_name'",
+    )
+    user_role_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for role. Supports dot notation. Env fallback: GENERIC_USER_ROLE_ATTRIBUTE, default: 'role'",
+    )
+    user_provider_attribute: Optional[str] = Field(
+        default=None,
+        description="IdP field for provider. Supports dot notation. Env fallback: GENERIC_USER_PROVIDER_ATTRIBUTE, default: 'provider'",
+    )
+    user_extra_attributes: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of extra IdP fields to capture. Env fallback: GENERIC_USER_EXTRA_ATTRIBUTES",
+    )
+
+
 class SSOConfig(LiteLLMPydanticObjectBase):
     """
     Configuration for SSO environment variables and settings
@@ -177,6 +219,12 @@ class SSOConfig(LiteLLMPydanticObjectBase):
     team_mappings: Optional[TeamMappings] = Field(
         default=None,
         description="Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings.",
+    )
+
+    # Attribute Mappings
+    attribute_mappings: Optional[AttributeMappings] = Field(
+        default=None,
+        description="Configuration for mapping IdP response fields to LiteLLM user attributes. Takes precedence over GENERIC_USER_*_ATTRIBUTE environment variables.",
     )
 
 
