@@ -77,9 +77,7 @@ def _has_file_search_tool(tools: Optional[Any]) -> bool:
     """Return True if any tool in the list has type 'file_search'."""
     if not tools:
         return False
-    return any(
-        isinstance(t, dict) and t.get("type") == "file_search" for t in tools
-    )
+    return any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
 
 
 def mock_responses_api_response(
@@ -486,7 +484,9 @@ async def aresponses(
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
         original_model = model
 
-        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
+        if isinstance(
+            litellm_logging_obj, LiteLLMLoggingObj
+        ) and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=kwargs
         ):
             if isinstance(input, str):
@@ -514,9 +514,7 @@ async def aresponses(
             )
             input = cast(Union[str, ResponseInputParam], merged_input)
             if model != original_model:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                    model=model
-                )
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
@@ -586,6 +584,88 @@ async def aresponses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def _apply_prompt_management_to_responses_call(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    custom_llm_provider: Optional[str],
+    litellm_logging_obj: Optional[LiteLLMLoggingObj],
+    kwargs: Dict[str, Any],
+    local_vars: Dict[str, Any],
+) -> tuple[Union[str, ResponseInputParam], str, Optional[str]]:
+    async_merged = kwargs.pop("_async_prompt_merged_params", None)
+    if async_merged is not None:
+        for key, value in async_merged.items():
+            local_vars[key] = value
+        return input, model, custom_llm_provider
+
+    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    original_model = model
+
+    if isinstance(input, str):
+        client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
+    else:
+        client_input = [
+            item  # type: ignore[misc]
+            for item in input
+            if isinstance(item, dict) and "role" in item
+        ]
+
+    if isinstance(
+        litellm_logging_obj, LiteLLMLoggingObj
+    ) and litellm_logging_obj.should_run_prompt_management_hooks(
+        prompt_id=prompt_id, non_default_params=kwargs
+    ):
+        (
+            model,
+            merged_input,
+            merged_optional_params,
+        ) = litellm_logging_obj.get_chat_completion_prompt(
+            model=model,
+            messages=client_input,
+            non_default_params=kwargs,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
+        )
+        input = cast(Union[str, ResponseInputParam], merged_input)
+        local_vars["input"] = input
+        local_vars["model"] = model
+        if model != original_model:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            local_vars["custom_llm_provider"] = custom_llm_provider
+        for key, value in merged_optional_params.items():
+            local_vars[key] = value
+
+    return input, model, custom_llm_provider
+
+
+def _resolve_model_provider_for_responses(
+    model: str,
+    custom_llm_provider: Optional[str],
+    litellm_params: GenericLiteLLMParams,
+    local_vars: Dict[str, Any],
+) -> tuple[str, Optional[str]]:
+    (
+        model,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+    )
+    local_vars["custom_llm_provider"] = custom_llm_provider
+    if dynamic_api_key is not None:
+        litellm_params.api_key = dynamic_api_key
+    if dynamic_api_base is not None:
+        litellm_params.api_base = dynamic_api_base
+    return model, custom_llm_provider
 
 
 @client
@@ -659,26 +739,12 @@ def responses(
                 mock_response=litellm_params.mock_response
             )
 
-        (
-            model,
-            custom_llm_provider,
-            dynamic_api_key,
-            dynamic_api_base,
-        ) = litellm.get_llm_provider(
+        model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
+            litellm_params=litellm_params,
+            local_vars=local_vars,
         )
-
-        # Update local_vars with detected provider (fixes #19782)
-        local_vars["custom_llm_provider"] = custom_llm_provider
-
-        # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
-        if dynamic_api_key is not None:
-            litellm_params.api_key = dynamic_api_key
-        if dynamic_api_base is not None:
-            litellm_params.api_base = dynamic_api_base
 
         #########################################################
         # PROMPT MANAGEMENT
@@ -686,53 +752,14 @@ def responses(
         # passes the result via _async_prompt_merged_params — apply those
         # directly and skip the sync hook to avoid double-merging.
         #########################################################
-        _async_merged = kwargs.pop("_async_prompt_merged_params", None)
-        if _async_merged is not None:
-            for k, v in _async_merged.items():
-                local_vars[k] = v
-        else:
-            prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
-            prompt_variables = cast(
-                Optional[dict], kwargs.get("prompt_variables", None)
-            )
-            original_model = model
-
-            if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
-                prompt_id=prompt_id, non_default_params=kwargs
-            ):
-                if isinstance(input, str):
-                    client_input: List[AllMessageValues] = [
-                        {"role": "user", "content": input}
-                    ]
-                else:
-                    client_input = [
-                        item  # type: ignore[misc]
-                        for item in input
-                        if isinstance(item, dict) and "role" in item
-                    ]
-                (
-                    model,
-                    merged_input,
-                    merged_optional_params,
-                ) = litellm_logging_obj.get_chat_completion_prompt(
-                    model=model,
-                    messages=client_input,
-                    non_default_params=kwargs,
-                    prompt_id=prompt_id,
-                    prompt_variables=prompt_variables,
-                    prompt_label=kwargs.get("prompt_label", None),
-                    prompt_version=kwargs.get("prompt_version", None),
-                )
-                input = cast(Union[str, ResponseInputParam], merged_input)
-                local_vars["input"] = input
-                local_vars["model"] = model
-                if model != original_model:
-                    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                        model=model
-                    )
-                    local_vars["custom_llm_provider"] = custom_llm_provider
-                for k, v in merged_optional_params.items():
-                    local_vars[k] = v
+        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+            input=input,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_logging_obj=litellm_logging_obj,
+            kwargs=kwargs,
+            local_vars=local_vars,
+        )
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
@@ -803,12 +830,16 @@ def responses(
             return run_async_function(aresponses_api_with_mcp, **mcp_call_kwargs)
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=custom_llm_provider,
-        )
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig]
+        if custom_llm_provider is None:
+            responses_api_provider_config = None
+        else:
+            responses_api_provider_config = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=model,
+                    provider=custom_llm_provider,
+                )
+            )
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
@@ -919,6 +950,9 @@ def responses(
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
+
         response = base_llm_http_handler.response_api_handler(
             model=model,
             input=input,
