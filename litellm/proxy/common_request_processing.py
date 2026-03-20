@@ -801,6 +801,108 @@ class ProxyBaseLLMRequestProcessing:
                 json.dumps(self.data, indent=4, default=str),
             )
 
+    async def _maybe_return_streaming_response(
+        self,
+        request: Request,
+        response: Any,
+        route_type: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        select_data_generator: Optional[Callable],
+        logging_obj: LiteLLMLoggingObj,
+        requested_model_from_client: Optional[str],
+        model_id: str,
+        cache_key: str,
+        api_base: str,
+        version: Optional[str],
+        response_cost: Any,
+        fastest_response_batch_completion: Any,
+        additional_headers: dict,
+        hidden_params: dict,
+        is_streaming_request: Optional[bool],
+    ) -> Optional[Any]:
+        if not (
+            self._is_streaming_request(
+                data=self.data, is_streaming_request=is_streaming_request
+            )
+            or self._is_streaming_response(response)
+        ):
+            return None
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=logging_obj.litellm_call_id,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            request_data=self.data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+            **additional_headers,
+        )
+
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
+
+        if requested_model_from_client:
+            self.data["_litellm_client_requested_model"] = requested_model_from_client
+
+        if route_type == "allm_passthrough_route":
+            if self._is_streaming_response(response):
+                if asyncio.iscoroutine(response):
+                    generator = await response
+                else:
+                    generator = response
+                return StreamingResponse(
+                    content=generator,
+                    status_code=status.HTTP_200_OK,
+                    headers=custom_headers,
+                )
+            return StreamingResponse(
+                content=response.aiter_bytes(),
+                status_code=response.status_code,
+                headers=custom_headers,
+            )
+        elif route_type == "anthropic_messages":
+            if self._is_streaming_response(response):
+                selected_data_generator = (
+                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=self.data,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                )
+                return await create_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
+            return None
+        elif select_data_generator:
+            selected_data_generator = select_data_generator(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=self.data,
+            )
+            return await create_response(
+                generator=selected_data_generator,
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        return None
+
     async def base_process_llm_request(
         self,
         request: Request,
@@ -992,98 +1094,27 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
             )
         )
-        if self._is_streaming_request(
-            data=self.data, is_streaming_request=is_streaming_request
-        ) or self._is_streaming_response(
-            response
-        ):  # use generate_responses to stream responses
-            custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=logging_obj.litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                fastest_response_batch_completion=fastest_response_batch_completion,
-                request_data=self.data,
-                hidden_params=hidden_params,
-                litellm_logging_obj=logging_obj,
-                **additional_headers,
-            )
-
-            # Call response headers hook for streaming success
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_headers=dict(request.headers),
-            )
-            if callback_headers:
-                custom_headers.update(callback_headers)
-
-            # Preserve the original client-requested model (pre-alias mapping) for downstream
-            # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
-            # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
-            # what the client sent.
-            if requested_model_from_client:
-                self.data[
-                    "_litellm_client_requested_model"
-                ] = requested_model_from_client
-            if route_type == "allm_passthrough_route":
-                # Check if response is an async generator
-                if self._is_streaming_response(response):
-                    if asyncio.iscoroutine(response):
-                        generator = await response
-                    else:
-                        generator = response
-
-                    # For passthrough routes, stream directly without error parsing
-                    # since we're dealing with raw binary data (e.g., AWS event streams)
-                    return StreamingResponse(
-                        content=generator,
-                        status_code=status.HTTP_200_OK,
-                        headers=custom_headers,
-                    )
-                else:
-                    # Traditional HTTP response with aiter_bytes
-                    return StreamingResponse(
-                        content=response.aiter_bytes(),
-                        status_code=response.status_code,
-                        headers=custom_headers,
-                    )
-            elif route_type == "anthropic_messages":
-                # Check if response is actually a streaming response (async generator)
-                # Non-streaming responses (dict) should be returned directly
-                # This handles cases like websearch_interception agentic loop
-                # which returns a non-streaming dict even for streaming requests
-                if self._is_streaming_response(response):
-                    selected_data_generator = (
-                        ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                            response=response,
-                            user_api_key_dict=user_api_key_dict,
-                            request_data=self.data,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    )
-                    return await create_response(
-                        generator=selected_data_generator,
-                        media_type="text/event-stream",
-                        headers=custom_headers,
-                    )
-                # Non-streaming response - fall through to normal response handling
-            elif select_data_generator:
-                selected_data_generator = select_data_generator(
-                    response=response,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=self.data,
-                )
-                return await create_response(
-                    generator=selected_data_generator,
-                    media_type="text/event-stream",
-                    headers=custom_headers,
-                )
+        streaming_response = await self._maybe_return_streaming_response(
+            request=request,
+            response=response,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            select_data_generator=select_data_generator,
+            logging_obj=logging_obj,
+            requested_model_from_client=requested_model_from_client,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            additional_headers=additional_headers,
+            hidden_params=hidden_params,
+            is_streaming_request=is_streaming_request,
+        )
+        if streaming_response is not None:
+            return streaming_response
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
