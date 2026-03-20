@@ -97,8 +97,10 @@ class BedrockRealtime(BaseAWSLLM):
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream = await bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+            bedrock_stream = (
+                await bedrock_client.invoke_model_with_bidirectional_stream(
+                    InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+                )
             )
 
             verbose_proxy_logger.debug(
@@ -232,7 +234,7 @@ class BedrockRealtime(BaseAWSLLM):
 
                     # Transform Bedrock format to OpenAI format
                     from litellm.types.realtime import RealtimeResponseTransformInput
-                    
+
                     realtime_response_transform_input: RealtimeResponseTransformInput = {
                         "current_output_item_id": session_state.get(
                             "current_output_item_id"
@@ -251,13 +253,11 @@ class BedrockRealtime(BaseAWSLLM):
                         ),
                     }
 
-                    transformed_response = (
-                        transformation_config.transform_realtime_response(
-                            message=bedrock_response,
-                            model=model,
-                            logging_obj=logging_obj,
-                            realtime_response_transform_input=realtime_response_transform_input,
-                        )
+                    transformed_response = transformation_config.transform_realtime_response(
+                        message=bedrock_response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        realtime_response_transform_input=realtime_response_transform_input,
                     )
 
                     # Update session state

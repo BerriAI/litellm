@@ -514,6 +514,57 @@ All models listed [here](https://ai.google.dev/gemini-api/docs/models/gemini) ar
 | Model Name         | Function Call                                         |
 | :---               | :---                                                  |
 | text-embedding-004 | `embedding(model="gemini/text-embedding-004", input)` |
+| gemini-embedding-2-preview | `embedding(model="gemini/gemini-embedding-2-preview", input)` | [Multimodal docs](#gemini-embedding-2-preview-multimodal) |
+
+### Gemini Embedding 2 Preview (Multimodal)
+
+`gemini-embedding-2-preview` supports **multimodal embeddings**—text, images, audio, video, and PDF in a single request. See [blog post](/blog/gemini_embedding_2_multimodal) for details.
+
+**Input formats:**
+- **Data URIs:** `data:image/png;base64,<encoded_data>`
+- **Gemini file references:** `files/abc123` (pre-uploaded via Gemini Files API)
+
+**Supported MIME types:** `image/png`, `image/jpeg`, `audio/mpeg`, `audio/wav`, `video/mp4`, `video/quicktime`, `application/pdf`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import embedding
+import os
+os.environ["GEMINI_API_KEY"] = ""
+
+# Text + Image (base64)
+response = embedding(
+    model="gemini/gemini-embedding-2-preview",
+    input=[
+        "The food was delicious and the waiter...",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
+    ],
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl -X POST http://localhost:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-embedding-2-preview",
+    "input": [
+      "The food was delicious and the waiter...",
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+**Optional:** `dimensions` maps to Gemini's `outputDimensionality`.
 
 
 ## Vertex AI Embedding Models

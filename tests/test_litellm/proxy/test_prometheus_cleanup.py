@@ -68,6 +68,30 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert os.path.isdir(custom_dir)
 
     @pytest.mark.parametrize(
+        "litellm_settings",
+        [
+            {"callbacks": "prometheus"},
+            {"success_callback": "prometheus"},
+            {"failure_callback": "prometheus"},
+            {"callbacks": "custom_callback"},  # string but not prometheus
+        ],
+    )
+    def test_handles_string_callbacks(self, litellm_settings):
+        """When callbacks are specified as a string instead of a list, should not crash."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            os.environ.pop("prometheus_multiproc_dir", None)
+
+            # Should not raise TypeError
+            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=4,
+                litellm_settings=litellm_settings,
+            )
+
+            # Cleanup
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+    @pytest.mark.parametrize(
         "num_workers, litellm_settings",
         [
             (1, {"callbacks": ["prometheus"]}),

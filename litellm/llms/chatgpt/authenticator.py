@@ -206,7 +206,9 @@ class Authenticator:
             "interval": str(interval or "5"),
         }
 
-    def _poll_for_authorization_code(self, device_code: Dict[str, str]) -> Dict[str, str]:
+    def _poll_for_authorization_code(
+        self, device_code: Dict[str, str]
+    ) -> Dict[str, str]:
         client = _get_httpx_client()
         interval = int(device_code.get("interval", "5"))
         start_time = time.time()
@@ -284,7 +286,9 @@ class Authenticator:
                 status_code=400,
             )
 
-        if not all(key in data for key in ("access_token", "refresh_token", "id_token")):
+        if not all(
+            key in data for key in ("access_token", "refresh_token", "id_token")
+        ):
             raise GetAccessTokenError(
                 message=f"Token exchange response missing fields: {data}",
                 status_code=400,
@@ -377,11 +381,11 @@ class Authenticator:
             auth_data = self._read_auth_file()
             if auth_data:
                 access_token = auth_data.get("access_token")
-                if access_token and not self._is_token_expired(
-                    auth_data, access_token
-                ):
+                if access_token and not self._is_token_expired(auth_data, access_token):
                     return access_token
-            sleep_for = min(DEVICE_CODE_POLL_SLEEP_SECONDS, max(0.0, deadline - time.time()))
+            sleep_for = min(
+                DEVICE_CODE_POLL_SLEEP_SECONDS, max(0.0, deadline - time.time())
+            )
             if sleep_for <= 0:
                 break
             time.sleep(sleep_for)

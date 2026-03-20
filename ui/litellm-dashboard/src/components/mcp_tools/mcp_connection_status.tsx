@@ -1,28 +1,27 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { Button, Spin, Alert, Collapse } from "antd";
 import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
-import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPConnectionStatusProps {
-  accessToken: string | null;
-  oauthAccessToken?: string | null;
   formValues: Record<string, any>;
-  onToolsLoaded?: (tools: any[]) => void;
+  tools: any[];
+  isLoadingTools: boolean;
+  toolsError: string | null;
+  toolsErrorStackTrace: string | null;
+  canFetchTools: boolean;
+  fetchTools: () => Promise<void>;
 }
 
-const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, oauthAccessToken, formValues, onToolsLoaded }) => {
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools } = useTestMCPConnection({
-    accessToken,
-    oauthAccessToken,
-    formValues, 
-    enabled: true, // Auto-fetch when required fields are available
-  });
-
-  // Notify parent component when tools change
-  useEffect(() => {
-    onToolsLoaded?.(tools);
-  }, [tools, onToolsLoaded]);
+const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
+  formValues,
+  tools,
+  isLoadingTools,
+  toolsError,
+  toolsErrorStackTrace,
+  canFetchTools,
+  fetchTools,
+}) => {
 
   // Don't show anything if required fields aren't filled
   if (!canFetchTools && !formValues.url && !formValues.spec_path) {

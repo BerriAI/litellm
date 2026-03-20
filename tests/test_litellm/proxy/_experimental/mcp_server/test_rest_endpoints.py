@@ -484,7 +484,7 @@ class TestListToolsRestAPI:
         captured = {"called": False}
 
         async def fake_get_tools(
-            server, server_auth_header, raw_headers=None, user_api_key_auth=None
+            server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None
         ):
             captured["called"] = True
             captured["server"] = server
@@ -528,6 +528,175 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
+
+    async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
+        """When server_id is a name string, it should be resolved to its UUID
+        and used for the tools lookup when the UUID is in allowed_server_ids."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-abc-123",
+            name="my-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "my-server"
+        stub_server.server_name = "my-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "my-server"}
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        # Allowed list contains the UUID, not the name
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-abc-123"]
+
+        captured = {"called": False, "server_arg": None}
+
+        async def fake_get_tools(server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None):
+            captured["called"] = True
+            captured["server_arg"] = server
+            return ["tool-x"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_name",
+            lambda name: stub_server if name == "my-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-abc-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="my-server",  # pass name, not UUID
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert captured["called"] is True
+        assert captured["server_arg"] is stub_server
+        assert result["tools"] == ["tool-x"]
+        assert result["error"] is None
+
+    async def test_name_not_in_allowed_returns_access_denied(self, monkeypatch):
+        """When name resolves to a server whose UUID is NOT in allowed_server_ids,
+        the result should be an access_denied error (not a crash or silent pass)."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-xyz-999",
+            name="restricted-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.available_on_public_internet = True
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        # No allowed servers for this key
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_name",
+            lambda name: stub_server if name == "restricted-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-xyz-999" else None,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="restricted-server",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == []
+        assert result["error"] == "unexpected_error"
+        assert "access_denied" in result["message"]
+
+    async def test_oauth2_user_token_injected_for_single_server(self, monkeypatch):
+        """For a single-server OAuth2 request, _get_user_oauth_extra_headers is called
+        and the returned headers are forwarded to _get_tools_for_single_server."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="oauth-server-id",
+            name="oauth-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "oauth-server"
+        stub_server.server_name = "oauth-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "oauth-server"}
+        stub_server.auth_type = MCPAuth.oauth2
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["oauth-server-id"]
+
+        oauth_headers = {"Authorization": "Bearer user-oauth-token"}
+
+        async def fake_get_user_oauth_extra_headers(server, user_api_key_dict, prefetched_creds=None):
+            return oauth_headers
+
+        captured = {}
+
+        async def fake_get_tools(server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None):
+            captured["server"] = server
+            captured["auth_header"] = server_auth_header
+            return ["oauth-tool"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "oauth-server-id" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints, "_get_user_oauth_extra_headers",
+            fake_get_user_oauth_extra_headers, raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="oauth-server-id",
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+        )
+
+        assert result["tools"] == ["oauth-tool"]
+        assert result["error"] is None
 
 
 class TestCallToolRestAPI:
@@ -590,12 +759,14 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
+            auth_type = None
 
         stub_server = StubServer()
 

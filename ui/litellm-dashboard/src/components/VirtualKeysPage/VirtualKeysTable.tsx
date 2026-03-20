@@ -1,5 +1,6 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
@@ -24,14 +25,15 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Popover, Skeleton, Tooltip } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button as AntButton, Popover, Skeleton, Tooltip, Typography } from "antd";
+import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
+import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 
@@ -51,6 +53,8 @@ interface VirtualKeysTableProps {
  */
 
 export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
+  const { data: fetchedOrganizations } = useOrganizations();
+  const resolvedOrganizations = fetchedOrganizations ?? organizations ?? [];
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
@@ -81,10 +85,12 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     data: keys,
     isPending: isLoading,
     isFetching,
+    isError,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
+    expand: "user",
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
@@ -96,6 +102,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       teams,
       organizations,
     });
+
+  // Defer the transition so the button stays in loading state until the table
+  // has rendered with the new data (mirrors the spend-logs pattern)
+  const isFetchingDeferred = useDeferredValue(isFetching);
+  const isButtonLoading = (isFetching || isFetchingDeferred) && !isError;
+
+  const handleRefresh = () => {
+    refetch();
+  };
 
   const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
 
@@ -162,11 +177,9 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         const value = info.getValue() as string;
         const width = info.cell.column.getSize();
         return (
-          <Tooltip title={value}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
-              {value ?? "-"}
-            </span>
-          </Tooltip>
+          <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+            {value ?? "-"}
+          </span>
         );
       },
     },
@@ -181,76 +194,110 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     {
       id: "team_alias",
       accessorKey: "team_id",
-      header: "Team Alias",
+      header: "Team",
       size: 120,
       enableSorting: false,
-      cell: ({ row, getValue }) => {
-        const teamId = getValue() as string;
-        const team = teams?.find((t) => t.team_id === teamId);
-        return team?.team_alias || "Unknown";
-      },
-    },
-    {
-      id: "team_id",
-      accessorKey: "team_id",
-      header: "Team ID",
-      size: 80,
-      enableSorting: false,
       cell: (info) => {
-        const value = info.getValue() as string | null;
+        const teamId = info.getValue() as string | null;
+        if (!teamId) return "-";
+        const team = teams?.find((t) => t.team_id === teamId);
+        const displayValue = team?.team_alias || teamId;
         const width = info.cell.column.getSize();
         return (
-          <Tooltip title={value}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
-              {value ?? "-"}
-            </span>
-          </Tooltip>
+          <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+            {displayValue}
+          </span>
         );
       },
     },
     {
-      id: "organization_id",
+      id: "organization_alias",
       accessorKey: "org_id",
-      header: "Organization ID",
+      header: "Organization",
       size: 140,
       enableSorting: false,
-      cell: (info) => (info.getValue() ? info.renderValue() : "-"),
-    },
-    {
-      id: "user_email",
-      accessorKey: "user",
-      header: "User Email",
-      size: 160,
-      enableSorting: false,
       cell: (info) => {
-        const user = info.getValue() as any;
-        const value = user?.user_email;
+        const orgId = info.getValue() as string | null;
+        if (!orgId) return "-";
+        const org = resolvedOrganizations.find((o) => o.organization_id === orgId);
+        const displayValue = org?.organization_alias || orgId;
         const width = info.cell.column.getSize();
         return (
-          <Tooltip title={value}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
-              {value ?? "-"}
-            </span>
-          </Tooltip>
+          <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
+            {displayValue}
+          </span>
         );
       },
     },
     {
-      id: "user_id",
-      accessorKey: "user_id",
-      header: "User ID",
-      size: 70,
+      id: "user",
+      accessorKey: "user",
+      header: () => (
+        <span className="flex items-center gap-1">
+          User
+          <Popover
+            content="Displays the first available value: User Alias, User Email, or User ID."
+            trigger="hover"
+          >
+            <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+          </Popover>
+        </span>
+      ),
+      size: 160,
       enableSorting: false,
-      cell: (info) => {
-        const userId = info.getValue() as string | null;
-        const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
-        const width = info.cell.column.getSize();
+      cell: ({ row }) => {
+        const key = row.original;
+        const userAlias = key.user?.user_alias ?? null;
+        const userEmail = key.user?.user_email ?? key.user_email ?? null;
+        const userId = key.user_id ?? null;
+        const isDefaultAdmin = userId === "default_user_id";
+        const displayValue = userAlias || userEmail || userId;
+        const width = 160;
+
+        const popoverContent = (
+          <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+            {[
+              { label: "User Alias", value: userAlias },
+              { label: "User Email", value: userEmail },
+              { label: "User ID", value: userId },
+            ].map(({ label, value }) => (
+              <div key={label} className="flex flex-col min-w-0">
+                <span className="text-gray-400">{label}</span>
+                {value ? (
+                  <Typography.Text
+                    className="font-mono text-xs"
+                    ellipsis={{ tooltip: value }}
+                    copyable
+                  >
+                    {value}
+                  </Typography.Text>
+                ) : (
+                  <span className="font-mono">-</span>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+
+        if (isDefaultAdmin && !userAlias && !userEmail) {
+          return (
+            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+              <span className="cursor-default">
+                <DefaultProxyAdminTag userId={userId} />
+              </span>
+            </Popover>
+          );
+        }
+
         return (
-          <Tooltip title={displayValue}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
-              {displayValue ?? "-"}
+          <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+            <span
+              className="font-mono text-xs truncate block cursor-default"
+              style={{ maxWidth: width, overflow: "hidden" }}
+            >
+              {displayValue || "-"}
             </span>
-          </Tooltip>
+          </Popover>
         );
       },
     },
@@ -269,18 +316,63 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
-      size: 70,
+      size: 160,
       enableSorting: false,
       cell: (info) => {
-        const value = info.getValue() as string | null;
-        const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
-        const width = info.cell.column.getSize();
+        const userId = info.getValue() as string | null;
+        if (!userId) return "-";
+        const key = info.row.original;
+        const createdByUser = key.created_by_user;
+        const userAlias = createdByUser?.user_alias ?? null;
+        const userEmail = createdByUser?.user_email ?? null;
+        const isDefaultAdmin = userId === "default_user_id";
+        const displayValue = userAlias || userEmail || userId;
+        const width = 160;
+
+        const popoverContent = (
+          <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+            {[
+              { label: "User Alias", value: userAlias },
+              { label: "User Email", value: userEmail },
+              { label: "User ID", value: userId },
+            ].map(({ label, value }) => (
+              <div key={label} className="flex flex-col min-w-0">
+                <span className="text-gray-400">{label}</span>
+                {value ? (
+                  <Typography.Text
+                    className="font-mono text-xs"
+                    ellipsis={{ tooltip: value }}
+                    copyable
+                  >
+                    {value}
+                  </Typography.Text>
+                ) : (
+                  <span className="font-mono">-</span>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+
+        if (isDefaultAdmin && !userAlias && !userEmail) {
+          return (
+            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+              <span className="cursor-default">
+                <DefaultProxyAdminTag userId={userId} />
+              </span>
+            </Popover>
+          );
+        }
+
         return (
-          <Tooltip title={displayValue}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
-              {displayValue ?? "-"}
+          <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+            <span
+              className="font-mono text-xs truncate block cursor-default"
+              style={{ maxWidth: width, overflow: "hidden" }}
+            >
+              {displayValue}
             </span>
-          </Tooltip>
+          </Popover>
         );
       },
     },
@@ -467,7 +559,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         );
       },
     },
-  ], []);
+  ], [teams, resolvedOrganizations]);
 
   const filterOptions: FilterOption[] = [
     {
@@ -525,8 +617,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
   ];
 
-  console.log(`keys: ${JSON.stringify(keys)}`);
-
   const table = useReactTable({
     data: filteredKeys,
     columns: columns.filter((col) => col.id !== "expander"),
@@ -538,13 +628,11 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     onSortingChange: (updaterOrValue) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
-      console.log(`newSorting: ${JSON.stringify(newSorting)}`);
       setSorting(newSorting);
       if (newSorting && newSorting.length > 0) {
         const sortState = newSorting[0];
         const sortBy = sortState.id;
         const sortOrder = sortState.desc ? "desc" : "asc";
-        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`);
         // Update filters state without triggering debouncedSearch
         // The useKeys hook will automatically refetch with the new sort parameters
         handleFilterChange(
@@ -606,16 +694,28 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
-            {isLoading || isFetching ? (
-              <Skeleton.Node active style={{ width: 200, height: 20 }} />
-            ) : (
-              <span className="inline-flex text-sm text-gray-700">
-                Showing {rangeLabel} of {totalCount} results
-              </span>
-            )}
+            <div className="inline-flex items-center gap-2">
+              {isLoading ? (
+                <Skeleton.Node active style={{ width: 200, height: 20 }} />
+              ) : (
+                <span className="inline-flex text-sm text-gray-700">
+                  Showing {rangeLabel} of {totalCount} results
+                </span>
+              )}
+
+              <AntButton
+                type="default"
+                icon={<SyncOutlined spin={isButtonLoading} />}
+                onClick={handleRefresh}
+                disabled={isButtonLoading}
+                title="Fetch data"
+              >
+                {isButtonLoading ? "Fetching" : "Fetch"}
+              </AntButton>
+            </div>
 
             <div className="inline-flex items-center gap-2">
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Node active style={{ width: 74, height: 20 }} />
               ) : (
                 <span className="text-sm text-gray-700">
@@ -623,24 +723,24 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                 </span>
               )}
 
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.previousPage()}
-                  disabled={isLoading || isFetching || !table.getCanPreviousPage()}
+                  disabled={isLoading || !table.getCanPreviousPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
                 </button>
               )}
 
-              {isLoading || isFetching ? (
+              {isLoading ? (
                 <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.nextPage()}
-                  disabled={isLoading || isFetching || !table.getCanNextPage()}
+                  disabled={isLoading || !table.getCanNextPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
@@ -725,7 +825,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                     ))}
                   </TableHead>
                   <TableBody>
-                    {isLoading || isFetching ? (
+                    {isLoading ? (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">

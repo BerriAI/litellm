@@ -7,11 +7,17 @@ transformations for the Agent API (Responses API).
 Source: litellm/llms/perplexity/responses/transformation.py
 """
 
+import json
 import os
 import sys
 
+import httpx
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
@@ -260,10 +266,12 @@ class TestPerplexityResponsesTransformation:
         assert result.get("user") == "user_456"
 
     def test_all_supported_params_declared(self):
-        """get_supported_openai_params returns complete list"""
+        """get_supported_openai_params returns Perplexity-specific restricted list"""
         config = PerplexityResponsesConfig()
         supported = config.get_supported_openai_params("perplexity/openai/gpt-5.2")
 
+        # Perplexity Responses API supports a restricted set of params
+        # Ref: https://docs.perplexity.ai/api-reference/responses-post
         expected = [
             "max_output_tokens",
             "stream",
@@ -271,68 +279,46 @@ class TestPerplexityResponsesTransformation:
             "top_p",
             "tools",
             "reasoning",
-            "preset",
             "instructions",
             "models",
-            "tool_choice",
-            "parallel_tool_calls",
-            "max_tool_calls",
-            "text",
-            "previous_response_id",
-            "store",
-            "background",
-            "truncation",
-            "metadata",
-            "safety_identifier",
-            "user",
-            "stream_options",
-            "top_logprobs",
-            "prompt_cache_key",
-            "frequency_penalty",
-            "presence_penalty",
-            "service_tier",
         ]
 
         for param in expected:
             assert param in supported, f"Missing supported param: {param}"
 
-    def test_cost_transformation(self):
-        """Perplexity cost dict to OpenAI float"""
-        config = PerplexityResponsesConfig()
+    def test_cost_dict_to_float_via_validator(self):
+        """Perplexity cost dict is parsed by generic ResponseAPIUsage.parse_cost validator"""
+        from litellm.types.llms.openai import ResponseAPIUsage
 
-        usage_data = {
-            "input_tokens": 100,
-            "output_tokens": 200,
-            "total_tokens": 300,
-            "cost": {
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=200,
+            total_tokens=300,
+            cost={
                 "currency": "USD",
                 "input_cost": 0.0001,
                 "output_cost": 0.0002,
                 "total_cost": 0.0003,
             },
-        }
+        )
 
-        result = config._transform_usage(usage_data)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 200
+        assert usage.total_tokens == 300
+        assert usage.cost == 0.0003
 
-        assert result["input_tokens"] == 100
-        assert result["output_tokens"] == 200
-        assert result["total_tokens"] == 300
-        assert result["cost"] == 0.0003
+    def test_cost_float_passthrough_via_validator(self):
+        """Cost already float passes through validator unchanged"""
+        from litellm.types.llms.openai import ResponseAPIUsage
 
-    def test_cost_transformation_float_passthrough(self):
-        """Cost already float passes through"""
-        config = PerplexityResponsesConfig()
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=200,
+            total_tokens=300,
+            cost=0.0005,
+        )
 
-        usage_data = {
-            "input_tokens": 100,
-            "output_tokens": 200,
-            "total_tokens": 300,
-            "cost": 0.0005,
-        }
-
-        result = config._transform_usage(usage_data)
-
-        assert result["cost"] == 0.0005
+        assert usage.cost == 0.0005
 
     def test_preset_handling(self):
         """Preset model names work"""
@@ -349,6 +335,85 @@ class TestPerplexityResponsesTransformation:
         assert data["preset"] == "pro-search"
         assert data["input"] == "What is AI?"
         assert "temperature" in data
+
+    def test_preset_handling_list_input(self):
+        """Preset with list input preserves type field"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "message", "role": "user", "content": "What is AI?"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="preset/pro-search",
+            input=list_input,
+            response_api_optional_request_params={"temperature": 0.7},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["preset"] == "pro-search"
+        assert isinstance(data["input"], list)
+        assert data["input"][0]["type"] == "message"
+        assert data["input"][0]["role"] == "user"
+
+    def test_non_preset_list_input(self):
+        """Non-preset with list input preserves type field"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "message", "role": "user", "content": "Hello"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["model"] == "openai/gpt-5.2"
+        assert isinstance(data["input"], list)
+        assert data["input"][0]["type"] == "message"
+
+    def test_list_input_adds_type_message_when_missing(self):
+        """Input items without type get type='message' added automatically"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"role": "user", "content": "Hello"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["input"][0]["type"] == "message"
+        assert data["input"][0]["role"] == "user"
+        assert data["input"][0]["content"] == "Hello"
+
+    def test_list_input_preserves_existing_type(self):
+        """Input items that already have type are not modified"""
+        config = PerplexityResponsesConfig()
+
+        list_input = [
+            {"type": "function_call_output", "call_id": "123", "output": "{}"},
+        ]
+
+        data = config.transform_responses_api_request(
+            model="openai/gpt-5.2",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert data["input"][0]["type"] == "function_call_output"
 
     def test_get_complete_url(self):
         """Correct endpoint URL"""
@@ -379,3 +444,149 @@ class TestPerplexityResponsesTransformation:
         assert config is not None
         assert isinstance(config, PerplexityResponsesConfig)
         assert config.custom_llm_provider == LlmProviders.PERPLEXITY
+
+    def test_failed_status_raises_exception(self):
+        """Perplexity HTTP 200 with status:'failed' must raise BaseLLMException"""
+        config = PerplexityResponsesConfig()
+
+        failed_body = {
+            "status": "failed",
+            "error": {"message": "Model quota exceeded"},
+        }
+
+        raw_response = httpx.Response(
+            status_code=200,
+            json=failed_body,
+            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=False,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        with pytest.raises(BaseLLMException) as exc_info:
+            config.transform_response_api_response(
+                model="perplexity/openai/gpt-5.2",
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+
+        assert "Model quota exceeded" in str(exc_info.value.message)
+
+    def test_successful_response_passes_through(self):
+        """Normal completed response delegates to base OpenAI handler"""
+        config = PerplexityResponsesConfig()
+
+        success_body = {
+            "id": "resp_123",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "openai/gpt-5.2",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "text": "Hello!", "annotations": []}
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = httpx.Response(
+            status_code=200,
+            json=success_body,
+            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=False,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        response = config.transform_response_api_response(
+            model="perplexity/openai/gpt-5.2",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert response.id == "resp_123"
+        assert response.status == "completed"
+
+    def test_streaming_cost_dict_to_float_via_validator(self):
+        """Cost dict in a streaming response.completed chunk is converted to float
+        end-to-end through transform_streaming_response via pydantic's recursive
+        construction of ResponsesAPIResponse → ResponseAPIUsage.parse_cost."""
+        config = PerplexityResponsesConfig()
+
+        completed_chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_streaming_123",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "openai/gpt-5.2",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_123",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "Hello!", "annotations": []}
+                        ],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 200,
+                    "total_tokens": 300,
+                    "cost": {
+                        "currency": "USD",
+                        "input_cost": 0.0001,
+                        "output_cost": 0.0002,
+                        "total_cost": 0.0003,
+                    },
+                },
+            },
+        }
+
+        logging_obj = LiteLLMLoggingObj(
+            model="perplexity/openai/gpt-5.2",
+            messages=[],
+            stream=True,
+            call_type="responses",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+
+        result = config.transform_streaming_response(
+            model="perplexity/openai/gpt-5.2",
+            parsed_chunk=completed_chunk,
+            logging_obj=logging_obj,
+        )
+
+        assert result.type == "response.completed"
+        assert result.response.usage.cost == 0.0003
+        assert isinstance(result.response.usage.cost, float)

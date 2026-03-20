@@ -60,9 +60,9 @@ class GenericGuardrailAPIRequest(BaseModel):
 
     input_type: Literal["request", "response"]
     litellm_call_id: Optional[str] = None  # the call id of the individual LLM call
-    litellm_trace_id: Optional[str] = (
-        None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-    )
+    litellm_trace_id: Optional[
+        str
+    ] = None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
     structured_messages: Optional[List[AllMessageValues]] = None
     images: Optional[List[str]] = None
     tools: Optional[List[ChatCompletionToolParam]] = None

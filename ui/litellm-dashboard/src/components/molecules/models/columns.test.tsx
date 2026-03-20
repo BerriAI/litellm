@@ -612,18 +612,19 @@ describe("columns", () => {
 
   it("should allow Admin to delete DB models", async () => {
     const user = userEvent.setup();
-    const setSelectedModelId = vi.fn();
+    const onDeleteClick = vi.fn();
     const cols = columns(
       "Admin",
       "admin-user",
       defaultProps.premiumUser,
-      setSelectedModelId,
+      defaultProps.setSelectedModelId,
       defaultProps.setSelectedTeamId,
       defaultProps.getDisplayModelName,
       defaultProps.handleEditClick,
       defaultProps.handleRefreshClick,
       defaultProps.expandedRows,
       defaultProps.setExpandedRows,
+      onDeleteClick,
     );
 
     const model = createMockModel({
@@ -639,23 +640,24 @@ describe("columns", () => {
     expect(deleteButton).toBeInTheDocument();
 
     await user.click(deleteButton);
-    expect(setSelectedModelId).toHaveBeenCalledWith("deletable-model");
+    expect(onDeleteClick).toHaveBeenCalledWith("deletable-model");
   });
 
   it("should allow model creator to delete their own DB models", async () => {
     const user = userEvent.setup();
-    const setSelectedModelId = vi.fn();
+    const onDeleteClick = vi.fn();
     const cols = columns(
       "User",
       "model-creator",
       defaultProps.premiumUser,
-      setSelectedModelId,
+      defaultProps.setSelectedModelId,
       defaultProps.setSelectedTeamId,
       defaultProps.getDisplayModelName,
       defaultProps.handleEditClick,
       defaultProps.handleRefreshClick,
       defaultProps.expandedRows,
       defaultProps.setExpandedRows,
+      onDeleteClick,
     );
 
     const model = createMockModel({
@@ -672,7 +674,7 @@ describe("columns", () => {
     expect(deleteButton).toBeInTheDocument();
 
     await user.click(deleteButton);
-    expect(setSelectedModelId).toHaveBeenCalledWith("user-model");
+    expect(onDeleteClick).toHaveBeenCalledWith("user-model");
   });
 
 

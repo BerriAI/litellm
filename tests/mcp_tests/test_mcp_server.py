@@ -395,6 +395,7 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the session manager and its methods
     mock_session_manager = AsyncMock()
@@ -425,6 +426,8 @@ async def test_streamable_http_mcp_handler_mock():
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
         AsyncMock(return_value=mock_auth_context),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
     ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
@@ -1456,6 +1459,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1511,6 +1515,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
     # Additional fields used by build_mcp_server_from_table
     mock_mcp_server.extra_headers = None
     mock_mcp_server.allow_all_keys = False
@@ -1566,6 +1571,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.authorization_url = None
     mock_mcp_server.registration_url = None
     mock_mcp_server.token_url = None
+    mock_mcp_server.oauth2_flow = None
     # Additional fields used by build_mcp_server_from_table - set explicitly
     # to avoid MagicMock objects being passed to Pydantic MCPServer constructor
     mock_mcp_server.extra_headers = None
@@ -1823,6 +1829,7 @@ async def test_get_tools_for_single_server():
         mock_manager._get_tools_from_server.assert_called_once_with(
             server=mock_server,
             mcp_auth_header="Bearer test_token",
+            extra_headers=None,
             add_prefix=False,
             raw_headers=None,
         )

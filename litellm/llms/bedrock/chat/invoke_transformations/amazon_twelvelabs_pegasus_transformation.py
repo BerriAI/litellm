@@ -70,12 +70,12 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
     def _normalize_response_format(self, value: Any) -> Any:
         """Normalize response_format to TwelveLabs format.
-        
+
         TwelveLabs expects:
         {
             "jsonSchema": {...}
         }
-        
+
         But OpenAI format is:
         {
             "type": "json_schema",
@@ -120,14 +120,14 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         for key in ("temperature", "maxOutputTokens"):
             if key in optional_params:
                 request_data[key] = optional_params.get(key)
-        
+
         # Handle responseFormat - transform to TwelveLabs format
         if "responseFormat" in optional_params:
             response_format = optional_params["responseFormat"]
             transformed_format = self._normalize_response_format(response_format)
             if transformed_format:
                 request_data["responseFormat"] = transformed_format
-        
+
         return request_data
 
     def _build_media_source(self, optional_params: dict) -> Optional[dict]:
@@ -200,13 +200,13 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     ) -> ModelResponse:
         """
         Transform TwelveLabs Pegasus response to LiteLLM format.
-        
+
         TwelveLabs response format:
         {
             "message": "...",
             "finishReason": "stop" | "length"
         }
-        
+
         LiteLLM format:
         ModelResponse with choices[0].message.content and finish_reason
         """
@@ -217,25 +217,26 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 message=f"Error parsing response: {raw_response.text}, error: {str(e)}",
                 status_code=raw_response.status_code,
             )
-        
+
         verbose_logger.debug(
             "twelvelabs pegasus response: %s",
             json.dumps(completion_response, indent=4, default=str),
         )
-        
+
         # Extract message content
         message_content = completion_response.get("message", "")
-        
+
         # Extract finish reason and map to LiteLLM format
         finish_reason_raw = completion_response.get("finishReason", "stop")
         finish_reason = map_finish_reason(finish_reason_raw)
-        
+
         # Set the response content
         try:
             if (
                 message_content
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None) is None
+                and getattr(model_response.choices[0].message, "tool_calls", None)
+                is None
             ):
                 model_response.choices[0].message.content = message_content  # type: ignore
                 model_response.choices[0].finish_reason = finish_reason
@@ -246,7 +247,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 message=f"Error setting response content: {str(e)}. Response: {completion_response}",
                 status_code=raw_response.status_code,
             )
-        
+
         # Calculate usage from headers
         bedrock_input_tokens = raw_response.headers.get(
             "x-amzn-bedrock-input-token-count", None
@@ -254,11 +255,11 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         bedrock_output_tokens = raw_response.headers.get(
             "x-amzn-bedrock-output-token-count", None
         )
-        
+
         prompt_tokens = int(
             bedrock_input_tokens or litellm.token_counter(messages=messages)
         )
-        
+
         completion_tokens = int(
             bedrock_output_tokens
             or litellm.token_counter(
@@ -266,7 +267,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 count_response_tokens=True,
             )
         )
-        
+
         model_response.created = int(time.time())
         model_response.model = model
         usage = Usage(
@@ -275,6 +276,5 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             total_tokens=prompt_tokens + completion_tokens,
         )
         setattr(model_response, "usage", usage)
-        
-        return model_response
 
+        return model_response

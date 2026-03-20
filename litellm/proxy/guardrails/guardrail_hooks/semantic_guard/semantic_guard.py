@@ -52,7 +52,9 @@ class SemanticGuardrail(CustomGuardrail):
         custom_routes_file: Optional[str] = None,
         custom_routes: Optional[List[Dict[str, Any]]] = None,
         on_flagged_action: str = "block",
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        event_hook: Optional[
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+        ] = None,
         default_on: bool = False,
         **kwargs,
     ):
@@ -86,11 +88,13 @@ class SemanticGuardrail(CustomGuardrail):
                 "Provide route_templates or custom_routes."
             )
 
-        self.semantic_router: "SemanticRouter" = SemanticGuardRouteLoader.build_semantic_router(
-            routes=routes,
-            litellm_router=llm_router,
-            embedding_model=embedding_model,
-            global_threshold=similarity_threshold,
+        self.semantic_router: "SemanticRouter" = (
+            SemanticGuardRouteLoader.build_semantic_router(
+                routes=routes,
+                litellm_router=llm_router,
+                embedding_model=embedding_model,
+                global_threshold=similarity_threshold,
+            )
         )
 
         self.route_count = len(routes)

@@ -57,9 +57,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
-        _is_ga = realtime_protocol is not None and realtime_protocol.upper() in ("GA", "V1")
+        _is_ga = realtime_protocol is not None and realtime_protocol.upper() in (
+            "GA",
+            "V1",
+        )
         if _is_ga:
-            path = "/openai/v1/realtime" 
+            path = "/openai/v1/realtime"
             return f"{api_base}{path}?model={model}"
         else:
             # Default to beta path for backwards compatibility
@@ -86,7 +89,9 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        if api_version is None and (realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")):
+        if api_version is None and (
+            realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
+        ):
             raise ValueError("api_version is required for Azure OpenAI calls")
 
         url = self._construct_url(
@@ -115,5 +120,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             await websocket.close(code=e.status_code, reason=str(e))
         except Exception:
-            verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
+            verbose_proxy_logger.exception(
+                "Error in AzureOpenAIRealtime.async_realtime"
+            )
             pass

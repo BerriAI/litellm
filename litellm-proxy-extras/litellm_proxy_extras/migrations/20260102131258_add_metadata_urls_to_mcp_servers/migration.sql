@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "authorization_url" TEXT,
-ADD COLUMN     "registration_url" TEXT,
-ADD COLUMN     "token_url" TEXT;
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "authorization_url" TEXT,
+ADD COLUMN IF NOT EXISTS "registration_url" TEXT,
+ADD COLUMN IF NOT EXISTS "token_url" TEXT;
 

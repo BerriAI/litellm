@@ -29,9 +29,7 @@ class VectorStoreFileRequestUtils:
         return cast(VectorStoreFileCreateRequest, filtered)
 
     @staticmethod
-    def get_list_query_params(
-        params: Dict[str, Any]
-    ) -> VectorStoreFileListQueryParams:
+    def get_list_query_params(params: Dict[str, Any]) -> VectorStoreFileListQueryParams:
         filtered = VectorStoreFileRequestUtils._filter_params(
             params=params, model=VectorStoreFileListQueryParams
         )

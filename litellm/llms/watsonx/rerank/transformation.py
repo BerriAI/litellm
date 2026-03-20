@@ -42,7 +42,9 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
         params = optional_params or {}
 
-        complete_url = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
+        complete_url = self._add_api_version_to_url(
+            url=url, api_version=(params.get("api_version", None))
+        )
         return complete_url
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
@@ -76,7 +78,8 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         )
         zen_api_key = cast(
             Optional[str],
-            optional_params.pop("zen_api_key", None) or get_secret_str("WATSONX_ZENAPIKEY"),
+            optional_params.pop("zen_api_key", None)
+            or get_secret_str("WATSONX_ZENAPIKEY"),
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -115,11 +118,17 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                         {"text": el} if isinstance(el, str) else el for el in v
                     ]
                 elif k == "top_n" and v is not None:
-                    optional_rerank_params.setdefault("parameters", {}).setdefault("return_options", {})["top_n"] = v
+                    optional_rerank_params.setdefault("parameters", {}).setdefault(
+                        "return_options", {}
+                    )["top_n"] = v
                 elif k == "return_documents" and v is not None and isinstance(v, bool):
-                    optional_rerank_params.setdefault("parameters", {}).setdefault("return_options", {})["inputs"] = v
+                    optional_rerank_params.setdefault("parameters", {}).setdefault(
+                        "return_options", {}
+                    )["inputs"] = v
                 elif k == "max_tokens_per_doc" and v is not None:
-                    optional_rerank_params.setdefault("parameters", {})["truncate_input_tokens"] = v
+                    optional_rerank_params.setdefault("parameters", {})[
+                        "truncate_input_tokens"
+                    ] = v
 
                 # IBM watsonx.ai require one of below parameters
                 elif k == "project_id" and v is not None:
@@ -189,7 +198,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id = raw_response_json.get("id") or raw_response_json.get("model_id") or str(uuid.uuid4())
+        response_id = (
+            raw_response_json.get("id")
+            or raw_response_json.get("model_id")
+            or str(uuid.uuid4())
+        )
 
         # Extract usage information
         _tokens = RerankTokens(

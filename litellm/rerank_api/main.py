@@ -30,7 +30,11 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"]] = None,
+    custom_llm_provider: Optional[
+        Literal[
+            "cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"
+        ]
+    ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
@@ -104,7 +108,6 @@ def rerank(  # noqa: PLR0915
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     user = kwargs.get("user", None)
     client = kwargs.get("client", None)
     try:
@@ -160,7 +163,8 @@ def rerank(  # noqa: PLR0915
 
         model_response = RerankResponse()
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(optional_rerank_params),
@@ -168,7 +172,6 @@ def rerank(  # noqa: PLR0915
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),
@@ -177,7 +180,10 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == litellm.LlmProviders.COHERE or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY:
+        if (
+            _custom_llm_provider == litellm.LlmProviders.COHERE
+            or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
+        ):
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -497,7 +503,9 @@ def rerank(  # noqa: PLR0915
             )
         elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
             credentials = IBMWatsonXMixin.get_watsonx_credentials(
-                optional_params=dict(optional_params), api_key=dynamic_api_key, api_base=dynamic_api_base
+                optional_params=dict(optional_params),
+                api_key=dynamic_api_key,
+                api_base=dynamic_api_base,
             )
 
             api_key = credentials["api_key"]

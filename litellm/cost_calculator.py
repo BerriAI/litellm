@@ -120,37 +120,49 @@ else:
     LitellmLoggingObject = Any
 
 # Pre-resolved CallTypes enum values for fast membership checks
-_A2A_CALL_TYPES = frozenset({
-    CallTypes.asend_message.value,
-    CallTypes.send_message.value,
-})
+_A2A_CALL_TYPES = frozenset(
+    {
+        CallTypes.asend_message.value,
+        CallTypes.send_message.value,
+    }
+)
 
-_VIDEO_CALL_TYPES = frozenset({
-    CallTypes.create_video.value,
-    CallTypes.acreate_video.value,
-    CallTypes.video_remix.value,
-    CallTypes.avideo_remix.value,
-})
+_VIDEO_CALL_TYPES = frozenset(
+    {
+        CallTypes.create_video.value,
+        CallTypes.acreate_video.value,
+        CallTypes.video_remix.value,
+        CallTypes.avideo_remix.value,
+    }
+)
 
-_SPEECH_CALL_TYPES = frozenset({
-    CallTypes.speech.value,
-    CallTypes.aspeech.value,
-})
+_SPEECH_CALL_TYPES = frozenset(
+    {
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
 
-_TRANSCRIPTION_CALL_TYPES = frozenset({
-    CallTypes.atranscription.value,
-    CallTypes.transcription.value,
-})
+_TRANSCRIPTION_CALL_TYPES = frozenset(
+    {
+        CallTypes.atranscription.value,
+        CallTypes.transcription.value,
+    }
+)
 
-_RERANK_CALL_TYPES = frozenset({
-    CallTypes.rerank.value,
-    CallTypes.arerank.value,
-})
+_RERANK_CALL_TYPES = frozenset(
+    {
+        CallTypes.rerank.value,
+        CallTypes.arerank.value,
+    }
+)
 
-_SEARCH_CALL_TYPES = frozenset({
-    CallTypes.search.value,
-    CallTypes.asearch.value,
-})
+_SEARCH_CALL_TYPES = frozenset(
+    {
+        CallTypes.search.value,
+        CallTypes.asearch.value,
+    }
+)
 
 _AREALTIME_CALL_TYPE = CallTypes.arealtime.value
 _MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
@@ -522,7 +534,10 @@ def cost_per_token(  # noqa: PLR0915
         return dashscope_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
-            model=model, usage=usage_block, response_time_ms=response_time_ms, request_model=request_model
+            model=model,
+            usage=usage_block,
+            response_time_ms=response_time_ms,
+            request_model=request_model,
         )
     else:
         model_info = _cached_get_model_info_helper(
@@ -645,7 +660,14 @@ def _select_model_name_for_cost_calc(
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
-            return_model = router_model_id
+            entry = litellm.model_cost[router_model_id]
+            if (
+                entry.get("input_cost_per_token") is not None
+                or entry.get("input_cost_per_second") is not None
+            ):
+                return_model = router_model_id
+            else:
+                return_model = model
         else:
             return_model = model
 
@@ -735,7 +757,7 @@ def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[s
     """
     if traffic_type is None:
         return None
-    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(traffic_type.upper())
+    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(str(traffic_type).upper())
     return service_tier
 
 
@@ -1114,9 +1136,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1167,7 +1189,9 @@ def completion_cost(  # noqa: PLR0915
                         and _usage["prompt_tokens_details"] != {}
                         and _usage["prompt_tokens_details"]
                     ):
-                        prompt_tokens_details = _usage.get("prompt_tokens_details", {})
+                        prompt_tokens_details = (
+                            _usage.get("prompt_tokens_details") or {}
+                        )
                         cache_read_input_tokens = prompt_tokens_details.get(
                             "cached_tokens", 0
                         )
@@ -1469,8 +1493,8 @@ def completion_cost(  # noqa: PLR0915
                     completion_tokens_cost_usd_dollar,
                 ) = cost_per_token(
                     model=model,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
+                    prompt_tokens=prompt_tokens or 0,
+                    completion_tokens=completion_tokens or 0,
                     custom_llm_provider=custom_llm_provider,
                     response_time_ms=total_time,
                     region_name=region_name,
@@ -1490,17 +1514,32 @@ def completion_cost(  # noqa: PLR0915
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                # Only azure_ai implements additional costs
                 if custom_llm_provider == "azure_ai":
+                    model_for_additional_costs = request_model_for_cost
+                    if completion_response is not None:
+                        hidden_params = (
+                            getattr(completion_response, "_hidden_params", None) or {}
+                        )
+                        hidden_model = hidden_params.get("model") or hidden_params.get(
+                            "litellm_model_name"
+                        )
+                        if hidden_model and (
+                            "model_router" in (hidden_model or "").lower()
+                            or "model-router" in (hidden_model or "").lower()
+                        ):
+                            model_for_additional_costs = hidden_model
+                        elif model_for_additional_costs is None:
+                            model_for_additional_costs = hidden_model
+                    if model_for_additional_costs is None:
+                        model_for_additional_costs = model
                     additional_costs = _get_additional_costs(
-                        model=model,
+                        model=model_for_additional_costs,
                         custom_llm_provider=custom_llm_provider,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
+                        prompt_tokens=prompt_tokens or 0,
+                        completion_tokens=completion_tokens or 0,
                     )
                 else:
                     additional_costs = None
-
 
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
@@ -1515,11 +1554,16 @@ def completion_cost(  # noqa: PLR0915
                     )
                 )
                 _final_cost += cost_for_built_in_tools
+                if additional_costs:
+                    _final_cost += sum(additional_costs.values())
 
-                # Apply discount from module-level config if configured
                 original_cost = _final_cost
                 if litellm.cost_discount_config:
-                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
                     )
@@ -1976,9 +2020,7 @@ def default_video_cost_calculator(
                 cost_info = litellm.model_cost[prefixed_model]
 
     if cost_info is None:
-        raise Exception(
-            f"Model not found in cost map for model={model}"
-        )
+        raise Exception(f"Model not found in cost map for model={model}")
 
     # Check for video-specific cost per second first
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
@@ -2250,4 +2292,3 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-

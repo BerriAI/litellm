@@ -7,7 +7,17 @@ import inspect
 import json
 import os
 import ssl
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 import openai
@@ -271,10 +281,7 @@ def get_openai_credentials(
         or None
     )
     resolved_api_key = (
-        api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or os.getenv("OPENAI_API_KEY")
+        api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
     )
     return OpenAICredentials(
         api_base=resolved_api_base,

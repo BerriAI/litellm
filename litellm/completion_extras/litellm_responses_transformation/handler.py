@@ -61,9 +61,7 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(
-        self, stream_iter: Any
-    ) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 
@@ -144,7 +142,9 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(self, *args, **kwargs) -> Union[
+    def completion(
+        self, *args, **kwargs
+    ) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",

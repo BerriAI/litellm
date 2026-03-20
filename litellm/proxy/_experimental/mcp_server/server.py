@@ -81,6 +81,7 @@ def _write_byok_cred_cache(
         _byok_cred_cache.clear()
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -182,7 +183,7 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=False, # enables SSE streaming
+        json_response=False,  # enables SSE streaming
         stateless=True,
     )
 
@@ -341,9 +342,9 @@ if MCP_AVAILABLE:
         host_progress_callback = None
         try:
             host_ctx = server.request_context
-            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
-                host_token = getattr(host_ctx.meta, 'progressToken', None)
-                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+            if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, "progressToken", None)
+                if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
                     async def forward_progress(progress: float, total: float | None):
@@ -352,14 +353,20 @@ if MCP_AVAILABLE:
                             await host_session.send_progress_notification(
                                 progress_token=host_token,
                                 progress=progress,
-                                total=total
+                                total=total,
                             )
-                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                            verbose_logger.debug(
+                                f"Forwarded progress {progress}/{total} to Host"
+                            )
                         except Exception as e:
-                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                            verbose_logger.error(
+                                f"Failed to forward progress to Host: {e}"
+                            )
 
                     host_progress_callback = forward_progress
-                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+                    verbose_logger.debug(
+                        f"Host progressToken captured: {host_token[:8]}..."
+                    )
         except Exception as e:
             verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
@@ -711,6 +718,7 @@ if MCP_AVAILABLE:
 
         Checks both the full tool name and unprefixed version (without server prefix).
         This allows users to configure simple tool names regardless of prefixing.
+        Comparison is case-insensitive to handle OpenAPI operationIds that may be in camelCase.
 
         Args:
             tool_name: The tool name to check (may be prefixed like "server-tool_name")
@@ -723,13 +731,15 @@ if MCP_AVAILABLE:
             split_server_prefix_from_name,
         )
 
-        # Check if the full name is in the list
-        if tool_name in filter_list:
+        # Normalize filter list to lowercase for case-insensitive comparison
+        filter_list_lower = [f.lower() for f in filter_list]
+
+        if tool_name.lower() in filter_list_lower:
             return True
 
-        # Check if the unprefixed name is in the list
+        # Check if the unprefixed name is in the list (case-insensitive)
         unprefixed_name, _ = split_server_prefix_from_name(tool_name)
-        return unprefixed_name in filter_list
+        return unprefixed_name.lower() in filter_list_lower
 
     def filter_tools_by_allowed_tools(
         tools: List[MCPTool],
@@ -831,18 +841,18 @@ if MCP_AVAILABLE:
                 )
 
         allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth
-            )
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_server_ids, _ip_blocked = (
-            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-                allowed_mcp_server_ids, client_ip
-            )
+        (
+            allowed_mcp_server_ids,
+            _ip_blocked,
+        ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+            allowed_mcp_server_ids, client_ip
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
-            client_ip, allowed_mcp_server_ids,
+            client_ip,
+            allowed_mcp_server_ids,
         )
         if _ip_blocked > 0:
             verbose_logger.debug(
@@ -867,9 +877,90 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
-        
 
         return allowed_mcp_servers
+
+    async def _get_user_oauth_extra_headers_from_db(
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """Look up stored OAuth2 token for (user, server) from DB and return as extra_headers dict.
+
+        Args:
+            prefetched_creds: Optional dict keyed by server_id with credential payloads.
+                              When provided, avoids a per-server DB round-trip.
+        """
+        if server.auth_type != MCPAuth.oauth2:
+            return None
+        if user_api_key_auth is None:
+            return None
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        server_id = getattr(server, "server_id", None)
+        if not user_id or not server_id:
+            return None
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_user_oauth_credential,
+                is_oauth_credential_expired,
+            )
+
+            if prefetched_creds is not None:
+                cred = prefetched_creds.get(server_id)
+            else:
+                from litellm.proxy.utils import (  # noqa: PLC0415
+                    get_prisma_client_or_throw,
+                )
+
+                prisma_client = get_prisma_client_or_throw(
+                    "Database not connected. Connect a database to use OAuth2 MCP tools."
+                )
+                cred = await get_user_oauth_credential(
+                    prisma_client, user_id, server_id
+                )
+            if cred and cred.get("access_token"):
+                if is_oauth_credential_expired(cred):
+                    verbose_logger.debug(
+                        f"_get_user_oauth_extra_headers_from_db: token expired for "
+                        f"user={user_id} server={server_id}"
+                    )
+                    return None
+                return {"Authorization": f"Bearer {cred['access_token']}"}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_get_user_oauth_extra_headers_from_db: failed to retrieve credential for "
+                f"user={user_id} server={server_id}: {e}"
+            )
+        return None
+
+    async def _prefetch_oauth_creds_for_user(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch all OAuth2 credentials for the user in one DB query.
+
+        Returns a dict keyed by server_id to avoid N+1 queries in asyncio.gather loops.
+        """
+        user_id = (
+            getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        )
+        if not user_id:
+            return {}
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                list_user_oauth_credentials,
+            )
+            from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            creds = await list_user_oauth_credentials(prisma_client, user_id)
+            return {c["server_id"]: c for c in creds if "server_id" in c}
+        except Exception as e:
+            verbose_logger.warning(
+                f"_prefetch_oauth_creds_for_user: failed to prefetch for user={user_id}: {e}"
+            )
+            return {}
 
     def _prepare_mcp_server_headers(
         server: MCPServer,
@@ -980,7 +1071,6 @@ if MCP_AVAILABLE:
 
             # Attach user identifiers using the standard helper
             if user_api_key_auth is not None:
-
                 LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                     data=list_tools_request_data,
                     user_api_key_dict=user_api_key_auth,
@@ -1015,6 +1105,18 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
+            # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
+            # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
+            _has_oauth2_server = any(
+                getattr(s, "auth_type", None) == MCPAuth.oauth2
+                for s in allowed_mcp_servers
+            )
+            _prefetched_oauth_creds = (
+                await _prefetch_oauth_creds_for_user(user_api_key_auth)
+                if _has_oauth2_server
+                else {}
+            )
+
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -1029,6 +1131,14 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                 )
+
+                # If no OAuth2 token came from request headers, fall back to pre-fetched creds
+                if extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                    extra_headers = await _get_user_oauth_extra_headers_from_db(
+                        server,
+                        user_api_key_auth,
+                        prefetched_creds=_prefetched_oauth_creds,
+                    )
 
                 try:
                     tools = await global_mcp_server_manager._get_tools_from_server(
@@ -1157,7 +1267,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         # Get prompts from each allowed server
         all_prompts = []
         for server in allowed_mcp_servers:
@@ -1216,7 +1325,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
             if server is None:
@@ -1271,7 +1379,6 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
         )
-
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1770,7 +1877,9 @@ if MCP_AVAILABLE:
             # configured auth_type so the generator doesn't need to know the prefix.
             auth_header_value: Optional[str] = None
             if mcp_auth_header:
-                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                server_auth_type = (
+                    getattr(mcp_server, "auth_type", None) if mcp_server else None
+                )
                 if server_auth_type == MCPAuth.api_key:
                     auth_header_value = f"ApiKey {mcp_auth_header}"
                 elif server_auth_type == MCPAuth.basic:
@@ -1806,12 +1915,8 @@ if MCP_AVAILABLE:
         # Deprecated: Local MCP Server Tool
         #########################################################
         else:
-            local_content = await _handle_local_mcp_tool(
-                original_tool_name, arguments
-            )
-            response = CallToolResult(
-                content=cast(Any, local_content), isError=False
-            )
+            local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
+            response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         return response
 
@@ -1931,7 +2036,6 @@ if MCP_AVAILABLE:
                 status_code=403,
                 detail="User not allowed to get this prompt.",
             )
-
 
         # Extract server name from prefixed prompt name
         original_prompt_name, server_name = split_server_prefix_from_name(name)

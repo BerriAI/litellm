@@ -64,12 +64,10 @@ def duration_in_seconds(duration: str) -> int:
         now = time.time()
         current_time = datetime.fromtimestamp(now)
 
-        if current_time.month == 12:
-            target_year = current_time.year + 1
-            target_month = 1
-        else:
-            target_year = current_time.year
-            target_month = current_time.month + value
+        # Calculate target month and year, handling overflow past December
+        total_months = current_time.month - 1 + value  # 0-indexed months
+        target_year = current_time.year + total_months // 12
+        target_month = total_months % 12 + 1  # back to 1-indexed
 
         # Determine the day to set for next month
         target_day = current_time.day

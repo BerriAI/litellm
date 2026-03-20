@@ -42,7 +42,9 @@ class DataSourceConfigStoredCompletions(TypedDict, total=False):
     """Optional metadata for filtering stored completions"""
 
 
-DataSourceConfig = Union[DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions]
+DataSourceConfig = Union[
+    DataSourceConfigCustom, DataSourceConfigLogs, DataSourceConfigStoredCompletions
+]
 
 
 class LLMAsJudgeGraderConfig(TypedDict, total=False):
@@ -78,7 +80,9 @@ class CustomGraderConfig(TypedDict, total=False):
     """ID of the custom grading function"""
 
 
-GraderConfig = Union[LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig]
+GraderConfig = Union[
+    LLMAsJudgeGraderConfig, GroundTruthGraderConfig, CustomGraderConfig
+]
 
 
 class CreateEvalRequest(TypedDict, total=False):

@@ -28,13 +28,13 @@ def litellm_to_list(embeds: litellm.EmbeddingResponse) -> list[list[float]]:
 
 
 class CustomDenseEncoder(DenseEncoder):
-    model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra="allow")
 
     def __init__(self, litellm_router_instance: Optional["Router"] = None, **kwargs):
         # Extract litellm_router_instance from kwargs if passed there
-        if 'litellm_router_instance' in kwargs:
-            litellm_router_instance = kwargs.pop('litellm_router_instance')
-        
+        if "litellm_router_instance" in kwargs:
+            litellm_router_instance = kwargs.pop("litellm_router_instance")
+
         super().__init__(**kwargs)
         self.litellm_router_instance = litellm_router_instance
 
@@ -91,9 +91,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
-                input=docs, 
-                model=self.model_name, 
-                **kwargs
+                input=docs, model=self.model_name, **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -106,9 +104,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
-                input=docs, 
-                model=self.model_name, 
-                **kwargs
+                input=docs, model=self.model_name, **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -121,9 +117,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
-                input=docs, 
-                model=self.model_name,
-                **kwargs
+                input=docs, model=self.model_name, **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -136,9 +130,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
-                input=docs, 
-                model=self.model_name,
-                **kwargs
+                input=docs, model=self.model_name, **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:

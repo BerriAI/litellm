@@ -60,7 +60,11 @@ class PrismaDBExceptionHandler:
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
         if isinstance(
-            e, (prisma.errors.ClientNotConnectedError, prisma.errors.HTTPClientClosedError)
+            e,
+            (
+                prisma.errors.ClientNotConnectedError,
+                prisma.errors.HTTPClientClosedError,
+            ),
         ):
             return True
         if isinstance(e, prisma.errors.PrismaError):

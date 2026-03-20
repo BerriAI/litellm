@@ -54,3 +54,4 @@ general_settings:
 
 litellm_settings:
   drop_params: true
+  modify_params: true

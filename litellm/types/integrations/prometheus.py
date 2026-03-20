@@ -238,11 +238,6 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
-    # Database engine / connection pool metrics
-    "litellm_db_pool_connections",
-    "litellm_db_pool_lock_waiting_connections",
-    "litellm_db_engine_up",
-    "litellm_db_engine_restarts_total",
 ]
 
 
@@ -622,12 +617,6 @@ class PrometheusMetricLabels:
     litellm_cache_hits_metric = _cache_metric_labels
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
-
-    # Database engine / connection pool metrics
-    litellm_db_pool_connections: List[str] = ["state"]
-    litellm_db_pool_lock_waiting_connections: List[str] = []
-    litellm_db_engine_up: List[str] = []
-    litellm_db_engine_restarts_total: List[str] = []
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:

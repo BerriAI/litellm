@@ -134,9 +134,9 @@ class PassthroughEndpointRouter:
             vertex_location=location,
             vertex_credentials=vertex_credentials,
         )
-        self.deployment_key_to_vertex_credentials[deployment_key] = (
-            vertex_pass_through_credentials
-        )
+        self.deployment_key_to_vertex_credentials[
+            deployment_key
+        ] = vertex_pass_through_credentials
 
     def _get_deployment_key(
         self, project_id: Optional[str], location: Optional[str]
@@ -156,10 +156,10 @@ class PassthroughEndpointRouter:
         """
         if litellm.vector_store_registry is None:
             return None
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=vector_store_id
-            )
+        vector_store_to_run: Optional[
+            LiteLLM_ManagedVectorStore
+        ] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+            vector_store_id=vector_store_id
         )
         return vector_store_to_run
 

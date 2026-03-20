@@ -51,8 +51,9 @@ export function useChatHistory(activeConversationId: string | null): {
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent">>) => void;
-  truncateAfterMessage: (conversationId: string, messageId: string) => void;
+  updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>) => void;
+  /** Remove the message with `messageId` and all subsequent messages from the conversation. */
+  truncateFromMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, newTitle: string) => void;
   setActiveConversationId: (id: string | null) => void;
@@ -148,7 +149,7 @@ export function useChatHistory(activeConversationId: string | null): {
   const updateLastAssistantMessage = useCallback(
     (
       conversationId: string,
-      updates: Partial<Pick<ChatMessage, "content" | "reasoningContent">>,
+      updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
     ) => {
       setConversations((prev) => {
         const updated = prev.map((conv) => {
@@ -168,7 +169,7 @@ export function useChatHistory(activeConversationId: string | null): {
     [],
   );
 
-  const truncateAfterMessage = useCallback(
+  const truncateFromMessage = useCallback(
     (conversationId: string, messageId: string) => {
       setConversations((prev) => {
         const updated = prev.map((conv) => {
@@ -222,7 +223,7 @@ export function useChatHistory(activeConversationId: string | null): {
     createConversation,
     appendMessage,
     updateLastAssistantMessage,
-    truncateAfterMessage,
+    truncateFromMessage,
     deleteConversation,
     renameConversation,
     setActiveConversationId,

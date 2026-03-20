@@ -1774,3 +1774,128 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+    def test_parallel_tool_calls_merged_into_single_assistant_message(self):
+        """
+        Regression test: multi-turn parallel tool calls via the Responses API must
+        produce a single assistant message with all tool_calls, not one assistant
+        message per function_call item.
+
+        When the model responds with two parallel tool calls (e.g. get_weather for
+        SF and NYC), the next Responses API request includes two consecutive
+        function_call items followed by two function_call_output items.
+
+        Without the fix each function_call becomes its own assistant message,
+        producing back-to-back assistant messages that Anthropic/Vertex AI rejects:
+        "tool_use ids were found without tool_result blocks immediately after".
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF and NYC?"},
+            # Two parallel tool calls from the previous assistant response
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "toolu_02",
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+            # Tool results
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+            {"type": "function_call_output", "call_id": "toolu_02", "output": "55°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        # Must not have two consecutive assistant messages
+        for i in range(len(roles) - 1):
+            assert not (
+                roles[i] == "assistant" and roles[i + 1] == "assistant"
+            ), f"Consecutive assistant messages at indices {i} and {i+1}: {roles}"
+
+        # The single assistant message must contain BOTH tool_calls
+        assistant_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "assistant"
+        ]
+        assert len(assistant_messages) == 1, (
+            f"Expected 1 assistant message, got {len(assistant_messages)}"
+        )
+
+        assistant_msg = assistant_messages[0]
+        tool_calls = (
+            assistant_msg.get("tool_calls")
+            if isinstance(assistant_msg, dict)
+            else getattr(assistant_msg, "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 2, (
+            f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
+        )
+
+        call_ids = [
+            (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None))
+            for tc in tool_calls
+        ]
+        assert "toolu_01" in call_ids, f"toolu_01 missing from tool_calls: {call_ids}"
+        assert "toolu_02" in call_ids, f"toolu_02 missing from tool_calls: {call_ids}"
+
+        # Both tool messages must be present
+        tool_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "tool"
+        ]
+        assert len(tool_messages) == 2, (
+            f"Expected 2 tool messages, got {len(tool_messages)}"
+        )
+
+    def test_single_tool_call_still_works_after_merge_fix(self):
+        """
+        Ensure the parallel-tool-call merging fix does not break the existing
+        single-tool-call path.
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF?"},
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        assert "user" in roles
+        assert "assistant" in roles
+        assert "tool" in roles
+
+        assistant_messages = [m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"]
+        assert len(assistant_messages) == 1
+
+        tool_calls = (
+            assistant_messages[0].get("tool_calls")
+            if isinstance(assistant_messages[0], dict)
+            else getattr(assistant_messages[0], "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 1

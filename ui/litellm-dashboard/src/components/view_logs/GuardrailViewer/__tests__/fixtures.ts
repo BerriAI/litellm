@@ -23,7 +23,7 @@ export interface GuardrailInformation {
   duration: number;
   end_time: number;
   start_time: number;
-  guardrail_mode: string;
+  guardrail_mode: string | string[] | Record<string, unknown> | null;
   guardrail_name: string;
   guardrail_status: string;
   guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse;

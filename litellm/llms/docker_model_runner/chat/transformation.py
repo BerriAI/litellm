@@ -18,7 +18,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     """
     Configuration for Docker Model Runner API.
-    
+
     Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
     The engine name (e.g., "llama.cpp") is part of the API endpoint path.
     """
@@ -59,7 +59,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Get API base and key for Docker Model Runner.
-        
+
         Default API base: http://localhost:22088/engines/llama.cpp
         The engine path should be included in the api_base.
         """
@@ -69,7 +69,9 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
             or "http://localhost:22088/engines/llama.cpp"
         )  # type: ignore
         # Docker Model Runner may not require authentication for local instances
-        dynamic_api_key = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
+        dynamic_api_key = (
+            api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
+        )
         return api_base, dynamic_api_key
 
     def get_complete_url(
@@ -83,13 +85,13 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     ) -> str:
         """
         Build the complete URL for Docker Model Runner API.
-        
+
         Docker Model Runner uses URLs in the format: /engines/{engine}/v1/chat/completions
-        
+
         The engine name should be specified in the api_base:
             - api_base="http://model-runner.docker.internal/engines/llama.cpp"
             - Default: "http://localhost:22088/engines/llama.cpp"
-        
+
         Args:
             api_base: Base URL for the Docker Model Runner instance including engine path
             api_key: API key (may not be required for local instances)
@@ -97,26 +99,26 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
             stream: Whether streaming is enabled
-            
+
         Returns:
             Complete URL for the API call
         """
         if not api_base:
             api_base = "http://localhost:22088/engines/llama.cpp"
-        
+
         # Remove trailing slashes from api_base
         api_base = api_base.rstrip("/")
- 
+
         # Build the URL: {api_base}/v1/chat/completions
         # api_base is expected to already contain the engine path
         complete_url = f"{api_base}/v1/chat/completions"
-        
+
         return complete_url
 
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for Docker Model Runner.
-        
+
         Docker Model Runner is OpenAI-compatible and supports standard parameters.
         """
         return super().get_supported_openai_params(model=model)
@@ -130,7 +132,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Map OpenAI parameters to Docker Model Runner parameters.
-        
+
         Docker Model Runner is OpenAI-compatible, so most parameters map directly.
         """
         supported_openai_params = self.get_supported_openai_params(model)
@@ -141,4 +143,3 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
                 optional_params[param] = value
 
         return optional_params
-

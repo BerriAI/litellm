@@ -44,6 +44,7 @@ IGNORE_FUNCTIONS = [
     "extract_text_from_a2a_message",  # max depth set (default 10) to prevent infinite recursion in A2A message parsing.
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
+    "_read_image_bytes",  # max depth set.
 ]
 
 
