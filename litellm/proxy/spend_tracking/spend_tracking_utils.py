@@ -18,12 +18,15 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.azure_ai.cost_calculator import _is_azure_model_router
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -83,6 +86,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    response_model: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -111,6 +115,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            response_model=response_model,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -135,6 +140,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["response_model"] = response_model
 
     return clean_metadata
 
@@ -337,6 +343,15 @@ def get_logging_payload(  # noqa: PLR0915
         hidden_params = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
 
+    # For Azure AI Model Router, capture the actual model used from the response
+    _raw_model = cast(str, kwargs.get("model") or "")
+    response_model: Optional[str] = None
+    if _raw_model and _is_azure_model_router(_raw_model):
+        if standard_logging_payload is not None:
+            response_model = standard_logging_payload.get("model")
+        if not response_model:
+            response_model = response_obj_dict.get("model")
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -392,6 +407,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        response_model=response_model,
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]

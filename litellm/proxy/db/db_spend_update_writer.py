@@ -20,6 +20,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Union,
     cast,
     overload,
@@ -30,6 +31,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.azure_ai.cost_calculator import _is_azure_model_router
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     BaseDailySpendTransaction,
@@ -306,6 +308,147 @@ class DBSpendUpdateWriter:
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e
             )
 
+    @staticmethod
+    def _split_model_router_payload(
+        payload: SpendLogsPayload,
+    ) -> Optional[Tuple[SpendLogsPayload, SpendLogsPayload]]:
+        """
+        Split a model router payload into two: one for the router and one for the actual model.
+
+        Returns (router_payload, actual_model_payload) or None if split is not possible.
+
+        router_payload: model=original router model, spend=router flat cost, tokens=0
+        actual_model_payload: model=actual model from response, spend=base model cost, tokens=original
+        """
+        metadata_str = payload.get("metadata")
+        if not metadata_str:
+            return None
+
+        metadata: SpendLogsMetadata = json.loads(metadata_str)
+        response_model = metadata.get("response_model")
+        if not response_model:
+            return None
+
+        cost_breakdown = metadata.get("cost_breakdown")
+        router_flat_cost = 0.0
+        if cost_breakdown:
+            additional_costs = cost_breakdown.get("additional_costs") or {}
+            router_flat_cost = additional_costs.get("azure_model_router_flat_cost", 0.0)
+
+        total_spend = payload.get("spend", 0) or 0
+        base_model_cost = total_spend - router_flat_cost
+
+        # Router entry: flat cost only, no tokens
+        router_payload = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "spend": router_flat_cost,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        )
+
+        # Actual model entry: base model cost, original tokens
+        # Ensure the model has the provider prefix
+        actual_model_name = response_model
+        custom_llm_provider = payload.get("custom_llm_provider", "")
+        if custom_llm_provider and "/" not in actual_model_name:
+            actual_model_name = f"{custom_llm_provider}/{actual_model_name}"
+
+        actual_payload = cast(
+            SpendLogsPayload,
+            {
+                **payload,
+                "model": actual_model_name,
+                "spend": base_model_cost,
+            },
+        )
+
+        return router_payload, actual_payload
+
+    async def _enqueue_all_daily_transactions(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: Optional[PrismaClient],
+        org_id: Optional[str],
+        api_requests: Optional[int] = None,
+    ) -> None:
+        """Enqueue daily spend transactions for all 6 entity types."""
+        try:
+            await self.add_spend_log_transaction_to_daily_user_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_user failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_end_user_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_end_user failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_agent_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_agent failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_team_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_team failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_org_transaction(
+                payload=payload,
+                org_id=org_id,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_org failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                api_requests=api_requests,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_enqueue_all_daily_transactions: daily_tag failed: %s",
+                traceback.format_exc(),
+            )
+
     async def _batch_database_updates(
         self,
         *,
@@ -403,71 +546,27 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_user_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
-                traceback.format_exc(),
-            )
-
-        try:
-            await self.add_spend_log_transaction_to_daily_end_user_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
-                traceback.format_exc(),
-            )
-
-        try:
-            await self.add_spend_log_transaction_to_daily_agent_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
-                traceback.format_exc(),
-            )
-
-        try:
-            await self.add_spend_log_transaction_to_daily_team_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
-                traceback.format_exc(),
-            )
-
-        try:
-            await self.add_spend_log_transaction_to_daily_org_transaction(
-                payload=payload_copy,
-                org_id=org_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
-                traceback.format_exc(),
-            )
-
-        try:
-            await self.add_spend_log_transaction_to_daily_tag_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
-                traceback.format_exc(),
+        # For Azure AI Model Router requests, split into two daily spend entries:
+        # one for the router (flat cost, no tokens) and one for the actual model (base cost, tokens).
+        # This ensures both models appear on the usage page without double-counting.
+        if _is_azure_model_router(payload_copy.get("model", "") or ""):
+            split_result = self._split_model_router_payload(payload_copy)
+            if split_result is not None:
+                router_payload, actual_payload = split_result
+                await self._enqueue_all_daily_transactions(
+                    router_payload, prisma_client, org_id
+                )
+                await self._enqueue_all_daily_transactions(
+                    actual_payload, prisma_client, org_id, api_requests=0
+                )
+            else:
+                # Split not possible (missing metadata), fall back to single entry
+                await self._enqueue_all_daily_transactions(
+                    payload_copy, prisma_client, org_id
+                )
+        else:
+            await self._enqueue_all_daily_transactions(
+                payload_copy, prisma_client, org_id
             )
 
     async def _update_key_db(
@@ -1859,6 +1958,7 @@ class DBSpendUpdateWriter:
         type: Literal[
             "user", "team", "org", "request_tags", "end_user", "agent"
         ] = "user",
+        api_requests: Optional[int] = None,
     ) -> Optional[BaseDailySpendTransaction]:
         common_expected_keys = ["startTime", "api_key"]
         if type == "user":
@@ -1918,6 +2018,8 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
+            _api_requests = api_requests if api_requests is not None else 1
+            _counts_as_request = _api_requests > 0
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1929,9 +2031,13 @@ class DBSpendUpdateWriter:
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],
-                api_requests=1,
-                successful_requests=1 if request_status == "success" else 0,
-                failed_requests=1 if request_status != "success" else 0,
+                api_requests=_api_requests,
+                successful_requests=(
+                    1 if _counts_as_request and request_status == "success" else 0
+                ),
+                failed_requests=(
+                    1 if _counts_as_request and request_status != "success" else 0
+                ),
                 cache_read_input_tokens=usage_obj.get("cache_read_input_tokens", 0)
                 or 0,
                 cache_creation_input_tokens=usage_obj.get(
@@ -1947,6 +2053,7 @@ class DBSpendUpdateWriter:
         self,
         payload: Union[dict, SpendLogsPayload],
         prisma_client: Optional[PrismaClient] = None,
+        api_requests: Optional[int] = None,
     ):
         """
         Add a spend log transaction to the `daily_spend_update_queue`
@@ -1963,7 +2070,7 @@ class DBSpendUpdateWriter:
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload, prisma_client, "user"
+                payload, prisma_client, "user", api_requests=api_requests
             )
         )
         if base_daily_transaction is None:
@@ -1982,6 +2089,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: Optional[PrismaClient] = None,
+        api_requests: Optional[int] = None,
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug(
@@ -1991,7 +2099,7 @@ class DBSpendUpdateWriter:
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload, prisma_client, "team"
+                payload, prisma_client, "team", api_requests=api_requests
             )
         )
         if base_daily_transaction is None:
@@ -2016,6 +2124,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         prisma_client: Optional[PrismaClient] = None,
         org_id: Optional[str] = None,
+        api_requests: Optional[int] = None,
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug(
@@ -2039,7 +2148,7 @@ class DBSpendUpdateWriter:
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload_with_org, prisma_client, "org"
+                payload_with_org, prisma_client, "org", api_requests=api_requests
             )
         )
         if base_daily_transaction is None:
@@ -2058,6 +2167,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: Optional[PrismaClient] = None,
+        api_requests: Optional[int] = None,
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug(
@@ -2082,7 +2192,10 @@ class DBSpendUpdateWriter:
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload_with_end_user_id, prisma_client, "end_user"
+                payload_with_end_user_id,
+                prisma_client,
+                "end_user",
+                api_requests=api_requests,
             )
         )
         if base_daily_transaction is None:
@@ -2101,6 +2214,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: Optional[PrismaClient] = None,
+        api_requests: Optional[int] = None,
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug(
@@ -2118,7 +2232,7 @@ class DBSpendUpdateWriter:
         )
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload_with_agent_id, prisma_client, "agent"
+                payload_with_agent_id, prisma_client, "agent", api_requests=api_requests
             )
         )
         if base_daily_transaction is None:
@@ -2136,6 +2250,7 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: Optional[PrismaClient] = None,
+        api_requests: Optional[int] = None,
     ) -> None:
         if prisma_client is None:
             verbose_proxy_logger.debug(
@@ -2145,7 +2260,7 @@ class DBSpendUpdateWriter:
 
         base_daily_transaction = (
             await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload, prisma_client, "request_tags"
+                payload, prisma_client, "request_tags", api_requests=api_requests
             )
         )
         if base_daily_transaction is None:

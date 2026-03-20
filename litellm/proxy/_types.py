@@ -3255,6 +3255,9 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    response_model: Optional[
+        str
+    ]  # Actual model used by model router (e.g., azure_ai/gpt-oss-120b)
 
 
 class SpendLogsPayload(TypedDict):
