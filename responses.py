@@ -47,21 +47,21 @@ class RequestsMock:
     def __init__(self) -> None:
         self._registered: list[_RegisteredResponse] = []
         self.calls: list[_Call] = []
-        self._patcher: patch | None = None
+        self._patchers: list[patch] = []
 
     def __enter__(self) -> "RequestsMock":
         _ACTIVE_MOCKS.append(self)
-        self._patcher = patch.object(
-            requests.sessions.Session,
-            "request",
-            new=self._request,
-        )
-        self._patcher.start()
+        self._patchers = [
+            patch.object(requests.sessions.Session, "request", new=self._request),
+            patch.object(requests.sessions.Session, "send", new=self._send),
+        ]
+        for patcher in self._patchers:
+            patcher.start()
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        if self._patcher is not None:
-            self._patcher.stop()
+        while self._patchers:
+            self._patchers.pop().stop()
         _ACTIVE_MOCKS.pop()
 
     def add(self, method: str, url: str, **kwargs: Any) -> None:
@@ -85,6 +85,16 @@ class RequestsMock:
             json=kwargs.get("json"),
         ).prepare()
 
+        return self._build_response(request)
+
+    def _send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        return self._build_response(request)
+
+    def _build_response(self, request: requests.PreparedRequest) -> requests.Response:
         registered = self._match(request.method, request.url)
         self.calls.append(_Call(request))
 
