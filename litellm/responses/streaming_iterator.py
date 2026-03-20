@@ -166,11 +166,12 @@ class BaseResponsesAPIStreamingIterator:
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
-                # Store the completed response
-                if (
-                    openai_responses_api_chunk
-                    and getattr(openai_responses_api_chunk, "type", None)
-                    == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+                # Store the completed response (also for incomplete/failed so logging still fires)
+                _chunk_type = getattr(openai_responses_api_chunk, "type", None)
+                if openai_responses_api_chunk and _chunk_type in (
+                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -195,10 +196,12 @@ class BaseResponsesAPIStreamingIterator:
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
-                                    # If cost calculation fails, continue without cost
                                     pass
 
-                    self._handle_logging_completed_response()
+                    if _chunk_type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+                        self._handle_logging_failed_response()
+                    else:
+                        self._handle_logging_completed_response()
 
                 return openai_responses_api_chunk
 
@@ -215,6 +218,32 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
         pass
+
+    def _handle_logging_failed_response(self):
+        """
+        Handle logging for RESPONSE_FAILED events by routing to failure handlers.
+
+        Unlike _handle_logging_completed_response (which calls success handlers),
+        this constructs an exception from the response error and routes to
+        async_failure_handler / failure_handler so logging integrations correctly
+        record the call as failed.
+        """
+        response_obj = (
+            getattr(self.completed_response, "response", None)
+            if self.completed_response
+            else None
+        )
+        error_info = getattr(response_obj, "error", None) if response_obj else None
+        error_message = "Response failed"
+        if isinstance(error_info, dict):
+            error_message = error_info.get("message", str(error_info))
+        exception = litellm.APIError(
+            status_code=500,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+        self._handle_failure(exception)
 
     async def _call_post_streaming_deployment_hook(self, chunk):
         """

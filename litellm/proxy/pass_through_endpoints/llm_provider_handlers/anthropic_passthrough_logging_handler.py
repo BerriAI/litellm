@@ -7,6 +7,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
@@ -124,10 +125,21 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
                 model_for_cost = f"{custom_llm_provider}/{model}"
 
+            router_model_id = logging_obj.get_router_model_id()
+            custom_pricing = use_custom_pricing_for_model(
+                litellm_params=(
+                    logging_obj.litellm_params
+                    if hasattr(logging_obj, "litellm_params")
+                    else None
+                )
+            )
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model_for_cost,
                 custom_llm_provider=custom_llm_provider,
+                custom_pricing=custom_pricing,
+                router_model_id=router_model_id,
             )
 
             kwargs["response_cost"] = response_cost
@@ -319,9 +331,7 @@ class AnthropicPassthroughLoggingHandler:
         import base64
 
         from litellm._uuid import uuid
-        from litellm.llms.anthropic.batches.transformation import (
-            AnthropicBatchesConfig,
-        )
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import Choices, SpecialEnums
 
         try:

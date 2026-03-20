@@ -907,8 +907,9 @@ def test_router_region_pre_call_check(allowed_model_region):
         {
             "model_name": "gpt-3.5-turbo-large",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "gpt-3.5-turbo-1106",
+                "model": "gpt-4.1-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "mock_response": "This is a mock response.",
             },
             "model_info": {"id": "2"},
         },

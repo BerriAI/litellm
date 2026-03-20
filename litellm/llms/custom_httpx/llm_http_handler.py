@@ -6162,7 +6162,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, files_list = video_provider_config.transform_video_create_character_request(
+        (
+            url,
+            files_list,
+        ) = video_provider_config.transform_video_create_character_request(
             name=name,
             video=video,
             api_base=api_base,
@@ -6230,7 +6233,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, files_list = video_provider_config.transform_video_create_character_request(
+        (
+            url,
+            files_list,
+        ) = video_provider_config.transform_video_create_character_request(
             name=name,
             video=video,
             api_base=api_base,
@@ -6324,11 +6330,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params
-            )
+            response = sync_httpx_client.get(url=url, headers=headers, params=params)
             response.raise_for_status()
             return video_provider_config.transform_video_get_character_response(
                 raw_response=response,
@@ -6386,9 +6388,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
-                params=params
+                url=url, headers=headers, params=params
             )
             response.raise_for_status()
             return video_provider_config.transform_video_get_character_response(
