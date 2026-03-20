@@ -1414,6 +1414,11 @@ class TestBackgroundStreamingTerminalEvents:
             background_streaming_task,
         )
 
+        error_payload = {
+            "type": "incomplete_response",
+            "message": "The model stopped before producing a complete response",
+            "code": "max_output_tokens",
+        }
         events = [
             {"type": "response.in_progress"},
             {
@@ -1421,6 +1426,7 @@ class TestBackgroundStreamingTerminalEvents:
                 "response": {
                     "id": "resp_123",
                     "status": "incomplete",
+                    "error": error_payload,
                     "incomplete_details": {"reason": "max_output_tokens"},
                     "usage": {"input_tokens": 10, "output_tokens": 4096},
                     "model": "gpt-4o",
@@ -1442,6 +1448,7 @@ class TestBackgroundStreamingTerminalEvents:
 
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "incomplete"
+        assert final_call.kwargs["error"] == error_payload
         assert final_call.kwargs["incomplete_details"] == {"reason": "max_output_tokens"}
         assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 4096}
 

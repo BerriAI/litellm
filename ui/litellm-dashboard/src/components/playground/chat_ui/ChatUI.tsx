@@ -60,8 +60,10 @@ import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
+import FilePreviewCard from "./FilePreviewCard";
 import MCPEventsDisplay from "./MCPEventsDisplay";
 import type { MCPEvent } from "../../mcp_tools/types";
+import ChatMessageBubble from "./ChatMessageBubble";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
@@ -1931,168 +1933,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
-                    <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-                        border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
-                        >
-                          {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
-                          ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
-                          )}
-                        </div>
-                        <strong className="text-sm capitalize">{message.role}</strong>
-                        {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
-                        )}
-                      </div>
-                      {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
-
-                      {/* Show MCP events at the start of assistant messages */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        mcpEvents.length > 0 &&
-                        (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) && (
-                          <div className="mb-3">
-                            <MCPEventsDisplay events={mcpEvents} />
-                          </div>
-                        )}
-
-                      {/* Show search results at the start of assistant messages */}
-                      {message.role === "assistant" && message.searchResults && (
-                        <SearchResultsDisplay searchResults={message.searchResults} />
-                      )}
-
-                      {/* Show Code Interpreter output for the last assistant message */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        codeInterpreter.result &&
-                        endpointType === EndpointType.RESPONSES && (
-                          <CodeInterpreterOutput
-                            code={codeInterpreter.result.code}
-                            containerId={codeInterpreter.result.containerId}
-                            annotations={codeInterpreter.result.annotations}
-                            accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
-                          />
-                        )}
-
-                      <div
-                        className="whitespace-pre-wrap break-words max-w-full message-content"
-                        style={{
-                          wordWrap: "break-word",
-                          overflowWrap: "break-word",
-                          wordBreak: "break-word",
-                          hyphens: "auto",
-                        }}
-                      >
-                        {message.isImage ? (
-                          <img
-                            src={typeof message.content === "string" ? message.content : ""}
-                            alt="Generated image"
-                            className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                            style={{ maxHeight: "500px" }}
-                          />
-                        ) : message.isAudio ? (
-                          <AudioRenderer message={message} />
-                        ) : (
-                          <>
-                            {/* Show attached image for user messages based on current endpoint */}
-                            {endpointType === EndpointType.RESPONSES && <ResponsesImageRenderer message={message} />}
-                            {endpointType === EndpointType.CHAT && <ChatImageRenderer message={message} />}
-
-                            <ReactMarkdown
-                              components={{
-                                code({
-                                  node,
-                                  inline,
-                                  className,
-                                  children,
-                                  ...props
-                                }: React.ComponentPropsWithoutRef<"code"> & {
-                                  inline?: boolean;
-                                  node?: any;
-                                }) {
-                                  const match = /language-(\w+)/.exec(className || "");
-                                  return !inline && match ? (
-                                    <SyntaxHighlighter
-                                      style={coy as any}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="rounded-md my-2"
-                                      wrapLines={true}
-                                      wrapLongLines={true}
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, "")}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code
-                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-                                      style={{ wordBreak: "break-word" }}
-                                      {...props}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                pre: ({ node, ...props }) => (
-                                  <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
-                                ),
-                              }}
-                            >
-                              {typeof message.content === "string" ? message.content : ""}
-                            </ReactMarkdown>
-
-                            {/* Show generated image from chat completions */}
-                            {message.image && (
-                              <div className="mt-3">
-                                <img
-                                  src={message.image.url}
-                                  alt="Generated image"
-                                  className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                                  style={{ maxHeight: "500px" }}
-                                />
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) &&
-                          !message.a2aMetadata && (
-                            <ResponseMetrics
-                              timeToFirstToken={message.timeToFirstToken}
-                              totalLatency={message.totalLatency}
-                              usage={message.usage}
-                              toolName={message.toolName}
-                            />
-                          )}
-
-                        {/* A2A Metrics - show for A2A agent responses */}
-                        {message.role === "assistant" && message.a2aMetadata && (
-                          <A2AMetrics
-                            a2aMetadata={message.a2aMetadata}
-                            timeToFirstToken={message.timeToFirstToken}
-                            totalLatency={message.totalLatency}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <ChatMessageBubble
+                    message={message}
+                    isLastMessage={index === chatHistory.length - 1}
+                    endpointType={endpointType as EndpointType}
+                    mcpEvents={mcpEvents}
+                    codeInterpreterResult={codeInterpreter.result}
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                  />
                 </div>
               ))}
 
@@ -2231,67 +2079,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {/* Show file previews above input when files are uploaded */}
               {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
-                      ) : (
-                        <img
-                          src={responsesImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{responsesUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveResponsesImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
-                    </button>
-                  </div>
-                </div>
+                <FilePreviewCard
+                  file={responsesUploadedImage}
+                  previewUrl={responsesImagePreviewUrl}
+                  onRemove={handleRemoveResponsesImage}
+                />
               )}
 
               {endpointType === EndpointType.CHAT && chatUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
-                      ) : (
-                        <img
-                          src={chatImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{chatUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveChatImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
-                    </button>
-                  </div>
-                </div>
+                <FilePreviewCard
+                  file={chatUploadedImage}
+                  previewUrl={chatImagePreviewUrl}
+                  onRemove={handleRemoveChatImage}
+                />
               )}
 
               {/* Code Interpreter indicator and sample prompts when enabled */}
