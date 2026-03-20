@@ -121,15 +121,14 @@ Use this if you want to run your own code **after** a user signs on to the LiteL
 Make sure the response type follows the `SSOUserDefinedValues` pydantic object. This is used for logging the user into the Admin UI:
 
 ```python
-from fastapi import Request
 from fastapi_sso.sso.base import OpenID
 
 from litellm.proxy._types import LitellmUserRoles, SSOUserDefinedValues
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    new_user,
-    user_info,
-)
-from litellm.proxy.management_endpoints.team_endpoints import add_new_member
+from litellm.proxy import proxy_server
+
+# These imports are available if you need to create users or manage team membership:
+# from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+# from litellm.proxy.management_endpoints.team_endpoints import add_new_member
 
 
 async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
@@ -142,12 +141,25 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
                 f"No ID found for user. userIDPInfo.id is None {userIDPInfo}"
             )
         
+        #################################################
+        # Access extra fields from SSO provider (requires GENERIC_USER_EXTRA_ATTRIBUTES env var)
+        # Example: Set GENERIC_USER_EXTRA_ATTRIBUTES="department,employee_id,groups"
+        extra_fields = getattr(userIDPInfo, 'extra_fields', None) or {}
+        user_department = extra_fields.get("department")
+        employee_id = extra_fields.get("employee_id")
+        user_groups = extra_fields.get("groups", [])
+        
+        print(f"User department: {user_department}")  # noqa
+        print(f"Employee ID: {employee_id}")  # noqa
+        print(f"User groups: {user_groups}")  # noqa
+        #################################################
 
         #################################################
         # Run your custom code / logic here
         # check if user exists in litellm proxy DB
-        _user_info = await user_info(user_id=userIDPInfo.id)
-        print("_user_info from litellm DB ", _user_info)  # noqa
+        if proxy_server.prisma_client is not None:
+            _user_info = await proxy_server.prisma_client.get_data(user_id=userIDPInfo.id)
+            print("_user_info from litellm DB ", _user_info)  # noqa
         #################################################
 
         return SSOUserDefinedValues(

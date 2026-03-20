@@ -9,16 +9,20 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    create_tool_function,
-    build_input_schema,
-    extract_parameters,
-)
+import pytest
 
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _resolve_param_list,
+    _resolve_ref,
+    build_input_schema,
+    create_tool_function,
+    extract_parameters,
+    get_base_url,
+    resolve_operation_params,
+)
 
 GET_ASYNC_CLIENT_TARGET = (
     "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
@@ -496,3 +500,358 @@ class TestPathSecurity:
             call_args = async_client.get.call_args
             url = call_args[0][0]
             assert url == "https://example.com/files/report%202024.json"
+
+
+class TestGetBaseUrl:
+    """Test base URL extraction and fallback logic."""
+
+    def test_openapi_3x_with_servers(self):
+        """Test extraction from OpenAPI 3.x servers field."""
+        spec = {
+            "openapi": "3.0.0",
+            "servers": [
+                {"url": "https://api.example.com/v1"},
+                {"url": "https://api-staging.example.com/v1"}
+            ],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com/v1"
+
+    def test_openapi_2x_with_host(self):
+        """Test extraction from OpenAPI 2.x (Swagger) host field."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "basePath": "/v1",
+            "schemes": ["https"],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com/v1"
+
+    def test_openapi_2x_without_basepath(self):
+        """Test extraction from OpenAPI 2.x without basePath."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "schemes": ["https"],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com"
+
+    def test_openapi_2x_default_scheme(self):
+        """Test that https is used as default scheme when not specified."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com"
+
+    def test_fallback_with_openapi_json_suffix(self):
+        """Test fallback: derive base URL from spec_path with /openapi.json suffix."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+            # No servers field
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:8001"
+
+    def test_fallback_with_swagger_json_suffix(self):
+        """Test fallback: derive base URL from spec_path with /swagger.json suffix."""
+        spec = {
+            "swagger": "2.0",
+            "paths": {}
+            # No host field
+        }
+        spec_path = "https://api.example.com/api/swagger.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://api.example.com/api"
+
+    def test_fallback_with_openapi_yaml_suffix(self):
+        """Test fallback: derive base URL from spec_path with .yaml suffix."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "http://localhost:3000/docs/openapi.yaml"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:3000/docs"
+
+    def test_fallback_with_generic_json_file(self):
+        """Test fallback: remove last segment if it's a JSON file."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://example.com/v1/api-spec.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://example.com/v1"
+
+    def test_fallback_with_generic_yaml_file(self):
+        """Test fallback: remove last segment if it's a YAML file."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://example.com/docs/api.yml"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://example.com/docs"
+
+    def test_no_fallback_without_spec_path(self):
+        """Test that empty string is returned when no server info and no spec_path."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == ""
+
+    def test_no_fallback_with_local_file_path(self):
+        """Test that fallback doesn't apply to local file paths."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "/Users/test/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == ""
+
+    def test_priority_servers_over_fallback(self):
+        """Test that servers field takes priority over spec_path fallback."""
+        spec = {
+            "openapi": "3.0.0",
+            "servers": [{"url": "https://production.example.com"}],
+            "paths": {}
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://production.example.com"
+
+    def test_fallback_with_port_number(self):
+        """Test fallback handles URLs with port numbers correctly."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:8001"
+
+    def test_fallback_with_nested_path(self):
+        """Test fallback with deeply nested spec path."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://api.example.com/v2/docs/api/openapi.json"
+
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://api.example.com/v2/docs/api"
+
+
+class TestResolveRef:
+    """Test $ref resolution for individual parameters."""
+
+    def test_inline_param_returned_unchanged(self):
+        """Inline params (no $ref) are returned as-is."""
+        param = {"name": "owner", "in": "path", "required": True}
+        component_params: dict = {}
+        result = _resolve_ref(param, component_params)
+        assert result is param
+
+    def test_ref_resolved_from_components(self):
+        """A $ref pointing at components/parameters is resolved correctly."""
+        param = {"$ref": "#/components/parameters/per-page"}
+        component_params = {
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+        }
+        result = _resolve_ref(param, component_params)
+        assert result == {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+
+    def test_unresolvable_ref_returns_none(self):
+        """A $ref whose target is absent from components returns None (not the stub)."""
+        param = {"$ref": "#/components/parameters/missing-param"}
+        component_params: dict = {}
+        result = _resolve_ref(param, component_params)
+        assert result is None
+
+    def test_non_component_ref_returned_unchanged(self):
+        """A $ref that doesn't start with #/components/parameters/ is returned as-is."""
+        param = {"$ref": "#/definitions/SomeModel"}
+        result = _resolve_ref(param, {})
+        assert result is param
+
+
+class TestResolveParamList:
+    """Test batch $ref resolution with filtering."""
+
+    def test_all_inline_params_preserved(self):
+        """All inline params with names are preserved."""
+        raw = [
+            {"name": "owner", "in": "path"},
+            {"name": "repo", "in": "path"},
+        ]
+        result = _resolve_param_list(raw, {})
+        assert len(result) == 2
+        assert result[0]["name"] == "owner"
+        assert result[1]["name"] == "repo"
+
+    def test_refs_resolved(self):
+        """$ref entries are resolved against component_params."""
+        raw = [
+            {"$ref": "#/components/parameters/per-page"},
+            {"name": "q", "in": "query"},
+        ]
+        component_params = {
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+        }
+        result = _resolve_param_list(raw, component_params)
+        assert len(result) == 2
+        assert result[0]["name"] == "per_page"
+        assert result[1]["name"] == "q"
+
+    def test_unresolvable_refs_dropped(self):
+        """Unresolvable $refs are silently dropped — no None or nameless entries."""
+        raw = [
+            {"$ref": "#/components/parameters/does-not-exist"},
+            {"name": "q", "in": "query"},
+        ]
+        result = _resolve_param_list(raw, {})
+        assert len(result) == 1
+        assert result[0]["name"] == "q"
+
+    def test_nameless_entries_dropped(self):
+        """Entries that resolve to dicts without a 'name' key are dropped."""
+        raw = [{"schema": {"type": "string"}}]  # no "name" field
+        result = _resolve_param_list(raw, {})
+        assert result == []
+
+
+class TestResolveOperationParams:
+    """Test the shared resolve_operation_params helper."""
+
+    def test_inline_params_unchanged(self):
+        """Simple inline operation with no $refs or path-level params is returned unchanged."""
+        operation = {
+            "operationId": "listRepos",
+            "parameters": [
+                {"name": "owner", "in": "path", "required": True},
+                {"name": "sort", "in": "query"},
+            ],
+        }
+        path_item = {"get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert names == ["owner", "sort"]
+
+    def test_ref_params_resolved(self):
+        """$ref parameters in the operation are resolved from components."""
+        operation = {
+            "parameters": [
+                {"$ref": "#/components/parameters/per-page"},
+                {"name": "q", "in": "query"},
+            ]
+        }
+        path_item = {"get": operation}
+        components = {
+            "parameters": {
+                "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+            }
+        }
+        result = resolve_operation_params(operation, path_item, components)
+        names = [p["name"] for p in result["parameters"]]
+        assert "per_page" in names
+        assert "q" in names
+
+    def test_path_level_params_merged(self):
+        """Path-level parameters are merged into the operation parameters."""
+        path_level_params = [
+            {"name": "owner", "in": "path", "required": True},
+            {"name": "repo", "in": "path", "required": True},
+        ]
+        operation = {
+            "parameters": [{"name": "sort", "in": "query"}]
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert "owner" in names
+        assert "repo" in names
+        assert "sort" in names
+
+    def test_operation_level_wins_on_collision(self):
+        """When path-level and operation-level define the same name+in, operation wins."""
+        path_level_params = [
+            {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 30}
+        ]
+        operation = {
+            "parameters": [
+                {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 100}
+            ]
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        per_page_params = [p for p in result["parameters"] if p["name"] == "per_page"]
+        assert len(per_page_params) == 1
+        assert per_page_params[0].get("default") == 100  # operation-level value
+
+    def test_unresolvable_refs_silently_dropped(self):
+        """Unresolvable $refs are dropped — they don't poison the result with (None, None) keys."""
+        operation = {
+            "parameters": [
+                {"$ref": "#/components/parameters/nonexistent"},
+                {"name": "q", "in": "query"},
+            ]
+        }
+        path_item = {"get": operation}
+        result = resolve_operation_params(operation, path_item, {})
+        names = [p["name"] for p in result["parameters"]]
+        assert names == ["q"]
+        # Verify no None entries slipped through
+        assert all(p.get("name") is not None for p in result["parameters"])
+
+    def test_github_style_spec_structure(self):
+        """Simulate a GitHub-style spec: path-level owner+repo refs, operation-level query params."""
+        component_params = {
+            "owner": {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
+            "repo": {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
+            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}},
+        }
+        path_level_params = [
+            {"$ref": "#/components/parameters/owner"},
+            {"$ref": "#/components/parameters/repo"},
+        ]
+        operation = {
+            "operationId": "repos/list-commits",
+            "parameters": [
+                {"$ref": "#/components/parameters/per-page"},
+                {"name": "sha", "in": "query"},
+            ],
+        }
+        path_item = {"parameters": path_level_params, "get": operation}
+        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
+        names = [p["name"] for p in result["parameters"]]
+        assert "owner" in names
+        assert "repo" in names
+        assert "per_page" in names
+        assert "sha" in names
+        assert len(names) == 4  # no duplicates

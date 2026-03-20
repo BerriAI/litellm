@@ -4,6 +4,7 @@ from typing import Dict
 import pytest
 
 from litellm import image_edit
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -253,4 +254,51 @@ def test_transform_image_edit_request_with_mask_list(image_edit_config: OpenAIIm
     
     mask_file = next(f for f in files if f[0] == "mask")
     assert mask_file[1][1] == mask1  # Should be the first mask, not the second
+
+
+def test_transform_image_edit_request_with_input_fidelity(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test that input_fidelity is included in the data dict when provided"""
+    model = "gpt-image-1"
+    prompt = "Make the background blue"
+    image = b"fake_image_data"
+    image_edit_optional_request_params = {"input_fidelity": "high"}
+    litellm_params = GenericLiteLLMParams()
+    headers = {}
+
+    data, files = image_edit_config.transform_image_edit_request(
+        model=model,
+        prompt=prompt,
+        image=image,
+        image_edit_optional_request_params=image_edit_optional_request_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+
+    assert data["input_fidelity"] == "high"
+    assert data["model"] == model
+    assert data["prompt"] == prompt
+    assert "image" not in data
+
+
+def test_get_supported_openai_params_includes_input_fidelity(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test that input_fidelity is in the supported params list"""
+    supported = image_edit_config.get_supported_openai_params(model="gpt-image-1")
+    assert "input_fidelity" in supported
+
+
+def test_input_fidelity_passes_through_optional_param_filter():
+    """Test that input_fidelity is not dropped by get_requested_image_edit_optional_param"""
+    params = {
+        "input_fidelity": "low",
+        "quality": "high",
+        "unknown_param": "should_be_dropped",
+    }
+    filtered = ImageEditRequestUtils.get_requested_image_edit_optional_param(params)
+    assert filtered["input_fidelity"] == "low"
+    assert filtered["quality"] == "high"
+    assert "unknown_param" not in filtered
 

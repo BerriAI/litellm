@@ -14,6 +14,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     The class `DeepInfra` provides configuration for the DeepInfra's Chat Completions API interface. Below are the parameters:
     """
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "deepinfra"
@@ -73,7 +74,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
             "top_p",
             "response_format",
             "tools",
-            "tool_choice"
+            "tool_choice",
         ]
 
         if litellm.supports_reasoning(
@@ -119,17 +120,19 @@ class DeepInfraConfig(OpenAIGPTConfig):
                     optional_params[param] = value
         return optional_params
 
-    def _transform_tool_message_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def _transform_tool_message_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
         """
         Transform tool message content from array to string format for DeepInfra compatibility.
-        
+
         DeepInfra requires tool message content to be a string, not an array.
         This method converts tool message content from array format to string format.
-        
+
         Example transformation:
         - Input:  {"role": "tool", "content": [{"type": "text", "text": "20"}]}
         - Output: {"role": "tool", "content": "20"}
-        
+
         Or if content is complex:
         - Input:  {"role": "tool", "content": [{"type": "text", "text": "result"}]}
         - Output: {"role": "tool", "content": "[{\"type\": \"text\", \"text\": \"result\"}]"}
@@ -137,13 +140,13 @@ class DeepInfraConfig(OpenAIGPTConfig):
         for message in messages:
             if message.get("role") == "tool":
                 content = message.get("content")
-                
+
                 # If content is a list/array, convert it to string
                 if isinstance(content, list):
                     # Check if it's a simple single text item
                     if (
-                        len(content) == 1 
-                        and isinstance(content[0], dict) 
+                        len(content) == 1
+                        and isinstance(content[0], dict)
                         and content[0].get("type") == "text"
                         and "text" in content[0]
                     ):
@@ -152,7 +155,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                     else:
                         # For complex content, serialize the entire array as JSON string
                         message["content"] = json.dumps(content)
-        
+
         return messages
 
     @overload
@@ -163,7 +166,10 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[False] = False
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
         ...
 
@@ -183,6 +189,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                 )
                 transformed_messages = await parent_result
                 return self._transform_tool_message_content(transformed_messages)
+
             return _async_transform()
         else:
             # Call parent with is_async=False (literal) for sync case

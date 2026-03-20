@@ -2,9 +2,10 @@ import React from "react";
 
 interface ConfigInfoMessageProps {
   show: boolean;
+  onOpenSettings?: () => void;
 }
 
-export const ConfigInfoMessage: React.FC<ConfigInfoMessageProps> = ({ show }) => {
+export const ConfigInfoMessage: React.FC<ConfigInfoMessageProps> = ({ show, onOpenSettings }) => {
   if (!show) return null;
 
   return (
@@ -30,7 +31,18 @@ export const ConfigInfoMessage: React.FC<ConfigInfoMessageProps> = ({ show }) =>
         <h4 className="text-sm font-medium text-blue-800">Request/Response Data Not Available</h4>
         <p className="text-sm text-blue-700 mt-1">
           To view request and response details, enable prompt storage in your LiteLLM configuration by adding the
-          following to your <code className="bg-blue-100 px-1 py-0.5 rounded">proxy_config.yaml</code> file:
+          following to your <code className="bg-blue-100 px-1 py-0.5 rounded">proxy_config.yaml</code> file
+          {onOpenSettings && (
+            <> or{" "}
+              <button
+                onClick={onOpenSettings}
+                className="text-blue-600 hover:text-blue-800 underline font-medium"
+              >
+                open the settings
+              </button>
+              {" "}to configure this directly.
+            </>
+          )}
         </p>
         <pre className="mt-2 bg-white p-3 rounded border border-blue-200 text-xs font-mono overflow-auto">
           {`general_settings:

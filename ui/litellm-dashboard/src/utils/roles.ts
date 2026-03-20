@@ -31,3 +31,32 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   }
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
+
+export const formatUserRole = (userRole: string): string => {
+  if (!userRole) {
+    return "Undefined Role";
+  }
+  switch (userRole.toLowerCase()) {
+    case "app_owner":
+      return "App Owner";
+    case "demo_app_owner":
+      return "App Owner";
+    case "app_admin":
+      return "Admin";
+    case "proxy_admin":
+      return "Admin";
+    case "proxy_admin_viewer":
+      return "Admin Viewer";
+    case "org_admin":
+      return "Org Admin";
+    case "internal_user":
+      return "Internal User";
+    case "internal_user_viewer":
+    case "internal_viewer": // TODO:remove if deprecated
+      return "Internal Viewer";
+    case "app_user":
+      return "App User";
+    default:
+      return "Unknown Role";
+  }
+};

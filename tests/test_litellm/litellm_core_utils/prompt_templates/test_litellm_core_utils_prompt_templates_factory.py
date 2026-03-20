@@ -8,7 +8,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    _convert_to_bedrock_tool_call_invoke,
     ollama_pt,
+    sanitize_messages_for_tool_calling,
 )
 
 
@@ -1138,6 +1140,73 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+def test_bedrock_nova_web_search_options_mapping():
+    """
+    Test that web_search_options is correctly mapped to Nova grounding.
+
+    This follows the LiteLLM pattern for web search where:
+    - Vertex AI maps web_search_options to {"googleSearch": {}}
+    - Anthropic maps web_search_options to {"type": "web_search_20250305", ...}
+    - Nova should map web_search_options to {"systemTool": {"name": "nova_grounding"}}
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Test basic mapping for Nova model
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    # Test with search_context_size (should be ignored for Nova)
+    result2 = config._map_web_search_options(
+        {"search_context_size": "high"},
+        "us.amazon.nova-premier-v1:0"
+    )
+
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+    # Nova doesn't support search_context_size, so it's just ignored
+
+def test_bedrock_tools_pt_does_not_handle_system_tool():
+    """
+    Verify that _bedrock_tools_pt does NOT handle system_tool format.
+
+    System tools (nova_grounding) should be added via web_search_options,
+    not via the tools parameter directly.
+    """
+
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Regular function tools should still work
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    assert len(result) == 1
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec["name"] == "get_weather"
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1305,12 +1374,12 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
-    Test that anthropic_messages_pt passes through server_tool_use and 
+    Test that anthropic_messages_pt passes through server_tool_use and
     tool_search_tool_result blocks in assistant message content.
-    
+
     These are Anthropic-native content types used for tool search functionality
     that need to be preserved when reconstructing multi-turn conversations.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1359,15 +1428,15 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify we have 3 messages (user, assistant, user)
     assert len(result) == 3
-    
+
     # Verify the assistant message content
     assistant_msg = result[1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
-    
+
     # Find the different content block types
     content_types = [block.get("type") for block in assistant_msg["content"]]
-    
+
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
     server_tool_use_block = next(
@@ -1376,7 +1445,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
-    
+
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
@@ -1385,10 +1454,576 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
-    
+
     # Verify text block is also preserved
     assert "text" in content_types
     text_block = next(
         b for b in assistant_msg["content"] if b.get("type") == "text"
     )
     assert text_block["text"] == "I found the time tool. How can I help you?"
+
+
+def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
+    """
+    Regression test for issue #19098: unpack_defs() causes OOM with nested tool schemas.
+
+    The old implementation had a "flatten defs" loop that would pre-expand each def
+    using unpack_defs(), but since defs often reference each other, each subsequent
+    call would copy already-expanded content, causing exponential memory growth.
+
+    This test creates a schema with multiple nested $defs that reference each other
+    to verify the fix prevents memory explosion while still correctly resolving refs.
+    """
+    import sys
+    import copy
+
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Schema with multiple nested $defs that reference each other
+    # This pattern would cause OOM with the old "flatten defs" loop
+    complex_nested_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"$ref": "#/$defs/Expression"},
+        },
+        "$defs": {
+            "Expression": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["and", "or", "not", "comparison"]},
+                    "left": {"$ref": "#/$defs/Operand"},
+                    "right": {"$ref": "#/$defs/Operand"},
+                    "operator": {"$ref": "#/$defs/Operator"},
+                },
+            },
+            "Operand": {
+                "type": "object",
+                "anyOf": [
+                    {"$ref": "#/$defs/Literal"},
+                    {"$ref": "#/$defs/FieldRef"},
+                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
+                ],
+            },
+            "Literal": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "literal"},
+                    "value": {"$ref": "#/$defs/LiteralValue"},
+                },
+            },
+            "LiteralValue": {
+                "oneOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "null"},
+                ],
+            },
+            "FieldRef": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "field"},
+                    "name": {"type": "string"},
+                    "table": {"$ref": "#/$defs/TableRef"},
+                },
+            },
+            "TableRef": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "alias": {"type": "string"},
+                },
+            },
+            "Operator": {
+                "type": "string",
+                "enum": ["=", "!=", "<", ">", "<=", ">=", "LIKE", "IN"],
+            },
+        },
+    }
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_query",
+                "description": "Execute a query with complex expressions",
+                "parameters": complex_nested_schema,
+            },
+        }
+    ]
+
+    # Measure initial size
+    def get_size(obj, seen=None):
+        size = sys.getsizeof(obj)
+        if seen is None:
+            seen = set()
+        obj_id = id(obj)
+        if obj_id in seen:
+            return 0
+        seen.add(obj_id)
+        if isinstance(obj, dict):
+            size += sum([get_size(v, seen) for v in obj.values()])
+            size += sum([get_size(k, seen) for k in obj.keys()])
+        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+            size += sum([get_size(i, seen) for i in obj])
+        return size
+
+    initial_size = get_size(tools)
+
+    # Process through _bedrock_tools_pt - this should complete without OOM
+    tools_copy = copy.deepcopy(tools)
+    result = _bedrock_tools_pt(tools=tools_copy)
+
+    final_size = get_size(result)
+
+    # The expansion factor should be reasonable (< 100x), not exponential (35000x as in #19098)
+    expansion_factor = final_size / initial_size
+    assert expansion_factor < 100, (
+        f"Memory expansion factor {expansion_factor:.1f}x is too high. "
+        f"Initial: {initial_size} bytes, Final: {final_size} bytes"
+    )
+
+    # Verify the result is valid Bedrock tools format
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "execute_query"
+
+    # Verify $defs have been removed (Bedrock doesn't support them)
+    tool_schema = result[0]["toolSpec"].get("inputSchema", {}).get("json", {})
+    assert "$defs" not in tool_schema, "$defs should be removed after expansion"
+
+
+# ── _convert_to_bedrock_tool_call_invoke tests ──
+
+
+def test_bedrock_tool_call_invoke_normal_single_tool():
+    """Normal single tool call with valid JSON arguments."""
+    tool_calls = [
+        {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston, MA"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "call_abc123"
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert result[0]["toolUse"]["input"] == {"location": "Boston, MA"}
+
+
+def test_bedrock_tool_call_invoke_empty_arguments():
+    """Tool call with empty arguments produces an empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_empty",
+            "type": "function",
+            "function": {"name": "do_something", "arguments": ""},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_concatenated_json():
+    """
+    Tool call whose arguments contain multiple concatenated JSON objects
+    (the bug from issue #20543) is split into separate Bedrock toolUse blocks.
+
+    Bedrock Claude Sonnet 4.5 sometimes returns multiple tool call arguments
+    concatenated in a single string like:
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_L7I3TewYAUhoheJZQEuwVN",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "arguments": (
+                    '{"command": ["curl", "-i", "http://localhost:9009", "-m", "10"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]}'
+                    '{"command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]}'
+                ),
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # Should produce 3 separate toolUse blocks
+    assert len(result) == 3
+
+    # First block keeps original tool id
+    assert result[0]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN"
+    assert result[0]["toolUse"]["name"] == "shell"
+    assert result[0]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009", "-m", "10"]
+    }
+
+    # Subsequent blocks get suffixed ids
+    assert result[1]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_1"
+    assert result[1]["toolUse"]["name"] == "shell"
+    assert result[1]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/robots.txt", "-m", "5"]
+    }
+
+    assert result[2]["toolUse"]["toolUseId"] == "tooluse_L7I3TewYAUhoheJZQEuwVN_2"
+    assert result[2]["toolUse"]["name"] == "shell"
+    assert result[2]["toolUse"]["input"] == {
+        "command": ["curl", "-i", "http://localhost:9009/sitemap.xml", "-m", "5"]
+    }
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_with_cache_control():
+    """
+    When a tool call has cache_control AND concatenated JSON arguments,
+    the cachePoint block is appended after the last split block.
+    """
+    tool_calls = [
+        {
+            "id": "call_cached",
+            "type": "function",
+            "cache_control": {"type": "default"},
+            "function": {
+                "name": "shell",
+                "arguments": '{"a": 1}{"b": 2}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    # 2 toolUse blocks + 1 cachePoint block
+    assert len(result) == 3
+    assert "toolUse" in result[0]
+    assert "toolUse" in result[1]
+    assert "cachePoint" in result[2]
+
+
+def test_bedrock_tool_call_invoke_non_dict_arguments():
+    """Arguments that parse to a non-dict (e.g. '""') produce empty dict input."""
+    tool_calls = [
+        {
+            "id": "call_non_dict",
+            "type": "function",
+            "function": {"name": "tool", "arguments": '""'},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_multiple_normal_tools():
+    """Multiple separate tool calls (normal parallel calling) work correctly."""
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city": "LA"}',
+            },
+        },
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 2
+    assert result[0]["toolUse"]["toolUseId"] == "call_1"
+    assert result[1]["toolUse"]["toolUseId"] == "call_2"
+
+
+# ========================================================================
+# Tool result deduplication tests (Case D in sanitize_messages_for_tool_calling)
+# ========================================================================
+
+
+def test_sanitize_messages_deduplicates_tool_results():
+    """
+    Anthropic requires exactly one tool_result per tool_use. When conversation
+    history (e.g. from session resume) contains duplicate tool result messages
+    with the same tool_call_id, sanitize_messages_for_tool_calling should keep
+    only the last occurrence.
+
+    Without this fix, Anthropic rejects with:
+        each tool_use must have a single result. Found multiple tool_result
+        blocks with id: <id>
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                    }
+                ],
+            },
+            # First tool result (stale/duplicate)
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": "Partial result...",
+            },
+            # Second tool result (final/complete — should be kept)
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": '{"temperature": 72, "condition": "sunny"}',
+            },
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Count tool messages with this ID — should be exactly 1
+        tool_results = [
+            m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
+        ]
+        assert len(tool_results) == 1
+        # Should keep the LAST occurrence (most complete)
+        assert tool_results[0]["content"] == '{"temperature": 72, "condition": "sunny"}'
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_preserves_unique_tool_results():
+    """
+    When each tool_call_id has exactly one tool_result, no deduplication should
+    occur. Messages should pass through unchanged.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Get weather for two cities"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "LA"}',
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "85F"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        tool_results = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_results) == 2
+        assert tool_results[0]["tool_call_id"] == "call_1"
+        assert tool_results[0]["content"] == "72F"
+        assert tool_results[1]["tool_call_id"] == "call_2"
+        assert tool_results[1]["content"] == "85F"
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_dedup_disabled_when_modify_params_false():
+    """
+    When litellm.modify_params is False, messages should be returned as-is
+    even if they contain duplicate tool results.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "user", "content": "Test"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_dup",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_dup", "content": "first"},
+            {"role": "tool", "tool_call_id": "call_dup", "content": "second"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Should be unchanged — no sanitization when modify_params=False
+        assert result == messages
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
+    """
+    When the same tool_call_id appears in two different assistant turns
+    (separated by a user message), both tool results must be preserved.
+    Deduplication should only apply within a single contiguous tool-result
+    block, not globally across the conversation.
+
+    Without per-turn scoping this would incorrectly drop the first tool result,
+    leaving the first assistant message without its required result (which
+    Anthropic would reject).
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "First question"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_X",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"q": "a"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_X", "content": "result_turn_1"},
+            {"role": "user", "content": "Second question"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_X",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"q": "b"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_X", "content": "result_turn_2"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Both tool results must survive — one per turn
+        tool_results = [
+            m for m in result
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
+        ]
+        assert len(tool_results) == 2, (
+            f"Expected 2 tool results (one per turn), got {len(tool_results)}. "
+            "Dedup may be global instead of per-turn scoped."
+        )
+        assert tool_results[0]["content"] == "result_turn_1"
+        assert tool_results[1]["content"] == "result_turn_2"
+    finally:
+        litellm.modify_params = original
+
+
+def test_sanitize_messages_combined_case_a_and_case_d():
+    """
+    Combined Case A + Case D: an assistant message has two tool_calls —
+    one with a missing result (Case A should inject a dummy) and one with
+    duplicate results (Case D should deduplicate to keep only the last).
+
+    This validates that both sanitization passes compose correctly without
+    interfering with each other.
+    """
+    original = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Do two things"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_missing",
+                        "type": "function",
+                        "function": {"name": "tool_a", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_duped",
+                        "type": "function",
+                        "function": {"name": "tool_b", "arguments": '{"q": "x"}'},
+                    },
+                ],
+            },
+            # No result for call_missing — Case A should inject a dummy
+            # Duplicate results for call_duped — Case D should keep last
+            {"role": "tool", "tool_call_id": "call_duped", "content": "stale_result"},
+            {"role": "tool", "tool_call_id": "call_duped", "content": "fresh_result"},
+            {"role": "user", "content": "Now summarize"},
+        ]
+
+        result = sanitize_messages_for_tool_calling(messages)
+
+        # Collect tool results from the output
+        tool_results = [m for m in result if m.get("role") in ("tool", "function")]
+
+        # Case A: call_missing should have a dummy result injected
+        missing_results = [
+            m for m in tool_results if m.get("tool_call_id") == "call_missing"
+        ]
+        assert len(missing_results) == 1, (
+            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
+        )
+
+        # Case D: call_duped should have exactly 1 result (the fresh one)
+        duped_results = [
+            m for m in tool_results if m.get("tool_call_id") == "call_duped"
+        ]
+        assert len(duped_results) == 1, (
+            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        )
+        assert duped_results[0]["content"] == "fresh_result", (
+            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
+        )
+
+        # Verify tool results immediately follow the assistant message
+        asst_idx = next(
+            i for i, m in enumerate(result) if m.get("role") == "assistant"
+        )
+        tool_msgs_after_asst = [
+            m
+            for m in result[asst_idx + 1 :]
+            if m.get("role") in ("tool", "function")
+        ]
+        assert len(tool_msgs_after_asst) == 2, (
+            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
+        )
+        # Both tool_call_ids should be present (order may vary)
+        tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
+        assert tool_ids == {"call_missing", "call_duped"}, (
+            f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
+        )
+    finally:
+        litellm.modify_params = original

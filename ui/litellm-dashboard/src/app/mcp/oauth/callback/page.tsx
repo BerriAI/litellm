@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 
-const RESULT_STORAGE_KEY = "litellm-mcp-oauth-result";
+// Written to sessionStorage so both the admin hook (useMcpOAuthFlow) and the
+// user hook (useUserMcpOAuthFlow) can pick up the result.  Each hook reads
+// its own namespace to avoid cross-flow collisions.
+const ADMIN_RESULT_KEY = "litellm-mcp-oauth-result";
+const USER_RESULT_KEY = "litellm-user-mcp-oauth-result";
 const RETURN_URL_STORAGE_KEY = "litellm-mcp-oauth-return-url";
 
 const resolveDefaultRedirect = () => {
@@ -21,7 +25,7 @@ const resolveDefaultRedirect = () => {
   return "/";
 };
 
-const McpOAuthCallbackPage = () => {
+const McpOAuthCallbackContent = () => {
   const searchParams = useSearchParams();
 
   const payload = useMemo(() => {
@@ -32,6 +36,10 @@ const McpOAuthCallbackPage = () => {
       type: "litellm-mcp-oauth",
       code: searchParams.get("code"),
       state: searchParams.get("state"),
+      // Forward OAuth provider error params so the hook can surface the real
+      // reason (e.g. "access_denied") instead of a generic "code missing" error.
+      error: searchParams.get("error"),
+      error_description: searchParams.get("error_description"),
     };
   }, [searchParams]);
 
@@ -41,13 +49,16 @@ const McpOAuthCallbackPage = () => {
     }
 
     try {
-      window.sessionStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(payload));
+      // Write to both namespace keys (admin and user) so whichever hook is
+      // active can consume the result.  sessionStorage only — no localStorage.
+      const serialized = JSON.stringify(payload);
+      window.sessionStorage.setItem(ADMIN_RESULT_KEY, serialized);
+      window.sessionStorage.setItem(USER_RESULT_KEY, serialized);
     } catch (err) {
-      console.error("Failed to persist OAuth callback payload", err);
+      // Silently ignore storage errors
     }
 
     const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY);
-    console.info("[MCP OAuth callback] returnUrl", returnUrl);
     const destination = returnUrl || resolveDefaultRedirect();
     window.location.replace(destination);
   }, [payload]);
@@ -64,6 +75,14 @@ const McpOAuthCallbackPage = () => {
           </p>
       </div>
     </div>
+  );
+};
+
+const McpOAuthCallbackPage = () => {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <McpOAuthCallbackContent />
+    </Suspense>
   );
 };
 

@@ -9,10 +9,11 @@ Control how many tokens Claude uses when responding with the `effort` parameter,
 
 The `effort` parameter allows you to control how eager Claude is about spending tokens when responding to requests. This gives you the ability to trade off between response thoroughness and token efficiency, all with a single model.
 
-**Note**: The effort parameter is currently in beta and only supported by Claude Opus 4.5. LiteLLM automatically adds the `effort-2025-11-24` beta header when:
-- `reasoning_effort` parameter is provided (for Claude Opus 4.5 only)
+**Supported models:**
+- **Claude 4.6** (Opus 4.6, Sonnet 4.6) — `output_config` is a stable API feature, no beta header needed. Opus 4.6 also supports `effort="max"`.
+- **Claude Opus 4.5** — requires the `effort-2025-11-24` beta header (automatically added by LiteLLM).
 
-For Claude Opus 4.5, `reasoning_effort="medium"`—both are automatically mapped to the correct format.
+LiteLLM automatically maps `reasoning_effort` → `output_config={"effort": ...}` for all supported models.
 
 ## How Effort Works
 
@@ -35,6 +36,7 @@ This gives a much greater degree of control over efficiency.
 
 | Level | Description | Typical use case |
 |-------|-------------|------------------|
+| `max` | Maximum capability beyond high — Claude uses even more tokens for the most thorough outcome. **Only supported by Claude Opus 4.6.** | The hardest reasoning problems, complex multi-step research |
 | `high` | Maximum capability—Claude uses as many tokens as needed for the best possible outcome. Equivalent to not setting the parameter. | Complex reasoning, difficult coding problems, agentic tasks |
 | `medium` | Balanced approach with moderate token savings. | Agentic tasks that require a balance of speed, cost, and performance |
 | `low` | Most efficient—significant token savings with some capability reduction. | Simpler tasks that need the best speed and lowest costs, such as subagents |
@@ -49,16 +51,29 @@ This gives a much greater degree of control over efficiency.
 ```python
 import litellm
 
+# Works with Claude 4.6 models (no beta header needed)
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-6",
+    messages=[{
+        "role": "user",
+        "content": "Analyze the trade-offs between microservices and monolithic architectures"
+    }],
+    reasoning_effort="medium"  # Automatically mapped to output_config
+)
+
+print(response.choices[0].message.content)
+```
+
+```python
+# Also works with Claude Opus 4.5 (beta header auto-injected)
 response = litellm.completion(
     model="anthropic/claude-opus-4-5-20251101",
     messages=[{
         "role": "user",
         "content": "Analyze the trade-offs between microservices and monolithic architectures"
     }],
-    reasoning_effort="medium"  # Automatically mapped to output_config for Opus 4.5
+    reasoning_effort="medium"
 )
-
-print(response.choices[0].message.content)
 ```
 
 </TabItem>
@@ -71,8 +86,9 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Claude 4.6 — output_config is a stable API feature (no beta header)
 const response = await client.messages.create({
-  model: "claude-opus-4-5-20251101",
+  model: "claude-sonnet-4-6",
   max_tokens: 4096,
   messages: [{
     role: "user",
@@ -96,7 +112,29 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -d '{
-    "model": "anthropic/claude-opus-4-5-20251101",
+    "model": "anthropic/claude-sonnet-4-6",
+    "messages": [{
+      "role": "user",
+      "content": "Analyze the trade-offs between microservices and monolithic architectures"
+    }],
+    "reasoning_effort": "medium"
+  }'
+```
+
+### Direct Anthropic API Call
+
+<Tabs>
+<TabItem value="46" label="Claude 4.6 (stable)">
+
+```bash
+# Claude 4.6 — no beta header needed
+curl https://api.anthropic.com/v1/messages \
+  --header "x-api-key: $ANTHROPIC_API_KEY" \
+  --header "anthropic-version: 2023-06-01" \
+  --header "content-type: application/json" \
+  --data '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 4096,
     "messages": [{
       "role": "user",
       "content": "Analyze the trade-offs between microservices and monolithic architectures"
@@ -107,9 +145,11 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-### Direct Anthropic API Call
+</TabItem>
+<TabItem value="45" label="Claude Opus 4.5 (beta)">
 
 ```bash
+# Claude Opus 4.5 — requires beta header
 curl https://api.anthropic.com/v1/messages \
   --header "x-api-key: $ANTHROPIC_API_KEY" \
   --header "anthropic-version: 2023-06-01" \
@@ -128,10 +168,19 @@ curl https://api.anthropic.com/v1/messages \
   }'
 ```
 
+</TabItem>
+</Tabs>
+
 ## Model Compatibility
 
-The effort parameter is currently only supported by:
-- **Claude Opus 4.5** (`claude-opus-4-5-20251101`)
+The effort parameter is supported by:
+- **Claude Opus 4.6** (`claude-opus-4-6`) — supports `high`, `medium`, `low`, and `max`
+- **Claude Sonnet 4.6** (`claude-sonnet-4-6`) — supports `high`, `medium`, `low`
+- **Claude Opus 4.5** (`claude-opus-4-5-20251101`) — supports `high`, `medium`, `low`
+
+:::info
+`effort="max"` is only available on Claude Opus 4.6. Using it with other models will raise a validation error.
+:::
 
 ## When Should I Adjust the Effort Parameter?
 
@@ -154,7 +203,7 @@ Example with tools:
 import litellm
 
 response = litellm.completion(
-    model="anthropic/claude-opus-4-5-20251101",
+    model="anthropic/claude-sonnet-4-6",
     messages=[{
         "role": "user",
         "content": "Check the weather in multiple cities"
@@ -173,9 +222,7 @@ response = litellm.completion(
             }
         }
     }],
-    output_config={
-        "effort": "low"  # Will make fewer tool calls
-    }
+    reasoning_effort="low"  # Mapped to output_config — will make fewer tool calls
 )
 ```
 
@@ -187,18 +234,12 @@ The effort parameter works seamlessly with extended thinking. When both are enab
 import litellm
 
 response = litellm.completion(
-    model="anthropic/claude-opus-4-5-20251101",
+    model="anthropic/claude-sonnet-4-6",
     messages=[{
         "role": "user",
         "content": "Solve this complex problem"
     }],
-    thinking={
-        "type": "enabled",
-        "budget_tokens": 5000
-    },
-    output_config={
-        "effort": "medium"  # Affects both thinking and response tokens
-    }
+    reasoning_effort="medium"  # Mapped to adaptive thinking + output_config for 4.6 models
 )
 ```
 
@@ -218,14 +259,14 @@ response = litellm.completion(
 
 The effort parameter is supported across all Anthropic-compatible providers:
 
-- **Standard Anthropic API**: ✅ Supported (Claude Opus 4.5)
-- **Azure Anthropic / Microsoft Foundry**: ✅ Supported (Claude Opus 4.5)
-- **Amazon Bedrock**: ✅ Supported (Claude Opus 4.5)
-- **Google Cloud Vertex AI**: ✅ Supported (Claude Opus 4.5)
+- **Standard Anthropic API**: ✅ Supported (Claude 4.6, Opus 4.5)
+- **Azure Anthropic / Microsoft Foundry**: ✅ Supported (Claude 4.6, Opus 4.5)
+- **Amazon Bedrock**: ✅ Supported (Claude 4.6, Opus 4.5)
+- **Google Cloud Vertex AI**: ✅ Supported (Claude 4.6, Opus 4.5)
 
 LiteLLM automatically handles:
-- Beta header injection (`effort-2025-11-24`) for all providers
-- Parameter mapping: `reasoning_effort` → `output_config={"effort": ...}` for Claude Opus 4.5
+- Parameter mapping: `reasoning_effort` → `output_config={"effort": ...}` for all supported models
+- Beta header injection (`effort-2025-11-24`) only for Claude Opus 4.5 (not needed for 4.6 models)
 
 ## Usage and Pricing
 
@@ -244,12 +285,13 @@ print(f"Total tokens: {response.usage.total_tokens}")
 
 ## Troubleshooting
 
-### Beta header not being added
+### Beta header not being added (Claude Opus 4.5)
 
-LiteLLM automatically adds the `effort-2025-11-24` beta header when:
-- `reasoning_effort` parameter is provided (for Claude Opus 4.5 only)
+LiteLLM automatically adds the `effort-2025-11-24` beta header for Claude Opus 4.5 when `reasoning_effort` or `output_config` is provided.
 
-If you're not seeing the header:
+**Note:** Claude 4.6 models do NOT need a beta header — `output_config` is a stable API feature for these models.
+
+If you're not seeing the header for Opus 4.5:
 
 1. Ensure you're using `reasoning_effort` parameter
 2. Verify the model is Claude Opus 4.5
@@ -257,7 +299,7 @@ If you're not seeing the header:
 
 ### Invalid effort value error
 
-Only three values are accepted: `"high"`, `"medium"`, `"low"`. Any other value will raise a validation error:
+Accepted values: `"high"`, `"medium"`, `"low"`, and `"max"` (Opus 4.6 only). Any other value will raise a validation error:
 
 ```python
 # ❌ This will raise an error
@@ -265,11 +307,17 @@ output_config={"effort": "very_low"}
 
 # ✅ Use one of the valid values
 output_config={"effort": "low"}
+
+# ❌ This will raise an error (max only works on Opus 4.6)
+litellm.completion(model="anthropic/claude-sonnet-4-6", reasoning_effort="max", ...)
+
+# ✅ max is only for Opus 4.6
+litellm.completion(model="anthropic/claude-opus-4-6", reasoning_effort="max", ...)
 ```
 
 ### Model not supported
 
-Currently, only Claude Opus 4.5 supports the effort parameter. Using it with other models may result in the parameter being ignored or an error.
+The effort parameter is supported by Claude Opus 4.6, Sonnet 4.6, and Opus 4.5. Using it with other models may result in the parameter being ignored or an error.
 
 ## Related Features
 

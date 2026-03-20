@@ -93,7 +93,7 @@ class BaseImageEditConfig(ABC):
         self,
         model: str,
         prompt: Optional[str],
-        image: FileTypes,
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,

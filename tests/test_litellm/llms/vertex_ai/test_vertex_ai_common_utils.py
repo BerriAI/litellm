@@ -440,7 +440,7 @@ def test_vertex_ai_complex_response_schema():
     optional_params = {}
 
     v.apply_response_schema_transformation(
-        value=non_default_params["response_format"], optional_params=optional_params
+        value=non_default_params["response_format"], optional_params=optional_params, model="gemini-1.5-pro-preview-0409"
     )
 
     # Assertions for the transformed schema
@@ -558,69 +558,49 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     assert url == expected_url
 
 
-@pytest.mark.parametrize(
-    "supported_regions, expected_result",
-    [
-        (None, False),  # get_supported_regions returns None
-        ([], False),  # empty list, no global region
-        (["us-central1"], False),  # only regional, no global
-        (["global"], True),  # only global region
-        (["global", "us-central1"], True),  # global and other regions
-        (
-            ["us-central1", "global", "europe-west1"],
-            True,
-        ),  # global among multiple regions
-    ],
-)
-def test_is_global_only_vertex_model(supported_regions, expected_result):
-    """Test is_global_only_vertex_model with various supported regions scenarios"""
-    from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
-
-    with patch("litellm.utils.get_supported_regions") as mock_get_supported_regions:
-        mock_get_supported_regions.return_value = supported_regions
-
-        result = is_global_only_vertex_model("test-model")
-
-        assert result == expected_result
-        mock_get_supported_regions.assert_called_once_with(
-            model="test-model", custom_llm_provider="vertex_ai"
-        )
-
 
 @pytest.mark.parametrize(
-    "model_is_global_only, vertex_region, expected_region",
+    "model_cost_entry, vertex_region, expected_region",
     [
-        (True, None, "global"),  # Global-only model with no region specified
-        (True, "us-central1", "global"),  # Global-only model overrides specified region
-        (True, "europe-west1", "global"),  # Global-only model overrides any region
-        (False, None, "us-central1"),  # Non-global model defaults to us-central1
-        (
-            False,
-            "europe-west1",
-            "europe-west1",
-        ),  # Non-global model uses specified region
-        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+        # Model with supported_regions=["global"], no user region -> use "global"
+        ({"supported_regions": ["global"]}, None, "global"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "us-central1", "global"),
+        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
+        ({"supported_regions": ["global"]}, "europe-west1", "global"),
+        # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
+        ({"supported_regions": ["us-west2"]}, None, "us-west2"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes supported region -> respect it
+        ({"supported_regions": ["us-west2", "us-central1"]}, "us-central1", "us-central1"),
+        # Model with supported_regions=["us-west2", "us-central1"], user passes unsupported region -> override
+        ({"supported_regions": ["us-west2", "us-central1"]}, "europe-west1", "us-west2"),
+        # No model_cost entry, no user region -> default us-central1
+        ({}, None, "us-central1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "europe-west1", "europe-west1"),
+        # No model_cost entry, user specifies region -> use specified region
+        ({}, "us-east1", "us-east1"),
     ],
 )
 def test_get_vertex_region_global_only_model(
-    model_is_global_only, vertex_region, expected_region
+    model_cost_entry, vertex_region, expected_region
 ):
-    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    """Test get_vertex_region resolves region from model_cost supported_regions"""
+    import litellm
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     vertex_base = VertexBase()
 
-    with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
-    ) as mock_is_global_only:
-        mock_is_global_only.return_value = model_is_global_only
-
+    with patch.dict(
+        litellm.model_cost,
+        {"vertex_ai/test-model": model_cost_entry},
+        clear=False,
+    ):
         result = vertex_base.get_vertex_region(
             vertex_region=vertex_region, model="test-model"
         )
 
         assert result == expected_region
-        mock_is_global_only.assert_called_once_with("test-model")
 
 
 def test_vertex_filter_format_uri():
@@ -810,6 +790,36 @@ def test_get_vertex_model_id_from_url():
     url = "https://invalid-url.com"
     model_id = get_vertex_model_id_from_url(url)
     assert model_id is None
+
+
+def test_get_vertex_model_id_from_url_with_slashes():
+    """Test get_vertex_model_id_from_url with model names containing slashes (e.g., gcp/google/gemini-2.5-flash)
+
+    Regression test for NVIDIA issue: custom model names with slashes in passthrough URLs
+    were being truncated (e.g., 'gcp/google/gemini-2.5-flash' -> 'gcp'), causing access_groups
+    checks to fail.
+    """
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with model name containing slashes: gcp/google/gemini-2.5-flash
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+    # Test with model name containing slashes: gcp/google/gemini-3-flash-preview
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-3-flash-preview"
+
+    # Test with custom model path: custom/model
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/custom/model:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "custom/model"
+
+    # Test passthrough URL format (without host)
+    url = "v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
 
 
 def test_construct_target_url_with_version_prefix():

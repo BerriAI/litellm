@@ -6,6 +6,7 @@ interface CodeGenMetadata {
   tags?: string[];
   vector_stores?: string[];
   guardrails?: string[];
+  policies?: string[];
 }
 
 interface GenerateCodeParams {
@@ -17,6 +18,7 @@ interface GenerateCodeParams {
   selectedTags: string[];
   selectedVectorStores: string[];
   selectedGuardrails: string[];
+  selectedPolicies: string[];
   selectedMCPServers: string[];
   mcpServers?: MCPServer[];
   mcpServerToolRestrictions?: Record<string, string[]>;
@@ -40,6 +42,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
+    selectedPolicies,
     selectedMCPServers,
     mcpServers,
     mcpServerToolRestrictions,
@@ -72,6 +75,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
   if (selectedTags.length > 0) metadata.tags = selectedTags;
   if (selectedVectorStores.length > 0) metadata.vector_stores = selectedVectorStores;
   if (selectedGuardrails.length > 0) metadata.guardrails = selectedGuardrails;
+  if (selectedPolicies.length > 0) metadata.policies = selectedPolicies;
 
   const modelNameForCode = selectedModel || "your-model-name";
 

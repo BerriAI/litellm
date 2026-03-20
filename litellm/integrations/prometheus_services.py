@@ -105,6 +105,11 @@ class PrometheusServicesLogger:
         return metrics
 
     def is_metric_registered(self, metric_name) -> bool:
+        # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
+        # perf regression when a new Router is created per request (e.g. router_settings in DB).
+        names_to_collectors = getattr(self.REGISTRY, "_names_to_collectors", None)
+        if names_to_collectors is not None:
+            return metric_name in names_to_collectors
         for metric in self.REGISTRY.collect():
             if metric_name == metric.name:
                 return True

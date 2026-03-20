@@ -10,11 +10,25 @@ sys.path.insert(
 
 import pytest
 import litellm
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig, Span
 import asyncio
 import logging
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
+from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes as OISpanAttributes,
+)
+from litellm.integrations.opentelemetry import (
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    LITELLM_TRACER_NAME,
+    LITELLM_REQUEST_SPAN_NAME,
+    OpenTelemetry,
+    OpenTelemetryConfig,
+    RAW_REQUEST_SPAN_NAME,
+    Span,
+)
 from litellm.proxy._types import SpanAttributes
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -242,3 +256,63 @@ def validate_redacted_message_span_attributes(span):
         ), f"Non-metadata attribute found: {attr}"
 
     pass
+
+@pytest.mark.asyncio
+async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
+    """
+    ArizePhoenixLogger creates its own dedicated TracerProvider so it can
+    coexist with the generic ``otel`` callback.  In proxy mode it creates a
+    ``litellm_proxy_request`` parent span and a ``litellm_request`` child span
+    on its *own* provider — completely independent of the global provider.
+
+    This test verifies:
+    1. Phoenix creates both parent and child spans on its dedicated exporter.
+    2. The spans form a proper parent-child hierarchy (same trace ID).
+    3. A raw_gen_ai_request sub-span is also produced.
+    """
+    from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    phoenix_exporter = InMemorySpanExporter()
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+    # ArizePhoenixLogger builds its own TracerProvider internally.
+    # We pass our in-memory exporter so we can inspect spans.
+    phoenix_logger = ArizePhoenixLogger(
+        config=OpenTelemetryConfig(exporter=phoenix_exporter),
+        callback_name="arize_phoenix",
+    )
+
+    litellm.callbacks = [phoenix_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    # Simulate a proxy request by injecting proxy_server_request as a top-level kwarg.
+    # This triggers ArizePhoenixLogger._get_phoenix_context to create its own parent span.
+    await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "ping"}],
+        mock_response="pong",
+        proxy_server_request={"url": "/chat/completions", "method": "POST", "headers": {}},
+    )
+
+    # Flush async span processing
+    await asyncio.sleep(1)
+
+    spans = phoenix_exporter.get_finished_spans()
+    span_names = [s.name for s in spans]
+
+    # Phoenix creates its own span names on its dedicated TracerProvider:
+    # - "litellm_proxy_request" (parent) — created by _get_phoenix_context
+    # - "litellm_request" (child)       — the LLM call span
+    # - "raw_gen_ai_request"            — raw request sub-span
+    assert "litellm_proxy_request" in span_names, f"Expected proxy parent span, got: {span_names}"
+    assert LITELLM_REQUEST_SPAN_NAME in span_names, f"Expected request child span, got: {span_names}"
+    assert RAW_REQUEST_SPAN_NAME in span_names, f"Expected raw request span, got: {span_names}"
+
+    # All spans should share the same trace ID (proper hierarchy)
+    trace_ids = {s.context.trace_id for s in spans}
+    assert len(trace_ids) == 1, f"Expected single trace, got {len(trace_ids)} traces"
+
+    phoenix_exporter.clear()

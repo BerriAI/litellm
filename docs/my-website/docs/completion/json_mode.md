@@ -342,3 +342,89 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+## Gemini - Native JSON Schema Format (Gemini 2.0+)
+
+Gemini 2.0+ models automatically use the native `responseJsonSchema` parameter, which provides better compatibility with standard JSON Schema format.
+
+### Benefits (Gemini 2.0+):
+- Standard JSON Schema format (lowercase types like `string`, `object`)
+- Supports `additionalProperties: false` for stricter validation
+- Better compatibility with Pydantic's `model_json_schema()`
+- No `propertyOrdering` required
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+from pydantic import BaseModel
+
+class UserInfo(BaseModel):
+    name: str
+    age: int
+
+response = completion(
+    model="gemini/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "Extract: John is 25 years old"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "user_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"}
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False  # Supported on Gemini 2.0+
+            }
+        }
+    }
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+        {"role": "user", "content": "Extract: John is 25 years old"}
+    ],
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "user_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"}
+                },
+                "required": ["name", "age"],
+                "additionalProperties": false
+            }
+        }
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Model Behavior
+
+| Model | Format Used | `additionalProperties` Support |
+|-------|-------------|-------------------------------|
+| Gemini 2.0+ | `responseJsonSchema` (JSON Schema) | ✅ Yes |
+| Gemini 1.5 | `responseSchema` (OpenAPI) | ❌ No |
+
+LiteLLM automatically selects the appropriate format based on the model version.

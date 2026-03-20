@@ -16,7 +16,7 @@ from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
 class PydanticAIHandler:
     """
     Handler for Pydantic AI agent requests.
-    
+
     Provides:
     - Direct non-streaming requests to Pydantic AI agents
     - Fake streaming by converting non-streaming responses into streaming chunks
@@ -41,9 +41,7 @@ class PydanticAIHandler:
         Returns:
             A2A SendMessageResponse dict
         """
-        verbose_logger.info(
-            f"Pydantic AI: Routing to Pydantic AI agent at {api_base}"
-        )
+        verbose_logger.info(f"Pydantic AI: Routing to Pydantic AI agent at {api_base}")
 
         # Send request directly to Pydantic AI agent
         response_data = await PydanticAITransformation.send_non_streaming_request(
@@ -102,5 +100,3 @@ class PydanticAIHandler:
             delay_ms=delay_ms,
         ):
             yield chunk
-
-

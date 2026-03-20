@@ -1,7 +1,7 @@
 "use client";
 
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
-import { Button, Card, Descriptions, Space, Typography } from "antd";
+import { Button, Card, Descriptions, Space, Tag, Typography } from "antd";
 import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
@@ -28,6 +28,7 @@ export default function SSOSettings() {
 
   const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
   const isRoleMappingsEnabled = Boolean(ssoSettings?.values.role_mappings);
+  const isTeamMappingsEnabled = Boolean(ssoSettings?.values.team_mappings);
 
   const renderEndpointValue = (value?: string | null) => (
     <Text className="font-mono text-gray-600 text-sm" copyable={!!value}>
@@ -37,6 +38,15 @@ export default function SSOSettings() {
 
   const renderSimpleValue = (value?: string | null) =>
     value ? value : <span className="text-gray-400 italic">Not configured</span>;
+
+  const renderTeamMappingsField = (values: SSOSettingsValues) => {
+    if (!values.team_mappings?.team_ids_jwt_field) {
+      return <span className="text-gray-400 italic">Not configured</span>;
+    }
+    return (
+      <Tag>{values.team_mappings.team_ids_jwt_field}</Tag>
+    );
+  };
 
   const descriptionsConfig = {
     column: {
@@ -103,6 +113,10 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
+        isTeamMappingsEnabled ? {
+          label: "Team IDs JWT Field",
+          render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
+        } : null,
       ],
     },
     generic: {
@@ -129,6 +143,10 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
+        isTeamMappingsEnabled ? {
+          label: "Team IDs JWT Field",
+          render: (values: SSOSettingsValues) => renderTeamMappingsField(values),
+        } : null,
       ],
     },
   };
@@ -155,7 +173,7 @@ export default function SSOSettings() {
             <span>{config.providerText}</span>
           </div>
         </Descriptions.Item>
-        {config.fields.map((field, index) => (
+        {config.fields.map((field, index) => field && (
           <Descriptions.Item key={index} label={field.label}>
             {field.render(values)}
           </Descriptions.Item>

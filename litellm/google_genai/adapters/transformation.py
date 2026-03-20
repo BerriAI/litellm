@@ -2,7 +2,6 @@ import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm import verbose_logger
-
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
 from litellm.types.llms.openai import (
     AllMessageValues,

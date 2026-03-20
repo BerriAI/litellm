@@ -35,11 +35,10 @@ from litellm import completion
 
 response = completion(
     model="github_copilot/gpt-4",
-    messages=[{"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}],
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    messages=[
+        {"role": "system", "content": "You are a helpful coding assistant"},
+        {"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}
+    ]
 )
 print(response)
 ```
@@ -50,11 +49,7 @@ from litellm import completion
 stream = completion(
     model="github_copilot/gpt-4",
     messages=[{"role": "user", "content": "Explain async/await in Python"}],
-    stream=True,
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    stream=True
 )
 
 for chunk in stream:
@@ -134,11 +129,7 @@ client = OpenAI(
 # Non-streaming response
 response = client.chat.completions.create(
     model="github_copilot/gpt-4",
-    messages=[{"role": "user", "content": "How do I optimize this SQL query?"}],
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    messages=[{"role": "user", "content": "How do I optimize this SQL query?"}]
 )
 
 print(response.choices[0].message.content)
@@ -156,11 +147,7 @@ response = litellm.completion(
     model="litellm_proxy/github_copilot/gpt-4",
     messages=[{"role": "user", "content": "Review this code for bugs"}],
     api_base="http://localhost:4000",
-    api_key="your-proxy-api-key",
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    api_key="your-proxy-api-key"
 )
 
 print(response.choices[0].message.content)
@@ -174,8 +161,6 @@ print(response.choices[0].message.content)
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
-  -H "editor-version: vscode/1.85.1" \
-  -H "Copilot-Integration-Id: vscode-chat" \
   -d '{
     "model": "github_copilot/gpt-4",
     "messages": [{"role": "user", "content": "Explain this error message"}]
@@ -211,9 +196,11 @@ export GITHUB_COPILOT_API_KEY_FILE="api-key.json"
 
 ### Headers
 
-GitHub Copilot supports various editor-specific headers:
+LiteLLM automatically injects the required GitHub Copilot headers (simulating VSCode). You don't need to specify them manually.
 
-```python showLineNumbers title="Common Headers"
+If you want to override the defaults (e.g., to simulate a different editor), you can use `extra_headers`:
+
+```python showLineNumbers title="Custom Headers (Optional)"
 extra_headers = {
     "editor-version": "vscode/1.85.1",           # Editor version
     "editor-plugin-version": "copilot/1.155.0",  # Plugin version

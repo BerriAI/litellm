@@ -40,14 +40,14 @@ def _get_int(value: Any, default: int) -> int:
 def _normalize_principal_arn(caller_arn: str, account_id: str) -> str:
     """
     Normalize a caller ARN to the format required by OpenSearch data access policies.
-    
+
     OpenSearch Serverless data access policies require:
     - IAM users: arn:aws:iam::account-id:user/user-name
     - IAM roles: arn:aws:iam::account-id:role/role-name
-    
+
     But get_caller_identity() returns for assumed roles:
     - arn:aws:sts::account-id:assumed-role/role-name/session-name
-    
+
     This function converts assumed-role ARNs to the proper IAM role ARN format.
     """
     if ":assumed-role/" in caller_arn:
@@ -99,13 +99,22 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Optional config
         self._data_source_id = self.vector_store_config.get("data_source_id")
         self._s3_bucket = self.vector_store_config.get("s3_bucket")
-        self._s3_prefix: Optional[str] = str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
-        self.embedding_model = self.vector_store_config.get(
-            "embedding_model"
-        ) or "amazon.titan-embed-text-v2:0"
+        self._s3_prefix: Optional[str] = (
+            str(self.vector_store_config.get("s3_prefix"))
+            if self.vector_store_config.get("s3_prefix")
+            else None
+        )
+        self.embedding_model = (
+            self.vector_store_config.get("embedding_model")
+            or "amazon.titan-embed-text-v2:0"
+        )
 
-        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
-        self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
+        self.wait_for_ingestion = self.vector_store_config.get(
+            "wait_for_ingestion", False
+        )
+        self.ingestion_timeout: int = _get_int(
+            self.vector_store_config.get("ingestion_timeout"), 300
+        )
 
         # Get AWS region using BaseAWSLLM method
         _aws_region = self.vector_store_config.get("aws_region_name")
@@ -219,7 +228,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         await self._create_opensearch_index(collection_name)
 
         # Step 4: Create IAM role for Bedrock
-        role_arn = await self._create_bedrock_role(unique_id, account_id, collection_arn)
+        role_arn = await self._create_bedrock_role(
+            unique_id, account_id, collection_arn
+        )
 
         # Step 5: Create Knowledge Base
         self.knowledge_base_id = await self._create_knowledge_base(
@@ -260,49 +271,84 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         oss = self._get_boto3_client("opensearchserverless")
         collection_name = f"litellm-kb-{unique_id}"
 
-        verbose_logger.debug(f"Creating OpenSearch Serverless collection: {collection_name}")
+        verbose_logger.debug(
+            f"Creating OpenSearch Serverless collection: {collection_name}"
+        )
 
         # Create encryption policy
         oss.create_security_policy(
             name=f"{collection_name}-enc",
             type="encryption",
-            policy=json.dumps({
-                "Rules": [{"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]}],
-                "AWSOwnedKey": True,
-            }),
+            policy=json.dumps(
+                {
+                    "Rules": [
+                        {
+                            "ResourceType": "collection",
+                            "Resource": [f"collection/{collection_name}"],
+                        }
+                    ],
+                    "AWSOwnedKey": True,
+                }
+            ),
         )
 
         # Create network policy (public access for simplicity)
         oss.create_security_policy(
             name=f"{collection_name}-net",
             type="network",
-            policy=json.dumps([{
-                "Rules": [{"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]},
-                          {"ResourceType": "dashboard", "Resource": [f"collection/{collection_name}"]}],
-                "AllowFromPublic": True,
-            }]),
+            policy=json.dumps(
+                [
+                    {
+                        "Rules": [
+                            {
+                                "ResourceType": "collection",
+                                "Resource": [f"collection/{collection_name}"],
+                            },
+                            {
+                                "ResourceType": "dashboard",
+                                "Resource": [f"collection/{collection_name}"],
+                            },
+                        ],
+                        "AllowFromPublic": True,
+                    }
+                ]
+            ),
         )
 
         # Create data access policy - include both root and actual caller ARN
         # This ensures the credentials being used have access to the collection
         # Normalize the caller ARN (convert assumed-role ARN to IAM role ARN if needed)
         normalized_caller_arn = _normalize_principal_arn(caller_arn, account_id)
-        verbose_logger.debug(f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}")
-        
+        verbose_logger.debug(
+            f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}"
+        )
+
         principals = [f"arn:aws:iam::{account_id}:root", normalized_caller_arn]
         # Deduplicate in case caller is root
         principals = list(set(principals))
-        
+
         oss.create_access_policy(
             name=f"{collection_name}-access",
             type="data",
-            policy=json.dumps([{
-                "Rules": [
-                    {"ResourceType": "index", "Resource": [f"index/{collection_name}/*"], "Permission": ["aoss:*"]},
-                    {"ResourceType": "collection", "Resource": [f"collection/{collection_name}"], "Permission": ["aoss:*"]},
-                ],
-                "Principal": principals,
-            }]),
+            policy=json.dumps(
+                [
+                    {
+                        "Rules": [
+                            {
+                                "ResourceType": "index",
+                                "Resource": [f"index/{collection_name}/*"],
+                                "Permission": ["aoss:*"],
+                            },
+                            {
+                                "ResourceType": "collection",
+                                "Resource": [f"collection/{collection_name}"],
+                                "Permission": ["aoss:*"],
+                            },
+                        ],
+                        "Principal": principals,
+                    }
+                ]
+            ),
         )
 
         # Create collection
@@ -341,9 +387,15 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Get credentials for signing
         credentials = self.get_credentials(
-            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
-            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
-            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
+            aws_access_key_id=_get_str_or_none(
+                self.vector_store_config.get("aws_access_key_id")
+            ),
+            aws_secret_access_key=_get_str_or_none(
+                self.vector_store_config.get("aws_secret_access_key")
+            ),
+            aws_session_token=_get_str_or_none(
+                self.vector_store_config.get("aws_session_token")
+            ),
             aws_region_name=self.aws_region_name,
         )
 
@@ -371,15 +423,17 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         index_name = "bedrock-kb-index"
         index_body = {
-            "settings": {
-                "index": {"knn": True, "knn.algo_param.ef_search": 512}
-            },
+            "settings": {"index": {"knn": True, "knn.algo_param.ef_search": 512}},
             "mappings": {
                 "properties": {
                     "bedrock-knowledge-base-default-vector": {
                         "type": "knn_vector",
                         "dimension": 1024,
-                        "method": {"engine": "faiss", "name": "hnsw", "space_type": "l2"},
+                        "method": {
+                            "engine": "faiss",
+                            "name": "hnsw",
+                            "space_type": "l2",
+                        },
                     },
                     "AMAZON_BEDROCK_METADATA": {"type": "text", "index": False},
                     "AMAZON_BEDROCK_TEXT_CHUNK": {"type": "text"},
@@ -391,7 +445,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         max_retries = 8
         retry_delay = 20  # seconds
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
                 client.indices.create(index=index_name, body=index_body)
@@ -400,7 +454,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             except Exception as e:
                 last_error = e
                 error_str = str(e)
-                if "authorization_exception" in error_str.lower() or "security_exception" in error_str.lower():
+                if (
+                    "authorization_exception" in error_str.lower()
+                    or "security_exception" in error_str.lower()
+                ):
                     verbose_logger.warning(
                         f"OpenSearch index creation attempt {attempt + 1}/{max_retries} failed due to authorization. "
                         f"Waiting {retry_delay}s for policy propagation..."
@@ -409,7 +466,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 else:
                     # Non-auth error, raise immediately
                     raise
-        
+
         # All retries exhausted
         raise RuntimeError(
             f"Failed to create OpenSearch index after {max_retries} attempts. "
@@ -427,15 +484,19 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         trust_policy = {
             "Version": "2012-10-17",
-            "Statement": [{
-                "Effect": "Allow",
-                "Principal": {"Service": "bedrock.amazonaws.com"},
-                "Action": "sts:AssumeRole",
-                "Condition": {
-                    "StringEquals": {"aws:SourceAccount": account_id},
-                    "ArnLike": {"aws:SourceArn": f"arn:aws:bedrock:{self.aws_region_name}:{account_id}:knowledge-base/*"},
-                },
-            }],
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "bedrock.amazonaws.com"},
+                    "Action": "sts:AssumeRole",
+                    "Condition": {
+                        "StringEquals": {"aws:SourceAccount": account_id},
+                        "ArnLike": {
+                            "aws:SourceArn": f"arn:aws:bedrock:{self.aws_region_name}:{account_id}:knowledge-base/*"
+                        },
+                    },
+                }
+            ],
         }
 
         response = iam.create_role(
@@ -452,7 +513,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 {
                     "Effect": "Allow",
                     "Action": ["bedrock:InvokeModel"],
-                    "Resource": [f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"],
+                    "Resource": [
+                        f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"
+                    ],
                 },
                 {
                     "Effect": "Allow",
@@ -462,7 +525,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 {
                     "Effect": "Allow",
                     "Action": ["s3:GetObject", "s3:ListBucket"],
-                    "Resource": [f"arn:aws:s3:::{self.s3_bucket}", f"arn:aws:s3:::{self.s3_bucket}/*"],
+                    "Resource": [
+                        f"arn:aws:s3:::{self.s3_bucket}",
+                        f"arn:aws:s3:::{self.s3_bucket}/*",
+                    ],
                 },
             ],
         }
@@ -554,20 +620,40 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         try:
             import boto3
         except ImportError:
-            raise ImportError("boto3 is required for Bedrock ingestion. Install with: pip install boto3")
+            raise ImportError(
+                "boto3 is required for Bedrock ingestion. Install with: pip install boto3"
+            )
 
         # Get credentials using BaseAWSLLM's get_credentials method
         credentials = self.get_credentials(
-            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
-            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
-            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
+            aws_access_key_id=_get_str_or_none(
+                self.vector_store_config.get("aws_access_key_id")
+            ),
+            aws_secret_access_key=_get_str_or_none(
+                self.vector_store_config.get("aws_secret_access_key")
+            ),
+            aws_session_token=_get_str_or_none(
+                self.vector_store_config.get("aws_session_token")
+            ),
             aws_region_name=self.aws_region_name,
-            aws_session_name=_get_str_or_none(self.vector_store_config.get("aws_session_name")),
-            aws_profile_name=_get_str_or_none(self.vector_store_config.get("aws_profile_name")),
-            aws_role_name=_get_str_or_none(self.vector_store_config.get("aws_role_name")),
-            aws_web_identity_token=_get_str_or_none(self.vector_store_config.get("aws_web_identity_token")),
-            aws_sts_endpoint=_get_str_or_none(self.vector_store_config.get("aws_sts_endpoint")),
-            aws_external_id=_get_str_or_none(self.vector_store_config.get("aws_external_id")),
+            aws_session_name=_get_str_or_none(
+                self.vector_store_config.get("aws_session_name")
+            ),
+            aws_profile_name=_get_str_or_none(
+                self.vector_store_config.get("aws_profile_name")
+            ),
+            aws_role_name=_get_str_or_none(
+                self.vector_store_config.get("aws_role_name")
+            ),
+            aws_web_identity_token=_get_str_or_none(
+                self.vector_store_config.get("aws_web_identity_token")
+            ),
+            aws_sts_endpoint=_get_str_or_none(
+                self.vector_store_config.get("aws_sts_endpoint")
+            ),
+            aws_external_id=_get_str_or_none(
+                self.vector_store_config.get("aws_external_id")
+            ),
         )
 
         # Create session with credentials
@@ -623,7 +709,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         await self._ensure_config_initialized()
 
         if not file_content or not filename:
-            verbose_logger.warning("No file content or filename provided for Bedrock ingestion")
+            verbose_logger.warning(
+                "No file content or filename provided for Bedrock ingestion"
+            )
             return _get_str_or_none(self.knowledge_base_id), None
 
         # Step 1: Upload file to S3
@@ -655,6 +743,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Step 3: Wait for ingestion (optional) - use asyncio.sleep to avoid blocking
         if self.wait_for_ingestion:
             import time as time_module
+
             start_time = time_module.time()
             while time_module.time() - start_time < self.ingestion_timeout:
                 job_status = bedrock_agent.get_ingestion_job(
@@ -672,7 +761,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     )
                     break
                 elif status == "FAILED":
-                    failure_reasons = job_status["ingestionJob"].get("failureReasons", [])
+                    failure_reasons = job_status["ingestionJob"].get(
+                        "failureReasons", []
+                    )
                     verbose_logger.error(f"Ingestion failed: {failure_reasons}")
                     break
                 elif status in ("STARTING", "IN_PROGRESS"):
@@ -682,4 +773,3 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     break
 
         return str(self.knowledge_base_id) if self.knowledge_base_id else None, s3_key
-

@@ -11,6 +11,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import GraySwanGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    initialize_guardrail as initialize_grayswan,
+)
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
@@ -19,10 +24,6 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
-)
-from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
-    GraySwanGuardrail,
-    initialize_guardrail as initialize_grayswan,
 )
 
 from .guardrail_initializers import (
@@ -326,11 +327,13 @@ class GuardrailRegistry:
         prisma_client: PrismaClient,
     ) -> List[Guardrail]:
         """
-        Get all guardrails from the database
+        Get all active guardrails from the database.
+        Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
             guardrails_from_db = (
                 await prisma_client.db.litellm_guardrailstable.find_many(
+                    where={"status": "active"},
                     order={"created_at": "desc"},
                 )
             )
@@ -489,7 +492,7 @@ class InMemoryGuardrailHandler:
         config_file_path: Optional[str] = None,
     ) -> Optional[CustomGuardrail]:
         """
-        Initialize a Custom Guardrail from a python file
+        Initialize a Custom Guardrail from a python file or module path
 
         This initializes it by adding it to the litellm callback manager
         """
@@ -498,26 +501,14 @@ class InMemoryGuardrailHandler:
                 "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
             )
 
-        _file_name, _class_name = guardrail_type.split(".")
         verbose_proxy_logger.debug(
-            "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
+            "Initializing custom guardrail: %s",
             guardrail_type,
-            _file_name,
-            _class_name,
         )
 
-        directory = os.path.dirname(config_file_path)
-        module_file_path = os.path.join(directory, _file_name) + ".py"
-
-        spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
-        if not spec:
-            raise ImportError(
-                f"Could not find a module specification for {module_file_path}"
-            )
-
-        module = importlib.util.module_from_spec(spec)  # type: ignore
-        spec.loader.exec_module(module)  # type: ignore
-        _guardrail_class = getattr(module, _class_name)
+        _guardrail_class = get_instance_fn(
+            guardrail_type, config_file_path=config_file_path
+        )
 
         mode = litellm_params.mode
         if mode is None:

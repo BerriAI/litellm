@@ -103,9 +103,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         """
         try:
             # Get model info first for conversion
-            model_group_info: Optional[ModelGroupInfo] = (
-                self.llm_router.get_model_group_info(model_group=model)
-            )
+            model_group_info: Optional[
+                ModelGroupInfo
+            ] = self.llm_router.get_model_group_info(model_group=model)
 
             weight: float = 1
             if (
@@ -277,16 +277,16 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ) = await self.check_available_usage(
                     model=model_info["model_name"], priority=key_priority
                 )
-                response._hidden_params["additional_headers"] = (
-                    {  # Add additional response headers - easier debugging
-                        "x-litellm-model_group": model_info["model_name"],
-                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
-                        "x-ratelimit-remaining-model-tokens": model_tpm,
-                        "x-ratelimit-remaining-model-requests": model_rpm,
-                        "x-ratelimit-current-active-projects": active_projects,
-                    }
-                )
+                response._hidden_params[
+                    "additional_headers"
+                ] = {  # Add additional response headers - easier debugging
+                    "x-litellm-model_group": model_info["model_name"],
+                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                    "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                    "x-ratelimit-remaining-model-tokens": model_tpm,
+                    "x-ratelimit-remaining-model-requests": model_rpm,
+                    "x-ratelimit-current-active-projects": active_projects,
+                }
 
                 return response
             return await super().async_post_call_success_hook(

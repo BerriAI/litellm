@@ -181,7 +181,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(s
     # litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-haiku-latest",
+        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
         vector_store_ids = [
             "T37J8R4WTM"
@@ -232,7 +232,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
     # Init client
     litellm._turn_on_debug()
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-haiku-latest",
+        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
         max_tokens=10,
         tools=[
@@ -255,7 +255,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
     litellm._turn_on_debug()
     
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-haiku-latest",
+        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
         max_tokens=10,
         tools=[
@@ -350,7 +350,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(setup_vector_stor
         new=AsyncMock(side_effect=fake_async_vector_store_search_handler),
     ):
         response = await litellm.acompletion(
-            model="anthropic/claude-3-5-haiku-latest",
+            model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
             messages=[{"role": "user", "content": "what is litellm?"}],
             max_tokens=10,
             tools=[

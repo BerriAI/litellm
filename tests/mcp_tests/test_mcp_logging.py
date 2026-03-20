@@ -19,8 +19,7 @@ from litellm.proxy._experimental.mcp_server.server import (
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
-from litellm.proxy.proxy_server import LiteLLM_ObjectPermissionTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.utils import HiddenParams
 from mcp.types import Tool as MCPTool, CallToolResult, TextContent

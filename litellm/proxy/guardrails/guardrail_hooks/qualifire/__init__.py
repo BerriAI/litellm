@@ -19,8 +19,12 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         hallucinations_check=getattr(litellm_params, "hallucinations_check", None),
         grounding_check=getattr(litellm_params, "grounding_check", None),
         pii_check=getattr(litellm_params, "pii_check", None),
-        content_moderation_check=getattr(litellm_params, "content_moderation_check", None),
-        tool_selection_quality_check=getattr(litellm_params, "tool_selection_quality_check", None),
+        content_moderation_check=getattr(
+            litellm_params, "content_moderation_check", None
+        ),
+        tool_selection_quality_check=getattr(
+            litellm_params, "tool_selection_quality_check", None
+        ),
         assertions=getattr(litellm_params, "assertions", None),
         on_flagged=getattr(litellm_params, "on_flagged", "block"),
         guardrail_name=guardrail.get("guardrail_name", ""),

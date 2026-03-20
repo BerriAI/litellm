@@ -65,9 +65,9 @@ class VertexFineTuningAPI(VertexLLM):
         )
 
         if create_fine_tuning_job_data.validation_file:
-            supervised_tuning_spec["validation_dataset"] = (
-                create_fine_tuning_job_data.validation_file
-            )
+            supervised_tuning_spec[
+                "validation_dataset"
+            ] = create_fine_tuning_job_data.validation_file
 
         _vertex_hyperparameters = (
             self._transform_openai_hyperparameters_to_vertex_hyperparameters(
@@ -332,7 +332,7 @@ class VertexFineTuningAPI(VertexLLM):
         }
 
         base_url = get_vertex_base_url(vertex_location)
-        
+
         url = None
         if request_route == "/tuningJobs":
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
@@ -349,9 +349,9 @@ class VertexFineTuningAPI(VertexLLM):
         elif "cachedContents" in request_route:
             _model = request_data.get("model")
             if _model is not None and "/publishers/google/models/" not in _model:
-                request_data["model"] = (
-                    f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
-                )
+                request_data[
+                    "model"
+                ] = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
 
             url = f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         else:

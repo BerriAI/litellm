@@ -837,6 +837,7 @@ async def test_cohere_documents_options_in_request_body():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_cohere_v2_conversation_history():
     """Test Cohere v2 with conversation history."""
     try:
@@ -847,20 +848,20 @@ async def test_cohere_v2_conversation_history():
             {"role": "assistant", "content": "2+2 equals 4."},
             {"role": "user", "content": "What about 3+3?"}
         ]
-        
+
         response = await litellm.acompletion(
             model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             max_tokens=50
         )
-        
+
         # Validate response with conversation history
         assert response.choices is not None
         assert len(response.choices) > 0
         assert response.choices[0].message.content is not None
         print(f"Conversation history response: {response.choices[0].message.content}")
-        
-    except litellm.ServiceUnavailableError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+
+    except (litellm.ServiceUnavailableError, litellm.InternalServerError, litellm.Timeout, litellm.APIConnectionError):
+        pytest.skip("Cohere service unavailable")
+    except litellm.RateLimitError:
+        pytest.skip("Rate limit exceeded")

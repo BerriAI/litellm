@@ -210,9 +210,13 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -226,11 +230,17 @@ async def test_create_vertex_fine_tune_jobs_mocked():
                 vertex_location=location,
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {"training_dataset_uri": training_file},
                 "tunedModelDisplayName": None,
@@ -259,6 +269,8 @@ async def test_create_vertex_fine_tune_jobs_mocked():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 @pytest.mark.asyncio()
@@ -291,9 +303,13 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -312,11 +328,17 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
                 },
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {
                     "training_dataset_uri": training_file,
@@ -352,6 +374,8 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 # Testing OpenAI -> Vertex AI param mapping
@@ -572,3 +596,61 @@ async def test_mock_openai_retrieve_fine_tune_job():
 
         # Verify the request
         mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")
+
+
+@pytest.mark.asyncio
+async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
+    """Test that Azure-specific parameters are passed through extra_body"""
+    from openai import AsyncAzureOpenAI
+    from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
+    from openai.types.fine_tuning.fine_tuning_job import Hyperparameters as OAIHyperparameters
+
+    mock_response = FineTuningJob(
+        id="ft-azure-123",
+        model="gpt-4.1-mini-2025-04-14",
+        created_at=1677610602,
+        status="validating_files",
+        fine_tuned_model=None,
+        object="fine_tuning.job",
+        hyperparameters=OAIHyperparameters(n_epochs=3),
+        organization_id="org-123",
+        seed=42,
+        training_file="file-123",
+        result_files=[],
+    )
+
+    with patch("litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job") as mock_create:
+        mock_create.return_value = mock_response
+
+        response = await litellm.acreate_fine_tuning_job(
+            model="gpt-4.1-mini-2025-04-14",
+            training_file="file-123",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            trainingType=1,
+            hyperparameters={
+                "n_epochs": 3,
+                "prompt_loss_weight": 0.1
+            },
+        )
+
+        # Verify the request
+        mock_create.assert_called_once()
+        request_params = mock_create.call_args.kwargs
+
+        # Check that create_fine_tuning_job_data contains the correct structure
+        create_data = request_params["create_fine_tuning_job_data"]
+        assert create_data["model"] == "gpt-4.1-mini-2025-04-14"
+        assert create_data["training_file"] == "file-123"
+        assert create_data["hyperparameters"] == {"n_epochs": 3}
+        
+        # Azure-specific parameters should be in extra_body
+        assert "extra_body" in create_data
+        assert create_data["extra_body"]["trainingType"] == 1
+        assert create_data["extra_body"]["prompt_loss_weight"] == 0.1
+
+        # Verify the response
+        assert response.id == "ft-azure-123"
+        assert response.model == "gpt-4.1-mini-2025-04-14"

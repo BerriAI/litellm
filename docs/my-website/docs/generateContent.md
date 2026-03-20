@@ -15,6 +15,7 @@ Use LiteLLM to call Google AI's generateContent endpoints for text generation, m
 | Streaming | ✅ | |
 | Fallbacks | ✅ | between supported models |
 | Loadbalancing | ✅ | between supported models |
+| Metadata Tracking | ✅ | passes trace ID, metadata to observability callbacks (e.g. S3, Langfuse) |
 
 ## Usage 
 ---

@@ -13,6 +13,8 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     default_role,
     group_claim,
     use_role_mappings,
+    use_team_mappings,
+    team_ids_jwt_field,
     ...rest
   } = formValues;
 
@@ -21,7 +23,9 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   };
 
   // Add role mappings only if use_role_mappings is checked AND provider supports role mappings
-  if (use_role_mappings) {
+  const provider = rest.sso_provider;
+  const supportsRoleMappings = provider === "okta" || provider === "generic";
+  if (use_role_mappings && supportsRoleMappings) {
     // Helper function to split comma-separated string into array
     const splitTeams = (teams: string | undefined): string[] => {
       if (!teams || teams.trim() === "") return [];
@@ -49,6 +53,14 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
         internal_user: splitTeams(internal_user_teams),
         internal_user_viewer: splitTeams(internal_viewer_teams),
       },
+    };
+  }
+
+  // Add team mappings only if use_team_mappings is checked AND provider supports team mappings
+  const supportsTeamMappings = provider === "okta" || provider === "generic";
+  if (use_team_mappings && supportsTeamMappings) {
+    payload.team_mappings = {
+      team_ids_jwt_field: team_ids_jwt_field,
     };
   }
 

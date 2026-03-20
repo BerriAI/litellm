@@ -35,26 +35,25 @@ curl 'http://0.0.0.0:4000/gemini/v1beta/models/gemini-1.5-flash:countTokens?key=
 ```
 
 </TabItem>
-<TabItem value="js" label="Google AI Node.js SDK">
+<TabItem value="js" label="Google GenAI JS SDK">
 
 ```javascript
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 
-const modelParams = {
-    model: 'gemini-pro',
-};
-  
-const requestOptions = {
-    baseUrl: 'http://localhost:4000/gemini', // http://<proxy-base-url>/gemini
-};
-  
-const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
-const model = genAI.getGenerativeModel(modelParams, requestOptions);
+const ai = new GoogleGenAI({
+    apiKey: "sk-1234", // litellm proxy API key
+    httpOptions: {
+        baseUrl: "http://localhost:4000/gemini", // http://<proxy-base-url>/gemini
+    },
+});
 
 async function main() {
     try {
-        const result = await model.generateContent("Explain how AI works");
-        console.log(result.response.text());
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: "Explain how AI works",
+        });
+        console.log(response.text);
     } catch (error) {
         console.error('Error:', error);
     }
@@ -63,12 +62,13 @@ async function main() {
 // For streaming responses
 async function main_streaming() {
     try {
-        const streamingResult = await model.generateContentStream("Explain how AI works");
-        for await (const chunk of streamingResult.stream) {
-            console.log('Stream chunk:', JSON.stringify(chunk));
+        const response = await ai.models.generateContentStream({
+            model: "gemini-2.5-flash",
+            contents: "Explain how AI works",
+        });
+        for await (const chunk of response) {
+            process.stdout.write(chunk.text);
         }
-        const aggregatedResponse = await streamingResult.response;
-        console.log('Aggregated response:', JSON.stringify(aggregatedResponse));
     } catch (error) {
         console.error('Error:', error);
     }
@@ -321,29 +321,28 @@ curl 'http://0.0.0.0:4000/gemini/v1beta/models/gemini-1.5-flash:generateContent?
 ```
 
 </TabItem>
-<TabItem value="js" label="Google AI Node.js SDK">
+<TabItem value="js" label="Google GenAI JS SDK">
 
 ```javascript
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 
-const modelParams = {
-    model: 'gemini-pro',
-};
-  
-const requestOptions = {
-    baseUrl: 'http://localhost:4000/gemini', // http://<proxy-base-url>/gemini
-    customHeaders: {
-        "tags": "gemini-js-sdk,pass-through-endpoint"
-    }
-};
-  
-const genAI = new GoogleGenerativeAI("sk-1234");
-const model = genAI.getGenerativeModel(modelParams, requestOptions);
+const ai = new GoogleGenAI({
+    apiKey: "sk-1234",
+    httpOptions: {
+        baseUrl: "http://localhost:4000/gemini", // http://<proxy-base-url>/gemini
+        headers: {
+            "tags": "gemini-js-sdk,pass-through-endpoint",
+        },
+    },
+});
 
 async function main() {
     try {
-        const result = await model.generateContent("Explain how AI works");
-        console.log(result.response.text());
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: "Explain how AI works",
+        });
+        console.log(response.text);
     } catch (error) {
         console.error('Error:', error);
     }

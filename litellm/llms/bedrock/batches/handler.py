@@ -12,6 +12,7 @@ class BedrockBatchesHandler:
 
     E.g. Twelve Labs Embedding Async Invoke
     """
+
     @staticmethod
     def _handle_async_invoke_status(
         batch_id: str, aws_region_name: str, logging_obj=None, **kwargs

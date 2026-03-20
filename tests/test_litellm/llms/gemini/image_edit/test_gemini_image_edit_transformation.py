@@ -61,7 +61,7 @@ class TestGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
-        assert generation_config["aspectRatio"] == "16:9"
+        assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
 
     def test_transform_image_edit_request_multiple_images(self) -> None:
         image_one = BytesIO(b"image_one")

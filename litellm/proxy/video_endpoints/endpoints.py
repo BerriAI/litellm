@@ -257,7 +257,8 @@ async def video_status(
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
         resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
+            model_id_from_decoded,
+            custom_llm_provider=provider_from_id,
         )
         if resolved_model:
             data["model"] = resolved_model
@@ -343,7 +344,7 @@ async def video_content(
     decoded = decode_video_id_with_provider(video_id)
     provider_from_id = decoded.get("custom_llm_provider")
     model_id_from_decoded = decoded.get("model_id")
-    
+
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
@@ -357,7 +358,8 @@ async def video_content(
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
         resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
+            model_id_from_decoded,
+            custom_llm_provider=provider_from_id,
         )
         if resolved_model:
             data["model"] = resolved_model
@@ -383,14 +385,14 @@ async def video_content(
             user_api_base=user_api_base,
             version=version,
         )
-        
+
         # Return raw video bytes with proper content type
         return Response(
             content=video_bytes,
             media_type="video/mp4",
             headers={
                 "Content-Disposition": f"attachment; filename=video_{video_id}.mp4"
-            }
+            },
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
@@ -471,7 +473,8 @@ async def video_remix(
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
         resolved_model = llm_router.resolve_model_name_from_model_id(
-            model_id_from_decoded, custom_llm_provider=provider_from_id
+            model_id_from_decoded,
+            custom_llm_provider=provider_from_id,
         )
         if resolved_model:
             data["model"] = resolved_model

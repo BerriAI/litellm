@@ -1,0 +1,99 @@
+# Loi sur l'IA (UE) Article 5.1(a) — Manipulation subliminale et techniques trompeuses
+# Interdit les systèmes d'IA qui utilisent des techniques subliminales, manipulatrices
+# ou trompeuses pour fausser le comportement et altérer la prise de décision éclairée.
+# Référence : https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_manipulation_fr"
+description: "Art. 5.1(a) — Bloque la manipulation subliminale, les techniques d'IA trompeuses et l'influence comportementale cachée"
+default_action: "BLOCK"
+
+identifier_words:
+  # Actions de développement
+  - "construire"
+  - "créer"
+  - "développer"
+  - "concevoir"
+  - "implémenter"
+  - "mettre en place"
+  - "déployer"
+  - "lancer"
+  - "utiliser"
+
+  # Actions d'influence
+  - "manipuler"
+  - "influencer"
+  - "persuader"
+  - "inciter"
+  - "contraindre"
+  - "exploiter"
+  - "cibler"
+  - "intégrer"
+  - "injecter"
+  - "insérer"
+
+additional_block_words:
+  # Techniques subliminales
+  - "subliminal"
+  - "subliminale"
+  - "message subliminal"
+  - "publicité subliminale"
+  - "technique subliminale"
+  - "signal subliminal"
+  - "stimulus subliminal"
+  - "perception subliminale"
+
+  # Manipulation subconsciente
+  - "subconscient"
+  - "inconscient"
+  - "manipulation subconsciente"
+  - "influence subconsciente"
+  - "persuasion subconsciente"
+  - "en dessous du seuil de conscience"
+
+  # Manipulation comportementale
+  - "manipulation de comportement"
+  - "manipulation comportementale"
+  - "distorsion comportementale"
+  - "conception manipulatrice"
+  - "dark pattern"
+  - "schéma trompeur"
+  - "conception trompeuse"
+  - "conception coercitive"
+
+  # Altération des décisions
+  - "altérer la décision"
+  - "fausser la décision"
+  - "saper l'autonomie"
+  - "contourner le consentement"
+
+always_block_keywords:
+  - keyword: "système de manipulation subliminale"
+    severity: "high"
+  - keyword: "système de publicité subliminale"
+    severity: "high"
+  - keyword: "manipulation comportementale cachée"
+    severity: "high"
+  - keyword: "outil de manipulation subconsciente"
+    severity: "high"
+  - keyword: "manipulation IA trompeuse"
+    severity: "high"
+  - keyword: "système IA dark pattern"
+    severity: "high"
+
+exceptions:
+  - "recherche sur"
+  - "étude sur"
+  - "académique"
+  - "thèse sur"
+  - "expliquer"
+  - "qu'est-ce que"
+  - "c'est quoi"
+  - "article 5"
+  - "interdit par"
+  - "prohibé par"
+  - "détecter les dark patterns"
+  - "audit"
+  - "surveillance de conformité"
+  - "contrôle de conformité"
+  - "examen éthique"
+  - "comment prévenir"
+  - "comment éviter"

@@ -1,7 +1,17 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
-from typing import List, Optional, Union, Dict, Tuple, Any, TYPE_CHECKING, Iterator, AsyncIterator
+from typing import (
+    List,
+    Optional,
+    Union,
+    Dict,
+    Tuple,
+    Any,
+    TYPE_CHECKING,
+    Iterator,
+    AsyncIterator,
+)
 from functools import cached_property
 import litellm
 import httpx
@@ -29,7 +39,12 @@ from .models import (
     ResponseFormat,
     SAPUserMessage,
 )
-from .handler import GenAIHubOrchestrationError, AsyncSAPStreamIterator, SAPStreamIterator
+from .handler import (
+    GenAIHubOrchestrationError,
+    AsyncSAPStreamIterator,
+    SAPStreamIterator,
+)
+
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True)
@@ -77,16 +92,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def run_env_setup(self, service_key: Optional[str] = None) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key) # type: ignore
+            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)  # type: ignore
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
-
 
     @property
     def headers(self) -> Dict[str, str]:
         if self.token_creator is None:
             self.run_env_setup()
-        access_token = self.token_creator() # type: ignore
+        access_token = self.token_creator()  # type: ignore
         return {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
@@ -98,14 +112,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def base_url(self) -> str:
         if self._base_url is None:
             self.run_env_setup()
-        return self._base_url # type: ignore
-
+        return self._base_url  # type: ignore
 
     @property
     def resource_group(self) -> str:
         if self._resource_group is None:
             self.run_env_setup()
-        return self._resource_group # type: ignore
+        return self._resource_group  # type: ignore
 
     @cached_property
     def deployment_url(self) -> str:
@@ -157,9 +170,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "response_format",
             "timeout",
         ]
+        # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
-            model.startswith('anthropic')
-            or model.startswith("amazon")
+            model.startswith("amazon")
             or model.startswith("cohere")
             or model.startswith("alephalpha")
             or model == "gpt-4"
@@ -184,13 +197,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return self.headers
 
     def get_complete_url(
-            self,
-            api_base: Optional[str],
-            api_key: Optional[str],
-            model: str,
-            optional_params: dict,
-            litellm_params: dict,
-            stream: Optional[bool] = None,
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
     ):
         api_base_ = f"{self.deployment_url}/v2/completion"
         return api_base_
@@ -198,13 +211,23 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[Dict[str, str]], # type: ignore
+        messages: List[Dict[str, str]],  # type: ignore
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # Filter out parameters that are not valid model params for SAP Orchestration API
+        # - tools, model_version, deployment_url: handled separately
+        excluded_params = {"tools", "model_version", "deployment_url"}
+
+        # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
+        # LangChain agents pass strict=true at top level, which fails for GPT models
+        # Anthropic models accept strict, so preserve it for them
+        if model.startswith("gpt"):
+            excluded_params.add("strict")
+
         model_params = {
-            k: v for k, v in optional_params.items() if k not in {"tools", "model_version", "deployment_url"}
+            k: v for k, v in optional_params.items() if k not in excluded_params
         }
 
         model_version = optional_params.pop("model_version", "latest")
@@ -229,8 +252,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response_format = model_params.pop("response_format", {})
         resp_type = response_format.get("type", None)
         if resp_type:
-            if resp_type== "json_schema":
-                response_format = validate_dict(response_format, ResponseFormatJSONSchema)
+            if resp_type == "json_schema":
+                response_format = validate_dict(
+                    response_format, ResponseFormatJSONSchema
+                )
             else:
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
@@ -248,11 +273,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "config": {
                 "modules": {
                     "prompt_templating": {
-                        "prompt": {
-                            "template": template,
-                            **tools,
-                            **response_format
-                        },
+                        "prompt": {"template": template, **tools, **response_format},
                         "model": {
                             "name": model,
                             "params": model_params,
@@ -267,18 +288,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return config
 
     def transform_response(
-            self,
-            model: str,
-            raw_response: httpx.Response,
-            model_response: ModelResponse,
-            logging_obj: LiteLLMLoggingObj,
-            request_data: dict,
-            messages: List[AllMessageValues],
-            optional_params: dict,
-            litellm_params: dict,
-            encoding: Any,
-            api_key: Optional[str] = None,
-            json_mode: Optional[bool] = None,
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
@@ -286,15 +307,45 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        return ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+
+        # Strip markdown code blocks if JSON response_format was used with Anthropic models
+        # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
+        # based on prompt phrasing. GPT/Gemini models don't exhibit this behavior,
+        # so we gate the stripping to avoid accidentally modifying valid responses.
+        response_format = optional_params.get("response_format", {})
+        if response_format.get("type") in ("json_object", "json_schema"):
+            if model.startswith("anthropic"):
+                response = self._strip_markdown_json(response)
+
+        return response
+
+    def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
+        """Strip markdown code block wrapper from JSON content if present.
+
+        SAP GenAI Hub with Anthropic models sometimes returns JSON wrapped in
+        markdown code blocks (```json ... ```) depending on prompt phrasing.
+        This method strips that wrapper to ensure consistent JSON output.
+        """
+        import re
+
+        for choice in response.choices or []:
+            if choice.message and choice.message.content:
+                content = choice.message.content.strip()
+                # Match ```json ... ``` or ``` ... ```
+                match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?```$", content, re.DOTALL)
+                if match:
+                    choice.message.content = match.group(1).strip()
+
+        return response
 
     def get_model_response_iterator(
-            self,
-            streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
-            sync_stream: bool,
-            json_mode: Optional[bool] = False,
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response) # type: ignore
+            return SAPStreamIterator(response=streaming_response)  # type: ignore
         else:
-            return AsyncSAPStreamIterator(response=streaming_response) # type: ignore
+            return AsyncSAPStreamIterator(response=streaming_response)  # type: ignore

@@ -41,6 +41,7 @@ def _get_litellm_skills_handler():
         from litellm.llms.litellm_proxy.skills.transformation import (
             LiteLLMSkillsTransformationHandler,
         )
+
         _litellm_skills_handler = LiteLLMSkillsTransformationHandler()
     return _litellm_skills_handler
 
@@ -58,7 +59,7 @@ async def acreate_skill(
 ) -> Skill:
     """
     Async: Create a new skill
-    
+
     Args:
         files: Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root.
         display_title: Optional display title for the skill
@@ -68,7 +69,7 @@ async def acreate_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -121,7 +122,7 @@ def create_skill(
 ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
     """
     Create a new skill
-    
+
     Args:
         files: Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root.
         display_title: Optional display title for the skill
@@ -131,7 +132,7 @@ def create_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -172,16 +173,14 @@ def create_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: Optional[
+            BaseSkillsAPIConfig
+        ] = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
-            raise ValueError(
-                f"CREATE skill is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"CREATE skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -205,7 +204,8 @@ def create_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params=request_body,
             litellm_params={
@@ -253,7 +253,7 @@ async def alist_skills(
 ) -> ListSkillsResponse:
     """
     Async: List all skills
-    
+
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
@@ -263,7 +263,7 @@ async def alist_skills(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         ListSkillsResponse object
     """
@@ -316,7 +316,7 @@ def list_skills(
 ) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
     """
     List all skills
-    
+
     Args:
         limit: Number of results to return per page (max 100, default 20)
         page: Pagination token for fetching a specific page of results
@@ -326,7 +326,7 @@ def list_skills(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         ListSkillsResponse object
     """
@@ -354,10 +354,10 @@ def list_skills(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: Optional[
+            BaseSkillsAPIConfig
+        ] = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
@@ -390,7 +390,8 @@ def list_skills(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params=query_params,
             litellm_params={
@@ -436,7 +437,7 @@ async def aget_skill(
 ) -> Skill:
     """
     Async: Get a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to fetch
         extra_headers: Additional headers for the request
@@ -444,7 +445,7 @@ async def aget_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -493,7 +494,7 @@ def get_skill(
 ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
     """
     Get a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to fetch
         extra_headers: Additional headers for the request
@@ -501,7 +502,7 @@ def get_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         Skill object
     """
@@ -528,10 +529,10 @@ def get_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: Optional[
+            BaseSkillsAPIConfig
+        ] = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
@@ -557,7 +558,8 @@ def get_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
             litellm_params={
@@ -602,7 +604,7 @@ async def adelete_skill(
 ) -> DeleteSkillResponse:
     """
     Async: Delete a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to delete
         extra_headers: Additional headers for the request
@@ -610,7 +612,7 @@ async def adelete_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         DeleteSkillResponse object
     """
@@ -659,7 +661,7 @@ def delete_skill(
 ) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
     """
     Delete a skill by ID
-    
+
     Args:
         skill_id: The ID of the skill to delete
         extra_headers: Additional headers for the request
@@ -667,7 +669,7 @@ def delete_skill(
         timeout: Request timeout
         custom_llm_provider: Provider name (e.g., 'anthropic')
         **kwargs: Additional parameters
-        
+
     Returns:
         DeleteSkillResponse object
     """
@@ -694,16 +696,14 @@ def delete_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: Optional[
+            BaseSkillsAPIConfig
+        ] = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
-            raise ValueError(
-                f"DELETE skill is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"DELETE skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -725,7 +725,8 @@ def delete_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
             litellm_params={
@@ -757,4 +758,3 @@ def delete_skill(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-

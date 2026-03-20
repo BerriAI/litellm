@@ -352,17 +352,17 @@ class TestErrorHandling:
     def test_hf_response_missing_embedding(self):
         """Test handling of HF response missing embedding field"""
         config = SagemakerEmbeddingConfig()
-        
+
         # Mock response without embedding field
         mock_response = httpx.Response(
             status_code=200,
             content=json.dumps({"object": "list"}).encode('utf-8'),
             headers={"content-type": "application/json"}
         )
-        
+
         model_response = EmbeddingResponse()
-        
-        with pytest.raises(Exception, match="HF response missing 'embedding' field"):
+
+        with pytest.raises(Exception, match="Unexpected response format"):
             config.transform_embedding_response(
                 model="sentence-transformers-model",
                 raw_response=mock_response,
@@ -370,6 +370,100 @@ class TestErrorHandling:
                 logging_obj=None,
                 request_data={"inputs": ["Hello"]}
             )
+
+
+class TestTEIEmbeddingResponse:
+    """Test HuggingFace Text Embeddings Inference (TEI) response format support"""
+
+    def setup_method(self):
+        self.config = SagemakerEmbeddingConfig()
+
+    def test_transform_embedding_response_tei_raw_array(self):
+        """Test TEI response transformation - raw array format [[...]]"""
+        # TEI returns raw embedding arrays without wrapper
+        tei_response = [
+            [0.1, 0.2, 0.3],
+            [0.4, 0.5, 0.6]
+        ]
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(tei_response).encode('utf-8'),
+            headers={"content-type": "application/json"}
+        )
+
+        model_response = EmbeddingResponse()
+        result = self.config.transform_embedding_response(
+            model="tei-qwen-embedding",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=None,
+            request_data={"inputs": ["Hello", "World"]}
+        )
+
+        # Verify response structure
+        assert result.object == "list"
+        assert result.model == "tei-qwen-embedding"
+        assert len(result.data) == 2
+        assert result.data[0]["object"] == "embedding"
+        assert result.data[0]["index"] == 0
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.data[1]["object"] == "embedding"
+        assert result.data[1]["index"] == 1
+        assert result.data[1]["embedding"] == [0.4, 0.5, 0.6]
+        assert isinstance(result.usage, Usage)
+
+    def test_transform_embedding_response_tei_single_input(self):
+        """Test TEI response with single input"""
+        tei_response = [
+            [0.1, 0.2, 0.3, 0.4, 0.5]
+        ]
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(tei_response).encode('utf-8'),
+            headers={"content-type": "application/json"}
+        )
+
+        model_response = EmbeddingResponse()
+        result = self.config.transform_embedding_response(
+            model="tei-model",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=None,
+            request_data={"inputs": ["Hello"]}
+        )
+
+        assert len(result.data) == 1
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+    def test_transform_embedding_response_wrapped_format_still_works(self):
+        """Test that wrapped format {"embedding": [...]} still works"""
+        hf_response = {
+            "embedding": [
+                [0.1, 0.2, 0.3],
+                [0.4, 0.5, 0.6]
+            ]
+        }
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(hf_response).encode('utf-8'),
+            headers={"content-type": "application/json"}
+        )
+
+        model_response = EmbeddingResponse()
+        result = self.config.transform_embedding_response(
+            model="hf-model",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=None,
+            request_data={"inputs": ["Hello", "World"]}
+        )
+
+        assert len(result.data) == 2
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.data[1]["embedding"] == [0.4, 0.5, 0.6]
 
 
 if __name__ == "__main__":

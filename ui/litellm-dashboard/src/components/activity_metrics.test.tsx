@@ -34,8 +34,25 @@ vi.mock("antd", () => {
   );
   PanelComponent.displayName = "Collapse.Panel";
   CollapseComponent.Panel = PanelComponent;
+  const TableComponent = ({ dataSource, columns }: { dataSource?: unknown[]; columns?: { title: string }[] }) => (
+    <table>
+      <thead>
+        <tr>
+          {columns?.map((col, i) => (
+            <th key={i}>{col.title}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {dataSource?.map((_, i) => (
+          <tr key={i} />
+        ))}
+      </tbody>
+    </table>
+  );
   return {
     Collapse: CollapseComponent,
+    Table: TableComponent,
   };
 });
 
@@ -95,6 +112,7 @@ const MOCK_TEAMS: Team[] = [
     created_at: "2025-01-01",
     keys: [],
     members_with_roles: [],
+    spend: 0,
   },
   {
     team_id: "team2",
@@ -108,6 +126,7 @@ const MOCK_TEAMS: Team[] = [
     created_at: "2025-01-01",
     keys: [],
     members_with_roles: [],
+    spend: 0,
   },
 ];
 
@@ -141,6 +160,7 @@ const createMockModelActivityData = (label: string, overrides: Partial<ModelActi
   total_cache_read_input_tokens: 1000,
   total_cache_creation_input_tokens: 500,
   top_api_keys: [],
+  top_models: [],
   daily_data: [
     {
       date: "2025-01-01",
@@ -172,6 +192,7 @@ const GPT_35_MODEL_DATA: ModelActivityData = {
   total_cache_read_input_tokens: 500,
   total_cache_creation_input_tokens: 250,
   top_api_keys: [],
+  top_models: [],
   daily_data: [
     {
       date: "2025-01-01",
@@ -265,6 +286,11 @@ describe("ActivityMetrics", () => {
     expect(tokenElements.length).toBeGreaterThan(0);
   });
 
+  it("should not display Top Virtual Keys section when model has no top_api_keys", () => {
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
+    expect(screen.queryByText("Top Virtual Keys by Spend")).not.toBeInTheDocument();
+  });
+
   it("should display top API keys section when present", () => {
     const modelWithTopKeys: Record<string, ModelActivityData> = {
       "gpt-4": {
@@ -327,6 +353,58 @@ describe("ActivityMetrics", () => {
 
     render(<ActivityMetrics modelMetrics={modelWithTopKeys} />);
     expect(screen.getByText(/Team: team1/)).toBeInTheDocument();
+  });
+
+  it("should display Model Usage when model has top_models", () => {
+    const modelWithTopModels: Record<string, ModelActivityData> = {
+      "gpt-4": {
+        ...mockModelMetrics["gpt-4"],
+        top_models: [
+          {
+            model: "gpt-4",
+            spend: 100.5,
+            requests: 100,
+            successful_requests: 95,
+            failed_requests: 5,
+            tokens: 50000,
+          },
+        ],
+      },
+    };
+
+    render(<ActivityMetrics modelMetrics={modelWithTopModels} />);
+    expect(screen.getByRole("heading", { name: "Model Usage" })).toBeInTheDocument();
+  });
+
+  it("should display Spend per day in model section", () => {
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
+    expect(screen.getByText("Spend per day")).toBeInTheDocument();
+  });
+
+  it("should display Requests per day in model section", () => {
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
+    expect(screen.getByText("Requests per day")).toBeInTheDocument();
+  });
+
+  it("should display Success vs Failed Requests in model section", () => {
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
+    expect(screen.getByText("Success vs Failed Requests")).toBeInTheDocument();
+  });
+
+  it("should sort empty string model key last in collapse order", () => {
+    const modelsWithEmptyKey: Record<string, ModelActivityData> = {
+      "gpt-4": { ...mockModelMetrics["gpt-4"] },
+      "": {
+        ...createMockModelActivityData(""),
+        label: "Unknown",
+      },
+    };
+
+    render(<ActivityMetrics modelMetrics={modelsWithEmptyKey} />);
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    const gpt4Index = headings.findIndex((h) => h.textContent?.includes("GPT-4"));
+    const unknownIndex = headings.findIndex((h) => h.textContent?.includes("Unknown"));
+    expect(gpt4Index).toBeLessThan(unknownIndex);
   });
 
   it("should display average tokens per successful request", () => {
@@ -962,6 +1040,73 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].top_api_keys[4].spend).toBe(16.0);
   });
 
+  it("should return empty object when results array is empty", () => {
+    const result = processActivityData({ results: [] }, "models");
+    expect(result).toEqual({});
+  });
+
+  it("should populate top_models for api_keys when models breakdown contains api_key_breakdown for that key", () => {
+    const dailyActivityWithModelsForKey: { results: DailyData[] } = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: EMPTY_SPEND_METRICS,
+          breakdown: {
+            models: {
+              "gpt-4": {
+                metrics: EMPTY_SPEND_METRICS,
+                metadata: {},
+                api_key_breakdown: {
+                  "api-key-hash-1": {
+                    metrics: {
+                      spend: 60.0,
+                      prompt_tokens: 18000,
+                      completion_tokens: 12000,
+                      total_tokens: 30000,
+                      api_requests: 60,
+                      successful_requests: 57,
+                      failed_requests: 3,
+                      cache_read_input_tokens: 0,
+                      cache_creation_input_tokens: 0,
+                    },
+                    metadata: { key_alias: "key-alias-1", team_id: "team1" },
+                  },
+                },
+              },
+            },
+            model_groups: {},
+            mcp_servers: {},
+            providers: {},
+            api_keys: {
+              "api-key-hash-1": {
+                metrics: {
+                  spend: 60.0,
+                  prompt_tokens: 18000,
+                  completion_tokens: 12000,
+                  total_tokens: 30000,
+                  api_requests: 60,
+                  successful_requests: 57,
+                  failed_requests: 3,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                metadata: { key_alias: "key-alias-1", team_id: "team1" },
+              },
+            },
+            entities: {},
+          },
+        },
+      ],
+    };
+
+    const result = processActivityData(dailyActivityWithModelsForKey, "api_keys", MOCK_TEAMS);
+
+    expect(result["api-key-hash-1"].top_models).toHaveLength(1);
+    expect(result["api-key-hash-1"].top_models[0].model).toBe("gpt-4");
+    expect(result["api-key-hash-1"].top_models[0].spend).toBe(60.0);
+    expect(result["api-key-hash-1"].top_models[0].requests).toBe(60);
+  });
+
   it("should not process api_key_breakdown when key is api_keys", () => {
     const dailyActivityWithBreakdown: { results: DailyData[] } = {
       results: [
@@ -1129,5 +1274,15 @@ describe("formatKeyLabel", () => {
 
     const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
     expect(result).toBe("key-hash-actual-key (team: Test Team 1)");
+  });
+
+  it("should return key_alias with team_id when teams array is empty", () => {
+    const modelData = createMockKeyMetricWithMetadata({
+      key_alias: "my-key",
+      team_id: "team1",
+    });
+
+    const result = formatKeyLabel(modelData, "my-key", []);
+    expect(result).toBe("my-key (team_id: team1)");
   });
 });

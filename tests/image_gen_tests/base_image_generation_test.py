@@ -93,6 +93,8 @@ class BaseImageGenTest(ABC):
         except Exception as e:
             if "Your task failed as a result of our safety system." in str(e):
                 pass
+            elif "ModelDeprecated" in str(e):
+                pass  # Azure model deployment has been deprecated - skip
             else:
                 pytest.fail(f"An exception occurred - {str(e)}")
 

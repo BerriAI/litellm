@@ -144,19 +144,32 @@ def _user_is_org_admin(
     user_object: Optional[LiteLLM_UserTable] = None,
 ) -> bool:
     """
-    Helper function to check if user is an org admin for the passed organization_id
-    """
-    if request_data.get("organization_id", None) is None:
-        return False
+    Helper function to check if user is an org admin for any of the passed organizations.
 
+    Checks both:
+    - `organization_id` (singular string) — legacy callers
+    - `organizations` (list of strings) — used by /user/new
+    """
     if user_object is None:
         return False
 
     if user_object.organization_memberships is None:
         return False
 
+    # Collect candidate org IDs from both fields
+    candidate_org_ids: List[str] = []
+    singular = request_data.get("organization_id", None)
+    if singular is not None:
+        candidate_org_ids.append(singular)
+    orgs_list = request_data.get("organizations", None)
+    if isinstance(orgs_list, list):
+        candidate_org_ids.extend(orgs_list)
+
+    if not candidate_org_ids:
+        return False
+
     for _membership in user_object.organization_memberships:
-        if _membership.organization_id == request_data.get("organization_id", None):
+        if _membership.organization_id in candidate_org_ids:
             if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value:
                 return True
 

@@ -26,7 +26,7 @@ async def list_callbacks():
 
     # Get callbacks organized by type using the callback manager utility
     callbacks_by_type = logging_callback_manager.get_callbacks_by_type()
-    
+
     return callbacks_by_type
 
 
@@ -38,17 +38,17 @@ async def list_callbacks():
 async def get_callback_configs():
     """
     Get Available Callback Configurations
-    
+
     Returns the configuration details for all available logging callbacks,
     including supported parameters, field types, and descriptions.
     """
     config_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "integrations",
-        "callback_configs.json"
+        "callback_configs.json",
     )
-    
+
     with open(config_path, "r") as f:
         configs = json.load(f)
-    
+
     return configs

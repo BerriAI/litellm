@@ -15,15 +15,43 @@ from litellm.types.rerank import RerankResponse
 
 class TestVertexAIRerankTransform:
     def setup_method(self):
+        # Save and clear Google/Vertex AI environment variables to prevent
+        # test isolation issues where previous tests leave credentials set
+        self._saved_env = {}
+        env_vars_to_clear = [
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "VERTEXAI_PROJECT",
+            "VERTEXAI_CREDENTIALS",
+            "VERTEX_AI_CREDENTIALS",
+            "VERTEX_PROJECT",
+            "VERTEX_LOCATION",
+            "VERTEX_AI_PROJECT",
+        ]
+        for var in env_vars_to_clear:
+            if var in os.environ:
+                self._saved_env[var] = os.environ[var]
+                del os.environ[var]
+
         self.config = VertexAIRerankConfig()
         self.model = "semantic-ranker-default@latest"
 
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_get_complete_url(self, mock_ensure_access_token):
-        """Test URL generation for Vertex AI Discovery Engine rerank API."""
-        # Mock _ensure_access_token to return (token, project_id)
-        mock_ensure_access_token.return_value = ("mock-token", None)
-        
+    def teardown_method(self):
+        # Restore saved environment variables
+        for var, value in self._saved_env.items():
+            os.environ[var] = value
+
+    def test_get_complete_url(self):
+        """
+        Test URL generation for Vertex AI Discovery Engine rerank API.
+
+        Uses instance-level mocking to avoid class-reference issues caused by
+        importlib.reload(litellm) in conftest.py.
+        """
+        # Mock _ensure_access_token at instance level to return (token, project_id)
+        mock_ensure_access_token = MagicMock(return_value=("mock-token", None))
+        self.config._ensure_access_token = mock_ensure_access_token
+
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
             url = self.config.get_complete_url(api_base=None, model=self.model)
@@ -39,6 +67,9 @@ class TestVertexAIRerankTransform:
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = "litellm-project-456"
+            # Reset mock call count
+            mock_ensure_access_token.reset_mock()
+            mock_ensure_access_token.return_value = ("mock-token", "litellm-project-456")
             try:
                 url = self.config.get_complete_url(api_base=None, model=self.model)
                 expected_url = "https://discoveryengine.googleapis.com/v1/projects/litellm-project-456/locations/global/rankingConfigs/default_ranking_config:rank"
@@ -55,34 +86,40 @@ class TestVertexAIRerankTransform:
                 litellm.vertex_project = None
             original_project = litellm.vertex_project
             litellm.vertex_project = None
+            # Reset mock and set it to raise an error
+            mock_ensure_access_token.reset_mock()
+            mock_ensure_access_token.side_effect = ValueError("Vertex AI project ID is required")
             try:
                 with pytest.raises(ValueError, match="Vertex AI project ID is required"):
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
 
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_validate_environment(self, mock_ensure_access_token):
-        """Test environment validation and header setup."""
-        # Mock the authentication
-        mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-        
-        # Mock the credential and project methods
-        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None), \
-             patch.object(self.config, 'get_vertex_ai_project', return_value="test-project-123"):
-            
-            headers = self.config.validate_environment(
-                headers={},
-                model=self.model,
-                api_key=None
-            )
-            
-            expected_headers = {
-                "Authorization": "Bearer test-access-token",
-                "Content-Type": "application/json",
-                "X-Goog-User-Project": "test-project-123"
-            }
-            assert headers == expected_headers
+    def test_validate_environment(self):
+        """
+        Test environment validation and header setup.
+
+        Uses instance-level mocking to avoid class-reference issues caused by
+        importlib.reload(litellm) in conftest.py.
+        """
+        # Mock the authentication at instance level
+        mock_ensure_access_token = MagicMock(
+            return_value=("test-access-token", "test-project-123")
+        )
+        self.config._ensure_access_token = mock_ensure_access_token
+
+        headers = self.config.validate_environment(
+            headers={},
+            model=self.model,
+            api_key=None
+        )
+
+        expected_headers = {
+            "Authorization": "Bearer test-access-token",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": "test-project-123"
+        }
+        assert headers == expected_headers
 
     def test_transform_rerank_request_basic(self):
         """Test basic request transformation for Vertex AI Discovery Engine format."""
@@ -416,33 +453,40 @@ class TestVertexAIRerankTransform:
         assert params["top_n"] == 2
         assert params["return_documents"] == True
 
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_validate_environment_with_optional_params(self, mock_ensure_access_token):
-        """Test that validate_environment accepts and uses optional_params for credentials."""
-        # Mock the authentication
-        mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-        
+    def test_validate_environment_with_optional_params(self):
+        """
+        Test that validate_environment accepts and uses optional_params for credentials.
+
+        Uses instance-level mocking to avoid class-reference issues caused by
+        importlib.reload(litellm) in conftest.py.
+        """
+        # Mock the authentication at instance level
+        mock_ensure_access_token = MagicMock(
+            return_value=("test-access-token", "test-project-123")
+        )
+        self.config._ensure_access_token = mock_ensure_access_token
+
         optional_params = {
             "vertex_credentials": "path/to/credentials.json",
             "vertex_project": "custom-project-id",
             "query": "test query",
             "documents": ["doc1"]
         }
-        
+
         headers = self.config.validate_environment(
             headers={},
             model=self.model,
             api_key=None,
             optional_params=optional_params
         )
-        
+
         # Verify that _ensure_access_token was called with the credentials from optional_params
         mock_ensure_access_token.assert_called_once()
         call_args = mock_ensure_access_token.call_args
         # The first call argument should be credentials (which will be the value from optional_params)
         # We can't check the exact value easily due to how get_vertex_ai_credentials pops values,
         # but we can verify the headers were set correctly
-        
+
         expected_headers = {
             "Authorization": "Bearer test-access-token",
             "Content-Type": "application/json",
@@ -450,16 +494,20 @@ class TestVertexAIRerankTransform:
         }
         assert headers == expected_headers
 
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
     def test_validate_environment_preserves_optional_params_for_get_complete_url(
         self,
-        mock_ensure_access_token,
     ):
         """
         Validate that calling validate_environment does not remove vertex-specific
         parameters needed later by get_complete_url.
+
+        Uses instance-level mocking to avoid class-reference issues caused by
+        importlib.reload(litellm) in conftest.py.
         """
-        mock_ensure_access_token.return_value = ("test-access-token", "project-from-token")
+        mock_ensure_access_token = MagicMock(
+            return_value=("test-access-token", "project-from-token")
+        )
+        self.config._ensure_access_token = mock_ensure_access_token
 
         optional_params = {
             "vertex_credentials": "path/to/credentials.json",

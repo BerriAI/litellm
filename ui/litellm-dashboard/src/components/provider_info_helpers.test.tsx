@@ -153,7 +153,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return watsonx placeholder for Watsonx provider", () => {
-      expect(getPlaceholder(Providers.Watsonx)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+      expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

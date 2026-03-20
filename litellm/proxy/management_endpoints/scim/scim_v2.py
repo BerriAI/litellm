@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -209,18 +210,18 @@ def _build_scim_metadata(
 async def _get_scim_upsert_user_setting() -> bool:
     """
     Get the scim_upsert_user setting from litellm_settings.
-    
+
     Returns:
         True if scim_upsert_user is not set or is True (default behavior),
         False if scim_upsert_user is explicitly set to False (SCIM 2.0 strict mode)
     """
     try:
         from litellm.proxy.proxy_server import proxy_config
-        
+
         config = await proxy_config.get_config()
         litellm_settings = config.get("litellm_settings", {}) or {}
         scim_upsert_user = litellm_settings.get("scim_upsert_user", True)
-        
+
         # Default to True if not set (backward compatibility)
         return bool(scim_upsert_user)
     except Exception as e:
@@ -249,7 +250,7 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
     existing_member_ids = []
     created_users = []
     all_member_ids = []
-    
+
     # Check the feature flag
     scim_upsert_user = await _get_scim_upsert_user_setting()
 
@@ -261,9 +262,7 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
             if not user_id or not user_id.strip():
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error": "Invalid member: user ID cannot be empty."
-                    },
+                    detail={"error": "Invalid member: user ID cannot be empty."},
                 )
 
             # Check if user exists
@@ -292,7 +291,7 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
                         status_code=400,
                         detail={
                             "error": f"User with ID '{user_id}' does not exist. "
-                                     "Please create the user first via POST /Users before adding to group."
+                            "Please create the user first via POST /Users before adding to group."
                         },
                     )
 
@@ -410,6 +409,306 @@ async def set_scim_content_type(response: Response):
     response.headers["Content-Type"] = "application/scim+json"
 
 
+def _get_resource_types(base_url: str = "/scim/v2") -> list:
+    """Return the list of SCIM ResourceType definitions per RFC 7643 Section 6."""
+    return [
+        SCIMResourceType(
+            id="User",
+            name="User",
+            description="User Account",
+            endpoint="/Users",
+            schema_="urn:ietf:params:scim:schemas:core:2.0:User",
+            meta={
+                "location": f"{base_url}/ResourceTypes/User",
+                "resourceType": "ResourceType",
+            },
+        ),
+        SCIMResourceType(
+            id="Group",
+            name="Group",
+            description="Group",
+            endpoint="/Groups",
+            schema_="urn:ietf:params:scim:schemas:core:2.0:Group",
+            meta={
+                "location": f"{base_url}/ResourceTypes/Group",
+                "resourceType": "ResourceType",
+            },
+        ),
+    ]
+
+
+def _get_schemas() -> list:
+    """Return the list of SCIM Schema definitions per RFC 7643 Section 7."""
+    return [
+        SCIMSchema(
+            id="urn:ietf:params:scim:schemas:core:2.0:User",
+            name="User",
+            description="User Account",
+            attributes=[
+                SCIMSchemaAttribute(
+                    name="userName",
+                    type="string",
+                    multiValued=False,
+                    description="Unique identifier for the User.",
+                    required=True,
+                    mutability="readWrite",
+                    returned="default",
+                    uniqueness="server",
+                ),
+                SCIMSchemaAttribute(
+                    name="name",
+                    type="complex",
+                    multiValued=False,
+                    description="The components of the user's real name.",
+                    required=False,
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="givenName",
+                            type="string",
+                            description="The given name of the User.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="familyName",
+                            type="string",
+                            description="The family name of the User.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="formatted",
+                            type="string",
+                            description="The full name.",
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
+                    name="displayName",
+                    type="string",
+                    multiValued=False,
+                    description="The name of the User, suitable for display.",
+                ),
+                SCIMSchemaAttribute(
+                    name="emails",
+                    type="complex",
+                    multiValued=True,
+                    description="Email addresses for the user.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Email address value.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="type",
+                            type="string",
+                            description="Type of email (work, home, etc.).",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="primary",
+                            type="boolean",
+                            description="Whether this is the primary email.",
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
+                    name="active",
+                    type="boolean",
+                    multiValued=False,
+                    description="Whether the user account is active.",
+                ),
+                SCIMSchemaAttribute(
+                    name="groups",
+                    type="complex",
+                    multiValued=True,
+                    description="Groups to which the user belongs.",
+                    mutability="readOnly",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Group identifier.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="Group display name.",
+                        ),
+                    ],
+                ),
+            ],
+            meta={
+                "location": "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:User",
+                "resourceType": "Schema",
+            },
+        ),
+        SCIMSchema(
+            id="urn:ietf:params:scim:schemas:core:2.0:Group",
+            name="Group",
+            description="Group",
+            attributes=[
+                SCIMSchemaAttribute(
+                    name="displayName",
+                    type="string",
+                    multiValued=False,
+                    description="A human-readable name for the Group.",
+                    required=True,
+                    mutability="readWrite",
+                    returned="default",
+                    uniqueness="none",
+                ),
+                SCIMSchemaAttribute(
+                    name="members",
+                    type="complex",
+                    multiValued=True,
+                    description="A list of members of the Group.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(
+                            name="value",
+                            type="string",
+                            description="Member identifier.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="display",
+                            type="string",
+                            description="Member display name.",
+                        ),
+                    ],
+                ),
+            ],
+            meta={
+                "location": "/scim/v2/Schemas/urn:ietf:params:scim:schemas:core:2.0:Group",
+                "resourceType": "Schema",
+            },
+        ),
+    ]
+
+
+@scim_router.get(
+    "",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+@scim_router.get(
+    "/",
+    status_code=200,
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_scim_base(request: Request):
+    """
+    Base SCIM v2 endpoint for resource discovery per RFC 7644 Section 4.
+
+    Returns a ListResponse of ResourceTypes supported by this SCIM service provider.
+    Identity providers (Okta, Azure AD, etc.) use this endpoint for resource discovery.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM base resource discovery request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(resource_types),
+        "Resources": [rt.model_dump() for rt in resource_types],
+    }
+
+
+@scim_router.get(
+    "/ResourceTypes",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_resource_types(request: Request):
+    """
+    SCIM ResourceTypes endpoint per RFC 7644 Section 4.
+
+    Returns a ListResponse of all resource types supported by this service provider.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM ResourceTypes request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(resource_types),
+        "Resources": [rt.model_dump() for rt in resource_types],
+    }
+
+
+@scim_router.get(
+    "/ResourceTypes/{resource_type_id}",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_resource_type(
+    request: Request,
+    resource_type_id: str = Path(..., title="ResourceType ID"),
+):
+    """
+    Get a single ResourceType by ID per RFC 7644.
+    """
+    verbose_proxy_logger.debug("SCIM ResourceType request for id=%s", resource_type_id)
+    base_url = str(request.base_url).rstrip("/") + "/scim/v2"
+    resource_types = _get_resource_types(base_url)
+    for rt in resource_types:
+        if rt.id == resource_type_id:
+            return rt.model_dump()
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"ResourceType not found: {resource_type_id}"},
+    )
+
+
+@scim_router.get(
+    "/Schemas",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_schemas(request: Request):
+    """
+    SCIM Schemas endpoint per RFC 7643 Section 7.
+
+    Returns a ListResponse of all schemas supported by this service provider.
+    """
+    verbose_proxy_logger.debug(
+        "SCIM Schemas request: method=%s url=%s",
+        request.method,
+        request.url,
+    )
+    schemas = _get_schemas()
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": len(schemas),
+        "Resources": [s.model_dump() for s in schemas],
+    }
+
+
+@scim_router.get(
+    "/Schemas/{schema_id:path}",
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_schema(
+    request: Request,
+    schema_id: str = Path(..., title="Schema URI"),
+):
+    """
+    Get a single Schema by its URI per RFC 7643 Section 7.
+    """
+    verbose_proxy_logger.debug("SCIM Schema request for id=%s", schema_id)
+    schemas = _get_schemas()
+    for s in schemas:
+        if s.id == schema_id:
+            return s.model_dump()
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"Schema not found: {schema_id}"},
+    )
+
+
 @scim_router.get(
     "/ServiceProviderConfig",
     response_model=SCIMServiceProviderConfig,
@@ -422,7 +721,7 @@ async def get_service_provider_config(request: Request):
         "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
         request.method,
         request.url,
-        dict(request.headers),
+        _safe_get_request_headers(request),
     )
     meta = {
         "resourceType": "ServiceProviderConfig",
@@ -466,13 +765,13 @@ async def get_users(
                 where_conditions["user_email"] = email
 
         # Get users from database
-        users: List[LiteLLM_UserTable] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=(startIndex - 1),
-                take=count,
-                order={"created_at": "desc"},
-            )
+        users: List[
+            LiteLLM_UserTable
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=(startIndex - 1),
+            take=count,
+            order={"created_at": "desc"},
         )
 
         # Get total count for pagination
@@ -826,6 +1125,28 @@ def _apply_patch_ops(
         value = op.value
         op_type = op.op
 
+        # Handle SCIM operations without path where value contains the fields
+        if not path and isinstance(value, dict):
+            for key, val in value.items():
+                key_lower = key.lower()
+                if key_lower == "active":
+                    _handle_active_update(op_type, val, metadata)
+                elif key_lower == "displayname":
+                    _handle_displayname_update(op_type, val, update_data)
+                elif key_lower == "externalid":
+                    _handle_externalid_update(op_type, val, update_data)
+                elif key_lower == "name" and isinstance(val, dict):
+                    for name_key, name_val in val.items():
+                        name_key_lower = name_key.lower()
+                        if name_key_lower in ("givenname", "familyname"):
+                            _handle_name_update(
+                                f"name.{name_key_lower}",
+                                op_type,
+                                name_val,
+                                scim_metadata,
+                            )
+            continue
+
         if path == "displayname":
             _handle_displayname_update(op_type, value, update_data)
         elif path == "externalid":
@@ -854,7 +1175,7 @@ async def patch_team_membership(
 ) -> bool:
     """
     Add or remove user from teams
-    
+
     Handles duplicate membership gracefully (idempotent operation).
     If a user is already in a team, that's fine - we don't treat it as an error.
     """
@@ -1268,9 +1589,7 @@ async def _process_group_patch_operations(
                 if not member_id or not member_id.strip():
                     raise HTTPException(
                         status_code=400,
-                        detail={
-                            "error": "Invalid member: user ID cannot be empty."
-                        },
+                        detail={"error": "Invalid member: user ID cannot be empty."},
                     )
 
                 user = await prisma_client.db.litellm_usertable.find_unique(
@@ -1293,7 +1612,7 @@ async def _process_group_patch_operations(
                             status_code=400,
                             detail={
                                 "error": f"User with ID '{member_id}' does not exist. "
-                                         "Please create the user first via POST /Users before adding to group."
+                                "Please create the user first via POST /Users before adding to group."
                             },
                         )
 

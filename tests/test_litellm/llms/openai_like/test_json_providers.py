@@ -97,6 +97,47 @@ class TestJSONProviderLoader:
         assert isinstance(supported, list)
         assert len(supported) > 0
 
+    def test_tool_params_excluded_when_function_calling_not_supported(self):
+        """Test that tool-related params are excluded for models that don't support
+        function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("publicai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        # Mock supports_function_calling to return False
+        with patch("litellm.utils.supports_function_calling", return_value=False):
+            supported = config.get_supported_openai_params("some-model-without-fc")
+
+        tool_params = ["tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"]
+        for param in tool_params:
+            assert param not in supported, (
+                f"'{param}' should not be in supported params when function calling is not supported"
+            )
+
+        # Non-tool params should still be present
+        assert "temperature" in supported
+        assert "max_tokens" in supported
+        assert "stop" in supported
+
+    def test_tool_params_included_when_function_calling_supported(self):
+        """Test that tool-related params are included for models that support function calling."""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("publicai")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        # Mock supports_function_calling to return True
+        with patch("litellm.utils.supports_function_calling", return_value=True):
+            supported = config.get_supported_openai_params("some-model-with-fc")
+
+        assert "tools" in supported
+        assert "tool_choice" in supported
+
     def test_provider_resolution(self):
         """Test that provider resolution finds JSON providers"""
         from litellm.litellm_core_utils.get_llm_provider_logic import (

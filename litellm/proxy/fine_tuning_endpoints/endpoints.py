@@ -281,7 +281,9 @@ async def retrieve_fine_tuning_job(
         except Exception:
             request_body = {}
 
-        custom_llm_provider = request_body.get("custom_llm_provider", None) or custom_llm_provider
+        custom_llm_provider = (
+            request_body.get("custom_llm_provider", None) or custom_llm_provider
+        )
 
         ## CHECK IF MANAGED FILE ID
         unified_finetuning_job_id: Union[str, Literal[False]] = False

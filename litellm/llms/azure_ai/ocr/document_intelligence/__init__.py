@@ -2,4 +2,3 @@
 from .transformation import AzureDocumentIntelligenceOCRConfig
 
 __all__ = ["AzureDocumentIntelligenceOCRConfig"]
-

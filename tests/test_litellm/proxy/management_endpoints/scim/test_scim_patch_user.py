@@ -143,3 +143,152 @@ async def test_patch_user_manages_group_memberships():
     assert "new-team" in call_args[1]["data"]["teams"]
     assert result == mock_scim_user
 
+
+@pytest.mark.asyncio
+async def test_patch_user_deprovision_without_path():
+    """
+    Test SCIM deprovisioning when operation has no path field.
+    Some SCIM providers send: {"op": "replace", "value": {"active": false}}
+    """
+    mock_user = LiteLLM_UserTable(
+        user_id="user-3",
+        user_email="test@example.com",
+        user_alias="Test User",
+        teams=[],
+        metadata={"scim_active": True, "scim_metadata": {"givenName": "Test", "familyName": "User"}},
+    )
+
+    updated_user = LiteLLM_UserTable(
+        user_id="user-3",
+        user_email="test@example.com",
+        user_alias="Test User",
+        teams=[],
+        metadata={"scim_active": False, "scim_metadata": {"givenName": "Test", "familyName": "User"}},
+    )
+
+    async def mock_update(*, where, data):
+        return updated_user
+
+    mock_client = MagicMock()
+    mock_db = MagicMock()
+    mock_client.db = mock_db
+    mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+
+    mock_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id="user-3",
+        userName="user-3",
+        displayName="Test User",
+        name=SCIMUserName(familyName="User", givenName="Test"),
+        emails=[SCIMUserEmail(value="test@example.com")],
+        active=False,
+    )
+
+    # SCIM operation without path field
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="replace", value={"active": False}),
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), \
+         patch("litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+               AsyncMock(return_value=mock_scim_user)):
+        result = await patch_user(user_id="user-3", patch_ops=patch_ops)
+
+    # Verify metadata was updated correctly
+    call_args = mock_db.litellm_usertable.update.call_args
+    metadata = call_args[1]["data"]["metadata"]
+    
+    # Parse JSON string back to dict if needed
+    if isinstance(metadata, str):
+        import json
+        metadata = json.loads(metadata)
+    
+    assert metadata["scim_active"] is False
+    assert "" not in metadata  # Ensure no empty string key
+    assert result.active is False
+
+
+@pytest.mark.asyncio
+async def test_patch_user_multiple_fields_without_path():
+    """
+    Test SCIM operations without path containing multiple fields.
+    """
+    mock_user = LiteLLM_UserTable(
+        user_id="user-4",
+        user_email="old@example.com",
+        user_alias="Old Name",
+        teams=[],
+        metadata={"scim_active": True, "scim_metadata": {"givenName": "Old", "familyName": "Name"}},
+    )
+
+    updated_user = LiteLLM_UserTable(
+        user_id="user-4",
+        user_email="old@example.com",
+        user_alias="New Display Name",
+        teams=[],
+        metadata={
+            "scim_active": False,
+            "scim_metadata": {"givenName": "New", "familyName": "User"},
+        },
+    )
+
+    async def mock_update(*, where, data):
+        return updated_user
+
+    mock_client = MagicMock()
+    mock_db = MagicMock()
+    mock_client.db = mock_db
+    mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
+
+    mock_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id="user-4",
+        userName="user-4",
+        displayName="New Display Name",
+        name=SCIMUserName(familyName="User", givenName="New"),
+        emails=[SCIMUserEmail(value="old@example.com")],
+        active=False,
+    )
+
+    # SCIM operation without path but with multiple fields
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={
+                    "active": False,
+                    "displayName": "New Display Name",
+                    "name": {"givenName": "New", "familyName": "User"},
+                },
+            ),
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), \
+         patch("litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+               AsyncMock(return_value=mock_scim_user)):
+        result = await patch_user(user_id="user-4", patch_ops=patch_ops)
+
+    # Verify all fields were updated correctly
+    call_args = mock_db.litellm_usertable.update.call_args
+    update_data = call_args[1]["data"]
+    metadata = update_data["metadata"]
+    
+    # Parse JSON string back to dict if needed
+    if isinstance(metadata, str):
+        import json
+        metadata = json.loads(metadata)
+    
+    assert metadata["scim_active"] is False
+    assert metadata["scim_metadata"]["givenName"] == "New"
+    assert metadata["scim_metadata"]["familyName"] == "User"
+    assert update_data["user_alias"] == "New Display Name"
+    assert "" not in metadata  # Ensure no empty string key
+    assert result.active is False
+
+
+

@@ -32,7 +32,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   return (
     <Modal
       title="Reuse Credentials"
-      visible={isVisible}
+      open={isVisible}
       onCancel={() => {
         onCancel();
         form.resetFields();

@@ -133,6 +133,7 @@ async def setup_db_connection(prisma_client):
     await litellm.proxy.proxy_server.prisma_client.connect()
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_pod_lock_acquisition_when_no_active_lock():
     """Test if a pod can acquire a lock when no lock is active"""
@@ -159,6 +160,7 @@ async def test_pod_lock_acquisition_when_no_active_lock():
 
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_pod_lock_acquisition_after_completion():
     """Test if a new pod can acquire lock after previous pod completes"""
@@ -191,6 +193,7 @@ async def test_pod_lock_acquisition_after_completion():
     assert lock_record == second_lock_manager.pod_id
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_pod_lock_acquisition_after_expiry():
     """Test if a new pod can acquire lock after previous pod's lock expires"""
@@ -227,6 +230,7 @@ async def test_pod_lock_acquisition_after_expiry():
     assert lock_record == second_lock_manager.pod_id
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_pod_lock_release():
     """Test if a pod can successfully release its lock"""
@@ -252,6 +256,7 @@ async def test_pod_lock_release():
     assert lock_record is None
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_concurrent_lock_acquisition():
     """Test that only one pod can acquire the lock when multiple pods try simultaneously"""
@@ -295,6 +300,7 @@ async def test_concurrent_lock_acquisition():
 
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_lock_acquisition_with_expired_ttl():
     """Test that a pod can acquire a lock when existing lock has expired TTL"""
@@ -332,6 +338,7 @@ async def test_lock_acquisition_with_expired_ttl():
     assert lock_record == second_lock_manager.pod_id
 
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_release_expired_lock():
     """Test that a pod cannot release a lock that has been taken over by another pod"""
@@ -369,6 +376,7 @@ async def test_release_expired_lock():
     lock_record = await global_redis_cache.async_get_cache(lock_key)
     assert lock_record == second_lock_manager.pod_id
 
+@pytest.mark.skip(reason="Requires Redis connection.")
 @pytest.mark.asyncio
 async def test_e2e_size_of_redis_buffer():
     """

@@ -103,6 +103,95 @@ export const generateDailyData = (
   return dailyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
+export const generateDailyWithKeysData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
+  // Aggregate by unique (Date, Team ID, Key ID) combination to prevent duplicates
+  const aggregatedData: {
+    [key: string]: {
+      Date: string;
+      teamId: string;
+      teamAlias: string | null;
+      keyId: string;
+      keyAlias: string | null;
+      metrics: {
+        spend: number;
+        api_requests: number;
+        successful_requests: number;
+        failed_requests: number;
+        total_tokens: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+      };
+    };
+  } = {};
+
+  spendData.results.forEach((day) => {
+    Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+      const apiKeyBreakdown = data.api_key_breakdown || {};
+
+      // Iterate through each API key in the breakdown
+      Object.entries(apiKeyBreakdown).forEach(([keyId, keyData]: [string, any]) => {
+        const keyAlias = keyData?.metadata?.key_alias || null;
+        const teamId = keyData?.metadata?.team_id || entity;
+        const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
+
+        // Create unique key for aggregation: Date_TeamID_KeyID
+        const uniqueKey = `${day.date}_${teamId}_${keyId}`;
+
+        if (!aggregatedData[uniqueKey]) {
+          // First time seeing this (Date, Team ID, Key ID) combination
+          aggregatedData[uniqueKey] = {
+            Date: day.date,
+            teamId,
+            teamAlias,
+            keyId,
+            keyAlias,
+            metrics: {
+              spend: keyData.metrics?.spend || 0,
+              api_requests: keyData.metrics?.api_requests || 0,
+              successful_requests: keyData.metrics?.successful_requests || 0,
+              failed_requests: keyData.metrics?.failed_requests || 0,
+              total_tokens: keyData.metrics?.total_tokens || 0,
+              prompt_tokens: keyData.metrics?.prompt_tokens || 0,
+              completion_tokens: keyData.metrics?.completion_tokens || 0,
+            },
+          };
+        } else {
+          // Aggregate metrics for existing entry
+          aggregatedData[uniqueKey].metrics.spend += keyData.metrics?.spend || 0;
+          aggregatedData[uniqueKey].metrics.api_requests += keyData.metrics?.api_requests || 0;
+          aggregatedData[uniqueKey].metrics.successful_requests += keyData.metrics?.successful_requests || 0;
+          aggregatedData[uniqueKey].metrics.failed_requests += keyData.metrics?.failed_requests || 0;
+          aggregatedData[uniqueKey].metrics.total_tokens += keyData.metrics?.total_tokens || 0;
+          aggregatedData[uniqueKey].metrics.prompt_tokens += keyData.metrics?.prompt_tokens || 0;
+          aggregatedData[uniqueKey].metrics.completion_tokens += keyData.metrics?.completion_tokens || 0;
+        }
+      });
+    });
+  });
+
+  // Convert aggregated data to array format
+  const dailyKeyBreakdown = Object.values(aggregatedData).map((item) => ({
+    Date: item.Date,
+    [entityLabel]: item.teamAlias || "-",
+    [`${entityLabel} ID`]: item.teamId || "-",
+    "Key Alias": item.keyAlias || "-",
+    "Key ID": item.keyId,
+    "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
+    Requests: item.metrics.api_requests,
+    "Successful Requests": item.metrics.successful_requests,
+    "Failed Requests": item.metrics.failed_requests,
+    "Total Tokens": item.metrics.total_tokens,
+    "Prompt Tokens": item.metrics.prompt_tokens,
+    "Completion Tokens": item.metrics.completion_tokens,
+  }));
+
+  return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
+};
+
 export const generateDailyWithModelsData = (
   spendData: EntitySpendData,
   entityLabel: string,
@@ -174,6 +263,8 @@ export const generateExportData = (
   switch (exportScope) {
     case "daily":
       return generateDailyData(spendData, entityLabel, teamAliasMap);
+    case "daily_with_keys":
+      return generateDailyWithKeysData(spendData, entityLabel, teamAliasMap);
     case "daily_with_models":
       return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
     default:

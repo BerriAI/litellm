@@ -155,6 +155,79 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
 
 @pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_litellm_metadata():
+    """Ensure litellm_metadata from kwargs is forwarded via update_from_kwargs.
+
+    Routes like /messages store model_info under kwargs['litellm_metadata'].
+    The handler must forward this so that use_custom_pricing_for_model can
+    detect custom pricing. Regression test for #23185.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    custom_model_info = {
+        "id": "claude-sonnet-4-custom-pricing",
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+    }
+    kwargs = {
+        "litellm_metadata": {
+            "model_info": custom_model_info,
+            "deployment": "anthropic/claude-sonnet-4-20250514",
+        },
+    }
+
+    try:
+        await handler.async_anthropic_messages_handler(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=mock_logging_obj,
+            client=mock_client,
+            kwargs=kwargs,
+        )
+    except Exception:
+        pass
+
+    mock_logging_obj.update_from_kwargs.assert_called_once()
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args
+    kwargs_arg = call_kwargs.kwargs.get(
+        "kwargs", call_kwargs[1].get("kwargs", {})
+    ) if call_kwargs.kwargs else call_kwargs[1].get("kwargs", {})
+
+    assert "litellm_metadata" in kwargs_arg
+    assert kwargs_arg["litellm_metadata"]["model_info"] == custom_model_info
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_header_priority():
     """
     Test that async_anthropic_messages_handler respects header priority:

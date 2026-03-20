@@ -13,20 +13,26 @@ Cygnal returns a `violation` score between `0` and `1` (higher means more likely
 
 ### 1. Obtain Credentials
 
-1. Create a Gray Swan account and generate a Cygnal API key.
+1. Log in to our Gray Swan platform and generate a Cygnal API key. 
+
+    For existing customers, you should already have access to our [platform](https://platform.grayswan.ai).
+
+    For new users, please register at this [page](https://hubs.ly/Q03-sX1J0) and we are more than happy to give you an onboarding!
+
+
 2. Configure environment variables for the LiteLLM proxy host:
 
-```bash
-export GRAYSWAN_API_KEY="your-grayswan-key"
-export GRAYSWAN_API_BASE="https://api.grayswan.ai"
-```
+    ```bash
+    export GRAYSWAN_API_KEY="your-grayswan-key"
+    export GRAYSWAN_API_BASE="https://api.grayswan.ai"
+    ```
 
 ### 2. Configure `config.yaml`
 
-Add a guardrail entry that references the Gray Swan integration. Below is a balanced example that monitors both input and output but only blocks once the violation score reaches the configured threshold.
+Add a guardrail entry that references the Gray Swan integration. Below is our recommmended settings.
 
 ```yaml
-model_list:
+model_list:                                 # this part is a standard litellm configuration for reference
   - model_name: openai/gpt-4.1-mini
     litellm_params:
       model: openai/gpt-4.1-mini
@@ -40,13 +46,14 @@ guardrails:
       api_key: os.environ/GRAYSWAN_API_KEY
       api_base: os.environ/GRAYSWAN_API_BASE  # optional
       optional_params:
-        on_flagged_action: monitor             # or "block"
+        on_flagged_action: passthrough         # or "block" or "monitor"
         violation_threshold: 0.5               # score >= threshold is flagged
         reasoning_mode: hybrid                 # off | hybrid | thinking
-        categories:
-          safety: "Detect jailbreaks and policy violations"
-        policy_id: "your-cygnal-policy-id"
+        policy_id: "your-cygnal-policy-id"     # Optional: Your Cygnal policy ID. Defaults to a content safety policy if empty.
+      streaming_end_of_stream_only: true       # For streaming API, only send the assembled message to Cygnal (post_call only). Defaults to false.
       default_on: true
+      guardrail_timeout: 30                   # Defaults to 30 seconds. Change accordingly.
+      fail_open: true                         # Defaults to true; set to false to propagate guardrail errors.
 
 general_settings:
   master_key: "your-litellm-master-key"
@@ -65,13 +72,13 @@ litellm --config config.yaml --port 4000
 
 ## Choosing Guardrail Modes
 
-Gray Swan can run during `pre_call`, `during_call`, and `post_call` stages. Combine modes based on your latency and coverage requirements.
+Gray Swan can run during `pre_call`, `during_call`, and `post_call` stages. Combine modes based on your latency and coverage requirements. 
 
 | Mode         | When it Runs      | Protects              | Typical Use Case |
 |--------------|-------------------|-----------------------|------------------|
 | `pre_call`   | Before LLM call   | User input only       | Block prompt injection before it reaches the model |
 | `during_call`| Parallel to call  | User input only       | Low-latency monitoring without blocking |
-| `post_call`  | After response    | Full conversation     | Scan output for policy violations, leaked secrets, or IPI |
+| `post_call`  | After response    | Model Outputs         | Scan output for policy violations, leaked secrets, or IPI |
 
 
 When using `during_call` with `on_flagged_action: block` or `on_flagged_action: passthrough`:
@@ -81,87 +88,110 @@ When using `during_call` with `on_flagged_action: block` or `on_flagged_action: 
 - The guardrail exception prevents the response from reaching the user, but **does not cancel the running LLM task**
 - This means you pay full LLM costs while returning an error/passthrough message to the user
 
-**Recommendation:** For cost-sensitive applications, use `pre_call` and `post_call` instead of `during_call` for blocking or passthrough modes. Reserve `during_call` for `monitor` mode where you want low-latency logging without impacting the user experience.
+**Recommendation:** Use `pre_call` and `post_call` instead of `during_call` for `passthrough` (or `block`) `on_flagged_action` (see our recommended configuration above). Reserve `during_call` for `monitor` mode ONLY when you want low-latency logging without impacting the user experience.
 
 
-<Tabs>
-<TabItem value="monitor" label="Monitor Only">
+---
 
-```yaml
-guardrails:
-  - guardrail_name: "cygnal-monitor-only"
-    litellm_params:
-      guardrail: grayswan
-      mode: "during_call"
-      api_key: os.environ/GRAYSWAN_API_KEY
-      optional_params:
-        on_flagged_action: monitor
-        violation_threshold: 0.6
-      default_on: true
+## Work with Claude Code
+
+Follow the official litellm [guide](https://docs.litellm.ai/docs/tutorials/claude_responses_api) on setting up Claude Code with litellm, with the guardrail part mentioned above added to your litellm configuration. Cygnal natively supports coding agent policies defense. Define your own policy or use the provided coding policies on the platform. The example config we show above is also the recommended setup for Claude Code (with the `policy_id` replaced with an appropriate one).
+
+---
+
+## Per-request overrides via `extra_body`
+
+You can override parts of the Gray Swan guardrail configuration on a per-request basis by passing `litellm_metadata.guardrails[*].grayswan.extra_body`.
+
+`extra_body` is merged into the Cygnal request body and takes precedence over specific fields from `config.yaml`, which are `policy_id`, `violation_threshold`, and `reasoning_mode`.
+
+If you include a `metadata` field inside `extra_body`, it is forwarded to the Cygnal API as-is under the request body's `metadata` field.
+
+Example:
+
+```bash
+curl -X POST "http://0.0.0.0:4000/v1/messages?beta=true" \
+  -H "Authorization: Bearer token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openrouter/anthropic/claude-sonnet-4.5",
+    "messages": [{"role": "user", "content": "hello"}],
+    "litellm_metadata": {
+      "guardrails": [
+        {
+          "cygnal-monitor": {
+            "extra_body": {
+              "policy_id": "specific policy id you want to use",
+              "metadata": {
+                "user": "health-check"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }'
 ```
 
-Best for visibility without blocking. Alerts are logged via LiteLLM’s standard logging callbacks.
+OpenAI client:
 
-</TabItem>
-<TabItem value="block-input" label="Block Input">
+```python
+from openai import OpenAI
 
-```yaml
-guardrails:
-  - guardrail_name: "cygnal-block-input"
-    litellm_params:
-      guardrail: grayswan
-      mode: "pre_call"
-      api_key: os.environ/GRAYSWAN_API_KEY
-      optional_params:
-        on_flagged_action: block
-        violation_threshold: 0.4
-        categories:
-          pii: "Detect sensitive data"
-      default_on: true
+client = OpenAI(api_key="anything", base_url="http://0.0.0.0:4000")
+
+resp = client.responses.create(
+    model="openrouter/anthropic/claude-sonnet-4.5",
+    input="hello",
+    extra_body={
+        "litellm_metadata": {
+            "guardrails": [
+                {
+                    "cygnal-monitor": {
+                        "extra_body": {
+                            "policy_id": "69038214e5cdb6befc5e991e",
+                            "metadata": {"trace_id": "trace-123"},
+                        }
+                    }
+                }
+            ]
+        }
+    },
+)
 ```
 
-Stops malicious or sensitive prompts before any tokens are generated.
+Anthropic client:
 
-</TabItem>
-<TabItem value="full-coverage" label="Full Coverage">
+```python
+from anthropic import Anthropic
 
-```yaml
-guardrails:
-  - guardrail_name: "cygnal-full-coverage"
-    litellm_params:
-      guardrail: grayswan
-      mode: [pre_call, post_call]
-      api_key: os.environ/GRAYSWAN_API_KEY
-      optional_params:
-        on_flagged_action: block
-        violation_threshold: 0.5
-        reasoning_mode: thinking
-        policy_id: "policy-id-from-grayswan"
-      default_on: true
+client = Anthropic(api_key="anything", base_url="http://0.0.0.0:4000")
+
+resp = client.messages.create(
+    model="openrouter/anthropic/claude-sonnet-4.5",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "hello"}],
+    extra_body={
+        "litellm_metadata": {
+            "guardrails": [
+                {
+                    "cygnal-monitor": {
+                        "extra_body": {
+                            "policy_id": "69038214e5cdb6befc5e991e",
+                            "metadata": {"trace_id": "trace-123"},
+                        }
+                    }
+                }
+            ]
+        }
+    },
+)
 ```
 
-Provides the strongest enforcement by inspecting both prompts and responses.
+Notes:
 
-</TabItem>
-<TabItem value="passthrough" label="Passthrough Mode">
-
-```yaml
-guardrails:
-  - guardrail_name: "cygnal-passthrough"
-    litellm_params:
-      guardrail: grayswan
-      mode: [pre_call, post_call]
-      api_key: os.environ/GRAYSWAN_API_KEY
-      optional_params:
-        on_flagged_action: passthrough
-        violation_threshold: 0.5
-      default_on: true
-```
-
-Allows requests to proceed without raising a 400 error when content is flagged. Instead of blocking, the model response content is replaced with a detailed violation message including violation score, violated rules, and detection flags (mutation, IPI). **Supported Response Formats:** OpenAI chat/text completions, Anthropic Messages API. Other response types (embeddings, images, etc.) will log a warning and return unchanged.
-
-</TabItem>
-</Tabs>
+- The guardrail name (for example, `cygnal-monitor`) must match the `guardrail_name` in `config.yaml`.
+- Per-request guardrail overrides may require a premium license, depending on your proxy settings.
 
 ---
 
@@ -170,9 +200,14 @@ Allows requests to proceed without raising a 400 error when content is flagged. 
 | Parameter                             | Type            | Description |
 |---------------------------------------|-----------------|-------------|
 | `api_key`                             | string          | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
+| `api_base`                            | string          | Override for the Gray Swan API base URL. Defaults to `https://api.grayswan.ai` or `GRAYSWAN_API_BASE`. |
 | `mode`                                | string or list  | Guardrail stages (`pre_call`, `during_call`, `post_call`). |
 | `optional_params.on_flagged_action`   | string          | `monitor` (log only), `block` (raise `HTTPException`), or `passthrough` (replace response content with violation message, no 400 error). |
-| `.optional_params.violation_threshold`| number (0-1)    | Scores at or above this value are considered violations. |
+| `optional_params.violation_threshold` | number (0-1)    | Scores at or above this value are considered violations. |
 | `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal's reasoning capabilities. |
 | `optional_params.categories`          | object          | Map of custom category names to descriptions. |
 | `optional_params.policy_id`           | string          | Gray Swan policy identifier. |
+| `guardrail_timeout`                   | number          | Timeout in seconds for the Cygnal request. Defaults to 30. |
+| `fail_open`                           | boolean         | If true, errors contacting Cygnal are logged and the request proceeds; if false, errors propagate. Defaults to treu. |
+| `streaming_end_of_stream_only`        | boolean         | For streaming `post_call`, only send the final assembled response to Cygnal. Defaults to false. |
+| `default_on`                          | boolean         | Run the guardrail on every request by default. |

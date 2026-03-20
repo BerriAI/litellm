@@ -23,7 +23,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -483,6 +486,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             request_data=data, guardrail_name=self.guardrail_name
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",

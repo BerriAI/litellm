@@ -67,6 +67,32 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
       },
     },
     {
+      header: "Files",
+      accessorKey: "vector_store_metadata",
+      cell: ({ row }) => {
+        const vectorStore = row.original;
+        const ingestedFiles = vectorStore.vector_store_metadata?.ingested_files || [];
+        
+        if (ingestedFiles.length === 0) {
+          return <span className="text-xs text-gray-400">-</span>;
+        }
+        
+        const filenames = ingestedFiles
+          .map((file) => file.filename || file.file_url || "Unknown")
+          .join(", ");
+        
+        const displayText = ingestedFiles.length === 1 
+          ? ingestedFiles[0].filename || ingestedFiles[0].file_url || "1 file"
+          : `${ingestedFiles.length} files`;
+        
+        return (
+          <Tooltip title={filenames}>
+            <span className="text-xs text-blue-600">{displayText}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       header: "Provider",
       accessorKey: "custom_llm_provider",
       cell: ({ row }) => {

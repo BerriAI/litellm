@@ -387,6 +387,10 @@ async def test_sync_in_memory_spend_with_redis():
         provider_budget_config=provider_budget_config,
     )
 
+    # Allow background _init_provider_budget_in_cache tasks to complete
+    # before overwriting Redis values (avoids race where init overwrites with 0.0)
+    await asyncio.sleep(0.5)
+
     # Set some values in Redis
     spend_key_openai = "provider_spend:openai:1d"
     spend_key_anthropic = "provider_spend:anthropic:1d"

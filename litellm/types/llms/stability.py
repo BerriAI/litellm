@@ -18,9 +18,12 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     - /v2beta/stable-image/generate/ultra
     - /v2beta/stable-image/generate/core
     """
+
     prompt: str  # Required - text prompt for image generation
     negative_prompt: Optional[str]  # What to avoid in the image
-    aspect_ratio: Optional[str]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
+    aspect_ratio: Optional[
+        str
+    ]  # e.g., "1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "9:21"
     seed: Optional[int]  # Random seed for reproducibility (0 to 4294967294)
     output_format: Optional[Literal["jpeg", "png", "webp"]]  # Output format
     model: Optional[str]  # Model variant (e.g., "sd3.5-large", "sd3.5-medium")
@@ -29,18 +32,22 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     strength: Optional[float]  # How much to transform the image (0-1)
     style_preset: Optional[str]  # Style preset name
 
+
 class StabilityImageEditRequest(StabilityImageGenerationRequest):
     """
     Request parameters for Stability AI image edit endpoint.
 
     Endpoint: /v2beta/stable-image/edit/inpaint
     """
+
     mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
+
 
 class StabilityImageGenerationResponse(TypedDict, total=False):
     """
     Response from Stability AI image generation endpoints.
     """
+
     image: str  # Base64-encoded image
     finish_reason: str  # "SUCCESS", "CONTENT_FILTERED", etc.
     seed: int  # The seed used for generation
@@ -55,6 +62,7 @@ class StabilityUpscaleRequest(TypedDict, total=False):
     - /v2beta/stable-image/upscale/conservative
     - /v2beta/stable-image/upscale/creative
     """
+
     image: str  # Required - Base64-encoded image to upscale
     prompt: Optional[str]  # Text prompt (required for creative upscale)
     negative_prompt: Optional[str]  # What to avoid
@@ -69,6 +77,7 @@ class StabilityInpaintRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/inpaint
     """
+
     image: str  # Required - Base64-encoded image to edit
     prompt: str  # Required - Description of desired changes
     mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
@@ -84,6 +93,7 @@ class StabilityOutpaintRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/outpaint
     """
+
     image: str  # Required - Base64-encoded image to expand
     prompt: Optional[str]  # Description of content to generate
     negative_prompt: Optional[str]  # What to avoid
@@ -102,6 +112,7 @@ class StabilityEraseRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/erase
     """
+
     image: str  # Required - Base64-encoded image
     mask: Optional[str]  # Base64-encoded mask (white = erase)
     seed: Optional[int]  # Random seed
@@ -115,6 +126,7 @@ class StabilitySearchReplaceRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/search-and-replace
     """
+
     image: str  # Required - Base64-encoded image
     prompt: str  # Required - Description of object to add
     search_prompt: str  # Required - Description of object to find and replace
@@ -130,8 +142,11 @@ class StabilityRemoveBackgroundRequest(TypedDict, total=False):
 
     Endpoint: /v2beta/stable-image/edit/remove-background
     """
+
     image: str  # Required - Base64-encoded image
-    output_format: Optional[Literal["png", "webp"]]  # Output format (no jpeg - needs transparency)
+    output_format: Optional[
+        Literal["png", "webp"]
+    ]  # Output format (no jpeg - needs transparency)
 
 
 class StabilityControlRequest(TypedDict, total=False):
@@ -143,6 +158,7 @@ class StabilityControlRequest(TypedDict, total=False):
     - /v2beta/stable-image/control/structure
     - /v2beta/stable-image/control/style
     """
+
     image: str  # Required - Base64-encoded control image (sketch/structure/style reference)
     prompt: str  # Required - Description of desired output
     negative_prompt: Optional[str]  # What to avoid
@@ -155,6 +171,7 @@ class StabilityEditResponse(TypedDict, total=False):
     """
     Response from Stability AI edit/upscale/control endpoints.
     """
+
     image: str  # Base64-encoded result image
     finish_reason: str  # "SUCCESS", "CONTENT_FILTERED", etc.
     seed: int  # The seed used

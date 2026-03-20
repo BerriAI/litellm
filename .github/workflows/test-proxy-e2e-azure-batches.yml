@@ -1,0 +1,90 @@
+name: Proxy E2E Azure Batches Tests
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy_e2e_azure_batches_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: llmproxy
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-e2e-batches-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-e2e-batches-
+            ${{ runner.os }}-poetry-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy"
+          poetry run pip install psycopg2-binary uvicorn fastapi httpx tenacity
+
+      - name: Setup litellm-enterprise
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        run: |
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run Prisma migrations
+        env:
+          DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+        run: |
+          cd litellm/proxy
+          poetry run prisma migrate deploy --schema schema.prisma
+          cd ../..
+
+      - name: Run Azure Batch E2E Tests
+        env:
+          DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+          USE_LOCAL_LITELLM: "true"
+          USE_MOCK_MODELS: "true"
+          USE_STATE_TRACKER: "true"
+          LITELLM_LOG: DEBUG
+        run: |
+          poetry run pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py \
+            -vv -s -k "test_e2e_managed_batch" \
+            --tb=short \
+            --maxfail=3 \
+            --durations=10
+

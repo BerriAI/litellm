@@ -1,5 +1,5 @@
 ---
-title: "v1.81.0 - Claude Code Web Search Support"
+title: "v1.81.0-stable - Claude Code - Web Search Across All Providers"
 slug: "v1-81-0"
 date: 2026-01-18T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.81.0
+docker.litellm.ai/berriai/litellm:v1.81.0-stable
 ```
 
 </TabItem>
@@ -47,6 +47,22 @@ pip install litellm==1.81.0
 
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 - **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
+- **Performance** - [25% CPU Usage Reduction](#performance---25-cpu-usage-reduction) by removing premature model.dump() calls from the hot path
+- **Deleted Keys Audit Table on UI** - [View deleted keys and teams for audit purposes](../../docs/proxy/deleted_keys_teams.md) with spend and budget information at the time of deletion
+
+---
+
+## Claude Code - Web Search Across All Providers
+
+<Image img={require('../../img/release_notes/claude_code_websearch.png')} />
+
+This release brings web search support to Claude Code across all LiteLLM providers (Bedrock, Azure, Vertex AI, and more), enabling AI coding assistants to search the web for real-time information.
+
+This means you can now use Claude Code's web search tool with any provider, not just Anthropic's native API. LiteLLM automatically intercepts web search requests and executes them server-side using your configured search provider (Perplexity, Tavily, Exa AI, and more).
+
+Proxy Admins can configure web search interception in their LiteLLM proxy config to enable this capability for their teams using Claude Code with Bedrock, Azure, or any other supported provider.
+
+[**Learn more →**](https://docs.litellm.ai/docs/tutorials/claude_code_websearch)
 
 ---
 
@@ -137,6 +153,20 @@ This feature improves reliability by:
 - Preventing memory issues from very large images
 - Aligning with OpenAI's 50MB payload limit
 - Validating image sizes early (when Content-Length header is available)
+
+---
+
+## Performance - 25% CPU Usage Reduction
+
+LiteLLM now reduces CPU usage by removing premature `model.dump()` calls from the hot path in request processing. Previously, Pydantic model serialization was performed earlier and more frequently than necessary, causing unnecessary CPU overhead on every request. By deferring serialization until it is actually needed, LiteLLM reduces CPU usage and improves request throughput under high load.
+
+---
+
+## Deleted Keys Audit Table on UI
+
+<Image img={require('../../img/ui_deleted_keys_table.png')} />
+
+LiteLLM now provides a comprehensive audit table for deleted API keys and teams directly in the UI. This feature allows you to easily track the spend of deleted keys, view their associated team information, and maintain accurate financial records for auditing and compliance purposes. The table displays key details including key aliases, team associations, and spend information captured at the time of deletion. For more information on how to use this feature, see the [Deleted Keys & Teams documentation](../../docs/proxy/deleted_keys_teams.md).
 
 ---
 

@@ -30,6 +30,15 @@ vi.mock("@tremor/react", async (importOriginal) => {
       // This avoids issues with hover states, positioning, and DOM queries in tests
       return React.createElement(React.Fragment, null, children);
     },
+    // Render as a plain checkbox so toggle interactions are testable without Tremor internals
+    Switch: ({ checked, onChange, className }: { checked?: boolean; onChange?: (v: boolean) => void; className?: string }) =>
+      React.createElement("input", {
+        type: "checkbox",
+        role: "switch",
+        checked,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
+        className,
+      }),
   };
 });
 

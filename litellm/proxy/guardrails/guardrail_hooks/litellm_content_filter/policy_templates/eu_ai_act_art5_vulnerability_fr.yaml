@@ -1,0 +1,109 @@
+# Loi sur l'IA (UE) Article 5.1(b) — Exploitation des vulnérabilités
+# Interdit les systèmes d'IA qui exploitent les vulnérabilités des personnes
+# en raison de l'âge, du handicap ou de la situation socio-économique.
+# Référence : https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_vulnerability_fr"
+description: "Art. 5.1(b) — Bloque les systèmes d'IA qui exploitent les vulnérabilités des enfants, personnes âgées ou handicapées"
+default_action: "BLOCK"
+
+identifier_words:
+  # Actions de développement
+  - "construire"
+  - "créer"
+  - "développer"
+  - "concevoir"
+  - "implémenter"
+  - "mettre en place"
+
+  # Actions d'exploitation
+  - "exploiter"
+  - "cibler"
+  - "manipuler"
+  - "profiter de"
+  - "abuser"
+  - "tirer parti"
+
+  # Actions d'analyse/profilage
+  - "profiler"
+  - "évaluer"
+  - "estimer"
+  - "analyser"
+  - "noter"
+  - "classifier"
+  - "détecter"
+  - "identifier"
+
+additional_block_words:
+  # Vulnérabilité des enfants
+  - "vulnérabilité des enfants"
+  - "vulnérabilité des mineurs"
+  - "enfants vulnérables"
+  - "mineurs vulnérables"
+  - "susceptibilité des enfants"
+  - "susceptibilité des mineurs"
+  - "cibler les enfants"
+  - "cibler les mineurs"
+
+  # Vulnérabilité des personnes âgées
+  - "vulnérabilité des personnes âgées"
+  - "vulnérabilité des seniors"
+  - "personnes âgées vulnérables"
+  - "seniors vulnérables"
+  - "susceptibilité des personnes âgées"
+  - "cibler les personnes âgées"
+  - "cibler les seniors"
+  - "déclin cognitif"
+
+  # Vulnérabilité des personnes handicapées
+  - "vulnérabilité des handicapés"
+  - "vulnérabilité des personnes handicapées"
+  - "personnes handicapées vulnérables"
+  - "handicapés vulnérables"
+  - "déficience intellectuelle"
+  - "déficience cognitive"
+  - "handicap mental"
+  - "cibler les handicapés"
+  - "cibler les personnes handicapées"
+
+  # Vulnérabilité économique
+  - "vulnérabilité économique"
+  - "vulnérabilité financière"
+  - "vulnérabilité socio-économique"
+  - "population vulnérable"
+  - "personnes vulnérables"
+
+always_block_keywords:
+  - keyword: "exploiter la vulnérabilité des enfants"
+    severity: "high"
+  - keyword: "exploiter la vulnérabilité des personnes âgées"
+    severity: "high"
+  - keyword: "exploiter la vulnérabilité des handicapés"
+    severity: "high"
+  - keyword: "cibler les enfants vulnérables"
+    severity: "high"
+  - keyword: "cibler les personnes âgées vulnérables"
+    severity: "high"
+  - keyword: "exploiter le déclin cognitif"
+    severity: "high"
+  - keyword: "manipuler les personnes vulnérables"
+    severity: "high"
+
+exceptions:
+  - "recherche sur"
+  - "étude sur"
+  - "académique"
+  - "thèse sur"
+  - "expliquer"
+  - "qu'est-ce que"
+  - "c'est quoi"
+  - "article 5"
+  - "interdit par"
+  - "prohibé par"
+  - "protéger les personnes vulnérables"
+  - "sauvegarde"
+  - "surveillance de conformité"
+  - "contrôle de conformité"
+  - "examen éthique"
+  - "accessibilité"
+  - "soutien pour"
+  - "aide pour"

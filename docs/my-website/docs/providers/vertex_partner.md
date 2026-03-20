@@ -11,6 +11,7 @@ import TabItem from '@theme/TabItem';
 |----------|---------------|---------------|
 | Anthropic (Claude) | `vertex_ai/claude-*` | [Vertex AI - Anthropic Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude) |
 | DeepSeek | `vertex_ai/deepseek-ai/{MODEL}` | [Vertex AI - DeepSeek Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/deepseek) |
+| ZAI (GLM) | `vertex_ai/zai-org/{MODEL}` | [Vertex AI - GLM Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/zaiorg/glm-47) |
 | Meta/Llama | `vertex_ai/meta/{MODEL}` | [Vertex AI - Meta Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama) |
 | Mistral | `vertex_ai/mistral-*` | [Vertex AI - Mistral Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral) |
 | AI21 (Jamba) | `vertex_ai/jamba-*` | [Vertex AI - AI21 Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/ai21) |
@@ -226,6 +227,79 @@ ModelResponse(
 |------------------|------------------------------|
 | vertex_ai/deepseek-ai/deepseek-r1-0528-maas | `completion('vertex_ai/deepseek-ai/deepseek-r1-0528-maas', messages)` |
 
+## VertexAI ZAI (GLM)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/zai-org/{MODEL}` |
+| Vertex Documentation | [Vertex AI - GLM Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/zaiorg/glm-47) |
+
+**LiteLLM Supports all Vertex AI GLM Models.** Ensure you use the `vertex_ai/zai-org/` prefix for all Vertex AI GLM models.
+
+| Model Name | Usage |
+|------------|-------|
+| vertex_ai/zai-org/glm-4.7-maas | `completion('vertex_ai/zai-org/glm-4.7-maas', messages)` |
+
+#### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+response = completion(
+    model="vertex_ai/zai-org/glm-4.7-maas",
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_project="your-vertex-project",
+    # vertex_location routes to "global"
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+  - model_name: glm-4.7
+    litellm_params:
+      model: vertex_ai/zai-org/glm-4.7-maas
+      vertex_project: "my-project"
+      # vertex_location routes to "global"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "glm-4.7",
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
 
 ## VertexAI Meta/Llama API
  
