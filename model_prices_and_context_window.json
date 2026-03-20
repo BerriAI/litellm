@@ -12527,6 +12527,110 @@
             "/v1/images/generations"
         ]
     },
+    "runware/google:4@3": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.047,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/google:4@2": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.138,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/bytedance:seedream@5.0-lite": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/bfl:7@1": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/runware:400@1": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.009,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/bfl:5@1": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/runware:z-image@turbo": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0019,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/klingai:kling-image@o3": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.028,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/imagineart:1@5": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/runware:400@3": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0017,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/alibaba:qwen-image@2.0": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/xai:grok-imagine@image": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "runware/xai:grok-imagine@image-pro": {
+        "litellm_provider": "runware",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,

@@ -981,6 +981,13 @@ const sidebars = {
             "providers/runwayml/videos",
           ]
         },
+        {
+          type: "category",
+          label: "Runware",
+          items: [
+            "providers/runware/images",
+          ]
+        },
         "providers/sambanova",
         "providers/sap",
         "providers/scaleway",

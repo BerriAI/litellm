@@ -8793,6 +8793,12 @@ class ProviderConfigManager:
             )
 
             return get_runwayml_image_generation_config(model)
+        elif LlmProviders.RUNWARE == provider:
+            from litellm.llms.runware.image_generation import (
+                get_runware_image_generation_config,
+            )
+
+            return get_runware_image_generation_config(model)
         elif LlmProviders.BLACK_FOREST_LABS == provider:
             from litellm.llms.black_forest_labs.image_generation import (
                 get_black_forest_labs_image_generation_config,

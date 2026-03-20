@@ -405,6 +405,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.FAL_AI,
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
+            litellm.LlmProviders.RUNWARE,
             litellm.LlmProviders.VERTEX_AI,
             litellm.LlmProviders.OPENROUTER,
         ):
