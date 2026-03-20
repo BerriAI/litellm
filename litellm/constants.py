@@ -361,6 +361,13 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+# Actions allowed in the OIDC session policy when assuming role via AssumeRoleWithWebIdentity.
+# Includes model invocation and guardrail apply for Bedrock.
+BEDROCK_OIDC_SESSION_POLICY_ACTIONS = (
+    "bedrock:InvokeModel",
+    "bedrock:InvokeModelWithResponseStream",
+    "bedrock:ApplyGuardrail",
+)
 BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
     os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 )
