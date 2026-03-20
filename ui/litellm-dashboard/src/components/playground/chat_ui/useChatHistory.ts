@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { MessageType, A2ATaskMetadata } from "./types";
 import { TokenUsage } from "./ResponseMetrics";
 import { MCPEvent } from "../../mcp_tools/types";
