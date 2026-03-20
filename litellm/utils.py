@@ -1944,15 +1944,39 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+            # NOTE: streaming requests return early (before this point) via
+            # CustomStreamWrapper, so this block is non-streaming only.
+            if getattr(logging_obj, "_defer_async_logging", False):
+                # Proxy has post-call guardrails that must complete before the
+                # SLO is built.  Store a closure the proxy will call after
+                # post_call_success_hook so guardrail_information is in metadata.
+                # Only create_task is deferred; sync callbacks fire immediately
+                # (below, outside the if/else) for billing/rate-limiting.
+                def _enqueue_deferred_logging() -> None:
+                    # Must be called from within a running event loop.
+                    asyncio.create_task(
+                        _client_async_logging_helper(
+                            logging_obj=logging_obj,
+                            result=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        )
+                    )
+
+                logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+            else:
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
                 )
-            )
+
+            # Sync callbacks always fire immediately regardless of deferral
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
