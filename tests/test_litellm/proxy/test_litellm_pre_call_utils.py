@@ -2018,7 +2018,10 @@ async def test_user_team_guardrails_skips_key_team():
     # get_team_object should only be called for team-b, not team-a
     mock_get_team.assert_called_once()
     call_args = mock_get_team.call_args
-    assert call_args.kwargs.get("team_id") or call_args.args[0] == "team-b"
+    actual_team_id = call_args.kwargs.get(
+        "team_id", call_args.args[0] if call_args.args else None
+    )
+    assert actual_team_id == "team-b", f"Expected team-b, got {actual_team_id}"
     assert "other-guard" in data["metadata"]["guardrails"]
 
 
@@ -2130,3 +2133,86 @@ async def test_user_team_guardrails_deduplicates():
     guardrails = data["metadata"]["guardrails"]
     assert guardrails.count("pii-guard") == 1  # no duplicate
     assert "new-guard" in guardrails
+
+
+@pytest.mark.asyncio
+async def test_user_team_guardrails_not_overwritten_by_key_guardrails():
+    """
+    Integration test: user team guardrails should NOT be overwritten when
+    _add_guardrails_from_key_or_team_metadata runs after.
+    This tests the full move_guardrails_to_metadata flow.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    # Key has its own guardrails, user's team has different guardrails
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=None,
+        metadata={"guardrails": ["key-guard"]},
+        team_metadata=None,
+    )
+
+    mock_user = LiteLLM_UserTable(
+        user_id="test-user",
+        teams=["user-team-1"],
+    )
+
+    mock_team = MagicMock()
+    mock_team.metadata = {"guardrails": ["team-member-guard"]}
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=mock_user.model_dump())
+
+    # Ensure guardrail_name_config_map is populated so early-exit doesn't trigger
+    original_map = litellm.guardrail_name_config_map
+    litellm.guardrail_name_config_map = {
+        "key-guard": MagicMock(),
+        "team-member-guard": MagicMock(),
+    }
+
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client", MagicMock(), create=True
+        ), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", mock_cache, create=True
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            AsyncMock(return_value=mock_team),
+        ), patch(
+            "litellm.proxy.utils._premium_user_check"
+        ):
+            updated_data = await add_litellm_data_to_request(
+                data=data,
+                request=request_mock,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=MagicMock(),
+                general_settings={},
+                version="test-version",
+            )
+
+        metadata = updated_data.get("metadata", {})
+        guardrails = metadata.get("guardrails", [])
+
+        # Both key guardrails AND user team guardrails should be present
+        assert "key-guard" in guardrails, f"key-guard missing from {guardrails}"
+        assert (
+            "team-member-guard" in guardrails
+        ), f"team-member-guard missing from {guardrails}"
+    finally:
+        litellm.guardrail_name_config_map = original_map

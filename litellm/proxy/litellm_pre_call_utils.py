@@ -1449,8 +1449,11 @@ def _add_guardrails_from_key_or_team_metadata(
             _premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
 
-    # Set combined guardrails in metadata as list
+    # Merge combined guardrails into metadata (preserving any already set,
+    # e.g. from user team memberships)
     if combined_guardrails:
+        existing = set(data.get(metadata_variable_name, {}).get("guardrails", []))
+        combined_guardrails.update(existing)
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
 
 
