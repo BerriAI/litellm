@@ -6,23 +6,21 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.litellm_logging import \
-    Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import \
-    use_custom_pricing_for_model
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.anthropic import get_anthropic_config
-from litellm.llms.anthropic.chat.handler import \
-    ModelResponseIterator as AnthropicModelResponseIterator
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator as AnthropicModelResponseIterator,
+)
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-from litellm.types.passthrough_endpoints.pass_through_endpoints import \
-    PassthroughStandardLoggingPayload
-from litellm.types.utils import (LiteLLMBatch, ModelResponse,
-                                 TextCompletionResponse)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
+from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import \
-        EndpointType
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
     from ..success_handler import PassThroughEndpointLogging
 else:
@@ -333,8 +331,7 @@ class AnthropicPassthroughLoggingHandler:
         import base64
 
         from litellm._uuid import uuid
-        from litellm.llms.anthropic.batches.transformation import \
-            AnthropicBatchesConfig
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import Choices, SpecialEnums
 
         try:
@@ -550,8 +547,7 @@ class AnthropicPassthroughLoggingHandler:
                 managed_files_hook, "store_unified_object_id"
             ):
                 # Create a mock user API key dict for the managed object storage
-                from litellm.proxy._types import (LitellmUserRoles,
-                                                  UserAPIKeyAuth)
+                from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
                 user_api_key_dict = UserAPIKeyAuth(
                     user_id=kwargs.get("user_id", "default-user"),

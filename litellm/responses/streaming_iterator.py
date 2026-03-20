@@ -168,14 +168,10 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
-                if (
-                    openai_responses_api_chunk
-                    and _chunk_type
-                    in (
-                        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-                        ResponsesAPIStreamEvents.RESPONSE_FAILED,
-                    )
+                if openai_responses_api_chunk and _chunk_type in (
+                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True

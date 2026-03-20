@@ -964,11 +964,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -1066,9 +1066,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params["context_management"] = (
-                            anthropic_context_management
-                        )
+                        optional_params[
+                            "context_management"
+                        ] = anthropic_context_management
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1142,9 +1142,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1168,9 +1168,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1467,7 +1467,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1684,7 +1686,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
-    def _build_code_by_id_map(self, tool_calls: List[ChatCompletionToolCallChunk]) -> Dict[str, str]:
+    def _build_code_by_id_map(
+        self, tool_calls: List[ChatCompletionToolCallChunk]
+    ) -> Dict[str, str]:
         code_by_id: Dict[str, str] = {}
         for tc in tool_calls:
             try:
@@ -1698,7 +1702,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return code_by_id
 
     def _build_code_interpreter_results(
-        self, tool_results: List[Any], code_by_id: Dict[str, str], container_id: Optional[str]
+        self,
+        tool_results: List[Any],
+        code_by_id: Dict[str, str],
+        container_id: Optional[str],
     ) -> List[OutputCodeInterpreterCall]:
         code_interpreter_results = []
         for tr in tool_results:
@@ -1723,7 +1730,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         completion_response: dict,
         citations: Optional[List[Any]],
-        thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]],
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
         web_search_results: Optional[List[Any]],
         tool_results: Optional[List[Any]],
         compaction_blocks: Optional[List[Any]],
@@ -1733,14 +1744,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "citations": citations,
             "thinking_blocks": thinking_blocks,
         }
-        
+
         context_management = completion_response.get("context_management")
         if context_management is not None:
             provider_specific_fields["context_management"] = context_management
-        
+
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
-        
+
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
             container_id = (
@@ -1752,15 +1763,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             code_interpreter_results = self._build_code_interpreter_results(
                 tool_results, code_by_id, container_id
             )
-            provider_specific_fields["code_interpreter_results"] = code_interpreter_results
-        
+            provider_specific_fields[
+                "code_interpreter_results"
+            ] = code_interpreter_results
+
         container = completion_response.get("container")
         if container is not None:
             provider_specific_fields["container"] = container
-        
+
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
-        
+
         return provider_specific_fields
 
     def transform_parsed_response(
@@ -1830,7 +1843,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _message = json_mode_message
 
         model_response.choices[0].message = _message
-        model_response._hidden_params["original_response"] = completion_response["content"]
+        model_response._hidden_params["original_response"] = completion_response[
+            "content"
+        ]
         model_response.choices[0].finish_reason = cast(
             OpenAIChatCompletionFinishReason,
             map_finish_reason(completion_response["stop_reason"]),
