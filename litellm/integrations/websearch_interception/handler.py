@@ -8,6 +8,7 @@ server-side using litellm router's search tools.
 
 import asyncio
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -66,6 +68,111 @@ class WebSearchInterceptionLogger(CustomLogger):
             ]
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
+
+    async def try_short_circuit_search(
+        self,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        custom_llm_provider: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Short-circuit web-search-only requests by executing the search directly.
+
+        Claude Code sends web search as a separate, standalone /v1/messages
+        request with a simple prompt and only web_search tool(s). For providers
+        that don't natively support web search (e.g. github_copilot), there is
+        no need to route this through the backend LLM — we can detect the
+        pattern, execute the search via Tavily/Perplexity, and return a
+        synthetic Anthropic response immediately.
+
+        Args:
+            model: Model name from the request
+            messages: Messages list from the request
+            tools: Tools list from the request
+            custom_llm_provider: Provider name
+
+        Returns:
+            An AnthropicMessagesResponse dict if short-circuited, or None to
+            continue normal processing.
+        """
+        if not tools:
+            return None
+
+        # Check if provider is in enabled list
+        provider_str = custom_llm_provider or ""
+        if (
+            self.enabled_providers is not None
+            and provider_str not in self.enabled_providers
+        ):
+            return None
+
+        # Only short-circuit for providers without native Anthropic Messages
+        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
+        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
+        # includes a follow-up LLM call to synthesize the answer from search
+        # results.  Short-circuiting those would skip that synthesis step and
+        # return raw search text — a regression for existing users.
+        try:
+            provider_enum = LlmProviders(provider_str)
+            anthropic_config = (
+                ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model, provider=provider_enum
+                )
+            )
+            if anthropic_config is not None:
+                verbose_logger.debug(
+                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
+                    "(provider has native Anthropic Messages support, using agentic loop)"
+                )
+                return None
+        except (ValueError, Exception):
+            pass  # unknown provider enum → safe to short-circuit
+
+        # All tools must be web search tools
+        if not all(is_web_search_tool(t) for t in tools):
+            return None
+
+        # Extract search query from the last user message
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        query = get_last_user_message(messages)
+        if not query:
+            return None
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search detected "
+            f"(provider={provider_str}, query='{query}')"
+        )
+
+        # Execute search
+        try:
+            search_result_text = await self._execute_search(query)
+        except Exception as e:
+            verbose_logger.error(
+                f"WebSearchInterception: Short-circuit search failed: {e}"
+            )
+            search_result_text = f"Search failed: {e}"
+
+        # Build synthetic Anthropic response
+        response: Dict[str, Any] = {
+            "id": f"msg_{str(uuid.uuid4())}",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": search_result_text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+        verbose_logger.debug(
+            "WebSearchInterception: Short-circuit search completed, "
+            f"returning synthetic response ({len(search_result_text)} chars)"
+        )
+        return response
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[Any]
