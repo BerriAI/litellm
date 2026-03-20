@@ -31,6 +31,7 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
+
 def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
@@ -244,8 +245,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return any(
             v in model_lower
             for v in (
-                "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
-                "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
+                "opus-4-6",
+                "opus_4_6",
+                "opus-4.6",
+                "opus_4.6",
+                "sonnet-4-6",
+                "sonnet_4_6",
+                "sonnet-4.6",
+                "sonnet_4.6",
             )
         )
 
@@ -352,9 +359,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Returns:
             List of beta header strings
         """
-        from litellm.types.llms.anthropic import (
-            ANTHROPIC_EFFORT_BETA_HEADER,
-        )
+        from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 
         betas = []
 
@@ -383,7 +388,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def get_anthropic_headers(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
+        auth_token: Optional[str] = None,
         anthropic_version: Optional[str] = None,
         computer_tool_used: Optional[str] = None,
         prompt_caching_set: bool = False,
@@ -444,7 +450,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             headers["authorization"] = f"Bearer {api_key}"
             headers["anthropic-dangerous-direct-browser-access"] = "true"
             betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
-        else:
+        elif auth_token and not api_key:
+            headers["authorization"] = f"Bearer {auth_token}"
+        elif api_key:
             headers["x-api-key"] = api_key
 
         if user_anthropic_beta_headers is not None:
@@ -478,9 +486,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
         )
+        api_key = AnthropicModelInfo.get_api_key(api_key)
+        # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
+        auth_token: Optional[str] = None
         if api_key is None:
+            auth_token = AnthropicModelInfo.get_auth_token()
+        if api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
-                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
                 llm_provider="anthropic",
                 model=model,
             )
@@ -512,6 +525,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
+            auth_token=auth_token,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
@@ -536,6 +550,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
             or "https://api.anthropic.com"
         )
 
@@ -546,6 +561,35 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
+    def get_auth_token(auth_token: Optional[str] = None) -> Optional[str]:
+        """Get auth token from ANTHROPIC_AUTH_TOKEN env var.
+
+        Unlike api_key (which uses X-Api-Key header), auth_token uses
+        Authorization: Bearer header, matching the official Anthropic SDK behavior.
+        """
+        from litellm.secret_managers.main import get_secret_str
+
+        return auth_token or get_secret_str("ANTHROPIC_AUTH_TOKEN")
+
+    @staticmethod
+    def get_auth_header(api_key: Optional[str] = None) -> Optional[dict]:
+        """Resolve Anthropic credentials and return the appropriate auth header dict.
+
+        Checks ANTHROPIC_API_KEY first (-> x-api-key), then
+        ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
+        Returns None if neither is available.
+        """
+        resolved_key = AnthropicModelInfo.get_api_key(api_key)
+        if resolved_key is not None:
+            if is_anthropic_oauth_key(resolved_key):
+                return {"authorization": f"Bearer {resolved_key}"}
+            return {"x-api-key": resolved_key}
+        auth_token = AnthropicModelInfo.get_auth_token()
+        if auth_token is not None:
+            return {"authorization": f"Bearer {auth_token}"}
+        return None
+
+    @staticmethod
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model.replace("anthropic/", "") if model else None
 
@@ -553,14 +597,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        if api_base is None or api_key is None:
+        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        if api_base is None or auth_header is None:
             raise ValueError(
-                "ANTHROPIC_API_BASE or ANTHROPIC_API_KEY is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
+                "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
             )
+        headers = {"anthropic-version": "2023-06-01"}
+        headers.update(auth_header)
         response = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            headers=headers,
         )
 
         try:

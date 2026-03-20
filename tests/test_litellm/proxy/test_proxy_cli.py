@@ -281,6 +281,47 @@ class TestProxyInitializationHelpers:
             mock_uvicorn_run.assert_called_once()
 
     @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_proxy_default_api_version_uses_azure_default(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        """Proxy default api_version should match litellm.AZURE_DEFAULT_API_VERSION for consistency."""
+        from click.testing import CliRunner
+
+        import litellm
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with patch.dict(os.environ, clean_env, clear=True), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            mock_proxy_module.save_worker_config.assert_called_once()
+            call_kwargs = mock_proxy_module.save_worker_config.call_args[1]
+            assert call_kwargs["api_version"] == litellm.AZURE_DEFAULT_API_VERSION
+
+    @patch("uvicorn.run")
     @patch("builtins.print")
     def test_keepalive_timeout_flag(self, mock_print, mock_uvicorn_run):
         """Test that the keepalive_timeout flag is properly passed to uvicorn"""
@@ -663,3 +704,202 @@ class TestHealthAppFactory:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(use_migrate=False)
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_startup_fails_when_db_setup_fails(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False and --enforce_prisma_migration_check is set"""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = False
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with patch.dict(
+            os.environ, clean_env, clear=True
+        ), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            with pytest.raises(SystemExit) as exc_info:
+                run_server.main(
+                    ["--local", "--skip_server_startup", "--enforce_prisma_migration_check"], standalone_mode=False
+                )
+            assert exc_info.value.code == 1
+            mock_setup_database.assert_called_once_with(use_migrate=True)
+
+
+# --- Module-level helpers for worker startup hook tests ---
+
+_dummy_hook_called = False
+
+
+def _dummy_hook():
+    """A simple sync hook used by test_should_run_worker_startup_hooks."""
+    global _dummy_hook_called
+    _dummy_hook_called = True
+
+
+_dummy_async_hook_called = False
+
+
+async def _dummy_async_hook():
+    """A simple async hook used by test_should_run_async_worker_startup_hook."""
+    global _dummy_async_hook_called
+    _dummy_async_hook_called = True
+
+
+def _failing_hook():
+    """A hook that always raises, used by test_should_raise_on_failing_hook."""
+    raise RuntimeError("Hook failed on purpose")
+
+
+class TestWorkerStartupHooks:
+    """Tests for the LITELLM_WORKER_STARTUP_HOOKS mechanism in proxy_startup_event."""
+
+    @pytest.mark.asyncio
+    async def test_should_run_worker_startup_hooks(self):
+        """Sync worker startup hook is called during proxy_startup_event."""
+        global _dummy_hook_called
+        _dummy_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook",
+        }
+        # Remove DATABASE_URL to avoid real DB setup
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass  # We expect errors after the hook (no DB, etc.)
+
+        assert _dummy_hook_called is True, "Sync startup hook was not called"
+
+    @pytest.mark.asyncio
+    async def test_should_run_async_worker_startup_hook(self):
+        """Async worker startup hook is awaited during proxy_startup_event."""
+        global _dummy_async_hook_called
+        _dummy_async_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook",
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass
+
+        assert _dummy_async_hook_called is True, "Async startup hook was not called"
+
+    @pytest.mark.asyncio
+    async def test_should_raise_on_failing_worker_startup_hook(self):
+        """A failing worker startup hook propagates the error."""
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_failing_hook",
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            with pytest.raises(RuntimeError, match="Hook failed on purpose"):
+                async with proxy_startup_event(app=None) as _:
+                    pass
+
+    def test_should_skip_when_no_hooks_set(self):
+        """When LITELLM_WORKER_STARTUP_HOOKS is not set, no hooks are executed."""
+        global _dummy_hook_called
+        _dummy_hook_called = False
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LITELLM_WORKER_STARTUP_HOOKS", None)
+            # The hook block should be skipped entirely when env var is absent
+            assert "LITELLM_WORKER_STARTUP_HOOKS" not in os.environ
+            # Verify that an empty env var value also results in no hook execution
+            assert os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "") == ""
+
+    @pytest.mark.asyncio
+    async def test_should_run_multiple_hooks(self):
+        """Multiple comma-separated hooks are all called."""
+        global _dummy_hook_called, _dummy_async_hook_called
+        _dummy_hook_called = False
+        _dummy_async_hook_called = False
+
+        from litellm.proxy.proxy_server import proxy_startup_event
+
+        hooks = (
+            "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook,"
+            "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook"
+        )
+        env_overrides = {
+            "LITELLM_WORKER_STARTUP_HOOKS": hooks,
+        }
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env.update(env_overrides)
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            try:
+                async with proxy_startup_event(app=None) as _:
+                    pass
+            except Exception:
+                pass
+
+        assert _dummy_hook_called is True, "First hook was not called"
+        assert _dummy_async_hook_called is True, "Second hook was not called"

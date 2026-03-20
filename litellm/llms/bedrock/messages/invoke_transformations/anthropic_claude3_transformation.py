@@ -276,7 +276,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4.6",
             "opus-4-6",
             "opus_4_6",
-            #sonnet 4.6
+            # sonnet 4.6
             "sonnet-4.6",
             "sonnet_4.6",
             "sonnet-4-6",
@@ -419,6 +419,10 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
+        # 5b. Strip `output_config` — Bedrock Invoke doesn't support it
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        anthropic_messages_request.pop("output_config", None)
+
         # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
@@ -458,7 +462,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
-    
+
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
 

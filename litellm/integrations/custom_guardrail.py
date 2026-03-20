@@ -231,8 +231,14 @@ class CustomGuardrail(CustomLogger):
                 event_hook, supported_event_hooks
             )
         elif isinstance(event_hook, Mode):
+            tag_values_flat: list = []
+            for v in event_hook.tags.values():
+                if isinstance(v, list):
+                    tag_values_flat.extend(v)
+                else:
+                    tag_values_flat.append(v)
             _validate_event_hook_list_is_in_supported_event_hooks(
-                list(event_hook.tags.values()), supported_event_hooks
+                tag_values_flat, supported_event_hooks
             )
             if event_hook.default:
                 default_list = (
@@ -466,8 +472,12 @@ class CustomGuardrail(CustomLogger):
         if isinstance(self.event_hook, list):
             return event_type.value in self.event_hook
         if isinstance(self.event_hook, Mode):
-            if event_type.value in self.event_hook.tags.values():
-                return True
+            for tag_value in self.event_hook.tags.values():
+                if isinstance(tag_value, list):
+                    if event_type.value in tag_value:
+                        return True
+                elif event_type.value == tag_value:
+                    return True
             if self.event_hook.default:
                 default_list = (
                     self.event_hook.default
@@ -578,6 +588,16 @@ class CustomGuardrail(CustomLogger):
         clean_guardrail_response = filter_exceptions_from_params(
             guardrail_json_response
         )
+
+        # Strip secret_fields to prevent plaintext Authorization headers from
+        # being persisted to spend logs, OTEL traces, or other logging backends.
+        # This matches the pattern used by Langfuse and Arize integrations.
+        if isinstance(clean_guardrail_response, dict):
+            clean_guardrail_response.pop("secret_fields", None)
+        elif isinstance(clean_guardrail_response, list):
+            for item in clean_guardrail_response:
+                if isinstance(item, dict):
+                    item.pop("secret_fields", None)
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
