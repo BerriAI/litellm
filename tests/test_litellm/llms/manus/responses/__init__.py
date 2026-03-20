@@ -1,2 +1,0 @@
-# Manus Responses API tests
-
