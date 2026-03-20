@@ -41,6 +41,18 @@ def _is_user_team_admin(
     return False
 
 
+def _is_user_team_mcp_manager(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> bool:
+    for member in team_obj.members_with_roles:
+        if (
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
+        ) and member.role == "mcp_server_manager":
+            return True
+
+    return False
+
+
 async def _is_user_org_admin_for_team(
     user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
 ) -> bool:

@@ -40,8 +40,8 @@ def _prepare_mcp_server_data(
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Convert model to dict
-    data_dict = data.model_dump(exclude_none=True)
+    # Convert model to dict, excluding fields not in the DB schema
+    data_dict = data.model_dump(exclude_none=True, exclude={"team_id"})
     # Ensure alias is always present in the dict (even if None)
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
