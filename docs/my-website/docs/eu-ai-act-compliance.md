@@ -102,19 +102,26 @@ litellm.failure_callback = ["your_logging_backend"]
 
 Connect to a persistent backend (Langfuse, Helicone, or your own database) with a retention policy of at least 6 months.
 
-## Article 13: Transparency
+## Article 13: Transparency to deployers
 
-Deployers must inform users that they are interacting with an AI system and provide information about its capabilities and limitations.
+Article 13 requires providers of high-risk AI systems to supply deployers with sufficient information — instructions for use, accuracy metrics, known limitations — to operate the system appropriately. This is provider-to-deployer transparency.
 
-LiteLLM's contribution to transparency:
-- **Model routing is logged** — you can tell users which model answered their query
-- **Cost attribution** — you know which features consume the most AI resources
+LiteLLM's contribution to Article 13:
+- **Model routing is logged** — deployers can see which model handled each request
+- **Cost attribution** — deployers know which features consume the most AI resources
 - **Fallback chains are visible** — when a primary model fails and a fallback serves the response, this is logged
+- **Provider documentation pass-through** — LiteLLM's docs link to each provider's model cards and usage policies
+
+## Article 50: End-user transparency
+
+Article 50 requires deployers to inform end users that they are interacting with an AI system. This is deployer-to-user transparency, and it is a separate obligation from Article 13.
 
 What you need to add:
 - User-facing disclosure that AI is involved in generating responses
 - Documentation of which models are active and their known limitations
 - Information about how routing decisions are made (cost, latency, quality)
+
+Note: Article 50 applies to chatbots and systems interacting directly with natural persons. It has a separate scope from the "high-risk" designation under Annex III — it applies even to limited-risk systems.
 
 ## Article 14: Human oversight
 
