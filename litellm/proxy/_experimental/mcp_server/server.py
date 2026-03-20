@@ -632,22 +632,32 @@ if MCP_AVAILABLE:
 
         normalized_contents: List[ReadResourceContents] = []
         for content in read_resource_result.contents:
+            # Preserve _meta from upstream (MCP spec: JSON key _meta, Python attr meta)
+            meta = getattr(content, "_meta", None) or getattr(content, "meta", None)
             if isinstance(content, TextResourceContents):
                 text_content: TextResourceContents = content
-                normalized_contents.append(
-                    ReadResourceContents(
-                        content=text_content.text,
-                        mime_type=text_content.mimeType,
-                    )
-                )
+                rc_kwargs: Dict[str, Any] = {
+                    "content": text_content.text,
+                    "mime_type": text_content.mimeType,
+                }
+                if meta is not None:
+                    rc_kwargs["meta"] = meta
+                try:
+                    normalized_contents.append(ReadResourceContents(**rc_kwargs))
+                except TypeError:
+                    # Older MCP SDK may not support meta in ReadResourceContents
+                    rc_kwargs.pop("meta", None)
+                    normalized_contents.append(ReadResourceContents(**rc_kwargs))
             elif isinstance(content, BlobResourceContents):
                 blob_content: BlobResourceContents = content
-                normalized_contents.append(
-                    ReadResourceContents(
-                        content=blob_content.blob,
-                        mime_type=None,
-                    )
-                )
+                rc_kwargs = {"content": blob_content.blob, "mime_type": None}
+                if meta is not None:
+                    rc_kwargs["meta"] = meta
+                try:
+                    normalized_contents.append(ReadResourceContents(**rc_kwargs))
+                except TypeError:
+                    rc_kwargs.pop("meta", None)
+                    normalized_contents.append(ReadResourceContents(**rc_kwargs))
 
         return normalized_contents
 
