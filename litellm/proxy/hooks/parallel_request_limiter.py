@@ -478,6 +478,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {})
                 or {}
             )
+            user_api_key_team_metadata = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key_team_metadata", None
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key=user_api_key,
+                metadata=user_api_key_metadata,
+                model_max_budget=user_api_key_model_max_budget,
+                team_metadata=user_api_key_team_metadata,
+            )
 
             # ------------
             # Setup values
