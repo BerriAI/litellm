@@ -382,9 +382,13 @@ if MCP_AVAILABLE:
                 (b"content-type", b"application/json"),
             ]
             if raw_headers:
-                for k, v in raw_headers.items():
+                try:
                     _scope_headers.append(
                         (k.lower().encode("latin-1"), v.encode("latin-1"))
+                    )
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    verbose_logger.debug(
+                        f"Skipping header {k!r}: contains non-Latin-1 characters"
                     )
             request = Request(
                 scope={
