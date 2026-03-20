@@ -381,9 +381,6 @@ if MCP_AVAILABLE:
             _scope_headers: list[tuple[bytes, bytes]] = [
                 (b"content-type", b"application/json"),
             ]
-            _scope_headers: list[tuple[bytes, bytes]] = [
-                (b"content-type", b"application/json"),
-            ]
             if raw_headers:
                 for k, v in raw_headers.items():
                     if k.lower() == "content-type":
@@ -391,6 +388,13 @@ if MCP_AVAILABLE:
                     _scope_headers.append(
                         (k.lower().encode("latin-1"), v.encode("latin-1"))
                     )
+            request = Request(
+                scope={
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/mcp/tools/call",
+                    "headers": _scope_headers,
+                }
             )
             if user_api_key_auth is not None:
                 data = await add_litellm_data_to_request(

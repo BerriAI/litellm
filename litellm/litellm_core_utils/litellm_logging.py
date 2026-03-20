@@ -4768,16 +4768,18 @@ class StandardLoggingPayloadSetup:
         if proxy_server_request is not None:
             _request_headers = proxy_server_request.get("headers", {})
             if _request_headers and isinstance(_request_headers, dict):
+                _sensitive_x_header = re.compile(
+                    r"^(x-litellm-api-key|x-api-key|x-goog-api-key"
+                    r"|x-mcp-(auth|servers|access-groups)"
+                    r"|x-mcp-.+-(authorization|x-api-key))$"
+                )
                 custom_headers = {
                     k: v
                     for k, v in _request_headers.items()
                     if k.lower().startswith("x-")
                     and v is not None
                     and isinstance(v, str)
-                    and not re.match(
-                        r"^x-mcp-.+-(authorization|x-api-key)$",
-                        k.lower(),
-                    )
+                    and not _sensitive_x_header.match(k.lower())
                 }
                 if custom_headers:
                     clean_metadata["requester_custom_headers"] = custom_headers
