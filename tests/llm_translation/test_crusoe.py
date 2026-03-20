@@ -39,11 +39,11 @@ def test_crusoe_get_openai_compatible_provider_info():
         os.environ,
         {
             "CRUSOE_API_KEY": "test-key",
-            "CRUSOE_API_BASE": "https://custom.crusoecloud.com/v1/",
+            "CRUSOE_API_BASE": "https://custom.crusoecloud.com/v1",
         },
     ):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://custom.crusoecloud.com/v1/"
+        assert api_base == "https://custom.crusoecloud.com/v1"
         assert api_key == "test-key"
 
     # Test with explicit parameters (should override env vars)
@@ -51,13 +51,13 @@ def test_crusoe_get_openai_compatible_provider_info():
         os.environ,
         {
             "CRUSOE_API_KEY": "env-key",
-            "CRUSOE_API_BASE": "https://env.crusoecloud.com/v1/",
+            "CRUSOE_API_BASE": "https://env.crusoecloud.com/v1",
         },
     ):
         api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.crusoecloud.com/v1/", "param-key"
+            "https://param.crusoecloud.com/v1", "param-key"
         )
-        assert api_base == "https://param.crusoecloud.com/v1/"
+        assert api_base == "https://param.crusoecloud.com/v1"
         assert api_key == "param-key"
 
 
@@ -84,14 +84,14 @@ def test_crusoe_models_configuration():
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         crusoe_models = [
-        "crusoe/meta-llama/Llama-3.3-70B-Instruct",
-        "crusoe/deepseek-ai/DeepSeek-R1-0528",
-        "crusoe/deepseek-ai/DeepSeek-V3-0324",
-        "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507",
-        "crusoe/moonshotai/Kimi-K2-Thinking",
-        "crusoe/openai/gpt-oss-120b",
-        "crusoe/google/gemma-3-12b-it",
-    ]
+            "crusoe/meta-llama/Llama-3.3-70B-Instruct",
+            "crusoe/deepseek-ai/DeepSeek-R1-0528",
+            "crusoe/deepseek-ai/DeepSeek-V3-0324",
+            "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507",
+            "crusoe/moonshotai/Kimi-K2-Thinking",
+            "crusoe/openai/gpt-oss-120b",
+            "crusoe/google/gemma-3-12b-it",
+        ]
 
         for model in crusoe_models:
             model_info = get_model_info(model)
