@@ -1318,11 +1318,9 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             request=request, key=key_id, existing_key=existing_key, result=result
         )
 
-    # Control-plane cross-origin: read return_to from cookie
-    cp_return_to: Optional[str] = None
-    cookie_return_to = request.cookies.get("litellm_cp_return_to")
-    if cookie_return_to:
-        cp_return_to = cookie_return_to.strip('"')
+    # Control-plane cross-origin: read return_to from cookie.
+    # Starlette's cookie_parser already handles RFC 2109 unquoting.
+    cp_return_to: Optional[str] = request.cookies.get("litellm_cp_return_to")
 
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
