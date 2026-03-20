@@ -32551,8 +32551,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
