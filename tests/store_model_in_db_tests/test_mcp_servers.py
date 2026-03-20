@@ -6,7 +6,7 @@ import os
 import asyncio
 from unittest import mock
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from starlette import status
 
@@ -259,45 +259,83 @@ async def test_create_duplicate_mcp_server():
 
 
 @pytest.mark.asyncio
-async def test_create_mcp_server_auth_failure():
+async def test_create_mcp_server_auth_failure_no_team_id():
     """
-    Test that non-admin users cannot create MCP servers.
+    Test that non-admin users without a team_id get a 400 error
+    requiring team_id for team MCP manager flow.
     """
-    # Mock the database functions directly
     with mock.patch(
         "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
         True,
     ), mock.patch(
         "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
     ) as mock_get_prisma:
-        # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
         )
         from fastapi import HTTPException
 
-        # Mock database client
         mock_prisma = mock.Mock()
         mock_get_prisma.return_value = mock_prisma
 
-        # Set up test data
         server_id = str(uuid.uuid4())
         mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
 
-        # Create mock user auth without admin role
         user_auth = UserAPIKeyAuth(
             api_key=TEST_MASTER_KEY,
             user_id="test-user",
-            user_role=LitellmUserRoles.INTERNAL_USER,  # Not an admin
+            user_role=LitellmUserRoles.INTERNAL_USER,
         )
 
-        # Expect HTTPException to be raised
         with pytest.raises(HTTPException) as exc_info:
             await add_mcp_server(
                 payload=mcp_server_request, user_api_key_dict=user_auth
             )
 
-        # Verify the exception details
+        assert exc_info.value.status_code == 400
+        assert "team_id is required" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_mcp_server_auth_failure_not_manager():
+    """
+    Test that non-admin users with a team_id but without MCP manager
+    permissions get a 403 error.
+    """
+    with mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+        True,
+    ), mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+    ) as mock_get_prisma, mock.patch(
+        "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
+        side_effect=HTTPException(
+            status_code=403,
+            detail={"error": "You do not have permission to manage MCP servers for this team."},
+        ),
+    ):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        mcp_server_request.team_id = "some-team-id"
+
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await add_mcp_server(
+                payload=mcp_server_request, user_api_key_dict=user_auth
+            )
+
         assert exc_info.value.status_code == 403
         assert "permission" in str(exc_info.value.detail)
 
