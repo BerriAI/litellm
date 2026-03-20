@@ -5568,6 +5568,7 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
+                request_kwargs=kwargs,
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -5660,6 +5661,7 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
+                            request_kwargs=kwargs,
                         )
                     else:
                         _healthy_deployments = []
@@ -6351,7 +6353,10 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str, parent_otel_span: Optional[Span]
+        self,
+        model: str,
+        parent_otel_span: Optional[Span],
+        request_kwargs: Optional[Dict] = None,
     ) -> Tuple[List[Dict], List[Dict]]:
         """
         Returns Tuple of:
@@ -6362,7 +6367,7 @@ class Router:
         _all_deployments: list = []
         try:
             _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
-                model=model,
+                model=model, request_kwargs=request_kwargs
             )
             if isinstance(_all_deployments, dict):
                 return [], _all_deployments
@@ -8850,7 +8855,9 @@ class Router:
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = self._get_all_deployments(model_name=model)
+        healthy_deployments = self._get_all_deployments(
+            model_name=model, team_id=request_team_id
+        )
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
@@ -8871,7 +8878,9 @@ class Router:
                     )
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
-                    healthy_deployments = self._get_all_deployments(model_name=model)
+                    healthy_deployments = self._get_all_deployments(
+                        model_name=model, team_id=request_team_id
+                    )
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
