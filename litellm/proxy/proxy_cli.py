@@ -159,9 +159,17 @@ class ProxyInitializationHelpers:
             "LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT", None
         )
         if graceful_shutdown_timeout is not None:
-            uvicorn_args["timeout_graceful_shutdown"] = int(
-                graceful_shutdown_timeout
-            )
+            try:
+                uvicorn_args["timeout_graceful_shutdown"] = int(
+                    graceful_shutdown_timeout
+                )
+            except ValueError:
+                from litellm._logging import verbose_proxy_logger
+
+                verbose_proxy_logger.warning(
+                    f"Invalid LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT value '{graceful_shutdown_timeout}'; "
+                    "must be an integer number of seconds. Ignoring."
+                )
 
         return uvicorn_args
 

@@ -831,24 +831,15 @@ async def test_readiness_returns_503_during_shutdown():
 
 
 @pytest.mark.asyncio
-async def test_liveness_returns_503_during_shutdown():
-    """Test that /health/liveliness returns 503 when proxy is shutting down."""
-    from fastapi import HTTPException
+async def test_liveness_stays_healthy_during_shutdown():
+    """Test that /health/liveliness stays healthy during shutdown.
 
+    Liveness probe must NOT return 503 during shutdown — K8s liveness failures
+    trigger container restarts, which would interrupt graceful shutdown.
+    Only readiness should return 503 to drain traffic.
+    """
     from litellm.proxy.health_endpoints._health_endpoints import health_liveliness
 
     with patch("litellm.proxy.proxy_server._proxy_shutting_down", True):
-        with pytest.raises(HTTPException) as exc_info:
-            await health_liveliness()
-        assert exc_info.value.status_code == 503
-        assert "Shutting down" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_liveness_returns_ok_when_not_shutting_down():
-    """Test that /health/liveliness returns normally when not shutting down."""
-    from litellm.proxy.health_endpoints._health_endpoints import health_liveliness
-
-    with patch("litellm.proxy.proxy_server._proxy_shutting_down", False):
         result = await health_liveliness()
         assert result == "I'm alive!"
