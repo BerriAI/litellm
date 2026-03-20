@@ -436,6 +436,7 @@ describe("useChatHistory", () => {
     });
 
     it("should clear sessionStorage when not simplified", () => {
+      vi.useFakeTimers();
       const { result } = renderHook(() => useChatHistory({ simplified: false }));
 
       sessionStorage.setItem("chatHistory", "[]");
@@ -446,9 +447,16 @@ describe("useChatHistory", () => {
         result.current.clearChatHistory();
       });
 
+      // Advance past the 500ms debounce to verify it does not re-write the key
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+
       expect(sessionStorage.getItem("chatHistory")).toBeNull();
       expect(sessionStorage.getItem("messageTraceId")).toBeNull();
       expect(sessionStorage.getItem("responsesSessionId")).toBeNull();
+
+      vi.useRealTimers();
     });
 
     it("should NOT clear sessionStorage when simplified", () => {
@@ -462,6 +470,83 @@ describe("useChatHistory", () => {
 
       // simplified mode should not touch sessionStorage
       expect(sessionStorage.getItem("chatHistory")).toBe('[{"role":"user","content":"hi"}]');
+    });
+
+    it("should not re-write chatHistory to sessionStorage after clear via debounce", () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useChatHistory({ simplified: false }));
+
+      // Add a message so the debounce has something to persist
+      act(() => {
+        result.current.updateTextUI("assistant", "Hello", "gpt-4");
+      });
+
+      // Let the debounce fire so the message is persisted
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(sessionStorage.getItem("chatHistory")).not.toBeNull();
+
+      // Now clear
+      act(() => {
+        result.current.clearChatHistory();
+      });
+
+      // Advance past the debounce — the key should stay removed
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+
+      expect(sessionStorage.getItem("chatHistory")).toBeNull();
+
+      vi.useRealTimers();
+    });
+  });
+
+  describe("simplified mode session isolation", () => {
+    it("should not hydrate messageTraceId from sessionStorage in simplified mode", () => {
+      sessionStorage.setItem("messageTraceId", "trace-from-playground");
+
+      const { result } = renderHook(() => useChatHistory({ simplified: true }));
+
+      expect(result.current.messageTraceId).toBeNull();
+    });
+
+    it("should not hydrate responsesSessionId from sessionStorage in simplified mode", () => {
+      sessionStorage.setItem("responsesSessionId", "resp-from-playground");
+
+      const { result } = renderHook(() => useChatHistory({ simplified: true }));
+
+      expect(result.current.responsesSessionId).toBeNull();
+    });
+
+    it("should not hydrate useApiSessionManagement from sessionStorage in simplified mode", () => {
+      sessionStorage.setItem("useApiSessionManagement", "false");
+
+      const { result } = renderHook(() => useChatHistory({ simplified: true }));
+
+      // Should get the default (true), not the stored value
+      expect(result.current.useApiSessionManagement).toBe(true);
+    });
+
+    it("should not persist session state to sessionStorage in simplified mode", () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useChatHistory({ simplified: true }));
+
+      act(() => {
+        result.current.setMessageTraceId("trace-embedded");
+        result.current.setResponsesSessionId("resp-embedded");
+      });
+
+      // Flush effects
+      act(() => {
+        vi.advanceTimersByTime(0);
+      });
+
+      expect(sessionStorage.getItem("messageTraceId")).toBeNull();
+      expect(sessionStorage.getItem("responsesSessionId")).toBeNull();
+
+      vi.useRealTimers();
     });
   });
 

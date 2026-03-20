@@ -51,14 +51,15 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
 
   const [messageTraceId, setMessageTraceId] = useState<string | null>(
-    () => sessionStorage.getItem("messageTraceId") || null,
+    () => (simplified ? null : sessionStorage.getItem("messageTraceId") || null),
   );
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("responsesSessionId") || null,
+    () => (simplified ? null : sessionStorage.getItem("responsesSessionId") || null),
   );
 
   const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
+    if (simplified) return true;
     const saved = sessionStorage.getItem("useApiSessionManagement");
     return saved ? JSON.parse(saved) : true; // Default to API session management
   });
@@ -66,6 +67,9 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   // Debounced chatHistory persistence
   useEffect(() => {
     if (simplified) return; // Do not persist chat history in simplified (embedded) mode
+    // When chatHistory is empty (e.g. after clearChatHistory removed the key),
+    // don't re-write an empty array back into sessionStorage.
+    if (chatHistory.length === 0) return;
     const handler = setTimeout(() => {
       sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
     }, 500); // Debounce by 500ms
@@ -77,6 +81,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
 
   // messageTraceId/responsesSessionId/useApiSessionManagement persistence
   useEffect(() => {
+    if (simplified) return;
     if (messageTraceId) {
       sessionStorage.setItem("messageTraceId", messageTraceId);
     } else {
@@ -88,7 +93,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
       sessionStorage.removeItem("responsesSessionId");
     }
     sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
-  }, [messageTraceId, responsesSessionId, useApiSessionManagement]);
+  }, [messageTraceId, responsesSessionId, useApiSessionManagement, simplified]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
     setChatHistory((prev) => {
@@ -330,14 +335,18 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const clearChatHistory = () => {
-    // Clean up audio object URLs before clearing history
-    chatHistory.forEach((message) => {
-      if (message.isAudio && typeof message.content === "string") {
-        URL.revokeObjectURL(message.content);
-      }
+    // Use functional updater to get the latest snapshot — avoids stale-closure
+    // bugs where audio messages added between the last render and the click
+    // would leak their blob URLs.
+    setChatHistory((prev) => {
+      prev.forEach((message) => {
+        if (message.isAudio && typeof message.content === "string") {
+          URL.revokeObjectURL(message.content);
+        }
+      });
+      return [];
     });
 
-    setChatHistory([]);
     setMessageTraceId(null);
     setResponsesSessionId(null); // Clear responses session ID
     setMCPEvents([]); // Clear MCP events
