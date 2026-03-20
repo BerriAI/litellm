@@ -896,6 +896,9 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
                             return_value={"test": "data"}
                         )
                         mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
+                        )
 
                         # Setup mock for http response
                         mock_response = MagicMock()
@@ -1550,6 +1553,9 @@ async def test_pass_through_request_query_params_forwarding():
                         test_body = {"name": "Azure Assistant", "model": "gpt-4o"}
                         mock_proxy_logging.pre_call_hook = AsyncMock(
                             return_value=test_body
+                        )
+                        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                            return_value={"x-callback-test": "value"}
                         )
 
                         # Setup mock for http response
