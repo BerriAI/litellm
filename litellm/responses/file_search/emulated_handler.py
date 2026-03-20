@@ -409,6 +409,24 @@ async def _call_aresponses(
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
 
 
+def _prepare_emulated_file_search_call(
+    kwargs: Dict[str, Any],
+) -> Tuple[bool, Dict[str, Any]]:
+    include_items: List[str] = list(kwargs.get("include") or [])
+    include_search_results = "file_search_call.results" in include_items
+
+    original_stream = kwargs.get("stream")
+    updated_kwargs = kwargs
+    if original_stream:
+        verbose_logger.debug(
+            "Streaming is not yet supported for emulated file_search. "
+            "Disabling stream for this request."
+        )
+        updated_kwargs = {**kwargs, "stream": False}
+
+    return include_search_results, updated_kwargs
+
+
 async def aresponses_with_emulated_file_search(
     input: Any,
     model: str,
@@ -423,17 +441,7 @@ async def aresponses_with_emulated_file_search(
     runs vector search, and synthesizes an OpenAI-format response.
     """
     # Determine whether caller wants search_results populated in the output.
-    _include: List[str] = list(kwargs.get("include") or [])
-    _include_search_results = "file_search_call.results" in _include
-
-    # Disable streaming for emulated file_search (not yet supported)
-    _original_stream = kwargs.get("stream")
-    if _original_stream:
-        verbose_logger.debug(
-            "Streaming is not yet supported for emulated file_search. "
-            "Disabling stream for this request."
-        )
-        kwargs = {**kwargs, "stream": False}
+    _include_search_results, kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
     transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
