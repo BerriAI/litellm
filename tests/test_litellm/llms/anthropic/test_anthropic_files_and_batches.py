@@ -337,11 +337,12 @@ class TestAnthropicFilesHandler:
         }
 
         with patch.object(handler.anthropic_model_info, "get_api_key", return_value=None):
-            with pytest.raises(ValueError, match="Missing Anthropic API Key"):
-                await handler.afile_content(
-                    file_content_request=file_content_request,
-                    api_key=None
-                )
+            with patch.object(handler.anthropic_model_info, "get_auth_header", return_value=None):
+                with pytest.raises(ValueError, match="Missing Anthropic API Key"):
+                    await handler.afile_content(
+                        file_content_request=file_content_request,
+                        api_key=None
+                    )
 
     @pytest.mark.asyncio
     async def test_afile_content_missing_file_id(self, handler):
