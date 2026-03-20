@@ -123,6 +123,31 @@ class TestProxyInitializationHelpers:
         assert args["log_config"] == "log_config.json"
         assert args["timeout_keep_alive"] == 120
 
+    def test_graceful_shutdown_timeout_from_env(self):
+        """Test that LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT sets timeout_graceful_shutdown."""
+        with patch.dict(os.environ, {"LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT": "30"}):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000
+            )
+            assert args["timeout_graceful_shutdown"] == 30
+
+    def test_graceful_shutdown_timeout_invalid_value_ignored(self):
+        """Test that an invalid LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT is ignored with a warning."""
+        with patch.dict(os.environ, {"LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT": "30s"}):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000
+            )
+            assert "timeout_graceful_shutdown" not in args
+
+    def test_graceful_shutdown_timeout_not_set_by_default(self):
+        """Test that timeout_graceful_shutdown is absent when env var is not set."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT", None)
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000
+            )
+            assert "timeout_graceful_shutdown" not in args
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):

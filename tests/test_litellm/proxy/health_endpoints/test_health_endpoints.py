@@ -814,3 +814,32 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+@pytest.mark.asyncio
+async def test_readiness_returns_503_during_shutdown():
+    """Test that /health/readiness returns 503 when proxy is shutting down."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    with patch("litellm.proxy.proxy_server._proxy_shutting_down", True):
+        with pytest.raises(HTTPException) as exc_info:
+            await health_readiness()
+        assert exc_info.value.status_code == 503
+        assert "Shutting down" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_liveness_stays_healthy_during_shutdown():
+    """Test that /health/liveliness stays healthy during shutdown.
+
+    Liveness probe must NOT return 503 during shutdown — K8s liveness failures
+    trigger container restarts, which would interrupt graceful shutdown.
+    Only readiness should return 503 to drain traffic.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import health_liveliness
+
+    with patch("litellm.proxy.proxy_server._proxy_shutting_down", True):
+        result = await health_liveliness()
+        assert result == "I'm alive!"

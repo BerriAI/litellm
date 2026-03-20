@@ -1282,7 +1282,14 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import prisma_client, version
+    from litellm.proxy.proxy_server import (
+        _proxy_shutting_down,
+        prisma_client,
+        version,
+    )
+
+    if _proxy_shutting_down:
+        raise HTTPException(status_code=503, detail="Shutting down")
 
     try:
         # get success callback

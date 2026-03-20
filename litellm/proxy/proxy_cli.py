@@ -150,6 +150,27 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+
+        # Ensure the process always exits within a bounded time during shutdown.
+        # Without this, any hanging await in the shutdown sequence (Prisma disconnect,
+        # Redis, aiohttp session close) can block the process indefinitely, creating
+        # a zombie that Kubernetes cannot detect or restart.
+        graceful_shutdown_timeout = os.getenv(
+            "LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT", None
+        )
+        if graceful_shutdown_timeout is not None:
+            try:
+                uvicorn_args["timeout_graceful_shutdown"] = int(
+                    graceful_shutdown_timeout
+                )
+            except ValueError:
+                from litellm._logging import verbose_proxy_logger
+
+                verbose_proxy_logger.warning(
+                    f"Invalid LITELLM_GRACEFUL_SHUTDOWN_TIMEOUT value '{graceful_shutdown_timeout}'; "
+                    "must be an integer number of seconds. Ignoring."
+                )
+
         return uvicorn_args
 
     @staticmethod
