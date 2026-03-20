@@ -1433,7 +1433,7 @@ const learnSidebar = {
           },
           items: [
             "tutorials/prompt_caching",
-            "tutorials/file_search_responses_api"
+            "tutorials/file_search_responses_api",
             "tutorials/anthropic_file_usage",
             "tutorials/gemini_realtime_with_audio",
             "tutorials/litellm_proxy_aporia",
