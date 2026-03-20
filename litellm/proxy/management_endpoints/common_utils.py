@@ -381,7 +381,7 @@ async def _upsert_budget_and_membership(
         # disconnect the budget and clear models since all limits are None
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}, "models": None},
+            data={"litellm_budget_table": {"disconnect": True}, "models": []},
         )
         return
 

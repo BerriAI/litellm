@@ -813,6 +813,19 @@ async def new_team(  # noqa: PLR0915
                         },
                     )
 
+        # Validate default_models is a subset of team models (prevent privilege escalation)
+        if data.default_models and data.models:
+            disallowed = set(data.default_models) - set(data.models)
+            if disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"default_models must be a subset of team models. "
+                        f"Disallowed: {sorted(disallowed)}. "
+                        f"Team models: {sorted(data.models)}"
+                    },
+                )
+
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
         if total_teams and _license_check.is_team_count_over_limit(
@@ -1406,6 +1419,25 @@ async def update_team(  # noqa: PLR0915
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+
+        # Validate default_models is a subset of team models (prevent privilege escalation)
+        if data.default_models:
+            team_models = (
+                data.models
+                if data.models is not None
+                else (existing_team_row.models or [])
+            )
+            if team_models:
+                disallowed = set(data.default_models) - set(team_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"default_models must be a subset of team models. "
+                            f"Disallowed: {sorted(disallowed)}. "
+                            f"Team models: {sorted(team_models)}"
+                        },
+                    )
 
         if data.soft_budget is not None:
             max_budget_to_check = (
