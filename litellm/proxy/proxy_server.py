@@ -6475,6 +6475,16 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
+
+
+@router.get("/version", tags=["LiteLLM Proxy Info"])
+async def get_version():
+    """Return the current LiteLLM version."""
+    import litellm as _litellm
+
+    return {"version": _litellm.__version__, "package": "litellm"}
+
+
 @router.get(
     "/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )
