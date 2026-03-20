@@ -203,6 +203,69 @@ if MCP_AVAILABLE:
 
         return resolved_team_id, team_obj
 
+    async def _auto_assign_mcp_server_to_team(
+        server_id: str,
+        team_id: str,
+        team_obj: "LiteLLM_TeamTableCachedObj",
+        prisma_client: Any,
+    ) -> None:
+        """
+        Add an MCP server to a team's ObjectPermissionTable and link the
+        permission back to the team if it didn't have one yet.
+
+        Uses handle_update_object_permission (the team-endpoint helper) so
+        the object_permission_id linkage follows the same pattern as
+        team_endpoints.update_team.
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            handle_update_object_permission,
+        )
+
+        existing_mcp_servers: list = []
+        if team_obj.object_permission is not None:
+            existing_mcp_servers = team_obj.object_permission.mcp_servers or []
+        updated_mcp_servers = list(set(existing_mcp_servers + [server_id]))
+
+        # Build the data dict in the same shape team_endpoints uses
+        data_json: Dict[str, Any] = {
+            "object_permission": {"mcp_servers": updated_mcp_servers},
+        }
+        data_json = await handle_update_object_permission(
+            data_json=data_json,
+            existing_team_row=team_obj,
+        )
+
+        # If handle_update_object_permission produced an object_permission_id,
+        # persist it on the team row (it sets data_json["object_permission_id"]).
+        if "object_permission_id" in data_json:
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": team_id},
+                data={"object_permission_id": data_json["object_permission_id"]},
+            )
+
+    async def _remove_mcp_server_from_team(
+        server_id: str,
+        team_obj: "LiteLLM_TeamTableCachedObj",
+    ) -> None:
+        """Remove a server ID from a team's ObjectPermissionTable.mcp_servers list."""
+        from litellm.proxy.proxy_server import prisma_client
+
+        existing_permission_id = getattr(team_obj, "object_permission_id", None)
+        if (
+            existing_permission_id is None
+            or team_obj.object_permission is None
+        ):
+            return
+
+        existing_mcp_servers = team_obj.object_permission.mcp_servers or []
+        updated_mcp_servers = [s for s in existing_mcp_servers if s != server_id]
+
+        await handle_update_object_permission_common(
+            data_json={"object_permission": {"mcp_servers": updated_mcp_servers}},
+            existing_object_permission_id=existing_permission_id,
+            prisma_client=prisma_client,
+        )
+
     @dataclass
     class _TemporaryMCPServerEntry:
         server: MCPServer
@@ -1347,36 +1410,12 @@ if MCP_AVAILABLE:
         # so a failure here doesn't mask the successfully created server).
         if manager_team_id is not None and manager_team_obj is not None:
             try:
-                existing_permission_id = getattr(
-                    manager_team_obj, "object_permission_id", None
-                )
-
-                # Read existing mcp_servers list and append the new server
-                existing_mcp_servers: list = []
-                if manager_team_obj.object_permission is not None:
-                    existing_mcp_servers = (
-                        manager_team_obj.object_permission.mcp_servers or []
-                    )
-                updated_mcp_servers = list(
-                    set(existing_mcp_servers + [new_mcp_server.server_id])
-                )
-
-                new_permission_id = await handle_update_object_permission_common(
-                    data_json={
-                        "object_permission": {
-                            "mcp_servers": updated_mcp_servers,
-                        }
-                    },
-                    existing_object_permission_id=existing_permission_id,
+                await _auto_assign_mcp_server_to_team(
+                    server_id=new_mcp_server.server_id,
+                    team_id=manager_team_id,
+                    team_obj=manager_team_obj,
                     prisma_client=prisma_client,
                 )
-
-                # If the team had no object_permission_id, link the new one
-                if existing_permission_id is None and new_permission_id is not None:
-                    await prisma_client.db.litellm_teamtable.update(
-                        where={"team_id": manager_team_id},
-                        data={"object_permission_id": new_permission_id},
-                    )
             except Exception as e:
                 verbose_proxy_logger.exception(
                     f"MCP server created but failed to auto-assign to team {manager_team_id}: {str(e)}"
@@ -1617,28 +1656,10 @@ if MCP_AVAILABLE:
         # Remove server from the manager's team permission list
         if manager_team_obj is not None:
             try:
-                existing_permission_id = getattr(
-                    manager_team_obj, "object_permission_id", None
+                await _remove_mcp_server_from_team(
+                    server_id=server_id,
+                    team_obj=manager_team_obj,
                 )
-                if (
-                    existing_permission_id is not None
-                    and manager_team_obj.object_permission is not None
-                ):
-                    existing_mcp_servers = (
-                        manager_team_obj.object_permission.mcp_servers or []
-                    )
-                    updated_mcp_servers = [
-                        s for s in existing_mcp_servers if s != server_id
-                    ]
-                    await handle_update_object_permission_common(
-                        data_json={
-                            "object_permission": {
-                                "mcp_servers": updated_mcp_servers,
-                            }
-                        },
-                        existing_object_permission_id=existing_permission_id,
-                        prisma_client=prisma_client,
-                    )
             except Exception as e:
                 verbose_proxy_logger.exception(
                     f"MCP server deleted but failed to remove from team permissions: {str(e)}"

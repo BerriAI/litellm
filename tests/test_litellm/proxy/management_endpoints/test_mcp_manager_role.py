@@ -233,7 +233,7 @@ class TestCreateMcpServerAsManager:
         created_server.server_id = "new_server_id"
         created_server.credentials = None
 
-        mock_handle_update = AsyncMock()
+        mock_auto_assign = AsyncMock()
 
         with (
             patch(
@@ -263,38 +263,23 @@ class TestCreateMcpServerAsManager:
                 ),
             ),
             patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.handle_update_object_permission_common",
-                mock_handle_update,
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._auto_assign_mcp_server_to_team",
+                mock_auto_assign,
             ),
         ):
             await add_mcp_server(payload=payload, user_api_key_dict=user_auth)
 
-            # Verify handle_update_object_permission_common was called with merged server list
-            mock_handle_update.assert_called_once()
-            call_kwargs = mock_handle_update.call_args.kwargs
-            mcp_servers = call_kwargs["data_json"]["object_permission"]["mcp_servers"]
-            assert "existing_server" in mcp_servers
-            assert "new_server_id" in mcp_servers
-            assert call_kwargs["existing_object_permission_id"] == "perm1"
+            # Verify _auto_assign_mcp_server_to_team was called with the right args
+            mock_auto_assign.assert_called_once()
+            call_kwargs = mock_auto_assign.call_args.kwargs
+            assert call_kwargs["server_id"] == "new_server_id"
+            assert call_kwargs["team_id"] == "team1"
+            assert call_kwargs["team_obj"] == mock_team
 
-    async def test_create_links_new_permission_to_team_when_none_exists(self):
-        """When team has no object_permission_id, create should link the new one."""
-        from litellm.proxy._types import NewMCPServerRequest
+    async def test_auto_assign_links_new_permission_to_team(self):
+        """_auto_assign_mcp_server_to_team should create permission and link to team."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-            add_mcp_server,
-        )
-
-        user_auth = UserAPIKeyAuth(
-            user_role=LitellmUserRoles.INTERNAL_USER,
-            user_id="user1",
-            api_key="sk-test",
-            team_id="team1",
-        )
-
-        payload = NewMCPServerRequest(
-            server_name="test_server",
-            url="https://example.com/mcp",
-            team_id="team1",
+            _auto_assign_mcp_server_to_team,
         )
 
         # Team with NO object_permission_id
@@ -307,46 +292,24 @@ class TestCreateMcpServerAsManager:
         )
         mock_team.object_permission = None
 
-        created_server = MagicMock()
-        created_server.server_id = "new_server_id"
-        created_server.credentials = None
-
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.update = AsyncMock()
 
-        with (
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-                return_value=mock_prisma,
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
-                AsyncMock(return_value=("team1", mock_team)),
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-                AsyncMock(return_value=None),
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
-                AsyncMock(return_value=created_server),
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-                MagicMock(
-                    add_server=AsyncMock(),
-                    reload_servers_from_database=AsyncMock(),
-                ),
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.handle_update_object_permission_common",
-                AsyncMock(return_value="new_perm_id"),
-            ),
+        # handle_update_object_permission sets object_permission_id in data_json
+        async def fake_handle(data_json, existing_team_row):
+            data_json["object_permission_id"] = "new_perm_id"
+            return data_json
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.handle_update_object_permission",
+            side_effect=fake_handle,
         ):
-            await add_mcp_server(payload=payload, user_api_key_dict=user_auth)
+            await _auto_assign_mcp_server_to_team(
+                server_id="new_server_id",
+                team_id="team1",
+                team_obj=mock_team,
+                prisma_client=mock_prisma,
+            )
 
             # Verify the team was updated with the new object_permission_id
             mock_prisma.db.litellm_teamtable.update.assert_called_once_with(
