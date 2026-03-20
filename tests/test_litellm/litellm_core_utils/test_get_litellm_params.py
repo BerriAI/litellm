@@ -4,7 +4,6 @@ Tests for get_litellm_params and related helpers.
 Ensures backward compatibility after sparse kwargs extraction optimization.
 """
 
-import pytest
 
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
@@ -126,3 +125,54 @@ class TestGetLitellmParamsExplicitFields:
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
 
+
+class TestGetLitellmParamsLitellmMetadataMerge:
+    """Verify litellm_metadata is merged into metadata for callback visibility."""
+
+    def test_merge_when_no_metadata(self):
+        """When only litellm_metadata is provided, it becomes metadata."""
+        lm_meta = {"user_api_key_hash": "hashed-abc", "team_id": "t-1"}
+        result = get_litellm_params(litellm_metadata=lm_meta)
+
+        assert result["metadata"] == lm_meta
+        # Must be a copy, not the same object
+        assert result["metadata"] is not lm_meta
+
+    def test_merge_preserves_existing_metadata_keys(self):
+        """Existing metadata keys are not overwritten by litellm_metadata."""
+        metadata = {"user_api_key": "sk-real", "trace_id": "t-1"}
+        lm_meta = {
+            "user_api_key_hash": "hashed-abc",
+            "user_api_key": "should-not-overwrite",
+        }
+        result = get_litellm_params(metadata=metadata, litellm_metadata=lm_meta)
+
+        assert result["metadata"]["user_api_key"] == "sk-real"
+        assert result["metadata"]["trace_id"] == "t-1"
+        assert result["metadata"]["user_api_key_hash"] == "hashed-abc"
+
+    def test_merge_does_not_mutate_caller_metadata(self):
+        """The caller's original metadata dict must not be mutated."""
+        original_metadata = {"user_api_key": "sk-real"}
+        lm_meta = {"user_api_key_hash": "hashed-abc"}
+        result = get_litellm_params(
+            metadata=original_metadata, litellm_metadata=lm_meta
+        )
+
+        assert "user_api_key_hash" not in original_metadata
+        assert result["metadata"] is not original_metadata
+
+    def test_merge_does_not_mutate_caller_litellm_metadata(self):
+        """The caller's original litellm_metadata dict must not be mutated."""
+        lm_meta = {"user_api_key_hash": "hashed-abc"}
+        original_keys = set(lm_meta.keys())
+        get_litellm_params(litellm_metadata=lm_meta)
+
+        assert set(lm_meta.keys()) == original_keys
+
+    def test_no_merge_when_litellm_metadata_is_none(self):
+        """When litellm_metadata is None, metadata is returned as-is."""
+        metadata = {"user_api_key": "sk-real"}
+        result = get_litellm_params(metadata=metadata, litellm_metadata=None)
+
+        assert result["metadata"] == metadata

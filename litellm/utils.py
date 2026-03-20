@@ -1155,12 +1155,15 @@ def function_setup(  # noqa: PLR0915
             # populate litellm_params["metadata"] so callbacks (e.g. Langfuse) that
             # read API key info from litellm_params["metadata"] see the fields.
             if not litellm_params.get("metadata"):
-                litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+                litellm_params["metadata"] = dict(kwargs["litellm_metadata"])
             else:
                 # Merge litellm_metadata into metadata without overwriting existing
                 # keys. This ensures API key fields (user_api_key_hash, etc.) are
                 # visible to callbacks even when Anthropic's native metadata field
                 # is present in /v1/messages requests from Claude Code.
+                litellm_params["metadata"] = dict(
+                    litellm_params["metadata"]
+                )  # don't mutate caller's dict
                 for key, value in kwargs["litellm_metadata"].items():
                     if key not in litellm_params["metadata"]:
                         litellm_params["metadata"][key] = value
