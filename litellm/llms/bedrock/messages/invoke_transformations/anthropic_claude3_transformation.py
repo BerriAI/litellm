@@ -373,7 +373,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         schema_text = {"type": "text", "text": json.dumps(schema)}
         content.append(schema_text)
 
-    _VALID_TOOL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+    _VALID_TOOL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+\Z")
     _INVALID_TOOL_ID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
     def _sanitize_tool_use_ids(self, anthropic_messages_request: Dict) -> None:
@@ -476,13 +476,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
 
-        # 7. Sanitize tool_use IDs (Bedrock requires ^[a-zA-Z0-9_-]+$)
+        # 6. Sanitize tool_use IDs (Bedrock requires ^[a-zA-Z0-9_-]+$)
         # The Anthropic native API allows broader characters in tool_use IDs,
         # but Bedrock rejects them with 400 Bad Request.
         # Fixes: https://github.com/BerriAI/litellm/issues/21114
         self._sanitize_tool_use_ids(anthropic_messages_request)
 
-        # 6. AUTO-INJECT beta headers based on features used
+        # 7. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
