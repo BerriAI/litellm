@@ -130,10 +130,77 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_mcp_manager,
+        _user_has_admin_view,
+    )
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        _get_team_allowed_mcp_servers,
+        handle_update_object_permission_common,
+    )
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    async def _assert_can_manage_team_mcp_server(
+        user_api_key_dict: UserAPIKeyAuth,
+        team_id: Optional[str] = None,
+        server_id: Optional[str] = None,
+    ) -> str:
+        """
+        Verify that the caller is an MCP server manager for a team and (for edit/delete)
+        that the target server belongs to that team.
+
+        Returns the team_id the caller is managing.
+        Raises HTTPException(400) if no team_id can be determined.
+        Raises HTTPException(403) if the caller is not an MCP manager or server not in team.
+        """
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        resolved_team_id = team_id or user_api_key_dict.team_id
+        if not resolved_team_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "team_id is required for MCP server manager operations."},
+            )
+
+        if (
+            team_id
+            and user_api_key_dict.team_id
+            and team_id != user_api_key_dict.team_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "team_id does not match the API key's team."},
+            )
+
+        team_obj = await get_team_object(
+            team_id=resolved_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=False,
+        )
+
+        if not _is_user_team_mcp_manager(user_api_key_dict, team_obj):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"User does not have mcp_server_manager role in team {resolved_team_id}."
+                },
+            )
+
+        if server_id is not None:
+            team_server_ids = await _get_team_allowed_mcp_servers(team_obj)
+            if server_id not in team_server_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"MCP server {server_id} is not assigned to team {resolved_team_id}."
+                    },
+                )
+
+        return resolved_team_id
 
     @dataclass
     class _TemporaryMCPServerEntry:

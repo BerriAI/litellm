@@ -1608,8 +1608,9 @@ class Member(MemberBase):
     role: Literal[
         "admin",
         "user",
+        "mcp_server_manager",
     ] = Field(
-        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
+        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member, 'mcp_server_manager' can manage MCP servers for the team"
     )
 
 
