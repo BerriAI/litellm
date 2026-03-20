@@ -537,12 +537,17 @@ class HashicorpSecretManager(BaseSecretManager):
                     json_resp.get("data", {}).get("data", {}).get(data_key, None)
                 )
                 if new_secret_value_from_vault != new_secret_value:
-                    verbose_logger.exception(
-                        f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
+                    # Mask key values to avoid logging raw API keys
+                    masked_expected = f"...{new_secret_value[-4:]}" if new_secret_value else "<empty>"
+                    masked_got = f"...{new_secret_value_from_vault[-4:]}" if new_secret_value_from_vault else "<empty>"
+                    verbose_logger.error(
+                        "New secret value mismatch. Expected: %s, Got: %s",
+                        masked_expected,
+                        masked_got,
                     )
                     return {
                         "status": "error",
-                        "message": f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}",
+                        "message": f"New secret value mismatch. Expected: {masked_expected}, Got: {masked_got}",
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:

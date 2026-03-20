@@ -385,6 +385,96 @@ class TestRotateVirtualKeyInSecretManager:
             new_secret_value="sk-new-value",
             team_id="team-123",
         )
-        
+
         # Verify async_rotate_secret was NOT called
         mock_secret_manager.async_rotate_secret.assert_not_called()
+
+
+class TestRotateVirtualKeyErrorHandling:
+    """Tests that _rotate_virtual_key_in_secret_manager propagates error dicts as exceptions."""
+
+    @pytest.mark.asyncio
+    async def test_rotate_raises_on_error_dict(self):
+        """Test that error dict from async_rotate_secret is raised as ValueError."""
+        from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        import litellm
+
+        mock_secret_manager = MagicMock(spec=BaseSecretManager)
+        mock_secret_manager.async_rotate_secret = AsyncMock(
+            return_value={"status": "error", "message": "New secret value mismatch. Expected: ...3lcA, Got: ...zt4w"}
+        )
+
+        litellm.secret_manager_client = mock_secret_manager
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        litellm._key_management_settings = KeyManagementSettings(
+            store_virtual_keys=True,
+            prefix_for_stored_virtual_keys="litellm/",
+        )
+
+        import builtins
+        original_isinstance = builtins.isinstance
+
+        def mock_isinstance(obj, cls):
+            if cls == BaseSecretManager and obj == mock_secret_manager:
+                return True
+            return original_isinstance(obj, cls)
+
+        with patch.object(
+            KeyManagementEventHooks,
+            "_get_secret_manager_optional_params",
+            return_value=None,
+        ), patch(
+            "litellm.proxy.hooks.key_management_event_hooks.isinstance",
+            side_effect=mock_isinstance,
+        ):
+            with pytest.raises(ValueError, match="Secret manager rotation failed"):
+                await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                    current_secret_name="old-key",
+                    new_secret_name="new-key",
+                    new_secret_value="sk-new-value",
+                    team_id=None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_rotate_success_dict_does_not_raise(self):
+        """Test that a success response from async_rotate_secret does not raise."""
+        from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        import litellm
+
+        mock_secret_manager = MagicMock(spec=BaseSecretManager)
+        mock_secret_manager.async_rotate_secret = AsyncMock(
+            return_value={"request_id": "abc", "data": {}}
+        )
+
+        litellm.secret_manager_client = mock_secret_manager
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        litellm._key_management_settings = KeyManagementSettings(
+            store_virtual_keys=True,
+            prefix_for_stored_virtual_keys="litellm/",
+        )
+
+        import builtins
+        original_isinstance = builtins.isinstance
+
+        def mock_isinstance(obj, cls):
+            if cls == BaseSecretManager and obj == mock_secret_manager:
+                return True
+            return original_isinstance(obj, cls)
+
+        with patch.object(
+            KeyManagementEventHooks,
+            "_get_secret_manager_optional_params",
+            return_value=None,
+        ), patch(
+            "litellm.proxy.hooks.key_management_event_hooks.isinstance",
+            side_effect=mock_isinstance,
+        ):
+            # Should not raise
+            await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                current_secret_name="old-key",
+                new_secret_name="new-key",
+                new_secret_value="sk-new-value",
+                team_id=None,
+            )

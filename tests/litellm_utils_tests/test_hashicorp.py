@@ -759,4 +759,7 @@ async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(hashicorp_s
         # Verify error response
         assert response["status"] == "error"
         assert "mismatch" in response["message"].lower()
-        assert "expected-value" in response["message"]
+        # Raw key values should be masked — only last 4 chars shown
+        assert "expected-value" not in response["message"]
+        assert "...alue" in response["message"]  # last 4 of "expected-value"
+        assert "...alue" in response["message"]  # last 4 of "different-value"
