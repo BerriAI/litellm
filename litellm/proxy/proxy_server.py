@@ -1203,7 +1203,27 @@ try:
                 if entry.is_dir() and not entry.name.startswith("_"):
                     index_path = os.path.join(entry.path, "index.html")
                     if os.path.exists(index_path):
-                        # Found at least one restructured route - this proves the pattern
+                        # Found at least one restructured route.
+                        # Also verify no root-level .html files still need restructuring.
+                        # Next.js static export may generate both pre-restructured pages
+                        # (e.g. login/index.html) and new pages as root-level .html files
+                        # (e.g. chat.html), causing the heuristic to fire prematurely.
+                        try:
+                            orphaned = [
+                                e.name
+                                for e in os.scandir(ui_dir)
+                                if e.is_file()
+                                and e.name.endswith(".html")
+                                and e.name not in ("index.html", "404.html")
+                            ]
+                        except (PermissionError, OSError):
+                            orphaned = []
+                        if orphaned:
+                            verbose_proxy_logger.debug(
+                                f"Found un-restructured HTML files at root: {orphaned}. "
+                                f"Restructuring needed despite existing {entry.name}/index.html."
+                            )
+                            return False
                         verbose_proxy_logger.debug(
                             f"Detected restructured UI via pattern: found {entry.name}/index.html"
                         )
