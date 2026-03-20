@@ -737,6 +737,7 @@ const sidebars = {
         "proxy/realtime_webrtc",
         "rerank",
         "response_api",
+        "prompt_management",
         "response_api_compact",
         {
           type: "category",

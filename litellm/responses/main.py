@@ -37,6 +37,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    AllMessageValues,
     PromptObject,
     Reasoning,
     ResponseIncludable,
@@ -463,6 +464,53 @@ async def aresponses(
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
 
+        #########################################################
+        # ASYNC PROMPT MANAGEMENT
+        # Run the async hook here so async-only prompt loggers are honoured.
+        # Then pop prompt_id from kwargs so the sync responses() path does NOT
+        # re-run the hook (which would double-prepend template messages).
+        # Pass merged_optional_params via an internal kwarg so responses()
+        # can apply them to local_vars without re-invoking the hook.
+        #########################################################
+        litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        original_model = model
+
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id, non_default_params=kwargs
+        ):
+            if isinstance(input, str):
+                client_input: List[AllMessageValues] = [
+                    {"role": "user", "content": input}
+                ]
+            else:
+                client_input = [
+                    item  # type: ignore[misc]
+                    for item in input
+                    if isinstance(item, dict) and "role" in item
+                ]
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
+            input = cast(Union[str, ResponseInputParam], merged_input)
+            if model != original_model:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model
+                )
+            kwargs.pop("prompt_id", None)
+            kwargs["_async_prompt_merged_params"] = merged_optional_params
+
         func = partial(
             responses,
             input=input,
@@ -622,6 +670,60 @@ def responses(
             litellm_params.api_key = dynamic_api_key
         if dynamic_api_base is not None:
             litellm_params.api_base = dynamic_api_base
+
+        #########################################################
+        # PROMPT MANAGEMENT
+        # If aresponses() already ran the async hook, it pops prompt_id and
+        # passes the result via _async_prompt_merged_params — apply those
+        # directly and skip the sync hook to avoid double-merging.
+        #########################################################
+        _async_merged = kwargs.pop("_async_prompt_merged_params", None)
+        if _async_merged is not None:
+            for k, v in _async_merged.items():
+                local_vars[k] = v
+        else:
+            prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+            prompt_variables = cast(
+                Optional[dict], kwargs.get("prompt_variables", None)
+            )
+            original_model = model
+
+            if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
+                prompt_id=prompt_id, non_default_params=kwargs
+            ):
+                if isinstance(input, str):
+                    client_input: List[AllMessageValues] = [
+                        {"role": "user", "content": input}
+                    ]
+                else:
+                    client_input = [
+                        item  # type: ignore[misc]
+                        for item in input
+                        if isinstance(item, dict) and "role" in item
+                    ]
+                (
+                    model,
+                    merged_input,
+                    merged_optional_params,
+                ) = litellm_logging_obj.get_chat_completion_prompt(
+                    model=model,
+                    messages=client_input,
+                    non_default_params=kwargs,
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    prompt_label=kwargs.get("prompt_label", None),
+                    prompt_version=kwargs.get("prompt_version", None),
+                )
+                input = cast(Union[str, ResponseInputParam], merged_input)
+                local_vars["input"] = input
+                local_vars["model"] = model
+                if model != original_model:
+                    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                        model=model
+                    )
+                    local_vars["custom_llm_provider"] = custom_llm_provider
+                for k, v in merged_optional_params.items():
+                    local_vars[k] = v
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
