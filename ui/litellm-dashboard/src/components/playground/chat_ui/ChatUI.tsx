@@ -75,6 +75,8 @@ import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
+import { useMessageEdit } from "./useMessageEdit";
+import { MessageBubbleWithActions } from "./MessageBubbleWithActions";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -246,6 +248,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
+
+  // Message edit/retry hook
+  const messageEdit = useMessageEdit(chatHistory, setChatHistory, (content: string) => {
+    setInputMessage(content);
+    setTimeout(() => handleSendMessage(), 100);
+  });
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -1931,7 +1939,33 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
               )}
 
-              {chatHistory.map((message, index) => (
+              {chatHistory.map((message, index) => {
+                const isEditing = message.role === "user" && messageEdit.editingIndex === index;
+                
+                // For simple user messages, use the cleaner component
+                if (message.role === "user" && !message.isImage && !message.isAudio) {
+                  return (
+                    <MessageBubbleWithActions
+                      key={index}
+                      message={message}
+                      index={index}
+                      isEditing={isEditing}
+                      editingContent={messageEdit.editingContent}
+                      isLoading={isLoading}
+                      onEditingContentChange={messageEdit.setEditingContent}
+                      onStartEdit={messageEdit.startEdit}
+                      onSaveEdit={messageEdit.saveEdit}
+                      onCancelEdit={messageEdit.cancelEdit}
+                      onRetry={messageEdit.retry}
+                    >
+                      {endpointType === EndpointType.RESPONSES && <ResponsesImageRenderer message={message} />}
+                      {endpointType === EndpointType.CHAT && <ChatImageRenderer message={message} />}
+                    </MessageBubbleWithActions>
+                  );
+                }
+
+                // For all other messages (assistant, image, audio), use existing rendering
+                return (
                 <div key={index}>
                   <ChatMessageBubble
                     message={message}
@@ -1942,7 +1976,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
                   />
                 </div>
-              ))}
+                );
+              })}
 
               {/* Show MCP events during loading if no assistant message exists yet */}
               {isLoading &&
