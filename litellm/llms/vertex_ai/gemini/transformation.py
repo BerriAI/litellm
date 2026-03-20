@@ -399,6 +399,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     video_metadata=video_metadata,
                                 )
                                 _parts.append(_part)
+                            except litellm.ImageFetchError:
+                                raise  # propagate fetch errors (e.g. 403) without masking them
                             except Exception:
                                 raise Exception(
                                     "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
