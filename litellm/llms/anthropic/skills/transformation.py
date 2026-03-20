@@ -42,7 +42,9 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
         auth_header = AnthropicModelInfo.get_auth_header(api_key)
         if auth_header is None:
-            raise ValueError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API")
+            raise ValueError(
+                "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API"
+            )
 
         headers.update(auth_header)
         headers["anthropic-version"] = "2023-06-01"
