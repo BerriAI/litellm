@@ -2606,9 +2606,7 @@ class SSOAuthenticationHandler:
 
             separator = "&" if "?" in return_to else "?"
             redirect_url = (
-                return_to
-                + separator
-                + urlencode({"login": "success", "code": code})
+                return_to + separator + urlencode({"login": "success", "code": code})
             )
             verbose_proxy_logger.info(
                 "Cross-origin SSO: redirecting to control plane with login code"
