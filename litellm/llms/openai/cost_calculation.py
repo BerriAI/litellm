@@ -114,7 +114,7 @@ def cost_per_second(
         )
         ## COST PER SECOND ##
         completion_cost = model_info["output_cost_per_second"] * duration
-    elif (
+    if (
         "input_cost_per_second" in model_info
         and model_info["input_cost_per_second"] is not None
     ):
@@ -123,7 +123,6 @@ def cost_per_second(
         )
         ## COST PER SECOND ##
         prompt_cost = model_info["input_cost_per_second"] * duration
-        completion_cost = 0.0
 
     return prompt_cost, completion_cost
 
