@@ -1,12 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Select, Typography, message, Spin } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
-import { DotsVerticalIcon } from "@heroicons/react/solid";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { extractErrorMessage } from "../../utils/errorUtils";
 import {
   getComplianceDatasetPrompts,
   getFrameworks,
@@ -37,6 +37,31 @@ const ACTION_LABELS: Record<string, string> = {
   block: "Block",
   next: "Next Step",
   modify_response: "Custom Response",
+};
+
+const SECTION_LABEL_STYLE: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+};
+
+const CARD_STYLE: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  backgroundColor: "#fff",
+  maxWidth: 720,
+  width: "100%",
+};
+
+const ICON_CIRCLE_STYLE: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: "50%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
 };
 
 function createDefaultStep(): PipelineStep {
@@ -103,18 +128,7 @@ function derivePipelineFromPolicy(policy: Policy | null | undefined): GuardrailP
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GuardrailIcon: React.FC = () => (
-  <div
-    style={{
-      width: 28,
-      height: 28,
-      borderRadius: "50%",
-      backgroundColor: "#eef2ff",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0,
-    }}
-  >
+  <div style={{ ...ICON_CIRCLE_STYLE, backgroundColor: "#eef2ff" }}>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="10" />
       <path d="M12 8v4" />
@@ -123,18 +137,7 @@ const GuardrailIcon: React.FC = () => (
 );
 
 const PlayIcon: React.FC = () => (
-  <div
-    style={{
-      width: 28,
-      height: 28,
-      borderRadius: "50%",
-      backgroundColor: "#f3f4f6",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: 0,
-    }}
-  >
+  <div style={{ ...ICON_CIRCLE_STYLE, backgroundColor: "#f3f4f6" }}>
     <svg width="12" height="12" viewBox="0 0 24 24" fill="#6b7280" stroke="none">
       <polygon points="6,3 20,12 6,21" />
     </svg>
@@ -198,6 +201,52 @@ const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
 // Step Card (editable)
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface StepOutcomeSectionProps {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  modifyMessage: string | null;
+  onChangeAction: (value: string) => void;
+  onChangeMessage: (value: string | null) => void;
+}
+
+const StepOutcomeSection: React.FC<StepOutcomeSectionProps> = ({
+  icon,
+  label,
+  value,
+  modifyMessage,
+  onChangeAction,
+  onChangeMessage,
+}) => (
+  <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+    <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+      {icon}
+      <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{label}</span>
+    </div>
+    <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+      Action
+    </label>
+    <Select
+      style={{ width: "100%" }}
+      value={value}
+      onChange={onChangeAction}
+      options={ACTION_OPTIONS}
+    />
+    {value === "modify_response" && (
+      <div style={{ marginTop: 8 }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Custom Response Message
+        </label>
+        <TextInput
+          placeholder="Enter custom response..."
+          value={modifyMessage || ""}
+          onChange={(e) => onChangeMessage(e.target.value || null)}
+        />
+      </div>
+    )}
+  </div>
+);
+
 interface StepCardProps {
   step: PipelineStep;
   stepIndex: number;
@@ -215,22 +264,16 @@ const StepCard: React.FC<StepCardProps> = ({
   onDelete,
   availableGuardrails,
 }) => {
-  const guardrailOptions = availableGuardrails.map((g) => ({
-    label: g.guardrail_name || g.guardrail_id,
-    value: g.guardrail_name || g.guardrail_id,
-  }));
+  const guardrailOptions = useMemo(
+    () => availableGuardrails.map((g) => ({
+      label: g.guardrail_name || g.guardrail_id,
+      value: g.guardrail_name || g.guardrail_id,
+    })),
+    [availableGuardrails]
+  );
 
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 10,
-        backgroundColor: "#fff",
-        maxWidth: 720,
-        width: "100%",
-        overflow: "hidden",
-      }}
-    >
+    <div style={{ ...CARD_STYLE, overflow: "hidden" }}>
       {/* Header row */}
       <div
         className="flex items-center justify-between"
@@ -238,15 +281,7 @@ const StepCard: React.FC<StepCardProps> = ({
       >
         <div className="flex items-center gap-2">
           <GuardrailIcon />
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              textTransform: "uppercase",
-              color: "#6366f1",
-              letterSpacing: "0.06em",
-            }}
-          >
+          <span style={{ ...SECTION_LABEL_STYLE, color: "#6366f1" }}>
             GUARDRAIL
           </span>
         </div>
@@ -268,7 +303,12 @@ const StepCard: React.FC<StepCardProps> = ({
             }}
             title="Delete step"
           >
-            <DotsVerticalIcon style={{ width: 16, height: 16, color: "#9ca3af" }} />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+            </svg>
           </button>
         </div>
       </div>
@@ -291,63 +331,22 @@ const StepCard: React.FC<StepCardProps> = ({
         />
       </div>
 
-      {/* ON PASS section */}
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
-        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-          <PassIcon />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON PASS</span>
-        </div>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
-          Action
-        </label>
-        <Select
-          style={{ width: "100%" }}
-          value={step.on_pass}
-          onChange={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
-          options={ACTION_OPTIONS}
-        />
-        {step.on_pass === "modify_response" && (
-          <div style={{ marginTop: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
-              Custom Response Message
-            </label>
-            <TextInput
-              placeholder="Enter custom response..."
-              value={step.modify_response_message || ""}
-              onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ON FAIL section */}
-      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
-        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-          <FailIcon />
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON FAIL</span>
-        </div>
-        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
-          Action
-        </label>
-        <Select
-          style={{ width: "100%" }}
-          value={step.on_fail}
-          onChange={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
-          options={ACTION_OPTIONS}
-        />
-        {step.on_fail === "modify_response" && (
-          <div style={{ marginTop: 8 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
-              Custom Response Message
-            </label>
-            <TextInput
-              placeholder="Enter custom response..."
-              value={step.modify_response_message || ""}
-              onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
-            />
-          </div>
-        )}
-      </div>
+      <StepOutcomeSection
+        icon={<PassIcon />}
+        label="ON PASS"
+        value={step.on_pass}
+        modifyMessage={step.modify_response_message}
+        onChangeAction={(value) => onChange({ on_pass: value as PipelineStep["on_pass"] })}
+        onChangeMessage={(value) => onChange({ modify_response_message: value })}
+      />
+      <StepOutcomeSection
+        icon={<FailIcon />}
+        label="ON FAIL"
+        value={step.on_fail}
+        modifyMessage={step.modify_response_message}
+        onChangeAction={(value) => onChange({ on_fail: value as PipelineStep["on_fail"] })}
+        onChangeMessage={(value) => onChange({ modify_response_message: value })}
+      />
     </div>
   );
 };
@@ -355,6 +354,49 @@ const StepCard: React.FC<StepCardProps> = ({
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────────────────────────
+
+const TriggerCard: React.FC = () => (
+  <div style={{ ...CARD_STYLE, padding: "16px 20px" }}>
+    <div className="flex items-center gap-3">
+      <PlayIcon />
+      <div>
+        <span style={{ ...SECTION_LABEL_STYLE, color: "#6b7280", display: "block", marginBottom: 2 }}>
+          TRIGGER
+        </span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
+          Incoming LLM Request
+        </span>
+        <span style={{ fontSize: 13, color: "#9ca3af" }}>
+          This flow runs when a request matches this policy
+        </span>
+      </div>
+    </div>
+  </div>
+);
+
+const EndCard: React.FC = () => (
+  <div style={{ ...CARD_STYLE, padding: "14px 20px" }}>
+    <div className="flex items-center gap-3">
+      <div style={{ ...ICON_CIRCLE_STYLE, backgroundColor: "#f3f4f6" }}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="8" y1="12" x2="16" y2="12" />
+        </svg>
+      </div>
+      <div>
+        <span style={{ ...SECTION_LABEL_STYLE, color: "#6b7280", display: "block", marginBottom: 2 }}>
+          END
+        </span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
+          Continue to LLM
+        </span>
+        <span style={{ fontSize: 13, color: "#9ca3af" }}>
+          Request proceeds to the model
+        </span>
+      </div>
+    </div>
+  </div>
+);
 
 interface PipelineFlowBuilderProps {
   pipeline: GuardrailPipeline;
@@ -384,42 +426,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
 
   return (
     <div className="flex flex-col items-center" style={{ padding: "16px 0" }}>
-      {/* Trigger Card */}
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 10,
-          padding: "16px 20px",
-          backgroundColor: "#fff",
-          maxWidth: 720,
-          width: "100%",
-        }}
-      >
-        <div className="flex items-center gap-3">
-          <PlayIcon />
-          <div>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                textTransform: "uppercase",
-                color: "#6b7280",
-                letterSpacing: "0.06em",
-                display: "block",
-                marginBottom: 2,
-              }}
-            >
-              TRIGGER
-            </span>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
-              Incoming LLM Request
-            </span>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>
-              This flow runs when a request matches this policy
-            </span>
-          </div>
-        </div>
-      </div>
+      <TriggerCard />
 
       {/* Steps */}
       {pipeline.steps.map((step, index) => (
@@ -438,59 +445,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
 
       {/* Bottom connector */}
       <Connector onInsert={() => handleInsertStep(pipeline.steps.length)} />
-
-      {/* End card */}
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 10,
-          padding: "14px 20px",
-          backgroundColor: "#fff",
-          maxWidth: 720,
-          width: "100%",
-        }}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: "50%",
-              backgroundColor: "#f3f4f6",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="8" y1="12" x2="16" y2="12" />
-            </svg>
-          </div>
-          <div>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                textTransform: "uppercase",
-                color: "#6b7280",
-                letterSpacing: "0.06em",
-                display: "block",
-                marginBottom: 2,
-              }}
-            >
-              END
-            </span>
-            <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", display: "block" }}>
-              Continue to LLM
-            </span>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>
-              Request proceeds to the model
-            </span>
-          </div>
-        </div>
-      </div>
+      <EndCard />
     </div>
   );
 };
@@ -505,29 +460,7 @@ interface PipelineInfoDisplayProps {
 
 export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeline }) => (
   <div className="flex flex-col items-center" style={{ padding: "16px 0" }}>
-    {/* Trigger */}
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 10,
-        padding: "14px 20px",
-        backgroundColor: "#fff",
-        maxWidth: 720,
-        width: "100%",
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <PlayIcon />
-        <div>
-          <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#6b7280", letterSpacing: "0.06em", display: "block", marginBottom: 2 }}>
-            TRIGGER
-          </span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>
-            Incoming LLM Request
-          </span>
-        </div>
-      </div>
-    </div>
+    <TriggerCard />
 
     {/* Steps */}
     {pipeline.steps.map((step, index) => (
@@ -536,21 +469,12 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
         <div style={{ width: 1, height: 32, backgroundColor: "#d1d5db" }} />
 
         {/* Step card */}
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 10,
-            padding: "14px 20px",
-            backgroundColor: "#fff",
-            maxWidth: 720,
-            width: "100%",
-          }}
-        >
+        <div style={{ ...CARD_STYLE, padding: "14px 20px" }}>
           {/* Header */}
           <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
             <div className="flex items-center gap-2">
               <GuardrailIcon />
-              <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "#6366f1", letterSpacing: "0.06em" }}>
+              <span style={{ ...SECTION_LABEL_STYLE, color: "#6366f1" }}>
                 GUARDRAIL
               </span>
             </div>
@@ -577,6 +501,10 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
         </div>
       </React.Fragment>
     ))}
+
+    {/* End card */}
+    <div style={{ width: 1, height: 32, backgroundColor: "#d1d5db" }} />
+    <EndCard />
   </div>
 );
 
@@ -635,7 +563,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
 
   const isQuickChat = testSource === TEST_SOURCE_QUICK;
-  const promptsForSource = getPromptsForTestSource(testSource);
+  const promptsForSource = useMemo(() => getPromptsForTestSource(testSource), [testSource]);
   const isDataset = promptsForSource.length > 0;
 
   const handleRunTest = async () => {
@@ -661,7 +589,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         );
         setResult(data);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(extractErrorMessage(e));
       } finally {
         setIsRunning(false);
       }
@@ -677,7 +605,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         const matched = complianceMatchExpected(prompt.expectedResult, data.terminal_action);
         entries.push({ prompt, result: data, matched });
       } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
+        const errMsg = extractErrorMessage(e);
         entries.push({
           prompt,
           result: null,
@@ -1066,17 +994,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
       <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
         {/* Versions section */}
         <div style={{ marginBottom: 24 }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              textTransform: "uppercase",
-              color: "#6b7280",
-              letterSpacing: "0.06em",
-              display: "block",
-              marginBottom: 4,
-            }}
-          >
+          <span style={{ ...SECTION_LABEL_STYLE, color: "#6b7280", display: "block", marginBottom: 4 }}>
             Versions
           </span>
           <span
@@ -1208,15 +1126,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
         {/* Silent Mirroring section */}
         <div>
           <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                textTransform: "uppercase",
-                color: "#6b7280",
-                letterSpacing: "0.06em",
-              }}
-            >
+            <span style={{ ...SECTION_LABEL_STYLE, color: "#6b7280" }}>
               Silent Mirroring
             </span>
             <span
@@ -1334,49 +1244,38 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       setVersions(list.versions ?? []);
     } catch (error) {
       NotificationsManager.fromBackend(
-        "Failed to create version: " + (error instanceof Error ? error.message : String(error))
+        "Failed to create version: " + extractErrorMessage(error)
       );
     } finally {
       setIsCreatingVersion(false);
     }
   };
 
-  const handleSelectVersion = (policy: Policy) => {
-    onSelectVersion?.(policy);
-  };
-
-  const handlePublishVersion = async () => {
+  const handleUpdateVersionStatus = async (
+    targetStatus: "published" | "production",
+  ) => {
     if (!accessToken || !editingPolicy?.policy_id) return;
+    const labels: Record<string, { success: string; errorPrefix: string }> = {
+      published: {
+        success: "Version published. You can test it in the Playground by selecting this version in the Policies dropdown.",
+        errorPrefix: "Failed to publish",
+      },
+      production: {
+        success: "Version promoted to production",
+        errorPrefix: "Failed to promote to production",
+      },
+    };
+    const { success, errorPrefix } = labels[targetStatus];
     setIsUpdatingStatus(true);
     try {
-      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "published");
-      NotificationsManager.success(
-        "Version published. You can test it in the Playground by selecting this version in the Policies dropdown."
-      );
+      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, targetStatus);
+      NotificationsManager.success(success);
       const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
       setVersions(list.versions ?? []);
       onVersionStatusUpdated?.(updated);
     } catch (error) {
       NotificationsManager.fromBackend(
-        "Failed to publish: " + (error instanceof Error ? error.message : String(error))
-      );
-    } finally {
-      setIsUpdatingStatus(false);
-    }
-  };
-
-  const handlePromoteToProduction = async () => {
-    if (!accessToken || !editingPolicy?.policy_id) return;
-    setIsUpdatingStatus(true);
-    try {
-      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "production");
-      NotificationsManager.success("Version promoted to production");
-      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
-      setVersions(list.versions ?? []);
-      onVersionStatusUpdated?.(updated);
-    } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to promote to production: " + (error instanceof Error ? error.message : String(error))
+        errorPrefix + ": " + extractErrorMessage(error)
       );
     } finally {
       setIsUpdatingStatus(false);
@@ -1426,7 +1325,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     } catch (error) {
       console.error("Failed to save policy:", error);
       NotificationsManager.fromBackend(
-        "Failed to save policy: " + (error instanceof Error ? error.message : String(error))
+        "Failed to save policy: " + extractErrorMessage(error)
       );
     } finally {
       setIsSubmitting(false);
@@ -1543,9 +1442,9 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             isCreatingVersion={isCreatingVersion}
             isUpdatingStatus={isUpdatingStatus}
             onNewVersion={handleNewVersion}
-            onSelectVersion={handleSelectVersion}
-            onPublish={handlePublishVersion}
-            onPromoteToProduction={handlePromoteToProduction}
+            onSelectVersion={onSelectVersion ?? (() => {})}
+            onPublish={() => handleUpdateVersionStatus("published")}
+            onPromoteToProduction={() => handleUpdateVersionStatus("production")}
           />
         )}
         <div
