@@ -5725,7 +5725,7 @@
         "input_cost_per_second": 0.0001,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0001
+        "output_cost_per_second": 0.0
     },
     "azure_ai/Cohere-embed-v3-english": {
         "input_cost_per_token": 1e-07,
@@ -31996,7 +31996,7 @@
         "input_cost_per_second": 0.0001,
         "litellm_provider": "openai",
         "mode": "audio_transcription",
-        "output_cost_per_second": 0.0001,
+        "output_cost_per_second": 0.0,
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
