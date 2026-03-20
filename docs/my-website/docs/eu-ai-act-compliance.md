@@ -18,17 +18,9 @@ LiteLLM sits between your application and 100+ LLM providers. It already capture
 
 This data is the raw material for compliance. The question is whether it satisfies the specific regulatory requirements.
 
-## What the scanner found
+## Supported providers
 
-Running [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) against the LiteLLM codebase:
-
-- **Files scanned:** 4,861
-- **AI providers supported:** Anthropic, OpenAI, Google GenAI, HuggingFace, Mistral, LangChain, LlamaIndex
-- **Model identifiers:** 112 (across all supported providers)
-- **External services:** 12
-- **Data flows:** 12
-
-These reflect what LiteLLM *supports*. Your deployment routes to a subset. Document which providers are active.
+LiteLLM integrates with Anthropic, OpenAI, Google GenAI, HuggingFace, Mistral, and many others — 100+ providers total. Your deployment routes to a subset. Document which providers are active in your system, as each has different compliance implications.
 
 ## Data flow diagram
 
@@ -65,7 +57,7 @@ graph LR
 
 Every provider is a **processor** under GDPR: they process data on your behalf. Each requires a Data Processing Agreement (Article 28).
 
-LiteLLM itself, when self-hosted, is under your control (controller). When using LiteLLM's hosted proxy, LiteLLM becomes an additional processor.
+When you self-host LiteLLM, your organization is the data controller — you determine the purpose and means of processing. LiteLLM as software has no GDPR role; the legal designation applies to the organization operating it. When using LiteLLM's hosted proxy service, the organization operating that service becomes an additional data processor.
 
 ## Article 12: Record-keeping
 
@@ -85,7 +77,7 @@ Article 12 requires automatic event recording for the lifetime of high-risk AI s
 | Data retention (6+ months) | Depends on your logging backend | **Your responsibility** |
 | Temperature/parameters | Logged if passed in request | **Partial** |
 
-LiteLLM covers approximately 70-80% of Article 12 requirements out of the box when callbacks are configured. The gaps are:
+Based on the mapping above, LiteLLM's callback system addresses most of the data fields Article 12 references when properly configured. The remaining gaps are:
 1. **Content logging is opt-in** — you must explicitly enable it
 2. **Retention is your responsibility** — LiteLLM doesn't store data persistently by default
 3. **Request parameters** (temperature, max_tokens, top_p) need to be explicitly included in your logging
@@ -149,25 +141,12 @@ LiteLLM processes user prompts. If those prompts contain personal data:
 3. **Cross-border transfers**: US-based providers (OpenAI, Anthropic) require Standard Contractual Clauses or equivalent safeguards
 4. **Data minimization**: Log what you need for compliance, not everything
 
-Generate a GDPR Article 30 Record of Processing Activities:
-
-```bash
-pip install ai-trace-auditor
-aitrace flow ./your-litellm-deployment -o data-flows.md
-```
-
-## Full compliance scan
-
-Generate a complete compliance package:
-
-```bash
-aitrace comply ./your-litellm-deployment --split -o compliance/
-```
+Consider maintaining a GDPR Article 30 Record of Processing Activities that documents each LLM provider relationship, the data categories processed, and the legal basis for processing.
 
 ## Recommendations
 
 1. **Enable comprehensive logging** with a persistent backend and 6+ month retention
-2. **Audit your traces** periodically: `aitrace audit your-traces.json -r "EU AI Act"`
+2. **Audit your traces periodically** against Article 12 requirements
 3. **Document your routing policy** — which models, which fallbacks, which guardrails
 4. **Establish DPAs** with every LLM provider you route to
 5. **Use self-hosted models** (Ollama, vLLM) for sensitive data to avoid third-party transfers
@@ -177,8 +156,8 @@ aitrace comply ./your-litellm-deployment --split -o compliance/
 - [EU AI Act full text](https://artificialintelligenceact.eu/)
 - [LiteLLM logging documentation](https://docs.litellm.ai/docs/observability/callbacks)
 - [LiteLLM guardrails](https://docs.litellm.ai/docs/proxy/guardrails)
-- [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) — open-source compliance scanning
+- [EU AI Office guidance](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai)
 
 ---
 
-*This guide was generated with assistance from [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) and reviewed for accuracy. It is not legal advice. Consult a qualified professional for compliance decisions.*
+*This is not legal advice. Consult a qualified professional for compliance decisions.*
