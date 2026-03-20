@@ -2279,6 +2279,75 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, route, expected_call_type",
+    [
+        (
+            {"model": "bad-model", "messages": [{"role": "user", "content": "hello"}]},
+            "/v1/chat/completions",
+            "acompletion",
+        ),
+        (
+            {"model": "bad-model", "prompt": "hello"},
+            "/v1/completions",
+            "atext_completion",
+        ),
+        (
+            {"model": "bad-model", "input": ["hello"]},
+            "/v1/embeddings",
+            "aembedding",
+        ),
+    ],
+)
+async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
+    request_data, route, expected_call_type
+):
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+    captured_logging_obj = {}
+    original_function_setup = litellm.utils.function_setup
+
+    def _capture_function_setup(*args, **kwargs):
+        logging_obj, data = original_function_setup(*args, **kwargs)
+        captured_logging_obj["logging_obj"] = logging_obj
+        return logging_obj, data
+
+    with patch(
+        "litellm.proxy.utils.litellm.utils.function_setup",
+        side_effect=_capture_function_setup,
+    ), patch.object(
+        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+    ), patch.object(
+        Logging, "failure_handler", return_value=None
+    ), patch(
+        "litellm.proxy.utils.threading.Thread"
+    ) as mock_thread:
+        mock_thread.return_value.start = Mock()
+
+        await proxy_logging._handle_logging_proxy_only_error(
+            request_data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test_key",
+                user_id="test_user",
+                token="test_token",
+                request_route=route,
+            ),
+            route=route,
+            original_exception=HTTPException(status_code=400, detail="bad request"),
+        )
+
+    logging_obj = captured_logging_obj["logging_obj"]
+    assert logging_obj.call_type == expected_call_type
+    assert logging_obj.model_call_details["call_type"] == expected_call_type
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.

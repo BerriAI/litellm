@@ -41,10 +41,8 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
-    _cache_key_object,
     _delete_cache_key_object,
     can_team_access_model,
-    get_key_object,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -1656,7 +1654,7 @@ async def _get_and_validate_existing_key(
         LiteLLM_VerificationToken: The existing key row
 
     Raises:
-        HTTPException: If key is not found
+        ProxyException: 404 if key is not found
     """
     if prisma_client is None:
         raise HTTPException(
@@ -1664,16 +1662,18 @@ async def _get_and_validate_existing_key(
             detail={"error": "Database not connected"},
         )
 
-    existing_key_row = await prisma_client.get_data(
-        token=token,
-        table_name="key",
-        query_type="find_unique",
+    hashed_token = _hash_token_if_needed(token=token)
+
+    existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
     )
 
     if existing_key_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Key not found: {token}"},
+        raise ProxyException(
+            message="Key not found.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
 
     return existing_key_row
@@ -2111,18 +2111,10 @@ async def update_key_fn(
         key = data_json.pop("key")
 
         # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        existing_key_row = await prisma_client.get_data(
-            token=data.key, table_name="key", query_type="find_unique"
+        existing_key_row = await _get_and_validate_existing_key(
+            token=data.key,
+            prisma_client=prisma_client,
         )
-
-        if existing_key_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Team not found, passed team_id={data.team_id}"},
-            )
 
         await _validate_update_key_data(
             data=data,
@@ -2158,6 +2150,8 @@ async def update_key_fn(
         )
 
         _data = {**non_default_values, "token": key}
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
         response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
@@ -2330,6 +2324,8 @@ async def bulk_update_keys(
                     error_message = error_detail.get("error", str(e))
                 else:
                     error_message = str(error_detail)
+            elif isinstance(e, ProxyException):
+                error_message = e.message
             else:
                 error_message = str(e)
 
@@ -4945,18 +4941,19 @@ async def block_key(
         route="/key/block",
     )
 
-    if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
+    # Check if the key exists before trying to block it
+    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if existing_record is None:
+        raise ProxyException(
+            message="Key not found.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+
+    if litellm.store_audit_logs is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -4970,7 +4967,7 @@ async def block_key(
                     object_id=hashed_token,
                     action="blocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=existing_record.model_dump_json(),
                 )
             )
         )
@@ -4979,24 +4976,9 @@ async def block_key(
         where={"token": hashed_token}, data={"blocked": True}  # type: ignore
     )
 
-    ## UPDATE KEY CACHE
-
-    ### get cached object ###
-    key_object = await get_key_object(
+    ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
+    await _delete_cache_key_object(
         hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    ### update cached object ###
-    key_object.blocked = True
-
-    ### store cached object ###
-    await _cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=key_object,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -5068,18 +5050,19 @@ async def unblock_key(
         route="/key/unblock",
     )
 
-    if litellm.store_audit_logs is True:
-        # make an audit log for key update
-        record = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed_token}
+    # Check if the key exists before trying to unblock it
+    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_token}
+    )
+    if existing_record is None:
+        raise ProxyException(
+            message="Key not found.",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
         )
-        if record is None:
-            raise ProxyException(
-                message=f"Key {data.key} not found",
-                type=ProxyErrorTypes.bad_request_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+
+    if litellm.store_audit_logs is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -5091,9 +5074,9 @@ async def unblock_key(
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
-                    action="blocked",
+                    action="unblocked",
                     updated_values="{}",
-                    before_value=record.model_dump_json(),
+                    before_value=existing_record.model_dump_json(),
                 )
             )
         )
@@ -5102,24 +5085,9 @@ async def unblock_key(
         where={"token": hashed_token}, data={"blocked": False}  # type: ignore
     )
 
-    ## UPDATE KEY CACHE
-
-    ### get cached object ###
-    key_object = await get_key_object(
+    ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
+    await _delete_cache_key_object(
         hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    ### update cached object ###
-    key_object.blocked = False
-
-    ### store cached object ###
-    await _cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=key_object,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
