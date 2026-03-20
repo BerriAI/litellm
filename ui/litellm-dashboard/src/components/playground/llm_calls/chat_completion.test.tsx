@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOpenAIChatCompletionRequest } from "./chat_completion";
+import openai from "openai";
+
+const mockGetGlobalLitellmHeaderName = vi.fn(() => "Authorization");
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGlobalLitellmHeaderName: (...args: any[]) => mockGetGlobalLitellmHeaderName(...args),
 }));
 
 // Mock the OpenAI client
@@ -255,5 +259,28 @@ describe("chat_completion", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs).not.toHaveProperty("mock_testing_fallbacks");
+  });
+
+  it("should include custom auth header in defaultHeaders when globalLitellmHeaderName is set", async () => {
+    mockGetGlobalLitellmHeaderName.mockReturnValue("X-Litellm-Key");
+
+    await makeOpenAIChatCompletionRequest(mockChatHistory, mockUpdateUI, "gpt-4", "test-token");
+
+    const constructorCalls = vi.mocked(openai.OpenAI).mock.calls;
+    expect(constructorCalls).toHaveLength(1);
+    const constructorArgs = constructorCalls[0][0];
+    expect(constructorArgs?.defaultHeaders).toHaveProperty("X-Litellm-Key", "Bearer test-token");
+  });
+
+  it("should not duplicate auth in defaultHeaders when globalLitellmHeaderName is Authorization", async () => {
+    mockGetGlobalLitellmHeaderName.mockReturnValue("Authorization");
+
+    await makeOpenAIChatCompletionRequest(mockChatHistory, mockUpdateUI, "gpt-4", "test-token");
+
+    const constructorCalls = vi.mocked(openai.OpenAI).mock.calls;
+    expect(constructorCalls).toHaveLength(1);
+    const constructorArgs = constructorCalls[0][0];
+    // When header is "Authorization", the SDK already handles it via apiKey — no need to duplicate
+    expect(constructorArgs?.defaultHeaders).not.toHaveProperty("Authorization");
   });
 });

@@ -1,7 +1,7 @@
 import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import type { MCPEvent } from "../../mcp_tools/types";
 import { MCPServer } from "../../mcp_tools/types";
@@ -57,6 +57,11 @@ export async function makeOpenAIResponsesRequest(
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
     headers["x-litellm-tags"] = tags.join(",");
+  }
+
+  const litellmHeaderName = getGlobalLitellmHeaderName();
+  if (litellmHeaderName !== "Authorization") {
+    headers[litellmHeaderName] = `Bearer ${accessToken}`;
   }
 
   const client = new openai.OpenAI({

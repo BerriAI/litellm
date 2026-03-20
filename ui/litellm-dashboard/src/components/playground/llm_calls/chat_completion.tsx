@@ -2,7 +2,7 @@ import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { MCPServer, type MCPEvent } from "../../mcp_tools/types";
 
 export async function makeOpenAIChatCompletionRequest(
@@ -42,6 +42,11 @@ export async function makeOpenAIChatCompletionRequest(
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
     headers["x-litellm-tags"] = tags.join(",");
+  }
+
+  const litellmHeaderName = getGlobalLitellmHeaderName();
+  if (litellmHeaderName !== "Authorization") {
+    headers[litellmHeaderName] = `Bearer ${accessToken}`;
   }
 
   const client = new openai.OpenAI({
