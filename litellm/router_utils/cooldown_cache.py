@@ -104,6 +104,38 @@ class CooldownCache:
             )
             raise e
 
+    async def async_add_deployment_to_cooldown(
+        self,
+        model_id: str,
+        original_exception: Exception,
+        exception_status: int,
+        cooldown_time: Optional[float],
+    ) -> None:
+        try:
+            _cooldown_time = cooldown_time
+            if _cooldown_time is None:
+                _cooldown_time = self.default_cooldown_time
+
+            cooldown_key, cooldown_data = self._common_add_cooldown_logic(
+                model_id=model_id,
+                original_exception=original_exception,
+                exception_status=exception_status,
+                cooldown_time=_cooldown_time,
+            )
+
+            await self.cache.async_set_cache(
+                value=cooldown_data,
+                key=cooldown_key,
+                ttl=_cooldown_time,
+            )
+        except Exception as e:
+            verbose_logger.error(
+                "CooldownCache::async_add_deployment_to_cooldown - Exception occurred - {}".format(
+                    str(e)
+                )
+            )
+            raise e
+
     @staticmethod
     @functools.lru_cache(maxsize=1024)
     def get_cooldown_cache_key(model_id: str) -> str:

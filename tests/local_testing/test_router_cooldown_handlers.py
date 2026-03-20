@@ -25,6 +25,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
     _should_run_cooldown_logic,
+    async_set_cooldown_deployments,
 )
 from litellm.types.router import (
     AllowedFailsPolicy,
@@ -882,3 +883,47 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
         api_key=os.getenv("OPENAI_API_KEY"),
         messages=[{"role": "user", "content": "hi"}],
     )
+
+
+@pytest.mark.asyncio
+async def test_async_set_cooldown_deployments_uses_async_cache():
+    """
+    async_set_cooldown_deployments should call async_add_deployment_to_cooldown
+    (non-blocking) and never the sync add_deployment_to_cooldown.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "test-deployment-id"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.router_utils.cooldown_handlers._should_run_cooldown_logic",
+        return_value=True,
+    ), patch(
+        "litellm.router_utils.cooldown_handlers._should_cooldown_deployment",
+        return_value=True,
+    ), patch.object(
+        router.cooldown_cache,
+        "async_add_deployment_to_cooldown",
+        new_callable=AsyncMock,
+    ) as mock_async, patch.object(
+        router.cooldown_cache,
+        "add_deployment_to_cooldown",
+    ) as mock_sync:
+        await async_set_cooldown_deployments(
+            litellm_router_instance=router,
+            original_exception=Exception("rate limit"),
+            exception_status=429,
+            deployment="test-deployment-id",
+            time_to_cooldown=60.0,
+        )
+        mock_async.assert_called_once()
+        mock_sync.assert_not_called()

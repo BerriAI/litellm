@@ -95,11 +95,14 @@ from litellm.router_utils.common_utils import (
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
+    _set_cooldown_deployments,  # used by sync deployment_callback_on_failure path (kept for external callers)
+)
+from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
     _async_get_cooldown_deployments_with_debug_info,
     _get_cooldown_deployments,
-    _set_cooldown_deployments,
+    async_set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
@@ -159,6 +162,7 @@ from litellm.types.router import (
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    CallTypes,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
@@ -6109,7 +6113,10 @@ class Router:
         """
         2 jobs:
         - Tracks the number of failures for a deployment in the current minute (using in-memory cache)
-        - Puts the deployment in cooldown if it exceeds the allowed fails / minute
+        - For sync callers only: puts the deployment in cooldown via _set_cooldown_deployments().
+          Async callers skip the cooldown write here because async_deployment_callback_on_failure
+          fires for every call (sync and async) and handles it non-blocking via
+          async_set_cooldown_deployments(). Doing it in both would double-write to Redis.
 
         Returns:
         - True if the deployment should be put in cooldown
@@ -6117,37 +6124,17 @@ class Router:
         """
         verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
         try:
-            exception = kwargs.get("exception", None)
-            exception_status = getattr(exception, "status_code", "")
-
-            # Cache litellm_params to avoid repeated dict lookups
             litellm_params = kwargs.get("litellm_params", {})
             _model_info = litellm_params.get("model_info", {})
 
-            exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
-                original_exception=exception
+            is_sync_call = (
+                litellm_params.get(CallTypes.acompletion.value, False) is not True
+                and litellm_params.get(CallTypes.aembedding.value, False) is not True
+                and litellm_params.get(CallTypes.aresponses.value, False) is not True
+                and litellm_params.get(CallTypes.aimage_generation.value, False)
+                is not True
+                and litellm_params.get(CallTypes.atranscription.value, False) is not True
             )
-
-            # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown = litellm_params.get("cooldown_time", None)
-
-            header_cooldown = None
-            if exception_headers is not None:
-                header_cooldown = litellm.utils._get_retry_after_from_exception_header(
-                    response_headers=exception_headers
-                )
-            ##############################################
-            # Logic to determine cooldown time
-            # 1. Check if a cooldown time is set in the deployment config
-            # 2. Check if a cooldown time is set in the response header
-            # 3. If no cooldown time is set, use the router default cooldown time
-            ##############################################
-            if deployment_cooldown is not None and deployment_cooldown >= 0:
-                _time_to_cooldown = deployment_cooldown
-            elif header_cooldown is not None and header_cooldown >= 0:
-                _time_to_cooldown = header_cooldown
-            else:
-                _time_to_cooldown = self.cooldown_time
 
             if isinstance(_model_info, dict):
                 deployment_id: Optional[str] = _model_info.get("id")
@@ -6157,15 +6144,36 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=deployment_id,
                 )
-                result = _set_cooldown_deployments(
+                if not is_sync_call:
+                    # async_deployment_callback_on_failure will handle the cooldown
+                    # write non-blocking via async_set_cooldown_deployments()
+                    return False
+
+                exception = kwargs.get("exception", None)
+                exception_status = getattr(exception, "status_code", "")
+                exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+                    original_exception=exception
+                )
+                deployment_cooldown = litellm_params.get("cooldown_time", None)
+                header_cooldown = None
+                if exception_headers is not None:
+                    header_cooldown = litellm.utils._get_retry_after_from_exception_header(
+                        response_headers=exception_headers
+                    )
+                if deployment_cooldown is not None and deployment_cooldown >= 0:
+                    _time_to_cooldown = deployment_cooldown
+                elif header_cooldown is not None and header_cooldown >= 0:
+                    _time_to_cooldown = header_cooldown
+                else:
+                    _time_to_cooldown = self.cooldown_time
+
+                return _set_cooldown_deployments(
                     litellm_router_instance=self,
                     exception_status=exception_status,
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                )  # setting deployment_id in cooldown deployments
-
-                return result
+                )
             else:
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. No model_info found."
@@ -6179,7 +6187,7 @@ class Router:
         self, kwargs, completion_response: Optional[Any], start_time, end_time
     ):
         """
-        Update RPM usage for a deployment
+        Update RPM usage and cooldown state for a deployment.
         """
         deployment_name = kwargs["litellm_params"]["metadata"].get(
             "deployment", None
@@ -6207,6 +6215,33 @@ class Router:
             value=1,
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
+        )
+
+        ## COOLDOWN
+        exception = kwargs.get("exception", None)
+        exception_status = getattr(exception, "status_code", "")
+        litellm_params = kwargs.get("litellm_params", {})
+        exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+            original_exception=exception
+        )
+        deployment_cooldown = litellm_params.get("cooldown_time", None)
+        header_cooldown = None
+        if exception_headers is not None:
+            header_cooldown = litellm.utils._get_retry_after_from_exception_header(
+                response_headers=exception_headers
+            )
+        if deployment_cooldown is not None and deployment_cooldown >= 0:
+            _time_to_cooldown = deployment_cooldown
+        elif header_cooldown is not None and header_cooldown >= 0:
+            _time_to_cooldown = header_cooldown
+        else:
+            _time_to_cooldown = self.cooldown_time
+        await async_set_cooldown_deployments(
+            litellm_router_instance=self,
+            exception_status=exception_status,
+            original_exception=exception,
+            deployment=id,
+            time_to_cooldown=_time_to_cooldown,
         )
 
     def _get_metadata_variable_name_from_kwargs(
@@ -6441,7 +6476,7 @@ class Router:
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
                         ).start()  # log response
-                    _set_cooldown_deployments(
+                    await async_set_cooldown_deployments(
                         litellm_router_instance=self,
                         exception_status=e.status_code,
                         original_exception=e,
