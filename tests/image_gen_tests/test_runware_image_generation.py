@@ -303,6 +303,8 @@ def test_runware_response_transformation_unit():
     assert len(result.data) == 2
     assert result.data[0].url == "https://cdn.runware.ai/image1.png"
     assert result.data[1].url == "https://cdn.runware.ai/image2.png"
+    # Verify multi-image cost is summed
+    assert result._hidden_params["runware_cost"] == 0.004
 
 
 def test_runware_cost_calculator():
@@ -326,6 +328,30 @@ def test_runware_cost_calculator():
     )
 
     assert cost == 0.005
+
+
+def test_runware_cost_calculator_multi_image():
+    """
+    Unit test for Runware cost calculator with multiple images summed.
+    """
+    from litellm.llms.runware.cost_calculator import cost_calculator
+    from litellm.types.utils import ImageObject, ImageResponse
+
+    response = ImageResponse(
+        created=1234567890,
+        data=[
+            ImageObject(url="https://example.com/image1.png"),
+            ImageObject(url="https://example.com/image2.png"),
+        ],
+    )
+    response._hidden_params = {"runware_cost": 0.010}
+
+    cost = cost_calculator(
+        model="runware:400@1",
+        image_response=response,
+    )
+
+    assert cost == 0.010
 
 
 def test_runware_validate_environment():
@@ -359,12 +385,13 @@ def test_runware_validate_environment_missing_key():
     )
 
     config = RunwareImageGenerationConfig()
-    with pytest.raises(ValueError, match="RUNWARE_API_KEY is not set"):
-        config.validate_environment(
-            headers={},
-            model="runware:400@1",
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=None,
-        )
+    with patch("litellm.llms.runware.image_generation.transformation.get_secret_str", return_value=None):
+        with pytest.raises(ValueError, match="RUNWARE_API_KEY is not set"):
+            config.validate_environment(
+                headers={},
+                model="runware:400@1",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+            )

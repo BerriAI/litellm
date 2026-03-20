@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 from uuid import uuid4
 
 import httpx
@@ -102,7 +102,7 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> Union[dict, list]:
         # Parse size into width/height
         width = 1024
         height = 1024
@@ -176,11 +176,15 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
                     )
                 )
 
-        # Store cost metadata from Runware response if available
-        if images and isinstance(images[0], dict):
-            cost = images[0].get("cost", None)
-            if cost is not None:
+        # Store total cost metadata from Runware response if available
+        if images:
+            total_cost = sum(
+                img.get("cost", 0) or 0
+                for img in images
+                if isinstance(img, dict) and img.get("cost") is not None
+            )
+            if total_cost > 0:
                 model_response._hidden_params = model_response._hidden_params or {}
-                model_response._hidden_params["runware_cost"] = cost
+                model_response._hidden_params["runware_cost"] = total_cost
 
         return model_response
