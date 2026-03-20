@@ -38,6 +38,12 @@ class PipelineStep(BaseModel):
         default=None,
         description="Custom message for modify_response action.",
     )
+    num_retries: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description="Number of times to retry the guardrail on failure before applying the on_fail action.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -86,6 +92,10 @@ class PipelineStepResult(BaseModel):
     modified_data: Optional[Dict[str, Any]] = None
     error_detail: Optional[str] = None
     duration_seconds: Optional[float] = None
+    retries_attempted: int = Field(
+        default=0,
+        description="Number of retries that were attempted before the final outcome.",
+    )
 
 
 class PipelineExecutionResult(BaseModel):
