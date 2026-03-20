@@ -8018,4 +8018,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "eda34dfd8b35474beffee18893d6782c7b3d0d3d2c610f66237eb97176f43527"
+content-hash = "2cf958f1a04fd5f1ab0e5cfc33bdbf441b518ed6c82d0f2546bf64cd3d2f89be"
