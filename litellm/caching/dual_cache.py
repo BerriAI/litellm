@@ -357,15 +357,16 @@ class DualCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
         **kwargs,
-    ) -> float:
+    ) -> Optional[float]:
         """
         Key - the key in cache
 
         Value - float - the value you want to increment by
 
-        Returns - float - the incremented value
+        Returns - the incremented value, or None if no cache backend is
+        available (in_memory_cache is None and Redis failed/is absent).
         """
-        result: float = value
+        result: Optional[float] = None
         try:
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment(
