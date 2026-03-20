@@ -293,7 +293,7 @@ class TestUpdateFromKwargs:
             litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
         )
 
-        assert logging_obj.litellm_params["metadata"]["from_caller"] is True
+        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
