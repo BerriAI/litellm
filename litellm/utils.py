@@ -8219,6 +8219,8 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8805,6 +8807,8 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
+        elif LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareImageGenerationConfig()
         return None
 
     @staticmethod

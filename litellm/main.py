@@ -5460,6 +5460,35 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "cloudflare":
+            api_key = (
+                api_key
+                or litellm.cloudflare_api_key
+                or litellm.api_key
+                or get_secret("CLOUDFLARE_API_KEY")
+            )
+            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("CLOUDFLARE_API_BASE")
+                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         elif custom_llm_provider == "infinity":
             response = base_llm_http_handler.embedding(
                 model=model,
