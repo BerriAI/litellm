@@ -1878,28 +1878,33 @@ class ProxyLogging:
             )
 
             input: Union[list, str, dict] = ""
+            normalized_call_type: Optional[str] = None
             if "messages" in request_data and isinstance(
                 request_data["messages"], list
             ):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    litellm_logging_obj.call_type = CallTypes.acompletion.value
+                    normalized_call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    litellm_logging_obj.call_type = CallTypes.atext_completion.value
+                    normalized_call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 if litellm_logging_obj.call_type != CallTypes.pass_through.value:
-                    litellm_logging_obj.call_type = CallTypes.aembedding.value
+                    normalized_call_type = CallTypes.aembedding.value
+            if normalized_call_type is not None:
+                litellm_logging_obj.call_type = normalized_call_type
+                litellm_logging_obj.model_call_details["call_type"] = (
+                    normalized_call_type
+                )
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
                 return
-
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
