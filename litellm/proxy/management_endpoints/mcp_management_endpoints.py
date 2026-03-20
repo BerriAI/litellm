@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
 from fastapi import (
     APIRouter,
@@ -147,12 +147,12 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         team_id: Optional[str] = None,
         server_id: Optional[str] = None,
-    ) -> str:
+    ) -> Tuple[str, "LiteLLM_TeamTableCachedObj"]:
         """
         Verify that the caller is an MCP server manager for a team and (for edit/delete)
         that the target server belongs to that team.
 
-        Returns the team_id the caller is managing.
+        Returns a tuple of (team_id, team_obj) for downstream use.
         Raises HTTPException(400) if no team_id can be determined.
         Raises HTTPException(403) if the caller is not an MCP manager or server not in team.
         """
@@ -165,6 +165,7 @@ if MCP_AVAILABLE:
                 detail={"error": "team_id is required for MCP server manager operations."},
             )
 
+        # When the API key is team-scoped, ensure the request team_id matches
         if (
             team_id
             and user_api_key_dict.team_id
@@ -200,7 +201,7 @@ if MCP_AVAILABLE:
                     },
                 )
 
-        return resolved_team_id
+        return resolved_team_id, team_obj
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -1277,6 +1278,7 @@ if MCP_AVAILABLE:
         is_proxy_admin = LitellmUserRoles.PROXY_ADMIN == user_api_key_dict.user_role
         manager_team_id: Optional[str] = None
 
+        manager_team_obj = None
         if not is_proxy_admin:
             # Check if the user is an MCP manager for the specified team
             if payload.team_id is None:
@@ -1286,7 +1288,7 @@ if MCP_AVAILABLE:
                         "error": "team_id is required when creating MCP servers as a team MCP manager."
                     },
                 )
-            manager_team_id = await _assert_can_manage_team_mcp_server(
+            manager_team_id, manager_team_obj = await _assert_can_manage_team_mcp_server(
                 user_api_key_dict=user_api_key_dict,
                 team_id=payload.team_id,
             )
@@ -1334,25 +1336,26 @@ if MCP_AVAILABLE:
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
 
-            # If created by an MCP manager, auto-assign the server to their team
-            if manager_team_id is not None:
-                from litellm.proxy.proxy_server import user_api_key_cache
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": f"Error creating mcp server: {str(e)}"},
+            )
 
-                team_obj = await get_team_object(
-                    team_id=manager_team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    check_db_only=False,
-                )
+        # Auto-assign the server to the manager's team (separate from create
+        # so a failure here doesn't mask the successfully created server).
+        if manager_team_id is not None and manager_team_obj is not None:
+            try:
                 existing_permission_id = getattr(
-                    team_obj, "object_permission_id", None
+                    manager_team_obj, "object_permission_id", None
                 )
 
                 # Read existing mcp_servers list and append the new server
                 existing_mcp_servers: list = []
-                if team_obj.object_permission is not None:
+                if manager_team_obj.object_permission is not None:
                     existing_mcp_servers = (
-                        team_obj.object_permission.mcp_servers or []
+                        manager_team_obj.object_permission.mcp_servers or []
                     )
                 updated_mcp_servers = list(
                     set(existing_mcp_servers + [new_mcp_server.server_id])
@@ -1374,12 +1377,10 @@ if MCP_AVAILABLE:
                         where={"team_id": manager_team_id},
                         data={"object_permission_id": new_permission_id},
                     )
-        except Exception as e:
-            verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error creating mcp server: {str(e)}"},
-            )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    f"MCP server created but failed to auto-assign to team {manager_team_id}: {str(e)}"
+                )
         return _redact_mcp_credentials(new_mcp_server)
 
     @router.post(
@@ -1593,8 +1594,9 @@ if MCP_AVAILABLE:
         )
 
         # Authz - proxy admins or team MCP managers can delete MCP servers
+        manager_team_obj = None
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            await _assert_can_manage_team_mcp_server(
+            _, manager_team_obj = await _assert_can_manage_team_mcp_server(
                 user_api_key_dict=user_api_key_dict,
                 server_id=server_id,
             )
@@ -1611,6 +1613,36 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # Remove server from the manager's team permission list
+        if manager_team_obj is not None:
+            try:
+                existing_permission_id = getattr(
+                    manager_team_obj, "object_permission_id", None
+                )
+                if (
+                    existing_permission_id is not None
+                    and manager_team_obj.object_permission is not None
+                ):
+                    existing_mcp_servers = (
+                        manager_team_obj.object_permission.mcp_servers or []
+                    )
+                    updated_mcp_servers = [
+                        s for s in existing_mcp_servers if s != server_id
+                    ]
+                    await handle_update_object_permission_common(
+                        data_json={
+                            "object_permission": {
+                                "mcp_servers": updated_mcp_servers,
+                            }
+                        },
+                        existing_object_permission_id=existing_permission_id,
+                        prisma_client=prisma_client,
+                    )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    f"MCP server deleted but failed to remove from team permissions: {str(e)}"
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
