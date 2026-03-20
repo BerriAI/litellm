@@ -167,8 +167,12 @@ class CloudflareChatConfig(BaseConfig):
             prompt_tokens = result_usage.get("prompt_tokens", 0)
             completion_tokens = result_usage.get("completion_tokens", 0)
         else:
-            prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
-            completion_content = model_response["choices"][0]["message"].get("content", "")
+            prompt_tokens = litellm.utils.get_token_count(
+                messages=messages, model=model
+            )
+            completion_content = model_response["choices"][0]["message"].get(
+                "content", ""
+            )
             completion_tokens = len(encoding.encode(completion_content))
 
         model_response.created = int(time.time())

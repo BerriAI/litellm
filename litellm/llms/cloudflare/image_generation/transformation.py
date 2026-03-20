@@ -38,7 +38,9 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
     ) -> str:
         if api_base is None:
             account_id = get_secret_str("CLOUDFLARE_ACCOUNT_ID")
-            api_base = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            api_base = (
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
         return api_base + model
 
     def validate_environment(
@@ -122,9 +124,7 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
         # Cloudflare may return raw image bytes (e.g. PNG) or JSON
         if "image/" in content_type:
             image_b64 = base64.b64encode(raw_response.content).decode("utf-8")
-            model_response.data.append(
-                ImageObject(b64_json=image_b64)
-            )
+            model_response.data.append(ImageObject(b64_json=image_b64))
         else:
             try:
                 response_data = raw_response.json()
@@ -137,9 +137,7 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
             result = response_data.get("result", {})
             image_data = result.get("image")
             if image_data:
-                model_response.data.append(
-                    ImageObject(b64_json=image_data)
-                )
+                model_response.data.append(ImageObject(b64_json=image_data))
 
         return model_response
 
