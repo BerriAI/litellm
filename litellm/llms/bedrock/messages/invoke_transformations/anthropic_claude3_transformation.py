@@ -1,3 +1,4 @@
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -372,6 +373,49 @@ class AmazonAnthropicClaudeMessagesConfig(
         schema_text = {"type": "text", "text": json.dumps(schema)}
         content.append(schema_text)
 
+
+    _VALID_TOOL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+    _INVALID_TOOL_ID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+
+    def _sanitize_tool_use_ids(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Sanitize tool_use IDs to match Bedrock's required pattern.
+
+        Bedrock requires tool_use IDs to match ``^[a-zA-Z0-9_-]+$`` but the
+        Anthropic native API allows broader characters. Clients like Claude Code
+        send requests through the pass-through endpoint with IDs that Bedrock
+        rejects with 400 Bad Request.
+
+        Replaces any invalid characters with underscores in both ``tool_use.id``
+        and ``tool_result.tool_use_id`` fields.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/21114
+        """
+        messages = anthropic_messages_request.get("messages")
+        if not isinstance(messages, list):
+            return
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "tool_use" and "id" in block:
+                    tool_id = block["id"]
+                    if isinstance(tool_id, str) and not self._VALID_TOOL_ID_PATTERN.match(tool_id):
+                        block["id"] = self._INVALID_TOOL_ID_CHARS.sub("_", tool_id)
+                elif block_type == "tool_result" and "tool_use_id" in block:
+                    tool_use_id = block["tool_use_id"]
+                    if isinstance(tool_use_id, str) and not self._VALID_TOOL_ID_PATTERN.match(tool_use_id):
+                        block["tool_use_id"] = self._INVALID_TOOL_ID_CHARS.sub("_", tool_use_id)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -428,6 +472,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
+
+        # 7. Sanitize tool_use IDs (Bedrock requires ^[a-zA-Z0-9_-]+$)
+        # The Anthropic native API allows broader characters in tool_use IDs,
+        # but Bedrock rejects them with 400 Bad Request.
+        # Fixes: https://github.com/BerriAI/litellm/issues/21114
+        self._sanitize_tool_use_ids(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()

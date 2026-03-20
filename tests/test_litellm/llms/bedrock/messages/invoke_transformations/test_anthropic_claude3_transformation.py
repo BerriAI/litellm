@@ -342,3 +342,139 @@ def test_bedrock_messages_strips_output_config_with_output_format():
 
     assert "output_config" not in result
     assert "output_format" not in result
+
+
+class TestSanitizeToolUseIds:
+    """Tests for _sanitize_tool_use_ids in AmazonAnthropicClaudeMessagesConfig.
+
+    Bedrock requires tool_use IDs to match ^[a-zA-Z0-9_-]+$ but the Anthropic
+    native API allows broader characters.
+    Fixes: https://github.com/BerriAI/litellm/issues/21114
+    """
+
+    def test_sanitize_tool_use_id_with_invalid_chars(self):
+        """tool_use.id with invalid characters should be sanitized."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        request = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_abc.123+xyz/foo",
+                            "name": "test_tool",
+                            "input": {},
+                        }
+                    ],
+                }
+            ]
+        }
+        cfg._sanitize_tool_use_ids(request)
+        assert request["messages"][0]["content"][0]["id"] == "toolu_abc_123_xyz_foo"
+
+    def test_sanitize_tool_result_id_with_invalid_chars(self):
+        """tool_result.tool_use_id with invalid characters should be sanitized."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        request = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_abc.123+xyz/foo",
+                            "content": "result",
+                        }
+                    ],
+                }
+            ]
+        }
+        cfg._sanitize_tool_use_ids(request)
+        assert (
+            request["messages"][0]["content"][0]["tool_use_id"]
+            == "toolu_abc_123_xyz_foo"
+        )
+
+    def test_valid_ids_unchanged(self):
+        """IDs that already match the Bedrock pattern should not be modified."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        request = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_valid-id_123",
+                            "name": "test_tool",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_valid-id_123",
+                            "content": "result",
+                        }
+                    ],
+                },
+            ]
+        }
+        cfg._sanitize_tool_use_ids(request)
+        assert request["messages"][0]["content"][0]["id"] == "toolu_valid-id_123"
+        assert (
+            request["messages"][1]["content"][0]["tool_use_id"] == "toolu_valid-id_123"
+        )
+
+    def test_no_messages_key(self):
+        """Should handle request without messages key gracefully."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        request = {"max_tokens": 1024}
+        cfg._sanitize_tool_use_ids(request)  # Should not raise
+
+    def test_string_content_ignored(self):
+        """Messages with string content (not list) should be skipped."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        request = {
+            "messages": [{"role": "user", "content": "hello"}]
+        }
+        cfg._sanitize_tool_use_ids(request)  # Should not raise
+
+    def test_consistent_sanitization_across_pairs(self):
+        """tool_use.id and matching tool_result.tool_use_id should sanitize identically."""
+        cfg = AmazonAnthropicClaudeMessagesConfig()
+        original_id = "toolu_01A.B+C/D:E"
+        request = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": original_id,
+                            "name": "test",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": original_id,
+                            "content": "result",
+                        }
+                    ],
+                },
+            ]
+        }
+        cfg._sanitize_tool_use_ids(request)
+        sanitized_tool_use = request["messages"][0]["content"][0]["id"]
+        sanitized_tool_result = request["messages"][1]["content"][0]["tool_use_id"]
+        assert sanitized_tool_use == sanitized_tool_result
+        assert sanitized_tool_use == "toolu_01A_B_C_D_E"
