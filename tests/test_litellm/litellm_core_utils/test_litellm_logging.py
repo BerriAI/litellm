@@ -180,6 +180,82 @@ def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
     assert use_custom_pricing_for_model(litellm_params) is False
 
 
+def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
+    """_response_cost_calculator should extract router_model_id from
+    litellm_params.litellm_metadata.model_info.id when the result object
+    does not carry _hidden_params (e.g. ResponsesAPIResponse from /v1/responses
+    streaming). Regression test for custom pricing on streaming responses."""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    custom_model_id = "gpt-5-custom-pricing"
+    custom_input_cost = 125.0
+    custom_output_cost = 10.0
+
+    litellm.register_model(
+        model_cost={
+            custom_model_id: {
+                "input_cost_per_token": custom_input_cost,
+                "output_cost_per_token": custom_output_cost,
+                "max_tokens": 128000,
+                "max_input_tokens": 128000,
+                "max_output_tokens": 16384,
+                "litellm_provider": "openai",
+            }
+        }
+    )
+
+    try:
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=time.time(),
+            litellm_call_id="test-123",
+            function_id="test-fn",
+        )
+
+        logging_obj.update_environment_variables(
+            model="gpt-5",
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "litellm_metadata": {
+                    "model_info": {
+                        "id": custom_model_id,
+                        "input_cost_per_token": custom_input_cost,
+                        "output_cost_per_token": custom_output_cost,
+                    },
+                },
+            },
+        )
+
+        response_obj = ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=1234567890,
+            model="gpt-5",
+            output=[],
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        )
+
+        cost = logging_obj._response_cost_calculator(result=response_obj)
+
+        assert cost is not None, "Cost should not be None"
+        expected_cost = (10 * custom_input_cost) + (5 * custom_output_cost)
+        assert cost == pytest.approx(
+            expected_cost
+        ), f"Expected {expected_cost}, got {cost}"
+    finally:
+        litellm.model_cost.pop(custom_model_id, None)
+
+
 class TestUpdateFromKwargs:
     """Tests for the update_from_kwargs convenience wrapper."""
 
