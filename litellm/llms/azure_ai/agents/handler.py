@@ -97,14 +97,63 @@ class AzureAIAgentsHandler:
     # -------------------------------------------------------------------------
     # Response Helpers
     # -------------------------------------------------------------------------
-    def _extract_content_from_messages(self, messages_data: dict) -> str:
-        """Extract assistant content from the messages response."""
+    def _extract_content_from_messages(
+        self, messages_data: dict
+    ) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
+        """Extract assistant content and annotations from the messages response.
+
+        Returns (content, annotations) where annotations is a list of
+        OpenAI-compatible ChatCompletionAnnotation dicts, or None.
+        """
         for msg in messages_data.get("data", []):
             if msg.get("role") == "assistant":
                 for content_item in msg.get("content", []):
                     if content_item.get("type") == "text":
-                        return content_item.get("text", {}).get("value", "")
-        return ""
+                        text_obj = content_item.get("text", {})
+                        content = text_obj.get("value", "")
+                        raw_annotations = text_obj.get("annotations")
+                        annotations = self._transform_annotations(
+                            raw_annotations
+                        )
+                        return content, annotations
+        return "", None
+
+    def _transform_annotations(
+        self,
+        raw_annotations: Optional[List[Dict[str, Any]]],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Transform Azure AI Foundry annotations to OpenAI-compatible format.
+
+        Azure AI returns annotations like:
+            {"type": "url_citation", "text": "[1]", "start_index": 10,
+             "end_index": 13, "url_citation": {"url": "...", "title": "..."}}
+
+        OpenAI expects:
+            {"type": "url_citation", "url_citation": {"url": "...", "title": "...",
+             "start_index": 10, "end_index": 13}}
+        """
+        if not raw_annotations:
+            return None
+
+        result: List[Dict[str, Any]] = []
+        for ann in raw_annotations:
+            ann_type = ann.get("type")
+            if ann_type == "url_citation":
+                url_citation = dict(ann.get("url_citation", {}))
+                # Azure puts start/end_index at annotation level; OpenAI
+                # expects them inside url_citation
+                if "start_index" in ann and "start_index" not in url_citation:
+                    url_citation["start_index"] = ann["start_index"]
+                if "end_index" in ann and "end_index" not in url_citation:
+                    url_citation["end_index"] = ann["end_index"]
+                result.append(
+                    {"type": "url_citation", "url_citation": url_citation}
+                )
+            else:
+                # Pass through unknown annotation types as-is
+                result.append(ann)
+
+        return result if result else None
 
     def _build_model_response(
         self,
@@ -113,15 +162,23 @@ class AzureAIAgentsHandler:
         model_response: ModelResponse,
         thread_id: str,
         messages: List[Dict[str, Any]],
+        annotations: Optional[List[Dict[str, Any]]] = None,
     ) -> ModelResponse:
         """Build the ModelResponse from agent output."""
         from litellm.types.utils import Choices, Message, Usage
+
+        message_kwargs: Dict[str, Any] = {
+            "content": content,
+            "role": "assistant",
+        }
+        if annotations:
+            message_kwargs["annotations"] = annotations
 
         model_response.choices = [
             Choices(
                 finish_reason="stop",
                 index=0,
-                message=Message(content=content, role="assistant"),
+                message=Message(**message_kwargs),
             )
         ]
         model_response.model = model
@@ -250,7 +307,7 @@ class AzureAIAgentsHandler:
             )
 
         # Execute the agent flow
-        thread_id, content = self._execute_agent_flow_sync(
+        thread_id, content, annotations = self._execute_agent_flow_sync(
             make_request=make_request,
             api_base=api_base,
             api_version=api_version,
@@ -261,7 +318,7 @@ class AzureAIAgentsHandler:
         )
 
         return self._build_model_response(
-            model, content, model_response, thread_id, messages
+            model, content, model_response, thread_id, messages, annotations
         )
 
     def _execute_agent_flow_sync(
@@ -273,8 +330,8 @@ class AzureAIAgentsHandler:
         thread_id: Optional[str],
         messages: List[Dict[str, Any]],
         optional_params: dict,
-    ) -> Tuple[str, str]:
-        """Execute the agent flow synchronously. Returns (thread_id, content)."""
+    ) -> Tuple[str, str, Optional[List[Dict[str, Any]]]]:
+        """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
         if not thread_id:
@@ -347,8 +404,8 @@ class AzureAIAgentsHandler:
         )
         self._check_response(response, [200], "Failed to get messages")
 
-        content = self._extract_content_from_messages(response.json())
-        return thread_id, content
+        content, annotations = self._extract_content_from_messages(response.json())
+        return thread_id, content, annotations
 
     # -------------------------------------------------------------------------
     # Async Completion
@@ -399,7 +456,7 @@ class AzureAIAgentsHandler:
             )
 
         # Execute the agent flow
-        thread_id, content = await self._execute_agent_flow_async(
+        thread_id, content, annotations = await self._execute_agent_flow_async(
             make_request=make_request,
             api_base=api_base,
             api_version=api_version,
@@ -410,7 +467,7 @@ class AzureAIAgentsHandler:
         )
 
         return self._build_model_response(
-            model, content, model_response, thread_id, messages
+            model, content, model_response, thread_id, messages, annotations
         )
 
     async def _execute_agent_flow_async(
@@ -422,8 +479,8 @@ class AzureAIAgentsHandler:
         thread_id: Optional[str],
         messages: List[Dict[str, Any]],
         optional_params: dict,
-    ) -> Tuple[str, str]:
-        """Execute the agent flow asynchronously. Returns (thread_id, content)."""
+    ) -> Tuple[str, str, Optional[List[Dict[str, Any]]]]:
+        """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
         if not thread_id:
@@ -496,8 +553,8 @@ class AzureAIAgentsHandler:
         )
         self._check_response(response, [200], "Failed to get messages")
 
-        content = self._extract_content_from_messages(response.json())
-        return thread_id, content
+        content, annotations = self._extract_content_from_messages(response.json())
+        return thread_id, content, annotations
 
     # -------------------------------------------------------------------------
     # Streaming Completion (Native SSE)
@@ -585,6 +642,7 @@ class AzureAIAgentsHandler:
         response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
         created = int(time.time())
         thread_id = None
+        collected_annotations: Optional[List[Dict[str, Any]]] = None
 
         current_event = None
 
@@ -600,6 +658,9 @@ class AzureAIAgentsHandler:
 
                 if data_str == "[DONE]":
                     # Send final chunk with finish_reason
+                    final_delta_kwargs: Dict[str, Any] = {"content": None}
+                    if collected_annotations:
+                        final_delta_kwargs["annotations"] = collected_annotations
                     final_chunk = ModelResponseStream(
                         id=response_id,
                         created=created,
@@ -609,7 +670,7 @@ class AzureAIAgentsHandler:
                             StreamingChoices(
                                 finish_reason="stop",
                                 index=0,
-                                delta=Delta(content=None),
+                                delta=Delta(**final_delta_kwargs),
                             )
                         ],
                     )
@@ -627,6 +688,21 @@ class AzureAIAgentsHandler:
                 if current_event == "thread.created" and "id" in data:
                     thread_id = data["id"]
                     verbose_logger.debug(f"Stream created thread: {thread_id}")
+
+                # Extract annotations from completed message
+                if current_event == "thread.message.completed":
+                    for content_item in data.get("content", []):
+                        if content_item.get("type") == "text":
+                            raw_annotations = content_item.get("text", {}).get(
+                                "annotations"
+                            )
+                            transformed = self._transform_annotations(
+                                raw_annotations
+                            )
+                            if transformed:
+                                if collected_annotations is None:
+                                    collected_annotations = []
+                                collected_annotations.extend(transformed)
 
                 # Process message deltas - this is where the actual content comes
                 if current_event == "thread.message.delta":
