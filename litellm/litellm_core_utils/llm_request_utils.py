@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import litellm
 
@@ -28,6 +28,42 @@ def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
                 extra_body["metadata"]["prompt"] = _prompt.__dict__
 
     return extra_body
+
+
+def contains_surrogate_code_point(value: str) -> bool:
+    return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+
+
+def find_surrogate_code_point_path(
+    value: Any,
+    path: str = "payload",
+) -> Optional[str]:
+    if isinstance(value, str):
+        if contains_surrogate_code_point(value):
+            return path
+        return None
+
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            nested_path = find_surrogate_code_point_path(
+                nested_value,
+                path=f"{path}.{key}",
+            )
+            if nested_path is not None:
+                return nested_path
+        return None
+
+    if isinstance(value, list):
+        for index, nested_value in enumerate(value):
+            nested_path = find_surrogate_code_point_path(
+                nested_value,
+                path=f"{path}[{index}]",
+            )
+            if nested_path is not None:
+                return nested_path
+        return None
+
+    return None
 
 
 def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
