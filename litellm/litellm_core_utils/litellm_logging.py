@@ -601,7 +601,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if "litellm_metadata" in kwargs and isinstance(
             kwargs["litellm_metadata"], dict
         ):
-            if "metadata" not in base_litellm_params:
+            if not base_litellm_params.get("metadata"):
                 base_litellm_params["metadata"] = dict(kwargs["litellm_metadata"])
             else:
                 base_litellm_params["metadata"] = dict(base_litellm_params["metadata"])
