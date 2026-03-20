@@ -35,6 +35,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     resolve_output_file_ids_to_unified,
     update_batch_in_database,
 )
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    get_files_provider_config,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
@@ -277,7 +280,16 @@ async def create_batch(  # noqa: PLR0915
 
                 verbose_proxy_logger.debug(f"Created batch using model: {model_param}")
             else:
-                # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+                # SCENARIO 3: Fallback to custom_llm_provider with files_settings credentials
+                # get configs for custom_llm_provider
+                llm_provider_config = get_files_provider_config(
+                    custom_llm_provider=custom_llm_provider
+                )
+                if llm_provider_config is not None:
+                    # add llm_provider_config to data
+                    _create_batch_data.update(llm_provider_config)
+                _create_batch_data.pop("custom_llm_provider", None)
+
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
                 )
@@ -507,7 +519,7 @@ async def retrieve_batch(  # noqa: PLR0915
                 if model_id_from_batch:
                     response._hidden_params["model_id"] = model_id_from_batch
 
-        # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+        # SCENARIO 3: Fallback to custom_llm_provider with files_settings credentials
         else:
             custom_llm_provider = (
                 provider
@@ -515,6 +527,15 @@ async def retrieve_batch(  # noqa: PLR0915
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
+
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
@@ -710,7 +731,7 @@ async def list_batches(
                 **data,
             )
 
-        # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+        # SCENARIO 3: Fallback to custom_llm_provider with files_settings credentials
         else:
             custom_llm_provider = (
                 provider
@@ -718,6 +739,15 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
+
             response = await litellm.alist_batches(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 after=after,
@@ -894,11 +924,20 @@ async def cancel_batch(
             if not response._hidden_params.get("model_id") and data.get("model"):
                 response._hidden_params["model_id"] = data["model"]
 
-        # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
+        # SCENARIO 3: Fallback to custom_llm_provider with files_settings credentials
         else:
             custom_llm_provider = (
                 provider or data.pop("custom_llm_provider", None) or "openai"
             )
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
+
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)

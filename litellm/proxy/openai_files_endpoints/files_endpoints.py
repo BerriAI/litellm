@@ -753,7 +753,16 @@ async def get_file_content(  # noqa: PLR0915
                     )
                 )
             else:
-                # Fallback to default behavior (uses env variables or provider-based routing)
+                # Fallback with files_settings credentials
+                # get configs for custom_llm_provider
+                llm_provider_config = get_files_provider_config(
+                    custom_llm_provider=custom_llm_provider
+                )
+                if llm_provider_config is not None:
+                    # add llm_provider_config to data
+                    data.update(llm_provider_config)
+                data.pop("custom_llm_provider", None)
+
                 response = await litellm.afile_content(
                     **{
                         "custom_llm_provider": custom_llm_provider,
@@ -954,6 +963,14 @@ async def get_file(
                 llm_router=llm_router,
             )
         else:
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
@@ -1156,6 +1173,14 @@ async def delete_file(
                 **data_without_file_id,
             )
         else:
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
             data.pop("file_id", None)
             response = await litellm.afile_delete(
                 custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
@@ -1320,6 +1345,15 @@ async def list_files(
                 or await get_custom_llm_provider_from_request_body(request=request)
                 or "openai"
             )
+
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                data.update(llm_provider_config)
+            data.pop("custom_llm_provider", None)
 
             response = await litellm.afile_list(
                 custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
