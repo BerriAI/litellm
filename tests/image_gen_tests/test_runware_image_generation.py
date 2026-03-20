@@ -160,8 +160,16 @@ async def test_runware_image_generation_with_n():
         mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "data": [
-                {"taskType": "imageInference", "taskUUID": "u1", "imageURL": "https://example.com/1.png"},
-                {"taskType": "imageInference", "taskUUID": "u2", "imageURL": "https://example.com/2.png"},
+                {
+                    "taskType": "imageInference",
+                    "taskUUID": "u1",
+                    "imageURL": "https://example.com/1.png",
+                },
+                {
+                    "taskType": "imageInference",
+                    "taskUUID": "u2",
+                    "imageURL": "https://example.com/2.png",
+                },
             ]
         }
         return mock_response
@@ -219,6 +227,54 @@ async def test_runware_image_generation_b64_response_format():
         task = captured_json_data[0]
         assert task["outputType"] == "base64Data"
         assert response.data[0].b64_json is not None
+
+
+@pytest.mark.asyncio
+async def test_runware_image_generation_pass_through_params():
+    """
+    Test that Runware-specific parameters (negativePrompt, steps, CFGScale, seed,
+    scheduler) are forwarded directly to the API request body.
+    """
+    captured_json_data = None
+
+    def capture_post_call(*args, **kwargs):
+        nonlocal captured_json_data
+        captured_json_data = kwargs.get("json")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "data": [
+                {
+                    "taskType": "imageInference",
+                    "taskUUID": "test-uuid",
+                    "imageURL": "https://example.com/image.png",
+                }
+            ]
+        }
+        return mock_response
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.side_effect = capture_post_call
+
+        await aimage_generation(
+            model="runware/runware:400@1",
+            prompt="A landscape",
+            api_key="test-key",
+            negativePrompt="blurry, low quality",
+            steps=30,
+            CFGScale=7.5,
+            seed=42,
+            scheduler="DPM++ 2M Karras",
+        )
+
+        task = captured_json_data[0]
+        assert task["negativePrompt"] == "blurry, low quality"
+        assert task["steps"] == 30
+        assert task["CFGScale"] == 7.5
+        assert task["seed"] == 42
+        assert task["scheduler"] == "DPM++ 2M Karras"
 
 
 def test_runware_request_transformation_unit():
@@ -385,7 +441,10 @@ def test_runware_validate_environment_missing_key():
     )
 
     config = RunwareImageGenerationConfig()
-    with patch("litellm.llms.runware.image_generation.transformation.get_secret_str", return_value=None):
+    with patch(
+        "litellm.llms.runware.image_generation.transformation.get_secret_str",
+        return_value=None,
+    ):
         with pytest.raises(ValueError, match="RUNWARE_API_KEY is not set"):
             config.validate_environment(
                 headers={},

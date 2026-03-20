@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
 import httpx
@@ -86,10 +86,13 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
                 elif drop_params:
                     pass
                 else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. "
+                    from litellm.exceptions import UnsupportedParamsError
+
+                    raise UnsupportedParamsError(
+                        message=f"Parameter {k} is not supported for model {model}. "
                         f"Supported parameters are {supported_params}. "
-                        f"Set drop_params=True to drop unsupported parameters."
+                        f"Set drop_params=True to drop unsupported parameters.",
+                        status_code=400,
                     )
         return optional_params
 
@@ -100,7 +103,7 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> Union[dict, list]:
+    ) -> dict:  # type: ignore[override]
         # Parse size into width/height
         width = 1024
         height = 1024
@@ -167,6 +170,11 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
         images = response_data.get("data", [])
         for image_data in images:
             if isinstance(image_data, dict):
+                # Skip error/failed task objects that lack image data
+                if not image_data.get("imageURL") and not image_data.get(
+                    "imageBase64Data"
+                ):
+                    continue
                 model_response.data.append(
                     ImageObject(
                         url=image_data.get("imageURL", None),
