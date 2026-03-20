@@ -976,9 +976,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     # Shutdown event - close guardrail/callback resources (e.g. presidio aiohttp sessions)
     for callback in litellm.callbacks:
-        if hasattr(callback, "async_close") and callable(callback.async_close):
+        if hasattr(callback, "async_close") and callable(callback.async_close):  # type: ignore[union-attr]
             try:
-                await callback.async_close()
+                await callback.async_close()  # type: ignore[union-attr]
             except Exception as e:
                 verbose_proxy_logger.error(
                     f"Error closing callback {type(callback).__name__}: {e}"
