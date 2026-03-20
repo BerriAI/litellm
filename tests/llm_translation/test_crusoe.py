@@ -77,10 +77,13 @@ def test_crusoe_models_configuration():
     """Test that Crusoe models are configured correctly"""
     from litellm import get_model_info
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    original_model_cost = litellm.model_cost
+    original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    crusoe_models = [
+        crusoe_models = [
         "crusoe/meta-llama/Llama-3.3-70B-Instruct",
         "crusoe/deepseek-ai/DeepSeek-R1-0528",
         "crusoe/deepseek-ai/DeepSeek-V3-0324",
@@ -90,10 +93,16 @@ def test_crusoe_models_configuration():
         "crusoe/google/gemma-3-12b-it",
     ]
 
-    for model in crusoe_models:
-        model_info = get_model_info(model)
-        assert model_info is not None, f"Model info not found for {model}"
-        assert model_info.get("litellm_provider") == "crusoe", (
-            f"{model} should have crusoe as provider"
-        )
-        assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
+        for model in crusoe_models:
+            model_info = get_model_info(model)
+            assert model_info is not None, f"Model info not found for {model}"
+            assert model_info.get("litellm_provider") == "crusoe", (
+                f"{model} should have crusoe as provider"
+            )
+            assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
+    finally:
+        litellm.model_cost = original_model_cost
+        if original_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env
