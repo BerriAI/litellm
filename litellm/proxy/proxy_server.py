@@ -2971,9 +2971,19 @@ class ProxyConfig:
                             )
                         else:
                             litellm.audit_log_callbacks.append(callback)
-                    print(  # noqa
-                        f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
-                    )  # noqa
+
+                    _store_audit_logs = litellm_settings.get(
+                        "store_audit_logs", litellm.store_audit_logs
+                    )
+                    if _store_audit_logs:
+                        print(  # noqa
+                            f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
+                        )  # noqa
+                    else:
+                        verbose_proxy_logger.warning(
+                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
+                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                        )
                 elif key == "cache_params":
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
