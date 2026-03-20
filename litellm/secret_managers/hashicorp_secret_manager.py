@@ -538,8 +538,8 @@ class HashicorpSecretManager(BaseSecretManager):
                 )
                 if new_secret_value_from_vault != new_secret_value:
                     # Mask key values to avoid logging raw API keys
-                    masked_expected = f"...{new_secret_value[-4:]}" if new_secret_value else "<empty>"
-                    masked_got = f"...{new_secret_value_from_vault[-4:]}" if new_secret_value_from_vault else "<empty>"
+                    masked_expected = f"...{new_secret_value[-4:]}" if new_secret_value and len(new_secret_value) > 4 else "<redacted>"
+                    masked_got = f"...{new_secret_value_from_vault[-4:]}" if new_secret_value_from_vault and len(new_secret_value_from_vault) > 4 else "<redacted>"
                     verbose_logger.error(
                         "New secret value mismatch. Expected: %s, Got: %s",
                         masked_expected,
