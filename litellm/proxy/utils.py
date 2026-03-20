@@ -445,6 +445,9 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
+            from litellm.proxy.proxy_server import key_rotation_pod_lock_manager
+            if key_rotation_pod_lock_manager is not None:
+                key_rotation_pod_lock_manager.redis_cache = redis_cache
 
     def _add_proxy_hooks(self, llm_router: Optional[Router] = None):
         """

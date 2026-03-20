@@ -47,7 +47,10 @@ class KeyRotationManager:
         """
         Main entry point - find and rotate keys that are due for rotation
         """
-        # Acquire distributed lock to prevent concurrent rotation across pods
+        # Acquire distributed lock to prevent concurrent rotation across pods.
+        # Lock TTL is DEFAULT_CRON_JOB_LOCK_TTL_SECONDS (default 60s, configurable
+        # via env var). For large key sets, increase this to avoid lock expiry
+        # mid-rotation.
         lock_acquired = False
         try:
             if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
