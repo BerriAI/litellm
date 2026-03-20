@@ -470,7 +470,9 @@ class HashicorpSecretManager(BaseSecretManager):
 
         try:
             # First verify the old secret exists using _build_secret_target
-            current_target = self._build_secret_target(current_secret_name, optional_params)
+            current_target = self._build_secret_target(
+                current_secret_name, optional_params
+            )
             try:
                 response = await async_client.get(
                     url=current_target["url"],
@@ -480,8 +482,13 @@ class HashicorpSecretManager(BaseSecretManager):
                 # Secret exists, we can proceed
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
-                    return {"status": "error", "message": f"Current secret {current_secret_name} not found"}
+                    verbose_logger.exception(
+                        f"Current secret {current_secret_name} not found"
+                    )
+                    return {
+                        "status": "error",
+                        "message": f"Current secret {current_secret_name} not found",
+                    }
                 verbose_logger.exception(
                     f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -490,8 +497,13 @@ class HashicorpSecretManager(BaseSecretManager):
                     "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception(f"Error checking current secret existence: {e}")
-                return {"status": "error", "message": f"Error checking current secret: {e}"}
+                verbose_logger.exception(
+                    f"Error checking current secret existence: {e}"
+                )
+                return {
+                    "status": "error",
+                    "message": f"Error checking current secret: {e}",
+                }
 
             # Create new secret with new name and value
             # Use _build_secret_target to handle optional_params
@@ -504,7 +516,10 @@ class HashicorpSecretManager(BaseSecretManager):
             )
 
             # Check if async_write_secret returned an error
-            if isinstance(create_response, dict) and create_response.get("status") == "error":
+            if (
+                isinstance(create_response, dict)
+                and create_response.get("status") == "error"
+            ):
                 return create_response
 
             # Verify new secret was created successfully using _build_secret_target
@@ -518,7 +533,9 @@ class HashicorpSecretManager(BaseSecretManager):
                 json_resp = response.json()
                 # Use data_key from target to get the correct value
                 data_key = new_target["data_key"]
-                new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                new_secret_value_from_vault = (
+                    json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                )
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
                         f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
@@ -529,8 +546,13 @@ class HashicorpSecretManager(BaseSecretManager):
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
-                    return {"status": "error", "message": f"Failed to verify new secret {new_secret_name}"}
+                    verbose_logger.exception(
+                        f"Failed to verify new secret {new_secret_name}"
+                    )
+                    return {
+                        "status": "error",
+                        "message": f"Failed to verify new secret {new_secret_name}",
+                    }
                 verbose_logger.exception(
                     f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -540,7 +562,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 }
             except Exception as e:
                 verbose_logger.exception(f"Error verifying new secret: {e}")
-                return {"status": "error", "message": f"Error verifying new secret: {e}"}
+                return {
+                    "status": "error",
+                    "message": f"Error verifying new secret: {e}",
+                }
 
             # If everything is successful, delete the old secret
             # Only delete if the names are different (same name means we're just updating the value)
@@ -552,7 +577,10 @@ class HashicorpSecretManager(BaseSecretManager):
                     timeout=timeout,
                 )
                 # Check if async_delete_secret returned an error
-                if isinstance(delete_response, dict) and delete_response.get("status") == "error":
+                if (
+                    isinstance(delete_response, dict)
+                    and delete_response.get("status") == "error"
+                ):
                     # Log the error but don't fail the rotation since new secret was created successfully
                     verbose_logger.warning(
                         f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"

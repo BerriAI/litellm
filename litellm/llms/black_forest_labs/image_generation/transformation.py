@@ -203,9 +203,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = (
-            api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
-        )
+        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
         base_url = base_url.rstrip("/")
 
         endpoint = self._get_model_endpoint(model)
@@ -261,7 +259,12 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ImageResponse:
         """
         Transform Black Forest Labs response to OpenAI-compatible ImageResponse.

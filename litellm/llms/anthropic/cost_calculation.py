@@ -29,9 +29,13 @@ def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage") -> float:
         return 0.0
 
     prompt_tokens_details = _parse_prompt_tokens_details(usage)
-    _, _, cache_creation_cost, cache_creation_cost_above_1hr, cache_read_cost = (
-        _get_token_base_cost(model_info=model_info, usage=usage)
-    )
+    (
+        _,
+        _,
+        cache_creation_cost,
+        cache_creation_cost_above_1hr,
+        cache_read_cost,
+    ) = _get_token_base_cost(model_info=model_info, usage=usage)
 
     cache_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
 
@@ -68,7 +72,9 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
-        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider="anthropic"
+        )
         provider_specific_entry: dict = model_info.get("provider_specific_entry") or {}
 
         multiplier = 1.0
@@ -77,9 +83,7 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
             and usage.inference_geo
             and usage.inference_geo.lower() not in ["global", "not_available"]
         ):
-            multiplier *= provider_specific_entry.get(
-                usage.inference_geo.lower(), 1.0
-            )
+            multiplier *= provider_specific_entry.get(usage.inference_geo.lower(), 1.0)
         if hasattr(usage, "speed") and usage.speed == "fast":
             multiplier *= provider_specific_entry.get("fast", 1.0)
 
