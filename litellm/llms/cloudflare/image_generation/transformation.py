@@ -1,5 +1,5 @@
 import base64
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -152,7 +152,7 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> CloudflareError:
         return CloudflareError(
             status_code=status_code,
