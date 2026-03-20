@@ -12,6 +12,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -1633,7 +1634,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         usage_metadata = completion_response["usageMetadata"]
 
-        def _get_token_count(detail: dict) -> int:
+        def _get_token_count(detail: Mapping[str, Any]) -> int:
             raw_token_count = detail.get("tokenCount", detail.get("token_count", 0))
             return raw_token_count if isinstance(raw_token_count, int) else 0
 
