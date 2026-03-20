@@ -9036,6 +9036,8 @@ export interface LoginRequest {
 interface LoginResponse {
   redirect_url: string;
   token?: string;
+  code?: string;
+  expires_in?: number;
 }
 
 export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {
@@ -9065,9 +9067,32 @@ export const loginCall = async (username: string, password: string, useV3?: bool
 
   const data: LoginResponse = await response.json();
 
-  // Write the token cookie from the response body so it works cross-origin
-  // (control plane UI → worker). The Set-Cookie header is still sent for
-  // same-origin deployments as a fallback.
+  // v3 returns an opaque code — exchange it for the real JWT
+  if (useV3 && data.code) {
+    const exchangeUrl = proxyBaseUrl
+      ? `${proxyBaseUrl}/v3/login/exchange`
+      : "/v3/login/exchange";
+
+    const exchangeResponse = await fetch(exchangeUrl, {
+      method: "POST",
+      body: JSON.stringify({ code: data.code }),
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!exchangeResponse.ok) {
+      const errorData = await exchangeResponse.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    const exchangeData: LoginResponse = await exchangeResponse.json();
+    if (exchangeData.token) {
+      document.cookie = `token=${exchangeData.token}; path=/; SameSite=Lax`;
+    }
+    return exchangeData;
+  }
+
+  // Backwards compatibility: v2 or old v3 returns token directly
   if (data.token) {
     document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
   }

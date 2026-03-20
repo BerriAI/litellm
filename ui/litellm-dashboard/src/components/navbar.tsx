@@ -80,6 +80,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const handleLogout = () => {
     clearTokenCookies();
     localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
     window.location.href = logoutUrl;
   };
 
@@ -87,6 +88,7 @@ const Navbar: React.FC<NavbarProps> = ({
     clearTokenCookies();
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
     window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
   };
 
