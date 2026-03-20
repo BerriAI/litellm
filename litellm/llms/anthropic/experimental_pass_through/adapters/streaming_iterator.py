@@ -42,6 +42,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         text="",
     )
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
+    last_usage: Optional[Dict] = None  # Track usage for message_stop
 
     def __init__(
         self,
@@ -68,11 +69,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Returns:
             UsageDelta with all token counts initialized to 0.
         """
+        from litellm.types.llms.anthropic import CacheCreationDelta
+
         return UsageDelta(
             input_tokens=0,
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
+            cache_creation=CacheCreationDelta(
+                ephemeral_5m_input_tokens=0,
+                ephemeral_1h_input_tokens=0,
+            ),
         )
 
     def __next__(self):
@@ -103,20 +110,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
+
+                # Deferred content_block_start: determine type from first chunk
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": content_block_start,
+                        }
+                    )
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 if should_start_new_block:
@@ -151,6 +166,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     processed_chunk["type"] == "message_delta"
                     and self.sent_content_block_finish is False
                 ):
+                    # Track usage for message_stop
+                    if "usage" in processed_chunk:
+                        self.last_usage = processed_chunk["usage"]
                     # Queue both the content_block_stop and the message_delta
                     self.chunk_queue.append(
                         {
@@ -177,7 +195,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if not self.sent_last_message:
                 self.sent_last_message = True
-                self.chunk_queue.append({"type": "message_stop"})
+                message_stop: Dict[str, Any] = {"type": "message_stop"}
+                if self.last_usage is not None:
+                    message_stop["usage"] = self.last_usage
+                self.chunk_queue.append(message_stop)
 
             if self.chunk_queue:
                 return self.chunk_queue.popleft()
@@ -188,7 +209,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
             if self.sent_last_message is False:
                 self.sent_last_message = True
-                return {"type": "message_stop"}
+                message_stop_ev: Dict[str, Any] = {"type": "message_stop"}
+                if self.last_usage is not None:
+                    message_stop_ev["usage"] = self.last_usage
+                return message_stop_ev
             raise StopIteration
         except Exception as e:
             verbose_logger.error(
@@ -207,6 +231,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Queue initial chunks if not sent yet
             if self.sent_first_chunk is False:
                 self.sent_first_chunk = True
+                verbose_logger.debug("AnthropicStreamWrapper: sending message_start")
                 self.chunk_queue.append(
                     {
                         "type": "message_start",
@@ -224,20 +249,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
+
+                # Deferred content_block_start: determine type from first chunk
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": content_block_start,
+                        }
+                    )
 
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
@@ -297,6 +330,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # Queue the merged chunk and reset
                     self.chunk_queue.append(merged_chunk)
                     self.queued_usage_chunk = True
+                    # Track usage for message_stop
+                    if "usage" in merged_chunk:
+                        self.last_usage = merged_chunk["usage"]
                     self.holding_stop_reason_chunk = None
                     return self.chunk_queue.popleft()
 
@@ -335,6 +371,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         processed_chunk["type"] == "message_delta"
                         and self.sent_content_block_finish is False
                     ):
+                        # Track usage for message_stop
+                        if "usage" in processed_chunk:
+                            self.last_usage = processed_chunk["usage"]
                         # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
@@ -374,7 +413,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if not self.sent_last_message:
                 self.sent_last_message = True
-                self.chunk_queue.append({"type": "message_stop"})
+                message_stop: Dict[str, Any] = {"type": "message_stop"}
+                if self.last_usage is not None:
+                    message_stop["usage"] = self.last_usage
+                self.chunk_queue.append(message_stop)
 
             # Return queued items if any
             if self.chunk_queue:
@@ -388,10 +430,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
             # Handle any held stop_reason chunk
             if self.holding_stop_reason_chunk is not None:
+                # Track usage from held chunk
+                if "usage" in self.holding_stop_reason_chunk:
+                    self.last_usage = self.holding_stop_reason_chunk["usage"]
                 return self.holding_stop_reason_chunk
             if not self.sent_last_message:
                 self.sent_last_message = True
-                return {"type": "message_stop"}
+                message_stop_ev: Dict[str, Any] = {"type": "message_stop"}
+                if self.last_usage is not None:
+                    message_stop_ev["usage"] = self.last_usage
+                return message_stop_ev
             raise StopAsyncIteration
 
     def anthropic_sse_wrapper(self) -> Iterator[bytes]:
@@ -415,6 +463,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
+        verbose_logger.debug("AnthropicStreamWrapper: async_anthropic_sse_wrapper called")
         async for chunk in self:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
