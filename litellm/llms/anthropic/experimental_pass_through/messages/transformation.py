@@ -126,7 +126,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
+        api_base = (
+            AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
+        )
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base}/v1/messages"
         return api_base
