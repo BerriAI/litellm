@@ -3,6 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
+
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
@@ -225,7 +226,11 @@ def _process_gemini_media(
             return _apply_gemini_3_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
-        raise Exception("Invalid image received - {}".format(image_url))
+        raise litellm.BadRequestError(
+            message=f"Invalid image received - {image_url}. Supported formats are http://, https://, gs://, or base64 data.",
+            model=model,
+            llm_provider="vertex_ai",
+        )
     except Exception as e:
         raise e
 
@@ -381,10 +386,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             video_metadata = file_element["file"].get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
-                                raise Exception(
-                                    "Unknown file type. Please pass in a file_id or file_data"
+                                raise litellm.BadRequestError(
+                                    message="Unknown file type. Please pass in a file_id or file_data",
+                                    model=model,
+                                    llm_provider="vertex_ai",
                                 )
-
                             # Convert detail to media_resolution_enum
                             media_resolution_enum = (
                                 _convert_detail_to_media_resolution_enum(detail)
@@ -399,12 +405,23 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     video_metadata=video_metadata,
                                 )
                                 _parts.append(_part)
-                            except Exception:
-                                raise Exception(
-                                    "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
-                                        file_id, msg_i, element_idx
-                                    )
-                                )
+                            except Exception as e:
+                                if isinstance(e, litellm.ImageFetchError):
+                                    # ImageFetchError (e.g., 403/404 on URL) — wrap with model/provider context
+                                    raise litellm.BadRequestError(
+                                        message=str(e),
+                                        model=model,
+                                        llm_provider="vertex_ai",
+                                    ) from e
+                                elif isinstance(e, litellm.BadRequestError):
+                                    # Other BadRequestError (e.g., unsupported format) — preserve original message
+                                    raise
+                                else:
+                                    raise litellm.BadRequestError(
+                                        message=f"Unable to determine mime type for file_id: {file_id}, set this explicitly using message[{msg_i}].content[{element_idx}].file.format. Original error: {str(e)}",
+                                        model=model,
+                                        llm_provider="vertex_ai",
+                                    ) from e
                     user_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
