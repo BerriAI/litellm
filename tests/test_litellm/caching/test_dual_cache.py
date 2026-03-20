@@ -159,3 +159,60 @@ async def test_dual_cache_sync_and_async_set_cache_use_same_ttl():
     # Both should use default_in_memory_ttl=60, so their expiry times
     # should be within a small tolerance of each other
     assert abs(sync_expiry - async_expiry) < 1.0
+
+
+def test_circuit_breaker_opens_after_threshold():
+    """Circuit opens after N consecutive Redis failures."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    for _ in range(3):
+        cb.record_failure()
+
+    assert cb._state == "open"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_open_skips_redis():
+    """When circuit is open, the guard decorator raises immediately without calling the method."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=3, recovery_timeout=60
+            )
+            self._circuit_breaker._state = "open"
+            self._circuit_breaker._opened_at = time.time()
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def do_thing(self):
+            self.call_count += 1
+            return "result"
+
+    fr = FakeRedis()
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await fr.do_thing()
+
+    assert fr.call_count == 0  # method body never executed
+
+
+def test_circuit_breaker_closes_on_recovery():
+    """After recovery_timeout expires, probe is allowed and success closes the circuit."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    cb._state = "open"
+    cb._opened_at = time.time() - 9999  # recovery timeout long expired
+
+    # is_open() should return False to allow a probe through, and transition to HALF_OPEN
+    assert cb.is_open() is False
+    assert cb._state == "half_open"
+
+    # Successful probe closes the circuit
+    cb.record_success()
+    assert cb._state == "closed"
