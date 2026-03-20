@@ -757,7 +757,7 @@ def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[s
     """
     if traffic_type is None:
         return None
-    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(traffic_type.upper())
+    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(str(traffic_type).upper())
     return service_tier
 
 
@@ -1189,7 +1189,9 @@ def completion_cost(  # noqa: PLR0915
                         and _usage["prompt_tokens_details"] != {}
                         and _usage["prompt_tokens_details"]
                     ):
-                        prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
+                        prompt_tokens_details = (
+                            _usage.get("prompt_tokens_details") or {}
+                        )
                         cache_read_input_tokens = prompt_tokens_details.get(
                             "cached_tokens", 0
                         )
@@ -1515,7 +1517,9 @@ def completion_cost(  # noqa: PLR0915
                 if custom_llm_provider == "azure_ai":
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
-                        hidden_params = getattr(completion_response, "_hidden_params", None) or {}
+                        hidden_params = (
+                            getattr(completion_response, "_hidden_params", None) or {}
+                        )
                         hidden_model = hidden_params.get("model") or hidden_params.get(
                             "litellm_model_name"
                         )

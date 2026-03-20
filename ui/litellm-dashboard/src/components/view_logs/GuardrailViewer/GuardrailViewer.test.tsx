@@ -151,6 +151,39 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText(/Raw Bedrock Guardrail Response/)).not.toBeInTheDocument();
   });
 
+  it("renders without crashing when guardrail_mode is null", () => {
+    const data = makeGuardrailInformation({ guardrail_mode: null });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText("Guardrails & Policy Compliance")).toBeInTheDocument();
+    // Null mode should display as dash
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("renders without crashing when guardrail_mode is an object", () => {
+    const data = makeGuardrailInformation({
+      guardrail_mode: { default: "pre_call", tags: {} },
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText("Guardrails & Policy Compliance")).toBeInTheDocument();
+    expect(screen.getByText("PRE-CALL")).toBeInTheDocument();
+  });
+
+  it("renders without crashing when guardrail_mode is an array and shows in both timeline buckets", () => {
+    const data = makeGuardrailInformation({
+      guardrail_mode: ["pre_call", "post_call"],
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText("Guardrails & Policy Compliance")).toBeInTheDocument();
+    // Mode badge shows first element formatted
+    expect(screen.getByText("PRE-CALL")).toBeInTheDocument();
+    // Entry should appear in both pre-call and post-call timeline sections
+    expect(screen.getByText(/Pre-call guardrail:/)).toBeInTheDocument();
+    expect(screen.getByText(/Post-call guardrail:/)).toBeInTheDocument();
+  });
+
   it("integration: renders with real Bedrock details without mocks", async () => {
     const user = userEvent.setup();
     const data = makeGuardrailInformation({
