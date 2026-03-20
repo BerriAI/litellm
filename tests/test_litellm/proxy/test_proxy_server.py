@@ -380,14 +380,32 @@ def test_login_v3_exchange_single_use(monkeypatch):
     assert second.status_code == 401
 
 
-def test_login_v3_exchange_invalid_code():
+def test_login_v3_exchange_invalid_code(monkeypatch):
     """Random code returns 401."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
     client = TestClient(app)
     response = client.post(
         "/v3/login/exchange",
         json={"code": "nonexistent-code"},
     )
     assert response.status_code == 401
+
+
+def test_login_v3_exchange_rejected_without_control_plane_url(monkeypatch):
+    """v3/login/exchange returns 404 when control_plane_url is not configured."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login/exchange",
+        json={"code": "some-code"},
+    )
+
+    assert response.status_code == 404
+    assert "control_plane_url" in response.json()["error"]["message"]
 
 
 def test_login_v3_returns_json_on_proxy_exception(monkeypatch):

@@ -1546,6 +1546,7 @@ user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
+_cp_no_redis_warning_emitted: bool = False
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -3096,6 +3097,21 @@ class ProxyConfig:
                         "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
                         "instead of continuing without a code_verifier."
                     )
+
+            ### CONTROL PLANE CODE-EXCHANGE PREREQUISITE CHECK ###
+            cp_url = general_settings.get("control_plane_url")
+            if cp_url and redis_usage_cache is None:
+                global _cp_no_redis_warning_emitted
+                if not _cp_no_redis_warning_emitted:
+                    _cp_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "control_plane_url is configured but Redis is not configured for LiteLLM caching. "
+                        "Login codes (SSO and /v3/login) will not be shared across instances — "
+                        "the /v3/login/exchange call may land on a different pod and fail with 401. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or ensure sticky sessions for single-instance deployments."
+                    )
+
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
@@ -11167,6 +11183,14 @@ async def login_v3(request: Request):  # noqa: PLR0915
 )  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
     try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login/exchange is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
         body = await request.json()
         code = body.get("code")
         if not code:

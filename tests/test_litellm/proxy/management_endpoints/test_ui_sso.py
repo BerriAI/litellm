@@ -5220,3 +5220,39 @@ class TestValidateReturnTo:
         # Should not raise
         SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
 
+    def test_rejects_scheme_mismatch(self, monkeypatch):
+        """http:// must be rejected when control_plane_url uses https://."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("http://cp.example.com/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_port_mismatch(self, monkeypatch):
+        """Non-default port must be rejected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com:8443/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_allows_explicit_default_port(self, monkeypatch):
+        """https://host:443 should match https://host (default port normalisation)."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:443/ui")
+
+    def test_allows_matching_custom_port(self, monkeypatch):
+        """Both sides on the same custom port should match."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com:3000"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:3000/ui")
+
