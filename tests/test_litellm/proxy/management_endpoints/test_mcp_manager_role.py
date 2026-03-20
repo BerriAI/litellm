@@ -9,6 +9,9 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_mcp_manager,
 )
+from litellm.proxy.management_endpoints import (
+    mcp_management_endpoints as mgmt_endpoints,
+)
 
 
 class TestIsUserTeamMcpManager:
@@ -70,6 +73,9 @@ from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not mgmt_endpoints.MCP_AVAILABLE, reason="MCP module not installed"
+)
 class TestAssertCanManageTeamMcpServer:
     async def test_mcp_manager_with_team_id_succeeds(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -86,10 +92,11 @@ class TestAssertCanManageTeamMcpServer:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_team_object",
             AsyncMock(return_value=mock_team),
         ):
-            result = await _assert_can_manage_team_mcp_server(
+            team_id, team_obj = await _assert_can_manage_team_mcp_server(
                 user_api_key_dict=user_auth, team_id="team1"
             )
-            assert result == "team1"
+            assert team_id == "team1"
+            assert team_obj == mock_team
 
     async def test_regular_user_gets_403(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -154,10 +161,11 @@ class TestAssertCanManageTeamMcpServer:
                 AsyncMock(return_value={"server1", "server2"}),
             ),
         ):
-            result = await _assert_can_manage_team_mcp_server(
+            team_id, team_obj = await _assert_can_manage_team_mcp_server(
                 user_api_key_dict=user_auth, server_id="server1"
             )
-            assert result == "team1"
+            assert team_id == "team1"
+            assert team_obj == mock_team
 
     async def test_mcp_manager_server_not_in_team_gets_403(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -188,6 +196,9 @@ class TestAssertCanManageTeamMcpServer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not mgmt_endpoints.MCP_AVAILABLE, reason="MCP module not installed"
+)
 class TestCreateMcpServerAsManager:
     async def test_create_auto_assigns_to_team(self):
         """MCP manager creating a server should auto-assign it to their team's ObjectPermissionTable."""
@@ -234,7 +245,7 @@ class TestCreateMcpServerAsManager:
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
-                AsyncMock(return_value="team1"),
+                AsyncMock(return_value=("team1", mock_team)),
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
