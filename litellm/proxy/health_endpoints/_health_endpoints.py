@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import os
 import time
 import traceback
@@ -10,8 +11,9 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -31,8 +33,10 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    get_in_flight_requests,
+)
 from litellm.secret_managers.main import get_secret
-from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
 #### Health ENDPOINTS ####
 
@@ -226,6 +230,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "datadog_metrics",
             "datadog_llm_observability",
             "generic_api",
             "arize",
@@ -243,7 +248,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             service_in_success_callbacks = True
         else:
             for cb in litellm.success_callback:
-                if hasattr(cb, "callback_name") and cb.callback_name == service:
+                if getattr(cb, "callback_name", None) == service:
                     service_in_success_callbacks = True
                     break
                 cb_id = get_callback_identifier(cb)
@@ -278,6 +283,31 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Datadog is healthy"
+                ),
+            }
+        elif service == "datadog_metrics":
+            from litellm.integrations.datadog.datadog_metrics import (
+                DatadogMetricsLogger,
+            )
+            from litellm.litellm_core_utils.litellm_logging import (
+                get_custom_logger_compatible_class,
+            )
+
+            datadog_metrics_logger = get_custom_logger_compatible_class(
+                "datadog_metrics"
+            )
+            if datadog_metrics_logger is None:
+                datadog_metrics_logger = DatadogMetricsLogger(
+                    start_periodic_flush=False
+                )
+            assert isinstance(datadog_metrics_logger, DatadogMetricsLogger)
+            response = await datadog_metrics_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog Metrics is healthy"
                 ),
             }
         elif service == "arize":
@@ -747,6 +777,7 @@ async def _perform_health_check_and_save(
         model=target_model,
         details=details,
         max_concurrency=max_concurrency,
+        model_id=model_id,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -1024,10 +1055,7 @@ async def shared_health_check_status_endpoint(
 
 
 def _read_license_data() -> Optional[Dict[str, Any]]:
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user_data,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: Optional[EnterpriseLicenseData] = (
         premium_user_data or _license_check.airgapped_license_data
@@ -1071,10 +1099,7 @@ async def health_license_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Return metadata about the configured LiteLLM license without exposing the key."""
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user
 
     license_data = _read_license_data()
     has_license = bool(getattr(_license_check, "license_str", None))
@@ -1116,11 +1141,11 @@ async def _db_health_readiness_check():
 
     global db_health_cache
 
-    # Note - Intentionally don't try/except this so it raises an exception when it fails
     try:
-        # if timedelta is less than 2 minutes return DB Status
         time_diff = datetime.now() - db_health_cache["last_updated"]
-        if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
+        if db_health_cache["status"] == "connected" and time_diff < timedelta(
+            seconds=15
+        ):
             return db_health_cache
 
         if prisma_client is None:
@@ -1131,7 +1156,28 @@ async def _db_health_readiness_check():
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
+        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
         PrismaDBExceptionHandler.handle_db_exception(e)
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            try:
+                verbose_proxy_logger.warning(
+                    "_db_health_readiness_check: health_check failed, attempting reconnect"
+                )
+                await prisma_client.disconnect()
+                await prisma_client.connect()
+                await prisma_client.health_check()
+                verbose_proxy_logger.info(
+                    "_db_health_readiness_check: reconnect succeeded"
+                )
+                db_health_cache = {
+                    "status": "connected",
+                    "last_updated": datetime.now(),
+                }
+                return db_health_cache
+            except Exception:
+                verbose_proxy_logger.error(
+                    "_db_health_readiness_check: reconnect failed"
+                )
         return db_health_cache
 
 
@@ -1268,17 +1314,22 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
+        # check log level
+        log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
+        is_detailed_debug = verbose_logger.isEnabledFor(logging.DEBUG)
+
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
             return {
                 "status": "healthy",
-                "db": "connected",
+                "db": db_health_status["status"],
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **db_health_status,
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
             }
         else:
             return {
@@ -1288,9 +1339,28 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+@router.get(
+    "/health/backlog",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_backlog():
+    """
+    Returns the number of HTTP requests currently in-flight on this uvicorn worker.
+
+    Use this to measure per-pod queue depth. A high value means the worker is
+    processing many concurrent requests — requests arriving now will have to wait
+    for the event loop to get to them, adding latency before LiteLLM even starts
+    its own timer.
+    """
+    return {"in_flight_requests": get_in_flight_requests()}
 
 
 @router.get(

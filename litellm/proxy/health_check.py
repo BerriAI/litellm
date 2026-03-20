@@ -11,7 +11,7 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, DEFAULT_HEALTH_CHECK_PROMPT
+from litellm.constants import DEFAULT_HEALTH_CHECK_PROMPT, HEALTH_CHECK_TIMEOUT_SECONDS
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -98,6 +98,66 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
+async def _run_model_health_check(model: dict):
+    litellm_params = model["litellm_params"]
+    model_info = model.get("model_info", {})
+    mode = model_info.get("mode", None)
+    litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+
+    return await run_with_timeout(
+        litellm.ahealth_check(
+            litellm_params,
+            mode=mode,
+            prompt=DEFAULT_HEALTH_CHECK_PROMPT,
+            input=["test from litellm"],
+        ),
+        timeout,
+    )
+
+
+async def _run_health_checks_with_bounded_concurrency(
+    models: list, concurrency_limit: int
+) -> tuple[list, int]:
+    """
+    Run health checks with at most `concurrency_limit` active tasks.
+    Preserves result ordering to match `models`.
+    """
+    results: list = [None] * len(models)
+    tasks_to_index: dict[asyncio.Task, int] = {}
+    model_iter = iter(enumerate(models))
+    peak_in_flight = 0
+
+    def _schedule_next() -> bool:
+        nonlocal peak_in_flight
+        try:
+            idx, next_model = next(model_iter)
+        except StopIteration:
+            return False
+        task = asyncio.create_task(_run_model_health_check(next_model))
+        tasks_to_index[task] = idx
+        peak_in_flight = max(peak_in_flight, len(tasks_to_index))
+        return True
+
+    for _ in range(min(concurrency_limit, len(models))):
+        _schedule_next()
+
+    while tasks_to_index:
+        done, _ = await asyncio.wait(
+            set(tasks_to_index.keys()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            idx = tasks_to_index.pop(task)
+            try:
+                results[idx] = task.result()
+            except Exception as e:
+                results[idx] = e
+            _schedule_next()
+
+    return results, peak_in_flight
+
+
 async def _perform_health_check(
     model_list: list,
     details: Optional[bool] = True,
@@ -114,66 +174,6 @@ async def _perform_health_check(
     instrumentation_enabled = bool(instrumentation_context.get("enabled", False))
     cycle_id = instrumentation_context.get("cycle_id", "unknown")
     source = instrumentation_context.get("source", "unknown")
-
-    async def _run_model_health_check(model: dict):
-        litellm_params = model["litellm_params"]
-        model_info = model.get("model_info", {})
-        mode = model_info.get("mode", None)
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info, litellm_params
-        )
-        timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-
-        return await run_with_timeout(
-            litellm.ahealth_check(
-                litellm_params,
-                mode=mode,
-                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
-                input=["test from litellm"],
-            ),
-            timeout,
-        )
-
-    async def _run_health_checks_with_bounded_concurrency(
-        models: list, concurrency_limit: int
-    ) -> tuple[list, int]:
-        """
-        Run health checks with at most `concurrency_limit` active tasks.
-        Preserves result ordering to match `models`.
-        """
-        results: list = [None] * len(models)
-        tasks_to_index: dict[asyncio.Task, int] = {}
-        model_iter = iter(enumerate(models))
-        peak_in_flight = 0
-
-        def _schedule_next() -> bool:
-            nonlocal peak_in_flight
-            try:
-                idx, next_model = next(model_iter)
-            except StopIteration:
-                return False
-            task = asyncio.create_task(_run_model_health_check(next_model))
-            tasks_to_index[task] = idx
-            peak_in_flight = max(peak_in_flight, len(tasks_to_index))
-            return True
-
-        for _ in range(min(concurrency_limit, len(models))):
-            _schedule_next()
-
-        while tasks_to_index:
-            done, _ = await asyncio.wait(
-                set(tasks_to_index.keys()),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in done:
-                idx = tasks_to_index.pop(task)
-                try:
-                    results[idx] = task.result()
-                except Exception as e:
-                    results[idx] = e
-                _schedule_next()
-
-        return results, peak_in_flight
 
     dispatch_mode = "unbounded"
     peak_in_flight = 0
@@ -234,6 +234,14 @@ def _update_litellm_params_for_health_check(
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
+    _health_check_max_tokens = model_info.get("health_check_max_tokens", None)
+    if _health_check_max_tokens is not None:
+        litellm_params["max_tokens"] = _health_check_max_tokens
+    elif "*" not in (
+        model_info.get("health_check_model") or litellm_params.get("model") or ""
+    ):
+        litellm_params["max_tokens"] = 1
+
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
@@ -283,11 +291,16 @@ async def perform_health_check(
     model: Optional[str] = None,
     cli_model: Optional[str] = None,
     details: Optional[bool] = True,
+    model_id: Optional[str] = None,
     max_concurrency: Optional[int] = None,
     instrumentation_context: Optional[dict] = None,
 ):
     """
     Perform a health check on the system.
+
+    When model_id is provided, only the deployment with that id is checked
+    (so models that share the same name but have different ids are checked separately).
+    When model (name) is provided, all deployments matching that name are checked.
 
     Returns:
         (bool): True if the health check passes, False otherwise.
@@ -314,7 +327,14 @@ async def perform_health_check(
     cycle_start_time = time.monotonic()
     requested_model_count = len(model_list)
 
-    if model is not None:
+    # Filter by model_id first so a single deployment is checked when id is specified
+    if model_id is not None:
+        _by_id = [
+            x for x in model_list if (x.get("model_info") or {}).get("id") == model_id
+        ]
+        if _by_id:
+            model_list = _by_id
+    elif model is not None:
         _new_model_list = [
             x for x in model_list if x["litellm_params"]["model"] == model
         ]

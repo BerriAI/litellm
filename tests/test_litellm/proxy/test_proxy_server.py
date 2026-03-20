@@ -236,6 +236,217 @@ def test_login_v2_returns_json_on_invalid_json_body(monkeypatch):
     assert isinstance(data["error"], dict)
 
 
+def test_login_v3_rejected_without_control_plane_url(monkeypatch):
+    """v3/login returns 404 when control_plane_url is not configured."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 404
+    assert "control_plane_url" in response.json()["error"]["message"]
+
+
+def test_login_v3_returns_code(monkeypatch):
+    """v3/login returns an opaque code, not the JWT directly."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "code" in data
+    assert data["expires_in"] == 60
+    assert "token" not in data
+
+
+def test_login_v3_exchange_happy_path(monkeypatch):
+    """Full flow: v3/login returns code, v3/login/exchange redeems it for JWT."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+
+    client = TestClient(app)
+
+    # Step 1: login — get code
+    login_response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+    assert login_response.status_code == 200
+    code = login_response.json()["code"]
+
+    # Step 2: exchange — get JWT
+    exchange_response = client.post(
+        "/v3/login/exchange",
+        json={"code": code},
+    )
+    assert exchange_response.status_code == 200
+    exchange_data = exchange_response.json()
+    assert exchange_data["token"] == "signed-token"
+    assert "redirect_url" in exchange_data
+    assert exchange_response.cookies.get("token") == "signed-token"
+
+
+def test_login_v3_exchange_single_use(monkeypatch):
+    """Code can only be redeemed once."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+
+    client = TestClient(app)
+
+    login_response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+    code = login_response.json()["code"]
+
+    # First exchange succeeds
+    first = client.post("/v3/login/exchange", json={"code": code})
+    assert first.status_code == 200
+
+    # Second exchange fails
+    second = client.post("/v3/login/exchange", json={"code": code})
+    assert second.status_code == 401
+
+
+def test_login_v3_exchange_invalid_code(monkeypatch):
+    """Random code returns 401."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login/exchange",
+        json={"code": "nonexistent-code"},
+    )
+    assert response.status_code == 401
+
+
+def test_login_v3_exchange_rejected_without_control_plane_url(monkeypatch):
+    """v3/login/exchange returns 404 when control_plane_url is not configured."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login/exchange",
+        json={"code": "some-code"},
+    )
+
+    assert response.status_code == 404
+    assert "control_plane_url" in response.json()["error"]["message"]
+
+
+def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
+    """Test that /v3/login returns JSON error when ProxyException is raised"""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(
+        side_effect=ProxyException(
+            message="Invalid credentials",
+            type=ProxyErrorTypes.auth_error,
+            param="password",
+            code=401,
+        )
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "wrong"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["message"] == "Invalid credentials"
+    assert data["error"]["type"] == "auth_error"
+
+
 def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     response = client_no_auth.get("/fallback/login")
 
@@ -1758,6 +1969,9 @@ class TestPriceDataReloadAPI:
                 }
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                        return_value=None
+                    )
                     mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                     response = client_with_auth.post("/reload/model_cost_map")
@@ -1813,6 +2027,9 @@ class TestPriceDataReloadAPI:
 
             # Mock the database connection
             with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                    return_value=None
+                )
                 mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                 response = client_with_auth.post("/reload/model_cost_map")
@@ -2008,6 +2225,9 @@ class TestPriceDataReloadIntegration:
 
                 # Mock the database connection
                 with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                        return_value=None
+                    )
                     mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
                     # Test reload endpoint
@@ -2078,9 +2298,180 @@ class TestPriceDataReloadIntegration:
                 param_value_json = call_args[1]["data"]["update"]["param_value"]
                 param_value_dict = json.loads(param_value_json)
                 assert param_value_dict["force_reload"] == False
+                assert param_value_dict.get("interval_hours") == 6
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_preserves_interval_hours(self):
+        """Test that _check_and_reload_model_cost_map preserves interval_hours after reload.
+
+        Regression test: the update branch of the upsert was previously dropping
+        interval_hours, causing scheduled reloads to self-destruct after first execution.
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+
+        # Set up config with interval_hours=24 and force_reload=True to trigger reload
+        mock_config = MagicMock()
+        mock_config.param_value = {"interval_hours": 24, "force_reload": True}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
+
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+                # Verify the upsert update branch preserves interval_hours
+                mock_prisma.db.litellm_config.upsert.assert_called()
+                call_args = mock_prisma.db.litellm_config.upsert.call_args
+                param_value_json = call_args[1]["data"]["update"]["param_value"]
+                param_value_dict = json.loads(param_value_json)
+                assert param_value_dict["force_reload"] == False
+                assert param_value_dict["interval_hours"] == 24, (
+                    "interval_hours must be preserved in the update branch; "
+                    "dropping it causes the schedule to self-destruct"
+                )
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_manual_reload_preserves_interval_hours(self):
+        """Test that manual reload via /reload/model_cost_map preserves existing interval_hours.
+
+        Regression test: the manual reload endpoint was overwriting param_value with
+        only force_reload=True, dropping any existing interval_hours schedule.
+        """
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        client = TestClient(app)
+
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = {"gpt-4": {"input_cost_per_token": 0.001}}
+
+                with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    # Simulate existing config with a schedule
+                    mock_existing = MagicMock()
+                    mock_existing.param_value = {"interval_hours": 12, "force_reload": False}
+                    mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_existing)
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+                    response = client.post("/reload/model_cost_map")
+                    assert response.status_code == 200
+
+                    # Verify interval_hours was preserved in the upsert
+                    mock_prisma.db.litellm_config.upsert.assert_called()
+                    call_args = mock_prisma.db.litellm_config.upsert.call_args
+                    param_value_json = call_args[1]["data"]["update"]["param_value"]
+                    param_value_dict = json.loads(param_value_json)
+                    assert param_value_dict["force_reload"] == True
+                    assert param_value_dict["interval_hours"] == 12, (
+                        "interval_hours must be preserved when manual reload sets force_reload; "
+                        "dropping it destroys any existing schedule"
+                    )
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+
+    def test_anthropic_beta_headers_reload_preserves_interval_hours(self):
+        """Test that _check_and_reload_anthropic_beta_headers preserves interval_hours after reload.
+
+        Regression test: the update branch of the upsert was dropping interval_hours,
+        identical to the model cost map bug.
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+
+        # Set up config with interval_hours=12 and force_reload=True to trigger reload
+        mock_config = MagicMock()
+        mock_config.param_value = {"interval_hours": 12, "force_reload": True}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        with patch(
+            "litellm.anthropic_beta_headers_manager.reload_beta_headers_config"
+        ) as mock_reload:
+            mock_reload.return_value = {"anthropic": {"beta_header": "test-value"}}
+
+            asyncio.run(proxy_config._check_and_reload_anthropic_beta_headers(mock_prisma))
+
+            # Verify the upsert update branch preserves interval_hours
+            mock_prisma.db.litellm_config.upsert.assert_called()
+            call_args = mock_prisma.db.litellm_config.upsert.call_args
+            param_value_json = call_args[1]["data"]["update"]["param_value"]
+            param_value_dict = json.loads(param_value_json)
+            assert param_value_dict["force_reload"] == False
+            assert param_value_dict["interval_hours"] == 12, (
+                "interval_hours must be preserved in the update branch; "
+                "dropping it causes the schedule to self-destruct"
+            )
+
+    def test_anthropic_beta_headers_manual_reload_preserves_interval_hours(self):
+        """Test that manual reload via /reload/anthropic_beta_headers preserves existing interval_hours.
+
+        Regression test: the manual reload endpoint was overwriting param_value with
+        only force_reload=True, dropping any existing interval_hours schedule.
+        """
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        client = TestClient(app)
+
+        with patch(
+            "litellm.anthropic_beta_headers_manager.reload_beta_headers_config"
+        ) as mock_reload:
+            mock_reload.return_value = {"anthropic": {"beta_header": "test-value"}}
+
+            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                # Simulate existing config with a schedule
+                mock_existing = MagicMock()
+                mock_existing.param_value = {"interval_hours": 8, "force_reload": False}
+                mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_existing)
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+                response = client.post("/reload/anthropic_beta_headers")
+                assert response.status_code == 200
+
+                # Verify interval_hours was preserved in the upsert
+                mock_prisma.db.litellm_config.upsert.assert_called()
+                call_args = mock_prisma.db.litellm_config.upsert.call_args
+                param_value_json = call_args[1]["data"]["update"]["param_value"]
+                param_value_dict = json.loads(param_value_json)
+                assert param_value_dict["force_reload"] == True
+                assert param_value_dict["interval_hours"] == 8, (
+                    "interval_hours must be preserved when manual reload sets force_reload; "
+                    "dropping it destroys any existing schedule"
+                )
 
     def test_config_file_parsing(self):
         """Test parsing of config file with reload settings"""

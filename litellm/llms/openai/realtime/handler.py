@@ -18,28 +18,28 @@ from ..openai import OpenAIChatCompletion
 class OpenAIRealtime(OpenAIChatCompletion):
     """
     Base handler for OpenAI-compatible realtime WebSocket connections.
-    
+
     Subclasses can override template methods to customize:
     - _get_default_api_base(): Default API base URL
     - _get_additional_headers(): Extra headers beyond Authorization
     - _get_ssl_config(): SSL configuration for WebSocket connection
     """
-    
+
     def _get_default_api_base(self) -> str:
         """
         Get the default API base URL for this provider.
         Override this in subclasses to set provider-specific defaults.
         """
         return "https://api.openai.com/"
-    
+
     def _get_additional_headers(self, api_key: str) -> dict:
         """
         Get additional headers beyond Authorization.
         Override this in subclasses to customize headers (e.g., remove OpenAI-Beta).
-        
+
         Args:
             api_key: API key for authentication
-            
+
         Returns:
             Dictionary of additional headers
         """
@@ -47,31 +47,31 @@ class OpenAIRealtime(OpenAIChatCompletion):
             "Authorization": f"Bearer {api_key}",
             "OpenAI-Beta": "realtime=v1",
         }
-    
+
     def _get_ssl_config(self, url: str) -> Any:
         """
         Get SSL configuration for WebSocket connection.
         Override this in subclasses to customize SSL behavior.
-        
+
         Args:
             url: WebSocket URL (ws:// or wss://)
-            
+
         Returns:
             SSL configuration (None, True, or SSLContext)
         """
         if url.startswith("ws://"):
             return None
-        
+
         # Use the shared SSL context which respects custom CA certs and SSL settings
         ssl_config = get_shared_realtime_ssl_context()
-        
+
         # If ssl_config is False (ssl_verify=False), websockets library needs True instead
         # to establish connection without verification (False would fail)
         if ssl_config is False:
             return True
-        
+
         return ssl_config
-    
+
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
         Construct the backend websocket URL with all query parameters (including 'model').
@@ -99,11 +99,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
         timeout: Optional[float] = None,
         query_params: Optional[RealtimeQueryParams] = None,
         user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[dict] = None,
         **kwargs: Any,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
-        
+
         if api_base is None:
             api_base = self._get_default_api_base()
         if api_key is None:
@@ -117,10 +118,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
         try:
             # Get provider-specific SSL configuration
             ssl_config = self._get_ssl_config(url)
-            
+
             # Get provider-specific headers
             headers = self._get_additional_headers(api_key)
-            
+
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
                 input=None,
@@ -142,6 +143,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     user_api_key_dict=user_api_key_dict,
+                    request_data={"litellm_metadata": litellm_metadata or {}},
                 )
                 await realtime_streaming.bidirectional_forward()
 

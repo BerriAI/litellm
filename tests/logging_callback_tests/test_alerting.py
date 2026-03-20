@@ -589,7 +589,7 @@ async def test_webhook_alerting(alerting_type):
             None,
             None,
         ),
-        ("gemini-pro", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -695,7 +695,7 @@ async def test_outage_alerting_called(
             None,
             None,
         ),
-        ("gemini-pro", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -782,7 +782,7 @@ async def test_region_outage_alerting_called(
             await slack_alerting.region_outage_alerts(
                 exception=error_to_raise, deployment_id=deployment_id  # type: ignore
             )
-        if model == "gemini-pro" and (error_code == 500 or error_code == 408):
+        if model == "gemini-2.0-flash" and (error_code == 500 or error_code == 408):
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()

@@ -1,7 +1,7 @@
 // Auto-generated from block_investment.csv — do not edit manually.
 // Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ...
 
-import type { CompliancePrompt, ComplianceFramework } from "./compliancePrompts";
+import type { CompliancePrompt } from "./compliancePrompts";
 
 export const financialCompliancePrompts: CompliancePrompt[] = [
   {

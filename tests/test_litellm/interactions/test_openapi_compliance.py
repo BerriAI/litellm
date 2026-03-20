@@ -77,6 +77,11 @@ class TestRequestCompliance:
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         input_schema = schema["properties"]["input"]
         
+        # The input property may be inline oneOf or a $ref to InteractionsInput
+        if "$ref" in input_schema:
+            ref_name = input_schema["$ref"].split("/")[-1]
+            input_schema = spec_dict["components"]["schemas"][ref_name]
+
         # Should be oneOf with multiple types
         assert "oneOf" in input_schema
         
@@ -100,10 +105,21 @@ class TestRequestCompliance:
         assert "discriminator" in content_schema
         assert content_schema["discriminator"]["propertyName"] == "type"
         
-        # Check TextContent is an option
-        mapping = content_schema["discriminator"]["mapping"]
-        assert "text" in mapping
-        print(f"Content type discriminator mapping: {list(mapping.keys())}")
+        # Check TextContent is an option (via mapping if present, or via oneOf refs)
+        mapping = content_schema["discriminator"].get("mapping")
+        if mapping:
+            assert "text" in mapping
+            print(f"Content type discriminator mapping: {list(mapping.keys())}")
+        else:
+            # Discriminator without explicit mapping — verify via oneOf
+            one_of = content_schema.get("oneOf", [])
+            ref_names = [
+                opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt
+            ]
+            assert "TextContent" in ref_names, (
+                f"TextContent not found in oneOf refs: {ref_names}"
+            )
+            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
@@ -147,7 +163,8 @@ class TestResponseCompliance:
         """Verify status enum values match spec."""
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         status_prop = schema["properties"]["status"]
-        expected_statuses = ["UNSPECIFIED", "IN_PROGRESS", "REQUIRES_ACTION", "COMPLETED", "FAILED", "CANCELLED", "INCOMPLETE"]
+        # Google Interactions API uses lowercase status values (updated Feb 2026)
+        expected_statuses = ["in_progress", "requires_action", "completed", "failed", "cancelled", "incomplete"]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
 

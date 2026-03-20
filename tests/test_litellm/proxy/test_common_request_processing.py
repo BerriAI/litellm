@@ -1,5 +1,7 @@
 import copy
-from unittest.mock import AsyncMock, MagicMock
+import datetime
+from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request, status
@@ -13,10 +15,13 @@ from litellm.proxy.common_request_processing import (
     ProxyConfig,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
+    _has_attribute_error_in_chain,
+    _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
     create_response,
 )
+from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -76,6 +81,22 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+        mock_set_active_span_tag = MagicMock(return_value=True)
+        import litellm.proxy.dd_span_tagger
+
+        monkeypatch.setattr(
+            litellm.proxy.dd_span_tagger,
+            "set_active_span_tag",
+            mock_set_active_span_tag,
+        )
+
+        DDSpanTagger.tag_call_id("test-call-id")
+
+        mock_set_active_span_tag.assert_called_once_with(
+            "litellm.call_id", "test-call-id"
+        )
 
     @pytest.mark.asyncio
     async def test_should_apply_hierarchical_router_settings_as_override(
@@ -1348,3 +1369,383 @@ class TestOverrideOpenAIResponseModel:
 
         # Verify the model was not changed
         assert response_obj.model == fallback_model
+
+    def test_override_model_preserves_azure_model_router_actual_model(self):
+        """
+        Test that when the requested model is an Azure Model Router, the actual
+        model used (returned in the response) is preserved instead of being
+        overridden.
+        """
+        requested_model = "azure_ai/model_router"
+        actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_azure_model_router_with_deployment_name(self):
+        """
+        Test that Azure Model Router with deployment name pattern also preserves
+        the actual model used.
+        """
+        requested_model = "azure_ai/model_router/my-deployment"
+        actual_model_used = "azure_ai/gpt-4.1-nano-2025-04-14"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_azure_model_router_with_hyphen(self):
+        """
+        Test that Azure Model Router with hyphen pattern (model-router) also preserves
+        the actual model used.
+        """
+        requested_model = "azure_ai/model-router"
+        actual_model_used = "azure_ai/gpt-5-nano-2025-08-07"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+        assert response_obj.model != requested_model
+
+
+class TestIsAzureModelRouterRequest:
+    """Tests for _is_azure_model_router_request helper"""
+
+    def test_detects_model_router_with_underscore(self):
+        assert _is_azure_model_router_request("azure_ai/model_router") is True
+        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+
+    def test_detects_model_router_with_hyphen(self):
+        assert _is_azure_model_router_request("azure_ai/model-router") is True
+        assert _is_azure_model_router_request("model-router") is True
+
+    def test_rejects_regular_models(self):
+        assert _is_azure_model_router_request("azure_ai/gpt-4") is False
+        assert _is_azure_model_router_request("gpt-4") is False
+        assert _is_azure_model_router_request("openai/gpt-3.5-turbo") is False
+
+
+class TestStreamingOverheadHeader:
+    """
+    Tests that x-litellm-overhead-duration-ms is emitted in streaming responses.
+
+    Regression tests for: streaming requests not including overhead header.
+    """
+
+    def test_get_custom_headers_includes_overhead_when_set(self):
+        """
+        get_custom_headers() returns x-litellm-overhead-duration-ms
+        when litellm_overhead_time_ms is in hidden_params.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        hidden_params = {
+            "litellm_overhead_time_ms": 42.5,
+            "_response_ms": 500.0,
+            "model_id": "test-model-id",
+            "api_base": "https://api.openai.com",
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id="test-model-id",
+            cache_key="",
+            api_base="https://api.openai.com",
+            version="1.0.0",
+            response_cost=0.001,
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        assert "x-litellm-overhead-duration-ms" in headers
+        assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    def test_get_custom_headers_omits_overhead_when_none(self):
+        """
+        get_custom_headers() omits x-litellm-overhead-duration-ms
+        when litellm_overhead_time_ms is not in hidden_params.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        hidden_params = {
+            "_response_ms": 500.0,
+            "model_id": "test-model-id",
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id="test-model-id",
+            cache_key="",
+            api_base="https://api.openai.com",
+            version="1.0.0",
+            response_cost=0.001,
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        # Should be absent (None gets filtered by exclude_values)
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_update_response_metadata_sets_overhead_on_stream_wrapper(self):
+        """
+        update_response_metadata() sets litellm_overhead_time_ms on
+        a streaming response's _hidden_params when llm_api_duration_ms is available.
+        """
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            update_response_metadata,
+        )
+
+        # Mock the logging object with llm_api_duration_ms set
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "llm_api_duration_ms": 200.0,
+            "litellm_params": {},
+        }
+        mock_logging_obj.caching_details = None
+        mock_logging_obj.callback_duration_ms = None
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+
+        # Simulate a streaming result object with _hidden_params (like CustomStreamWrapper)
+        stream_result = MagicMock()
+        stream_result._hidden_params = {
+            "model_id": "test-model-id",
+            "api_base": "https://api.openai.com",
+            "additional_headers": {},
+        }
+
+        start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=300)
+        end_time = datetime.datetime.now()
+
+        update_response_metadata(
+            result=stream_result,
+            logging_obj=mock_logging_obj,
+            model="gpt-4o",
+            kwargs={},
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        assert "litellm_overhead_time_ms" in stream_result._hidden_params
+        overhead = stream_result._hidden_params["litellm_overhead_time_ms"]
+        assert overhead is not None
+        assert isinstance(overhead, float)
+        # overhead = total_response_ms (~300ms) - llm_api_duration_ms (200ms) = ~100ms
+        assert overhead > 0
+
+    @pytest.mark.asyncio
+    async def test_streaming_response_includes_overhead_header(self):
+        """
+        StreamingResponse returned by create_response() includes
+        x-litellm-overhead-duration-ms in its headers.
+        """
+
+        async def mock_generator() -> AsyncGenerator[str, None]:
+            yield 'data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"hi"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        headers = {
+            "x-litellm-overhead-duration-ms": "42.5",
+            "x-litellm-call-id": "test-call-id",
+            "x-litellm-model-id": "test-model-id",
+        }
+
+        response = await create_response(
+            generator=mock_generator(),
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.headers.get("x-litellm-overhead-duration-ms") == "42.5"
+
+    def test_streaming_overhead_header_in_custom_headers_from_stream_hidden_params(
+        self,
+    ):
+        """
+        Verifies that when get_custom_headers() is called with a streaming
+        response's hidden_params (containing litellm_overhead_time_ms),
+        the x-litellm-overhead-duration-ms header is correctly populated.
+
+        This tests the critical path: update_response_metadata sets the value
+        → get_custom_headers reads it → StreamingResponse header is set.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        # This is what CustomStreamWrapper._hidden_params looks like after
+        # update_response_metadata() has been called on it
+        hidden_params = {
+            "model_id": "openai-gpt4o-deployment",
+            "api_base": "https://api.openai.com",
+            "additional_headers": {},
+            "litellm_overhead_time_ms": 55.3,  # set by update_response_metadata
+            "_response_ms": 280.0,
+            "litellm_call_id": "test-call-id",
+            "response_cost": 0.002,
+            "cache_key": None,
+            "fastest_response_batch_completion": None,
+            "callback_duration_ms": None,
+        }
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id=hidden_params.get("model_id"),
+            cache_key=hidden_params.get("cache_key") or "",
+            api_base=hidden_params.get("api_base") or "",
+            version="1.0.0",
+            response_cost=hidden_params.get("response_cost"),
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        # The overhead header must be present and correct
+        assert "x-litellm-overhead-duration-ms" in custom_headers, (
+            "x-litellm-overhead-duration-ms header must be emitted during streaming. "
+            "It was missing — this is the streaming overhead header regression."
+        )
+        assert custom_headers["x-litellm-overhead-duration-ms"] == "55.3"
+
+
+class TestDDSpanTaggerTagRequest:
+    """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
+
+    def _make_user_api_key_dict(self, key_alias=None, token=None):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        d = UserAPIKeyAuth()
+        d.key_alias = key_alias
+        d.token = token
+        return d
+
+    def test_tags_key_alias_and_model(self):
+        """key_alias and requested_model are set on the span when present."""
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="gpt-4o",
+            )
+
+        mock_set_tag.assert_any_call("litellm.key_alias", "my-prod-key")
+        mock_set_tag.assert_any_call("litellm.key_hash", "hashed123")
+        mock_set_tag.assert_any_call("litellm.requested_model", "gpt-4o")
+
+    def test_no_tags_when_key_absent(self):
+        """No key tags are set when key_alias and token are None (e.g. 401 path)."""
+        user_key = self._make_user_api_key_dict(key_alias=None, token=None)
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model=None,
+            )
+
+        mock_set_tag.assert_not_called()
+
+    def test_only_model_tagged_when_no_key_info(self):
+        """requested_model is tagged even when there's no key info."""
+        user_key = self._make_user_api_key_dict(key_alias=None, token=None)
+
+        with patch(
+            "litellm.proxy.dd_span_tagger.set_active_span_tag"
+        ) as mock_set_tag:
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="claude-3-5-sonnet",
+            )
+
+        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+
+
+class TestHasAttributeErrorInChain:
+    """Tests for _has_attribute_error_in_chain helper."""
+
+    def test_direct_attribute_error(self):
+        exc = AttributeError("'str' object has no attribute 'get'")
+        assert _has_attribute_error_in_chain(exc) is True
+
+    def test_no_attribute_error(self):
+        exc = ValueError("some other error")
+        assert _has_attribute_error_in_chain(exc) is False
+
+    def test_attribute_error_in_cause(self):
+        inner = AttributeError("bad attribute")
+        outer = RuntimeError("wrapper")
+        outer.__cause__ = inner
+        assert _has_attribute_error_in_chain(outer) is True
+
+    def test_attribute_error_in_context(self):
+        inner = AttributeError("bad attribute")
+        outer = RuntimeError("wrapper")
+        outer.__context__ = inner
+        assert _has_attribute_error_in_chain(outer) is True
+
+    def test_attribute_error_in_original_exception(self):
+        inner = AttributeError("bad attribute")
+        outer = RuntimeError("wrapper")
+        outer.original_exception = inner  # type: ignore
+        assert _has_attribute_error_in_chain(outer) is True
+
+    def test_attribute_error_nested_two_levels(self):
+        """Simulates the real failure: AttributeError -> OpenAIException -> APIConnectionError."""
+        attr_err = AttributeError("'str' object has no attribute 'get'")
+        mid = Exception("OpenAIException wrapper")
+        mid.__context__ = attr_err
+        outer = Exception("APIConnectionError wrapper")
+        outer.__context__ = mid
+        assert _has_attribute_error_in_chain(outer) is True
+
+    def test_depth_limit_prevents_infinite_loop(self):
+        """Ensure circular references don't cause infinite recursion."""
+        exc_a = RuntimeError("a")
+        exc_b = RuntimeError("b")
+        exc_a.__context__ = exc_b
+        exc_b.__context__ = exc_a  # circular
+        assert _has_attribute_error_in_chain(exc_a) is False

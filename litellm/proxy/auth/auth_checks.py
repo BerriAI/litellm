@@ -29,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -58,6 +59,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.guardrails.tool_name_extraction import (
+    TOOL_CAPABLE_CALL_TYPES,
+    extract_request_tool_names,
+)
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -220,7 +225,142 @@ async def _run_project_checks(
         )
 
 
-async def common_checks(
+def _enforce_user_param_check(
+    general_settings: dict, request: Request, request_body: dict, route: str
+) -> None:
+    if not general_settings.get("enforce_user_param", False):
+        return
+
+    http_method = request.method if hasattr(request, "method") else None
+    is_post_method = http_method and http_method.upper() == "POST"
+    is_openai_route = RouteChecks.is_llm_api_route(route=route)
+    is_mcp_route = (
+        route in LiteLLMRoutes.mcp_routes.value
+        or RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        )
+    )
+
+    if (
+        is_post_method
+        and is_openai_route
+        and not is_mcp_route
+        and "user" not in request_body
+    ):
+        raise Exception(
+            f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+        )
+
+
+def _reject_clientside_metadata_tags_check(
+    general_settings: dict, request_body: dict, route: str
+) -> None:
+    if not general_settings.get("reject_clientside_metadata_tags", False):
+        return
+
+    if (
+        RouteChecks.is_llm_api_route(route=route)
+        and "metadata" in request_body
+        and isinstance(request_body["metadata"], dict)
+        and "tags" in request_body["metadata"]
+    ):
+        raise ProxyException(
+            message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="metadata.tags",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+def _global_proxy_budget_check(
+    global_proxy_spend: Optional[float], skip_budget_checks: bool, route: str
+) -> None:
+    if (
+        litellm.max_budget > 0
+        and not skip_budget_checks
+        and global_proxy_spend is not None
+        and RouteChecks.is_llm_api_route(route=route)
+        and route != "/v1/models"
+        and route != "/models"
+    ):
+        if global_proxy_spend > litellm.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend, max_budget=litellm.max_budget
+            )
+
+
+def _guardrail_modification_check(
+    request_body: dict, team_object: Optional[LiteLLM_TeamTable]
+) -> None:
+    _request_metadata: dict = request_body.get("metadata", {}) or {}
+    if not _request_metadata.get("guardrails"):
+        return
+
+    from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    if not can_modify_guardrails(team_object):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Your team does not have permission to modify guardrails."
+            },
+        )
+
+
+async def check_tools_allowlist(
+    request_body: dict,
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    route: str,
+) -> None:
+    """
+    Enforce key/team tool allowlist (metadata.allowed_tools). No DB in hot path —
+    effective allowlist is read from valid_token.metadata and valid_token.team_metadata.
+    Raises ProxyException with tool_access_denied if a tool is not allowed.
+    """
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
+
+    if valid_token is None:
+        return
+    call_types = get_call_types_for_route(route)
+    if not call_types or not any(
+        ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types
+    ):
+        return
+    tool_names = extract_request_tool_names(route, request_body)
+    if not tool_names:
+        return
+    key_meta = (
+        (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
+    )
+    team_meta = (
+        (valid_token.team_metadata or {})
+        if isinstance(valid_token.team_metadata, dict)
+        else {}
+    )
+    key_allowed = key_meta.get("allowed_tools")
+    team_allowed = team_meta.get("allowed_tools")
+    effective = (
+        key_allowed
+        if (isinstance(key_allowed, list) and len(key_allowed) > 0)
+        else team_allowed
+    )
+    if not isinstance(effective, list) or len(effective) == 0:
+        return
+    allowed_set = {str(t) for t in effective}
+    disallowed = [n for n in tool_names if n not in allowed_set]
+    if disallowed:
+        raise ProxyException(
+            message=f"Tool(s) {disallowed} are not in the allowed tools list for this key/team.",
+            type=ProxyErrorTypes.tool_access_denied,
+            param="tools",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
+async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -263,74 +403,106 @@ async def common_checks(
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
-            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
+            f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin."
         )
 
     # 2. If team can call model
     if _model and team_object:
-        if not await can_team_access_model(
-            model=_model,
-            team_object=team_object,
-            llm_router=llm_router,
-            team_model_aliases=valid_token.team_model_aliases if valid_token else None,
-        ):
-            raise ProxyException(
-                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
-                type=ProxyErrorTypes.team_model_access_denied,
-                param="model",
-                code=status.HTTP_401_UNAUTHORIZED,
+        with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
+            if not await can_team_access_model(
+                model=_model,
+                team_object=team_object,
+                llm_router=llm_router,
+                team_model_aliases=valid_token.team_model_aliases
+                if valid_token
+                else None,
+            ):
+                raise ProxyException(
+                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
+                    type=ProxyErrorTypes.team_model_access_denied,
+                    param="model",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+
+    # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
+    if valid_token is not None and valid_token.agent_id:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+        from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+        agent = global_agent_registry.get_agent_by_id(agent_id=valid_token.agent_id)
+        if agent is not None:
+            require_trace_id = (agent.litellm_params or {}).get(
+                "require_trace_id_on_calls_by_agent"
             )
+            if require_trace_id:
+                headers_dict = dict(request.headers)
+                trace_id = get_chain_id_from_headers(headers_dict)
+                if not trace_id:
+                    raise ProxyException(
+                        message="Requests made with this agent's key must include the x-litellm-trace-id header.",
+                        type=ProxyErrorTypes.bad_request_error,
+                        param=None,
+                        code=status.HTTP_400_BAD_REQUEST,
+                    )
 
     ## 2.1 If user can call model (if personal key)
     if _model and team_object is None and user_object is not None:
-        await can_user_call_model(
-            model=_model,
-            llm_router=llm_router,
-            user_object=user_object,
-        )
+        with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
+            await can_user_call_model(
+                model=_model,
+                llm_router=llm_router,
+                user_object=user_object,
+            )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
-    await _run_project_checks(
-        project_object=project_object,
-        _model=_model,
-        llm_router=llm_router,
-        skip_budget_checks=skip_budget_checks,
-        valid_token=valid_token,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
+        await _run_project_checks(
+            project_object=project_object,
+            _model=_model,
+            llm_router=llm_router,
+            skip_budget_checks=skip_budget_checks,
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
         # 3. If team is in budget
-        await _team_max_budget_check(
-            team_object=team_object,
-            proxy_logging_obj=proxy_logging_obj,
-            valid_token=valid_token,
-        )
+        with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
+            await _team_max_budget_check(
+                team_object=team_object,
+                proxy_logging_obj=proxy_logging_obj,
+                valid_token=valid_token,
+            )
 
         # 3.0.5. If team is over soft budget (alert only, doesn't block)
-        await _team_soft_budget_check(
-            team_object=team_object,
-            proxy_logging_obj=proxy_logging_obj,
-            valid_token=valid_token,
-        )
+        with tracer.trace("litellm.proxy.auth.common_checks.team_soft_budget_check"):
+            await _team_soft_budget_check(
+                team_object=team_object,
+                proxy_logging_obj=proxy_logging_obj,
+                valid_token=valid_token,
+            )
 
         # 3.1. If organization is in budget
-        await _organization_max_budget_check(
-            valid_token=valid_token,
-            team_object=team_object,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.organization_max_budget_check"
+        ):
+            await _organization_max_budget_check(
+                valid_token=valid_token,
+                team_object=team_object,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
-        await _tag_max_budget_check(
-            request_body=request_body,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            valid_token=valid_token,
-        )
+        with tracer.trace("litellm.proxy.auth.common_checks.tag_max_budget_check"):
+            await _tag_max_budget_check(
+                request_body=request_body,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                valid_token=valid_token,
+            )
 
         # 4. If user is in budget
         ## 4.1 check personal budget, if personal key
@@ -348,14 +520,15 @@ async def common_checks(
                 )
 
         ## 4.2 check team member budget, if team key
-        await _check_team_member_budget(
-            team_object=team_object,
-            user_object=user_object,
-            valid_token=valid_token,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_budget"):
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
         if (
@@ -370,83 +543,10 @@ async def common_checks(
                     message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
                 )
 
-    # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
-    if (
-        general_settings.get("enforce_user_param", None) is not None
-        and general_settings["enforce_user_param"] is True
-    ):
-        # Get HTTP method from request
-        http_method = request.method if hasattr(request, "method") else None
-
-        # Check if it's a POST request and if it's an OpenAI route but not MCP
-        is_post_method = http_method and http_method.upper() == "POST"
-        is_openai_route = RouteChecks.is_llm_api_route(route=route)
-        is_mcp_route = (
-            route in LiteLLMRoutes.mcp_routes.value
-            or RouteChecks.check_route_access(
-                route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
-            )
-        )
-
-        # Enforce user param only for POST requests on OpenAI routes (excluding MCP routes)
-        if (
-            is_post_method
-            and is_openai_route
-            and not is_mcp_route
-            and "user" not in request_body
-        ):
-            raise Exception(
-                f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
-            )
-
-    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
-    if (
-        general_settings.get("reject_clientside_metadata_tags", None) is not None
-        and general_settings["reject_clientside_metadata_tags"] is True
-    ):
-        if (
-            RouteChecks.is_llm_api_route(route=route)
-            and "metadata" in request_body
-            and isinstance(request_body["metadata"], dict)
-            and "tags" in request_body["metadata"]
-        ):
-            raise ProxyException(
-                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
-                type=ProxyErrorTypes.bad_request_error,
-                param="metadata.tags",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-    # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    if (
-        litellm.max_budget > 0
-        and not skip_budget_checks
-        and global_proxy_spend is not None
-        # only run global budget checks for OpenAI routes
-        # Reason - the Admin UI should continue working if the proxy crosses it's global budget
-        and RouteChecks.is_llm_api_route(route=route)
-        and route != "/v1/models"
-        and route != "/models"
-    ):
-        if global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend, max_budget=litellm.max_budget
-            )
-
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if _request_metadata.get("guardrails"):
-        # check if team allowed to modify guardrails
-        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
-
-        can_modify: bool = can_modify_guardrails(team_object)
-        if can_modify is False:
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Your team does not have permission to modify guardrails."
-                },
-            )
+    _enforce_user_param_check(general_settings, request, request_body, route)
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+    _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
+    _guardrail_modification_check(request_body, team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(
@@ -467,11 +567,21 @@ async def common_checks(
     )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
-    await vector_store_access_check(
-        request_body=request_body,
-        team_object=team_object,
-        valid_token=valid_token,
-    )
+    with tracer.trace("litellm.proxy.auth.common_checks.vector_store_access_check"):
+        await vector_store_access_check(
+            request_body=request_body,
+            team_object=team_object,
+            valid_token=valid_token,
+        )
+
+    # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
+    with tracer.trace("litellm.proxy.auth.common_checks.check_tools_allowlist"):
+        await check_tools_allowlist(
+            request_body=request_body,
+            valid_token=valid_token,
+            team_object=team_object,
+            route=route,
+        )
 
     return True
 
@@ -786,7 +896,7 @@ def _check_end_user_budget(
     Raises:
         litellm.BudgetExceededError: If end user has exceeded their budget
     """
-    if route in LiteLLMRoutes.info_routes.value:
+    if RouteChecks.is_info_route(route):
         return
 
     if end_user_obj.litellm_budget_table is None:
@@ -1263,6 +1373,8 @@ async def get_user_object(
                 new_user_params: Dict[str, Any] = {
                     "user_id": user_id,
                 }
+                if user_email is not None:
+                    new_user_params["user_email"] = user_email
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
 
@@ -1884,7 +1996,7 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Calculate expiration time (10 minutes from now)
+        # Experimental UI flow uses fixed 10-min expiry for security (does not use LITELLM_UI_SESSION_DURATION)
         expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
@@ -2029,6 +2141,29 @@ async def _fetch_key_object_from_db_with_reconnect(
 
 
 @log_db_metrics
+async def get_jwt_key_mapping_object(
+    jwt_claim_name: str,
+    jwt_claim_value: str,
+    prisma_client: PrismaClient,
+) -> Optional[str]:
+    """
+    Lookup a JWT-to-virtual-key mapping from the database.
+
+    Returns the hashed token (str) if a matching active mapping is found, else None.
+    """
+    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
+        where={
+            "jwt_claim_name": jwt_claim_name,
+            "jwt_claim_value": jwt_claim_value,
+            "is_active": True,
+        }
+    )
+    if mapping is not None:
+        return mapping.token
+    return None
+
+
+@log_db_metrics
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],
@@ -2066,13 +2201,11 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = (
-        await _fetch_key_object_from_db_with_reconnect(
-            hashed_token=hashed_token,
-            prisma_client=prisma_client,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    _valid_token: Optional[BaseModel] = await _fetch_key_object_from_db_with_reconnect(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     if _valid_token is None:
@@ -2218,9 +2351,9 @@ async def get_org_object(
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=response.model_dump()
-            if hasattr(response, "model_dump")
-            else response,
+            value=(
+                response.model_dump() if hasattr(response, "model_dump") else response
+            ),
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
