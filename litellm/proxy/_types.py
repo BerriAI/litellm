@@ -1677,6 +1677,7 @@ class NewTeamRequest(TeamBase):
         int
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2960,7 +2961,9 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
+AUDIT_ACTIONS = Literal[
+    "created", "updated", "deleted", "blocked", "unblocked", "rotated"
+]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):

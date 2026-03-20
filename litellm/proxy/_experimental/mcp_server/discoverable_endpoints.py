@@ -208,26 +208,52 @@ async def exchange_token_with_server(
     client_id: str,
     client_secret: Optional[str],
     code_verifier: Optional[str],
+    refresh_token: Optional[str] = None,
+    scope: Optional[str] = None,
 ):
-    if grant_type != "authorization_code":
+    if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
-    proxy_base_url = get_request_base_url(request)
-    token_data = {
-        "grant_type": "authorization_code",
-        "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
-        "client_secret": mcp_server.client_secret
-        if mcp_server.client_secret
-        else client_secret,
-        "code": code,
-        "redirect_uri": f"{proxy_base_url}/callback",
-    }
+    resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
+    resolved_client_secret = (
+        mcp_server.client_secret if mcp_server.client_secret else client_secret
+    )
 
-    if code_verifier:
-        token_data["code_verifier"] = code_verifier
+    if grant_type == "refresh_token":
+        if not refresh_token:
+            raise HTTPException(
+                status_code=400,
+                detail="refresh_token is required for refresh_token grant",
+            )
+        token_data: dict = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": resolved_client_id,
+        }
+        if resolved_client_secret is not None:
+            token_data["client_secret"] = resolved_client_secret
+        if scope:
+            token_data["scope"] = scope
+    else:
+        if not code:
+            raise HTTPException(
+                status_code=400,
+                detail="code is required for authorization_code grant",
+            )
+        proxy_base_url = get_request_base_url(request)
+        token_data = {
+            "grant_type": "authorization_code",
+            "client_id": resolved_client_id,
+            "code": code,
+            "redirect_uri": f"{proxy_base_url}/callback",
+        }
+        if resolved_client_secret is not None:
+            token_data["client_secret"] = resolved_client_secret
+        if code_verifier:
+            token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
@@ -375,6 +401,8 @@ async def token_endpoint(
     client_id: str = Form(...),
     client_secret: Optional[str] = Form(None),
     code_verifier: str = Form(None),
+    refresh_token: Optional[str] = Form(None),
+    scope: Optional[str] = Form(None),
     mcp_server_name: Optional[str] = None,
 ):
     """
@@ -408,6 +436,8 @@ async def token_endpoint(
         client_id=client_id,
         client_secret=client_secret,
         code_verifier=code_verifier,
+        refresh_token=refresh_token,
+        scope=scope,
     )
 
 
