@@ -324,7 +324,10 @@ class DBSpendUpdateWriter:
         if not metadata_str:
             return None
 
-        metadata: SpendLogsMetadata = json.loads(metadata_str)
+        try:
+            metadata: SpendLogsMetadata = json.loads(metadata_str)
+        except (json.JSONDecodeError, ValueError):
+            return None
         response_model = metadata.get("response_model")
         if not response_model:
             return None
@@ -336,7 +339,7 @@ class DBSpendUpdateWriter:
             router_flat_cost = additional_costs.get("azure_model_router_flat_cost", 0.0)
 
         total_spend = payload.get("spend", 0) or 0
-        base_model_cost = total_spend - router_flat_cost
+        base_model_cost = max(0.0, total_spend - router_flat_cost)
 
         # Router entry: flat cost only, no tokens
         router_payload = cast(
