@@ -19,6 +19,18 @@ from openapi_core import OpenAPI
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
+def _resolve_schema_ref(spec_dict: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    ref = schema.get("$ref")
+    if ref is None:
+        return schema
+
+    prefix = "#/components/schemas/"
+    if not ref.startswith(prefix):
+        raise KeyError(f"Unsupported schema ref: {ref}")
+
+    return spec_dict["components"]["schemas"][ref.removeprefix(prefix)]
+
+
 def _load_openapi_spec_dict() -> Dict[str, Any]:
     """
     Load the OpenAPI spec JSON.
@@ -32,8 +44,7 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         return response.json()
     except Exception as e:  # pragma: no cover - defensive, env-dependent
         pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - "
-            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
+            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
         )
 
 
@@ -55,18 +66,25 @@ class TestRequestCompliance:
     def test_create_model_interaction_request_schema(self, spec_dict):
         """Verify CreateModelInteractionParams schema fields."""
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-        
+
         # Required fields per spec
         assert "model" in schema["required"]
         assert "input" in schema["required"]
-        
+
         # Check our supported optional fields exist in spec
         our_optional_fields = [
-            "tools", "system_instruction", "generation_config", 
-            "stream", "store", "background", "response_modalities",
-            "response_format", "response_mime_type", "previous_interaction_id"
+            "tools",
+            "system_instruction",
+            "generation_config",
+            "stream",
+            "store",
+            "background",
+            "response_modalities",
+            "response_format",
+            "response_mime_type",
+            "previous_interaction_id",
         ]
-        
+
         spec_properties = schema["properties"]
         for field in our_optional_fields:
             assert field in spec_properties, f"Field '{field}' not in OpenAPI spec"
@@ -75,16 +93,11 @@ class TestRequestCompliance:
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-        input_schema = schema["properties"]["input"]
-        
-        # The input property may be inline oneOf or a $ref to InteractionsInput
-        if "$ref" in input_schema:
-            ref_name = input_schema["$ref"].split("/")[-1]
-            input_schema = spec_dict["components"]["schemas"][ref_name]
+        input_schema = _resolve_schema_ref(spec_dict, schema["properties"]["input"])
 
         # Should be oneOf with multiple types
         assert "oneOf" in input_schema
-        
+
         input_types = []
         for option in input_schema["oneOf"]:
             if option.get("type") == "string":
@@ -93,7 +106,7 @@ class TestRequestCompliance:
                 input_types.append("array")
             elif "$ref" in option:
                 input_types.append(option["$ref"])
-        
+
         print(f"Input supports types: {input_types}")
         assert "string" in input_types, "Input should support string"
         assert "array" in input_types, "Input should support array"
@@ -101,30 +114,25 @@ class TestRequestCompliance:
     def test_content_schema_uses_discriminator(self, spec_dict):
         """Verify Content uses type discriminator."""
         content_schema = spec_dict["components"]["schemas"]["Content"]
-        
+
         assert "discriminator" in content_schema
         assert content_schema["discriminator"]["propertyName"] == "type"
-        
-        # Check TextContent is an option (via mapping if present, or via oneOf refs)
+
         mapping = content_schema["discriminator"].get("mapping")
         if mapping:
             assert "text" in mapping
             print(f"Content type discriminator mapping: {list(mapping.keys())}")
         else:
-            # Discriminator without explicit mapping — verify via oneOf
-            one_of = content_schema.get("oneOf", [])
-            ref_names = [
-                opt["$ref"].split("/")[-1] for opt in one_of if "$ref" in opt
+            content_options = [
+                option["$ref"].split("/")[-1] for option in content_schema.get("oneOf", []) if "$ref" in option
             ]
-            assert "TextContent" in ref_names, (
-                f"TextContent not found in oneOf refs: {ref_names}"
-            )
-            print(f"Content type discriminator (no mapping), oneOf refs: {ref_names}")
+            assert "TextContent" in content_options
+            print(f"Content discriminator options: {content_options}")
 
     def test_text_content_schema(self, spec_dict):
         """Verify TextContent schema."""
         text_schema = spec_dict["components"]["schemas"]["TextContent"]
-        
+
         assert "type" in text_schema["required"]
         assert "text" in text_schema["properties"]
         assert text_schema["properties"]["type"].get("const") == "text"
@@ -133,10 +141,10 @@ class TestRequestCompliance:
     def test_turn_schema(self, spec_dict):
         """Verify Turn schema for multi-turn conversations."""
         turn_schema = spec_dict["components"]["schemas"]["Turn"]
-        
+
         assert "role" in turn_schema["properties"]
         assert "content" in turn_schema["properties"]
-        
+
         # Content can be string or Content[]
         content_prop = turn_schema["properties"]["content"]
         assert "oneOf" in content_prop
@@ -151,10 +159,18 @@ class TestResponseCompliance:
         # The response is the Interaction schema
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-        
+
         # Output fields (readOnly)
-        output_fields = ["id", "status", "created", "updated", "role", "outputs", "usage"]
-        
+        output_fields = [
+            "id",
+            "status",
+            "created",
+            "updated",
+            "role",
+            "outputs",
+            "usage",
+        ]
+
         for field in output_fields:
             assert field in schema["properties"], f"Output field '{field}' not in spec"
             print(f"✓ Output field '{field}' exists in spec")
@@ -164,17 +180,24 @@ class TestResponseCompliance:
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         status_prop = schema["properties"]["status"]
         # Google Interactions API uses lowercase status values (updated Feb 2026)
-        expected_statuses = ["in_progress", "requires_action", "completed", "failed", "cancelled", "incomplete"]
+        expected_statuses = [
+            "in_progress",
+            "requires_action",
+            "completed",
+            "failed",
+            "cancelled",
+            "incomplete",
+        ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
 
     def test_usage_schema(self, spec_dict):
         """Verify Usage schema fields."""
         usage_schema = spec_dict["components"]["schemas"]["Usage"]
-        
+
         # Key usage fields
         expected_fields = ["total_input_tokens", "total_output_tokens", "total_tokens"]
-        
+
         for field in expected_fields:
             assert field in usage_schema["properties"], f"Usage field '{field}' not in spec"
             print(f"✓ Usage field '{field}' exists")
@@ -186,7 +209,7 @@ class TestToolsCompliance:
     def test_tool_schema(self, spec_dict):
         """Verify Tool schema."""
         tool_schema = spec_dict["components"]["schemas"]["Tool"]
-        
+
         # Tool should be oneOf multiple tool types
         assert "oneOf" in tool_schema or "properties" in tool_schema
         print(f"✓ Tool schema found")
@@ -207,40 +230,40 @@ class TestEndpointCompliance:
     def test_create_endpoint_exists(self, spec_dict):
         """Verify POST /interactions endpoint exists."""
         paths = spec_dict["paths"]
-        
+
         # Find the create interactions endpoint
         create_path = None
         for path, methods in paths.items():
             if "interactions" in path and "post" in methods:
                 create_path = path
                 break
-        
+
         assert create_path is not None, "POST /interactions endpoint not found"
         print(f"✓ Create endpoint: POST {create_path}")
 
     def test_get_endpoint_exists(self, spec_dict):
         """Verify GET /interactions/{id} endpoint exists."""
         paths = spec_dict["paths"]
-        
+
         get_path = None
         for path, methods in paths.items():
             if "{id}" in path and "interactions" in path and "get" in methods:
                 get_path = path
                 break
-        
+
         assert get_path is not None, "GET /interactions/{id} endpoint not found"
         print(f"✓ Get endpoint: GET {get_path}")
 
     def test_delete_endpoint_exists(self, spec_dict):
         """Verify DELETE /interactions/{id} endpoint exists."""
         paths = spec_dict["paths"]
-        
+
         delete_path = None
         for path, methods in paths.items():
             if "{id}" in path and "interactions" in path and "delete" in methods:
                 delete_path = path
                 break
-        
+
         assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
         print(f"✓ Delete endpoint: DELETE {delete_path}")
 
@@ -248,11 +271,11 @@ class TestEndpointCompliance:
 if __name__ == "__main__":
     # Quick manual test
     import httpx
-    
+
     print("Loading OpenAPI spec...")
     response = httpx.get(OPENAPI_SPEC_URL)
     spec = response.json()
-    
+
     print(f"\nSpec version: {spec.get('openapi')}")
     print(f"API title: {spec.get('info', {}).get('title')}")
     print(f"\nEndpoints:")
@@ -260,6 +283,5 @@ if __name__ == "__main__":
         for method in methods:
             if method in ["get", "post", "delete", "put", "patch"]:
                 print(f"  {method.upper()} {path}")
-    
-    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")
 
+    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")
