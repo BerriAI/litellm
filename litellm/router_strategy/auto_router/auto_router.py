@@ -1,6 +1,7 @@
 """
 Auto-Routing Strategy that works with a Semantic Router Config
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
@@ -123,10 +124,16 @@ class AutoRouter(CustomLogger):
         raw_content = user_message.get("content", "")
         # Handle Anthropic-style content blocks: [{"type": "text", "text": "..."}]
         if isinstance(raw_content, list):
-            message_content = " ".join(block.get("text", "") for block in raw_content if isinstance(block, dict) and block.get("text", ""))
+            message_content = " ".join(
+                block.get("text", "")
+                for block in raw_content
+                if isinstance(block, dict) and block.get("text", "")
+            )
         else:
             message_content = str(raw_content)
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
+        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
+            text=message_content
+        )
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model
