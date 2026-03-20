@@ -91,18 +91,27 @@ def test_crusoe_model_list_populated():
     """Test Crusoe models are present in model_prices_and_context_window.json"""
     import litellm
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    original_model_cost = litellm.model_cost
+    original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    expected = [
-        "crusoe/meta-llama/Llama-3.3-70B-Instruct",
-        "crusoe/deepseek-ai/DeepSeek-R1-0528",
-        "crusoe/deepseek-ai/DeepSeek-V3-0324",
-        "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507",
-        "crusoe/moonshotai/Kimi-K2-Thinking",
-        "crusoe/openai/gpt-oss-120b",
-        "crusoe/google/gemma-3-12b-it",
-    ]
-    for model in expected:
-        assert model in litellm.model_cost, f"{model} not found in model_cost"
-        assert litellm.model_cost[model].get("litellm_provider") == "crusoe"
+        expected = [
+            "crusoe/meta-llama/Llama-3.3-70B-Instruct",
+            "crusoe/deepseek-ai/DeepSeek-R1-0528",
+            "crusoe/deepseek-ai/DeepSeek-V3-0324",
+            "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507",
+            "crusoe/moonshotai/Kimi-K2-Thinking",
+            "crusoe/openai/gpt-oss-120b",
+            "crusoe/google/gemma-3-12b-it",
+        ]
+        for model in expected:
+            assert model in litellm.model_cost, f"{model} not found in model_cost"
+            assert litellm.model_cost[model].get("litellm_provider") == "crusoe"
+    finally:
+        litellm.model_cost = original_model_cost
+        if original_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env
