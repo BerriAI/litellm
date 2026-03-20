@@ -417,13 +417,13 @@ async def test_mcp_read_resource_success():
 async def test_read_resource_preserves_meta():
     """Test that _meta from upstream MCP resource contents is preserved when normalizing.
 
-    The read_resource handler normalizes upstream TextResourceContents/BlobResourceContents
-    into ReadResourceContents. This test verifies meta is passed through (fix for _meta
+    Exercises the production _normalize_read_resource_contents helper (fix for _meta
     being dropped when accessing resources through LiteLLM proxy).
     """
     try:
-        from mcp.server.lowlevel.helper_types import ReadResourceContents
-        from mcp.types import BlobResourceContents
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_read_resource_contents,
+        )
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -439,34 +439,12 @@ async def test_read_resource_preserves_meta():
         ]
     )
 
-    # Replicate the normalization logic from read_resource handler to verify meta flow
-    normalized_contents: list = []
-    for content in read_result.contents:
-        meta = getattr(content, "_meta", None) or getattr(content, "meta", None)
-        if isinstance(content, TextResourceContents):
-            rc_kwargs = {"content": content.text, "mime_type": content.mimeType}
-            if meta is not None:
-                rc_kwargs["meta"] = meta
-            try:
-                normalized_contents.append(ReadResourceContents(**rc_kwargs))
-            except TypeError:
-                rc_kwargs.pop("meta", None)
-                normalized_contents.append(ReadResourceContents(**rc_kwargs))
-        elif isinstance(content, BlobResourceContents):
-            rc_kwargs = {"content": content.blob, "mime_type": None}
-            if meta is not None:
-                rc_kwargs["meta"] = meta
-            try:
-                normalized_contents.append(ReadResourceContents(**rc_kwargs))
-            except TypeError:
-                rc_kwargs.pop("meta", None)
-                normalized_contents.append(ReadResourceContents(**rc_kwargs))
+    normalized_contents = _normalize_read_resource_contents(read_result)
 
     assert len(normalized_contents) == 1
     out = normalized_contents[0]
     assert out.content == "<html>content</html>"
     assert out.mime_type == "text/html"
-    # meta is preserved when ReadResourceContents supports it (MCP SDK >= 1.26)
     if hasattr(out, "meta"):
         assert out.meta == meta_value
 

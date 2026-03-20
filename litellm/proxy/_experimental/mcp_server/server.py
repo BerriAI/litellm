@@ -629,11 +629,25 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
         )
+        return _normalize_read_resource_contents(read_resource_result)
 
+    ########################################################
+    ############ End of MCP Server Routes ##################
+    ########################################################
+
+    ########################################################
+    ############ Helper Functions ##########################
+    ########################################################
+
+    def _normalize_read_resource_contents(
+        read_resource_result: ReadResourceResult,
+    ) -> List[ReadResourceContents]:
+        """Normalize upstream resource contents to ReadResourceContents, preserving _meta."""
         normalized_contents: List[ReadResourceContents] = []
         for content in read_resource_result.contents:
-            # Preserve _meta from upstream (MCP spec: JSON key _meta, Python attr meta)
-            meta = getattr(content, "_meta", None) or getattr(content, "meta", None)
+            meta = getattr(content, "_meta", None)
+            if meta is None:
+                meta = getattr(content, "meta", None)
             if isinstance(content, TextResourceContents):
                 text_content: TextResourceContents = content
                 rc_kwargs: Dict[str, Any] = {
@@ -645,7 +659,6 @@ if MCP_AVAILABLE:
                 try:
                     normalized_contents.append(ReadResourceContents(**rc_kwargs))
                 except TypeError:
-                    # Older MCP SDK may not support meta in ReadResourceContents
                     rc_kwargs.pop("meta", None)
                     normalized_contents.append(ReadResourceContents(**rc_kwargs))
             elif isinstance(content, BlobResourceContents):
@@ -658,16 +671,7 @@ if MCP_AVAILABLE:
                 except TypeError:
                     rc_kwargs.pop("meta", None)
                     normalized_contents.append(ReadResourceContents(**rc_kwargs))
-
         return normalized_contents
-
-    ########################################################
-    ############ End of MCP Server Routes ##################
-    ########################################################
-
-    ########################################################
-    ############ Helper Functions ##########################
-    ########################################################
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: Optional[List[str]],
