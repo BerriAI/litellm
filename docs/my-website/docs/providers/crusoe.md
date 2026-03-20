@@ -153,14 +153,14 @@ import litellm
 from litellm import completion
 
 # Using environment variable
-os.environ["CRUSOE_API_BASE"] = "https://custom.crusoecloud.com/v1/"
+os.environ["CRUSOE_API_BASE"] = "https://custom.crusoecloud.com/v1"
 os.environ["CRUSOE_API_KEY"] = ""  # your API key
 
 # Or pass directly
 response = completion(
     model="crusoe/meta-llama/Llama-3.3-70B-Instruct",
     messages=[{"content": "Hello!", "role": "user"}],
-    api_base="https://custom.crusoecloud.com/v1/",
+    api_base="https://custom.crusoecloud.com/v1",
     api_key="your-api-key"
 )
 ```

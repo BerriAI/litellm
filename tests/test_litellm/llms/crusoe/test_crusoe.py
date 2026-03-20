@@ -39,11 +39,11 @@ def test_crusoe_dynamic_config_env_vars():
 
     with patch.dict(
         os.environ,
-        {"CRUSOE_API_KEY": "test-key", "CRUSOE_API_BASE": "https://custom.crusoe.com/v1/"},
+        {"CRUSOE_API_KEY": "test-key", "CRUSOE_API_BASE": "https://custom.crusoe.com/v1"},
     ):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
 
-    assert api_base == "https://custom.crusoe.com/v1/"
+    assert api_base == "https://custom.crusoe.com/v1"
     assert api_key == "test-key"
 
 
@@ -56,10 +56,10 @@ def test_crusoe_dynamic_config_explicit_params():
 
     with patch.dict(os.environ, {"CRUSOE_API_KEY": "env-key"}):
         api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://override.crusoe.com/v1/", "override-key"
+            "https://override.crusoe.com/v1", "override-key"
         )
 
-    assert api_base == "https://override.crusoe.com/v1/"
+    assert api_base == "https://override.crusoe.com/v1"
     assert api_key == "override-key"
 
 
