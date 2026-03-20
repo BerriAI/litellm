@@ -58,6 +58,8 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,
+            client_id=getattr(litellm_params, "client_id", None),
+            client_secret=getattr(litellm_params, "client_secret", None),
         )
 
         headers["Content-Type"] = "application/json"
