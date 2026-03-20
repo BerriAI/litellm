@@ -55,7 +55,7 @@ graph LR
     class Azure processor
 ```
 
-Every provider is a **processor** under GDPR: they process data on your behalf. Each requires a Data Processing Agreement (Article 28).
+Providers are typically processors for customer-submitted data, but the exact role depends on each provider's terms of service and processing purpose. Deployers should review each provider's DPA. Each requires a Data Processing Agreement (Article 28).
 
 When you self-host LiteLLM, your organization is the data controller — you determine the purpose and means of processing. LiteLLM as software has no GDPR role; the legal designation applies to the organization operating it. When using LiteLLM's hosted proxy service, the organization operating that service becomes an additional data processor.
 
