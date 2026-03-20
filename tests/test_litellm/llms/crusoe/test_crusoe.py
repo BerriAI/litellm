@@ -78,6 +78,24 @@ def test_crusoe_supported_params():
     assert "stream" in params
 
 
+def test_crusoe_param_mapping_max_completion_tokens():
+    """Test max_completion_tokens is mapped to max_tokens for Crusoe"""
+    from litellm.llms.openai_like.dynamic_config import create_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    config = create_config_class(JSONProviderRegistry.get("crusoe"))()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 1024},
+        optional_params={},
+        model="meta-llama/Llama-3.3-70B-Instruct",
+        drop_params=False,
+    )
+
+    assert "max_tokens" in optional_params, "max_completion_tokens should be mapped to max_tokens"
+    assert optional_params["max_tokens"] == 1024
+    assert "max_completion_tokens" not in optional_params
+
+
 def test_crusoe_provider_detection_by_prefix():
     """Test crusoe/model prefix is correctly routed"""
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
