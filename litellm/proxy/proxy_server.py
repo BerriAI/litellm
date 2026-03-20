@@ -11120,12 +11120,23 @@ async def login_v3(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "/ui/"
         litellm_dashboard_ui += "?login=success"
 
-        json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+        # Store JWT behind a single-use opaque code (60s TTL)
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": litellm_dashboard_ui}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+        else:
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+
+        return JSONResponse(
+            content={"code": code, "expires_in": 60},
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
-        return json_response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.login_v3(): Exception occurred - {}".format(
@@ -11149,6 +11160,66 @@ async def login_v3(request: Request):  # noqa: PLR0915
                 param="None",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+@router.post(
+    "/v3/login/exchange", include_in_schema=False
+)  # exchange single-use opaque code for JWT
+async def login_v3_exchange(request: Request):
+    try:
+        body = await request.json()
+        code = body.get("code")
+        if not code:
+            raise ProxyException(
+                message="Missing 'code' parameter",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f"login_code:{code}"
+        if redis_usage_cache is not None:
+            cached_data = await redis_usage_cache.async_get_cache(key=cache_key)
+        else:
+            cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
+
+        if not cached_data or not isinstance(cached_data, dict):
+            raise ProxyException(
+                message="Invalid or expired login code",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Single-use: delete immediately
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_delete_cache(key=cache_key)
+        else:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+
+        json_response = JSONResponse(
+            content={
+                "token": cached_data["token"],
+                "redirect_url": cached_data["redirect_url"],
+            },
+            status_code=status.HTTP_200_OK,
+        )
+        json_response.set_cookie(key="token", value=cached_data["token"])
+        return json_response
+    except ProxyException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v3_exchange(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @app.get("/onboarding/get_token", include_in_schema=False)

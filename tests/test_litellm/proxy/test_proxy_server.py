@@ -253,8 +253,8 @@ def test_login_v3_rejected_without_control_plane_url(monkeypatch):
     assert "control_plane_url" in response.json()["error"]["message"]
 
 
-def test_login_v3_includes_token_in_body(monkeypatch):
-    """v3/login returns token in body when control_plane_url is configured."""
+def test_login_v3_returns_code(monkeypatch):
+    """v3/login returns an opaque code, not the JWT directly."""
     mock_prisma_client = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
@@ -285,9 +285,109 @@ def test_login_v3_includes_token_in_body(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["token"] == "signed-token"
-    assert response.json()["redirect_url"] == "http://testserver/ui/?login=success"
-    assert response.cookies.get("token") == "signed-token"
+    data = response.json()
+    assert "code" in data
+    assert data["expires_in"] == 60
+    assert "token" not in data
+
+
+def test_login_v3_exchange_happy_path(monkeypatch):
+    """Full flow: v3/login returns code, v3/login/exchange redeems it for JWT."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+
+    client = TestClient(app)
+
+    # Step 1: login — get code
+    login_response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+    assert login_response.status_code == 200
+    code = login_response.json()["code"]
+
+    # Step 2: exchange — get JWT
+    exchange_response = client.post(
+        "/v3/login/exchange",
+        json={"code": code},
+    )
+    assert exchange_response.status_code == 200
+    exchange_data = exchange_response.json()
+    assert exchange_data["token"] == "signed-token"
+    assert "redirect_url" in exchange_data
+    assert exchange_response.cookies.get("token") == "signed-token"
+
+
+def test_login_v3_exchange_single_use(monkeypatch):
+    """Code can only be redeemed once."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"control_plane_url": "https://cp.example.com"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+
+    client = TestClient(app)
+
+    login_response = client.post(
+        "/v3/login",
+        json={"username": "alice", "password": "secret"},
+    )
+    code = login_response.json()["code"]
+
+    # First exchange succeeds
+    first = client.post("/v3/login/exchange", json={"code": code})
+    assert first.status_code == 200
+
+    # Second exchange fails
+    second = client.post("/v3/login/exchange", json={"code": code})
+    assert second.status_code == 401
+
+
+def test_login_v3_exchange_invalid_code():
+    """Random code returns 401."""
+    client = TestClient(app)
+    response = client.post(
+        "/v3/login/exchange",
+        json={"code": "nonexistent-code"},
+    )
+    assert response.status_code == 401
 
 
 def test_login_v3_returns_json_on_proxy_exception(monkeypatch):
