@@ -1144,10 +1144,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
-    team_id: Optional[str] = Field(
-        None,
-        description="Team ID to assign the MCP server to. Required for team MCP managers.",
-    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1612,9 +1608,8 @@ class Member(MemberBase):
     role: Literal[
         "admin",
         "user",
-        "mcp_server_manager",
     ] = Field(
-        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member, 'mcp_server_manager' can manage MCP servers for the team"
+        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
     )
 
 
