@@ -123,10 +123,15 @@ class RedisCircuitBreaker:
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
+        if self._state == self.HALF_OPEN:
+            # Probe already in flight — fast-fail all concurrent requests.
+            # Only the one call that caused the OPEN→HALF_OPEN transition
+            # (which returned False) is the designated probe.
+            return True
         if self._state == self.OPEN:
             if time.time() - (self._opened_at or 0) > self.recovery_timeout:
                 self._state = self.HALF_OPEN
-                return False  # allow probe through
+                return False  # this caller is the designated probe
             return True
         return False
 
