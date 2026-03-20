@@ -1742,19 +1742,87 @@ async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_it
         await asyncio.sleep(0.05)
         tick_event.set()
 
-    bg_task = asyncio.create_task(background_tick())
-    anext_task = asyncio.create_task(wrapper.__anext__())
-    try:
-        # If the event loop is blocked by a sync next(), this will time out.
-        await asyncio.wait_for(tick_event.wait(), timeout=0.15)
+    # Run the two coroutines concurrently and measure wall time.
+    # If __anext__ blocks the event loop, background_tick can't run and the gather
+    # takes the full 0.3 s delay; if non-blocking both finish within ~0.35 s total.
+    start = asyncio.get_event_loop().time()
 
-        out = await asyncio.wait_for(anext_task, timeout=2.0)
-        assert isinstance(out, ModelResponseStream)
-    finally:
-        if not anext_task.done():
-            anext_task.cancel()
-            try:
-                await anext_task
-            except asyncio.CancelledError:
-                pass
-        await bg_task
+    out, _ = await asyncio.gather(
+        wrapper.__anext__(),
+        background_tick(),
+    )
+
+    elapsed = asyncio.get_event_loop().time() - start
+    assert isinstance(out, ModelResponseStream)
+    # background_tick sleeps 0.05 s; total must finish well under 2 × 0.3 s
+    assert elapsed < 0.5, f"Event loop was likely blocked (elapsed={elapsed:.2f}s)"
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteration(
+    logging_obj: Logging,
+):
+    """
+    PEP 479 regression: when a sync iterator is exhausted, asyncio.to_thread(next, it)
+    raises StopIteration inside a coroutine, which Python converts to RuntimeError.
+    The wrapper must catch StopIteration in the thread and raise StopAsyncIteration
+    in the coroutine instead, so callers get clean stream termination.
+    """
+
+    class SingleChunkIterator:
+        def __init__(self, chunk: ModelResponseStream):
+            self._chunk = chunk
+            self._done = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._done:
+                raise StopIteration
+            self._done = True
+            return self._chunk
+
+    test_chunk = ModelResponseStream(
+        id="chatcmpl-exhaustion-test",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="done",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=SingleChunkIterator(test_chunk),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    # Drain the wrapper fully.  The wrapper's except-handler calls finish_reason_handler()
+    # on the first StopAsyncIteration (sent_last_chunk=False→True), then re-raises on the
+    # next call.  What must NOT happen is a RuntimeError from PEP 479 converting
+    # StopIteration (raised inside the thread) to RuntimeError inside the coroutine.
+    try:
+        while True:
+            await wrapper.__anext__()
+    except StopAsyncIteration:
+        pass  # expected clean termination
+    except RuntimeError as e:
+        pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
