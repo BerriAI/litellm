@@ -203,7 +203,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        tags=[get_datadog_tags()],
+                        tags=get_datadog_tags(),
                         spans=self.log_queue,
                     ),
                 ),
@@ -315,7 +315,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
             status="error" if error_info else "ok",
-            tags=[get_datadog_tags(standard_logging_object=standard_logging_payload)],
+            tags=get_datadog_tags(standard_logging_object=standard_logging_payload),
         )
 
         apm_trace_id = self._get_apm_trace_id()
