@@ -163,6 +163,9 @@ run_grype_scans() {
         "CVE-2026-25639" # axios - full fix requires 1.x major version bump; pinned to >=0.30.2 to clear other axios CVEs, upgrade to 1.x in follow-up
         "CVE-2026-2297" # Python 3.13 SourcelessFileLoader audit hook bypass - no fix available in base image
         "GHSA-qffp-2rhf-9h96" # tar hardlink path traversal - from nodejs_wheel bundled npm, not used in application runtime code
+        "CVE-2026-2673" # OpenSSL 3.6.1 TLS 1.3 key exchange group negotiation issue - no fix available yet
+        "CVE-2026-3644" # Python 3.13 vulnerability - no fix available in base image
+        "CVE-2026-4224" # Python 3.13 Expat parser stack overflow in ElementDeclHandler - no fix available in base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

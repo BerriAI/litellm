@@ -934,6 +934,7 @@ async def new_team(  # noqa: PLR0915
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
+            team_member_budget_duration=data.team_member_budget_duration,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
@@ -942,6 +943,7 @@ async def new_team(  # noqa: PLR0915
                 team_member_budget=data.team_member_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
+                team_member_budget_duration=data.team_member_budget_duration,
             )
 
         ## ADD TO TEAM TABLE
@@ -3334,7 +3336,9 @@ def _convert_teams_to_response_models(
     use_deleted_table: bool,
 ) -> List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
     """Convert raw Prisma team rows to response models."""
-    team_list: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
+    team_list: List[
+        Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]
+    ] = []
     for team in teams:
         try:
             team_dict = team.model_dump()

@@ -3874,14 +3874,23 @@ class Router:
             The response from the handler function
         """
         handler_name = original_function.__name__
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name="generic_api_call"
+        )
         try:
             verbose_router_logger.debug(
                 f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            self._update_kwargs_before_fallbacks(
+                model=model,
+                kwargs=kwargs,
+                metadata_variable_name=metadata_variable_name,
             )
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="generic_api_call"

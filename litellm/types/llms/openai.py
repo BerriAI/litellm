@@ -84,6 +84,7 @@ from typing_extensions import Annotated, Dict, Required, TypedDict, override
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
+    OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
 )
@@ -1242,6 +1243,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         List[
             Union[
                 GenericResponseOutputItem,
+                OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,
@@ -1308,13 +1310,16 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         if not isinstance(serialized, list):
             return serialized
         return [
-            {
-                k: v
-                for k, v in item.items()
-                if v is not None or k not in ("status", "content", "encrypted_content")
-            }
-            if isinstance(item, dict) and item.get("type") == "reasoning"
-            else item
+            (
+                {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None
+                    or k not in ("status", "content", "encrypted_content")
+                }
+                if isinstance(item, dict) and item.get("type") == "reasoning"
+                else item
+            )
             for item in serialized
         ]
 
