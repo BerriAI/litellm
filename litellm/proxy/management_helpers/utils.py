@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -148,6 +148,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    team_models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -245,6 +246,18 @@ async def add_new_member(
         if _budget_id:
             membership_create_data["budget_id"] = _budget_id
         if new_member.models:
+            # Defense-in-depth: validate member models are within team models
+            if team_models:
+                disallowed = set(new_member.models) - set(team_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Member model overrides must be a subset of team models. "
+                            f"Disallowed: {sorted(disallowed)}. "
+                            f"Team models: {sorted(team_models)}"
+                        },
+                    )
             membership_create_data["models"] = new_member.models
 
         _returned_team_membership = (

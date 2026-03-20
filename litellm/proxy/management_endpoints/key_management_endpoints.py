@@ -643,6 +643,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     ) and team_table is not None:
         # Read member models from LiteLLM_TeamMembership table (authoritative source),
         # NOT from members_with_roles JSON blob which can be stale after /team/member_update.
+        # Note: This is a management endpoint (/key/generate), not the hot auth path.
+        # The hot path (/chat/completions) uses the SQL view join with zero extra queries.
         member_models: list = []
         if data.user_id and prisma_client is not None:
             _membership = await prisma_client.db.litellm_teammembership.find_unique(

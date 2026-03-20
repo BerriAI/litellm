@@ -1439,6 +1439,15 @@ async def update_team(  # noqa: PLR0915
                         },
                     )
 
+        # When team.models is being narrowed, prune existing default_models
+        # to prevent stale over-permissive defaults (privilege escalation)
+        if data.models is not None and not data.default_models:
+            existing_defaults = existing_team_row.default_models or []
+            if existing_defaults and data.models:
+                pruned = [m for m in existing_defaults if m in set(data.models)]
+                if pruned != existing_defaults:
+                    data.default_models = pruned
+
         if data.soft_budget is not None:
             max_budget_to_check = (
                 data.max_budget
@@ -1829,6 +1838,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                team_models=team_models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1853,6 +1863,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    team_models=team_models,
                 )
             except Exception as e:
                 raise HTTPException(
