@@ -4,9 +4,25 @@ LiteLLM is an AI gateway. Every LLM call in your stack passes through it. That m
 
 This guide maps LiteLLM's existing features to regulatory requirements and identifies what deployers need to add.
 
+## Is your system in scope?
+
+Articles 12, 13, and 14 of the EU AI Act apply only to **high-risk AI systems** as defined in Annex III. Most LiteLLM deployments — general-purpose chatbots, internal productivity tools, code assistants — are not high-risk and are not subject to these obligations.
+
+Your system is likely high-risk if it is used for:
+- **Recruitment or HR decisions** (screening CVs, evaluating candidates, task allocation)
+- **Credit scoring or insurance pricing**
+- **Law enforcement or border control**
+- **Critical infrastructure management** (energy, water, transport)
+- **Education assessment** (grading, admissions)
+- **Access to essential public services**
+
+If your use case does not fall under Annex III, Articles 12-14 do not apply. You may still have obligations under **Article 50** (transparency for chatbots and AI systems interacting directly with users) and **GDPR** (if processing personal data). Read those sections below.
+
+If your system is high-risk, the August 2, 2026 deadline for full compliance applies. The rest of this guide addresses high-risk obligations.
+
 ## Why the gateway layer matters
 
-The EU AI Act requires record-keeping (Article 12), transparency (Article 13), and human oversight (Article 14) for high-risk AI systems. These requirements apply to the deployed system, not to individual model providers.
+For high-risk systems, the EU AI Act requires record-keeping (Article 12), transparency (Article 13), and human oversight (Article 14). These requirements apply to the deployed system, not to individual model providers.
 
 LiteLLM sits between your application and 100+ LLM providers. It already captures:
 - Model identifier per request
@@ -74,12 +90,12 @@ Article 12 requires automatic event recording for the lifetime of high-risk AI s
 | Error recording | `exception` type and message in failure callbacks | **Covered** |
 | Operation latency | Calculated from request timing | **Covered** |
 | User identification | `user` field in request metadata | **Available** |
-| Data retention (6+ months) | Depends on your logging backend | **Your responsibility** |
+| Data retention | Depends on your logging backend | **Your responsibility** |
 | Temperature/parameters | Logged if passed in request | **Partial** |
 
 Based on the mapping above, LiteLLM's callback system addresses most of the data fields Article 12 references when properly configured. The remaining gaps are:
 1. **Content logging is opt-in** — you must explicitly enable it
-2. **Retention is your responsibility** — LiteLLM doesn't store data persistently by default
+2. **Retention is your responsibility** — LiteLLM doesn't store data persistently by default. Article 18 requires providers of high-risk systems to retain logs and technical documentation for **10 years** after market placement. Deployers under Article 26(6) must retain logs for a period appropriate to the intended purpose and at least 6 months. Confirm the applicable retention period with legal counsel.
 3. **Request parameters** (temperature, max_tokens, top_p) need to be explicitly included in your logging
 
 ### Configuring Article 12-compliant logging
@@ -100,7 +116,7 @@ litellm.failure_callback = ["your_logging_backend"]
 # - error type and message (on failure)
 ```
 
-Connect to a persistent backend (Langfuse, Helicone, or your own database) with a retention policy of at least 6 months.
+Connect to a persistent backend (Langfuse, Helicone, or your own database). Set your retention policy based on your role: providers must retain logs for 10 years (Article 18); deployers for at least 6 months (Article 26(6)). Confirm with legal counsel.
 
 ## Article 13: Transparency to deployers
 
@@ -152,7 +168,7 @@ Consider maintaining a GDPR Article 30 Record of Processing Activities that docu
 
 ## Recommendations
 
-1. **Enable comprehensive logging** with a persistent backend and 6+ month retention
+1. **Enable comprehensive logging** with a persistent backend and retention per Article 18 (10 years for providers) or Article 26(6) (minimum 6 months for deployers)
 2. **Audit your traces periodically** against Article 12 requirements
 3. **Document your routing policy** — which models, which fallbacks, which guardrails
 4. **Establish DPAs** with every LLM provider you route to
