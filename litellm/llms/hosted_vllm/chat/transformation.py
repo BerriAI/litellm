@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload, Iterator, AsyncIterator
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -15,9 +15,10 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
+from ....types.utils import ModelResponseStream, ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig, OpenAIChatCompletionStreamingHandler
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -182,3 +183,28 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(
                 messages, model, is_async=cast(Literal[False], False)
             )
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return HostedVLLMChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class HostedVLLMChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        # Map vLLM's 'reasoning' field to LiteLLM's 'reasoning_content' field
+        # vLLM returns delta.reasoning, but LiteLLM expects delta.reasoning_content
+        choices = chunk.get("choices", [])
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+
+        return super().chunk_parser(chunk)
