@@ -1239,6 +1239,13 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            elif isinstance(choice, StreamingChoices) and hasattr(
+                choice.delta, "reasoning_content"
+            ):
+                if choice.delta.reasoning_content is not None:
+                    return "thinking", ChatCompletionThinkingBlock(
+                        type="thinking", thinking="", signature=""
+                    )
 
         return "text", TextBlock(type="text", text="")
 
@@ -1320,6 +1327,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 stop_reason=self._translate_openai_finish_reason_to_anthropic(
                     response.choices[0].finish_reason
                 ),
+                stop_sequence=None,
             )
             if getattr(response, "usage", None) is not None:
                 litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
