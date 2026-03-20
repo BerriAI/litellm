@@ -1399,6 +1399,8 @@ if MCP_AVAILABLE:
         client_id: Optional[str] = Form(None),
         client_secret: Optional[str] = Form(None),
         code_verifier: Optional[str] = Form(None),
+        refresh_token: Optional[str] = Form(None),
+        scope: Optional[str] = Form(None),
     ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
         resolved_client_id = mcp_server.client_id or client_id or ""
@@ -1422,6 +1424,8 @@ if MCP_AVAILABLE:
             client_id=resolved_client_id,
             client_secret=client_secret,
             code_verifier=code_verifier,
+            refresh_token=refresh_token,
+            scope=scope,
         )
 
     @router.post(
