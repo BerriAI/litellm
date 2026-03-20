@@ -216,3 +216,45 @@ def test_circuit_breaker_closes_on_recovery():
     # Successful probe closes the circuit
     cb.record_success()
     assert cb._state == "closed"
+
+
+def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
+    """
+    Regression test: only ONE probe gets through when the circuit transitions
+    OPEN → HALF_OPEN. All concurrent callers that check is_open() while the
+    state is already HALF_OPEN must be fast-failed (return True), not allowed
+    through as additional probes.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    cb._state = "open"
+    cb._opened_at = time.time() - 9999  # recovery timeout long expired
+
+    # First caller: OPEN + expired → transitions to HALF_OPEN, returns False (probe)
+    assert cb.is_open() is False
+    assert cb._state == "half_open"
+
+    # All subsequent concurrent callers: HALF_OPEN → fast-fail (return True)
+    for _ in range(10):
+        assert cb.is_open() is True, "concurrent callers should be fast-failed in HALF_OPEN"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_cache_returns_none_when_no_in_memory_cache_and_redis_fails():
+    """
+    Regression test: when in_memory_cache is None and Redis fails, async_increment_cache
+    must return None — not the raw increment delta — to avoid silently miscalculating
+    rate-limit counters.
+    """
+    dc = DualCache()
+    dc.in_memory_cache = None  # type: ignore[assignment]  # constructor always creates InMemoryCache, so null it manually
+    dc.redis_cache = MagicMock()
+    dc.redis_cache.async_increment = AsyncMock(side_effect=Exception("redis down"))
+
+    result = await dc.async_increment_cache("rpm:model:14-05", 1.0, ttl=60)
+
+    assert result is None, (
+        f"Expected None when in_memory_cache is absent and Redis fails, got {result!r}. "
+        "Returning the delta (1.0) would silently miscalculate rate-limit counters."
+    )
