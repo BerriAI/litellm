@@ -194,7 +194,6 @@ export const getAgentHubTableColumns = (
         return publicA - publicB;
       },
       cell: ({ row }) => {
-        console.log(`CHECKPOINT 1: ${JSON.stringify(row.original)}`);
         const agent = row.original;
 
         return agent.is_public === true ? (
