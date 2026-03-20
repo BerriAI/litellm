@@ -83,7 +83,9 @@ class VantageLogger(FocusLogger):
 
         verbose_logger.debug(
             "VantageLogger initialized (integration_token=%s)",
-            resolved_token[:4] + "***" if resolved_token and len(resolved_token) > 4 else "***",
+            resolved_token[:4] + "***"
+            if resolved_token and len(resolved_token) > 4
+            else "***",
         )
 
     async def initialize_focus_export_job(self) -> None:
@@ -128,9 +130,7 @@ class VantageLogger(FocusLogger):
             callback_type=VantageLogger
         )
         if not vantage_loggers:
-            verbose_logger.debug(
-                "No Vantage logger registered; skipping scheduler"
-            )
+            verbose_logger.debug("No Vantage logger registered; skipping scheduler")
             return
 
         vantage_logger = cast(VantageLogger, vantage_loggers[0])

@@ -1568,6 +1568,91 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
     print("✓ _handle_clientside_credential test passed!")
 
 
+def test_sync_generic_api_call_preserves_requested_model_group_in_logs():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-sonnet-4-6",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-west-2",
+                },
+            }
+        ]
+    )
+
+    try:
+        captured_kwargs = {}
+
+        def mock_original_function(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {"status": "ok"}
+
+        response = router._generic_api_call_with_fallbacks(
+            model="claude-sonnet-4-6",
+            original_function=mock_original_function,
+        )
+
+        assert response == {"status": "ok"}
+        assert (
+            captured_kwargs["model"] == "bedrock/global.anthropic.claude-sonnet-4-6"
+        )
+        assert (
+            captured_kwargs["litellm_metadata"]["model_group"] == "claude-sonnet-4-6"
+        )
+        assert (
+            captured_kwargs["litellm_metadata"]["deployment"]
+            == "bedrock/global.anthropic.claude-sonnet-4-6"
+        )
+    finally:
+        router.discard()
+
+
+def test_sync_generic_api_call_uses_request_kwargs_for_deployment_selection():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "regional-model",
+                "litellm_params": {
+                    "model": "anthropic/us-model",
+                    "api_key": "test-api-key",
+                    "region_name": "us",
+                },
+            },
+            {
+                "model_name": "regional-model",
+                "litellm_params": {
+                    "model": "anthropic/eu-model",
+                    "api_key": "test-api-key",
+                    "region_name": "eu",
+                },
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    try:
+        captured_kwargs = {}
+
+        def mock_original_function(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {"status": "ok"}
+
+        response = router._generic_api_call_with_fallbacks(
+            model="regional-model",
+            original_function=mock_original_function,
+            messages=[{"role": "user", "content": "Hello from Europe"}],
+            allowed_model_region="eu",
+        )
+
+        assert response == {"status": "ok"}
+        assert captured_kwargs["model"] == "anthropic/eu-model"
+    finally:
+        router.discard()
+
+
 @pytest.mark.parametrize(
     "function_name, expected_metadata_key",
     [

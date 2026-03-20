@@ -42,6 +42,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
+    OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
@@ -1698,6 +1699,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> List[
         Union[
             GenericResponseOutputItem,
+            OutputCodeInterpreterCall,
             OutputFunctionToolCall,
             OutputImageGenerationCall,
             ResponseFunctionToolCall,
@@ -1706,6 +1708,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_output: List[
             Union[
                 GenericResponseOutputItem,
+                OutputCodeInterpreterCall,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,
@@ -1727,7 +1730,62 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response=chat_completion_response
             )
         )
+
+        # Convert server-side tool results (e.g. Anthropic code execution)
+        # into code_interpreter_call output items, replacing the corresponding
+        # function_call items so the output matches OpenAI's native shape.
+        tool_result_items = (
+            LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(
+                chat_completion_response
+            )
+        )
+        if tool_result_items:
+            result_by_id = {item.id: item for item in tool_result_items}
+            replaced_ids = set(result_by_id.keys())
+            responses_output = [
+                (
+                    result_by_id[getattr(item, "call_id", None)]
+                    if (
+                        getattr(item, "type", None) == "function_call"
+                        and getattr(item, "call_id", None) in replaced_ids
+                    )
+                    else item
+                )
+                for item in responses_output
+            ]
+
         return responses_output
+
+    @staticmethod
+    def _extract_tool_result_output_items(
+        chat_completion_response: ModelResponse,
+    ) -> list:
+        """Extract pre-built code_interpreter_call output items from provider_specific_fields.
+
+        Provider transformers (e.g. Anthropic) convert their native tool results
+        into OutputCodeInterpreterCall objects and store them in
+        provider_specific_fields["code_interpreter_results"]. This method
+        simply retrieves them — no provider-specific parsing here.
+        """
+        output_items: list = []
+        for choice in chat_completion_response.choices or []:
+            message = getattr(choice, "message", None)
+            if not message:
+                continue
+            psf = getattr(message, "provider_specific_fields", None)
+            if not psf or not isinstance(psf, dict):
+                continue
+            results = psf.get("code_interpreter_results")
+            if results and isinstance(results, list):
+                for item in results:
+                    # In the streaming path, items are plain dicts after
+                    # model_dump() in stream_chunk_builder.  Reconstruct
+                    # Pydantic objects so responses_output has a uniform type.
+                    if isinstance(item, dict):
+                        output_items.append(OutputCodeInterpreterCall(**item))
+                    else:
+                        output_items.append(item)
+        return output_items
 
     @staticmethod
     def _extract_reasoning_output_items(

@@ -107,6 +107,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
         self._accumulated_reasoning_content_parts: List[str] = []
+        self._accumulated_provider_specific_fields: Dict[str, Any] = {}
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -479,16 +480,36 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         event.__dict__["sequence_number"] = self._sequence_number
         return event
 
-    def create_litellm_model_response(
-        self,
-    ) -> Optional[ModelResponse]:
-        return cast(
+    def _merge_provider_specific_fields(self, src: dict) -> None:
+        """Merge provider_specific_fields using last-value-wins for lists.
+
+        List-valued keys (web_search_results, tool_results,
+        code_interpreter_results, etc.) are emitted cumulatively — each
+        emission contains the full list so far.  Using "last value wins"
+        matches stream_chunk_builder's semantics and avoids quadratic
+        growth from repeated extend calls.
+        """
+        for key, val in src.items():
+            self._accumulated_provider_specific_fields[key] = val
+
+    def create_litellm_model_response(self) -> Optional[ModelResponse]:
+        response = cast(
             Optional[ModelResponse],
             stream_chunk_builder(
                 chunks=self.collected_chat_completion_chunks,
                 logging_obj=self.litellm_logging_obj,
             ),
         )
+        if response is not None and self._accumulated_provider_specific_fields:
+            if (
+                not hasattr(response, "_hidden_params")
+                or response._hidden_params is None
+            ):
+                response._hidden_params = {}
+            response._hidden_params.setdefault("provider_specific_fields", {}).update(
+                self._accumulated_provider_specific_fields
+            )
+        return response
 
     @staticmethod
     def _snapshot_chunk_for_stream_chunk_builder(
@@ -853,6 +874,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
+                        # Accumulate provider_specific_fields from chunk and delta
+                        for src in (
+                            getattr(chunk, "provider_specific_fields", None),
+                            getattr(
+                                chunk.choices[0].delta if chunk.choices else None,
+                                "provider_specific_fields",
+                                None,
+                            ),
+                        ):
+                            if src and isinstance(src, dict):
+                                self._merge_provider_specific_fields(src)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
                             self._snapshot_chunk_for_stream_chunk_builder(chunk)
@@ -964,6 +996,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
+                    # Accumulate provider_specific_fields from chunk and delta
+                    for src in (
+                        getattr(chunk, "provider_specific_fields", None),
+                        getattr(
+                            chunk.choices[0].delta if chunk.choices else None,
+                            "provider_specific_fields",
+                            None,
+                        ),
+                    ):
+                        if src and isinstance(src, dict):
+                            self._merge_provider_specific_fields(src)
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)

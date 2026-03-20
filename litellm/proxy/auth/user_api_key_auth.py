@@ -548,13 +548,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     custom_auth_api_key: bool = False
 
     try:
-        # get the request body
-
-        await pre_db_read_auth_checks(
-            request_data=request_data,
-            request=request,
-            route=route,
-        )
+        with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
+            await pre_db_read_auth_checks(
+                request_data=request_data,
+                request=request,
+                route=route,
+            )
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
@@ -588,9 +587,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ### USER-DEFINED AUTH FUNCTION ###
         if enterprise_custom_auth is not None:
-            response = await enterprise_custom_auth(
-                request=request, api_key=api_key, user_custom_auth=user_custom_auth
-            )
+            with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
+                response = await enterprise_custom_auth(
+                    request=request, api_key=api_key, user_custom_auth=user_custom_auth
+                )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
                 validated = await _run_post_custom_auth_checks(
@@ -685,6 +685,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 do_standard_jwt_auth = True
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
+                    jwt_claims: Optional[dict]
                     if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
@@ -700,22 +701,24 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     if valid_token is not None:
                         api_key = valid_token.token or ""
+                        valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
 
                 if do_standard_jwt_auth:
-                    result = await JWTAuthManager.auth_builder(
-                        request_data=request_data,
-                        general_settings=general_settings,
-                        api_key=api_key,
-                        jwt_handler=jwt_handler,
-                        route=route,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        proxy_logging_obj=proxy_logging_obj,
-                        parent_otel_span=parent_otel_span,
-                        request_headers=_safe_get_request_headers(request),
-                    )
+                    with tracer.trace("litellm.proxy.auth.jwt_auth_builder"):
+                        result = await JWTAuthManager.auth_builder(
+                            request_data=request_data,
+                            general_settings=general_settings,
+                            api_key=api_key,
+                            jwt_handler=jwt_handler,
+                            route=route,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                            parent_otel_span=parent_otel_span,
+                            request_headers=_safe_get_request_headers(request),
+                        )
 
                     is_proxy_admin = result["is_proxy_admin"]
                     team_id = result["team_id"]
@@ -729,6 +732,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     team_membership: Optional[LiteLLM_TeamMembership] = result.get(
                         "team_membership", None
                     )
+                    jwt_claims = result.get("jwt_claims", None)
 
                     global_proxy_spend = await get_global_proxy_spend(
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -757,6 +761,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
+                            jwt_claims=jwt_claims,
                         )
 
                     valid_token = UserAPIKeyAuth(
@@ -803,6 +808,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_metadata=(
                             team_object.metadata if team_object is not None else None
                         ),
+                        jwt_claims=jwt_claims,
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks
@@ -904,15 +910,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             try:
                 end_user_params["end_user_id"] = end_user_id
 
-                # get end-user object
-                _end_user_object = await get_end_user_object(
-                    end_user_id=end_user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    route=route,
-                )
+                with tracer.trace("litellm.proxy.auth.get_end_user_object"):
+                    _end_user_object = await get_end_user_object(
+                        end_user_id=end_user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        route=route,
+                    )
                 if _end_user_object is not None:
                     end_user_params[
                         "allowed_model_region"
@@ -955,14 +961,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if valid_token is None:
             ## Check CACHE
             try:
-                valid_token = await get_key_object(
-                    hashed_token=hash_token(api_key),
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    check_cache_only=True,
-                )
+                with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
+                    valid_token = await get_key_object(
+                        hashed_token=hash_token(api_key),
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        check_cache_only=True,
+                    )
             except Exception:
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
@@ -1134,13 +1141,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 api_key = hash_token(token=api_key)
 
             try:
-                valid_token = await get_key_object(
-                    hashed_token=api_key,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
+                with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+                    valid_token = await get_key_object(
+                        hashed_token=api_key,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
                     e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
@@ -1228,14 +1236,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
                 try:
-                    user_obj = await get_user_object(
-                        user_id=valid_token.user_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        user_id_upsert=False,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
+                    with tracer.trace("litellm.proxy.auth.get_user_object"):
+                        user_obj = await get_user_object(
+                            user_id=valid_token.user_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            user_id_upsert=False,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                 except Exception as e:
                     verbose_logger.debug(
                         "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {}".format(
@@ -1324,71 +1333,73 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             if not skip_budget_checks:
-                # Check 4. Token Spend is under budget
-                if RouteChecks.is_llm_api_route(route=route):
-                    await _virtual_key_max_budget_check(
+                with tracer.trace("litellm.proxy.auth.budget_checks"):
+                    # Check 4. Token Spend is under budget
+                    if RouteChecks.is_llm_api_route(route=route):
+                        await _virtual_key_max_budget_check(
+                            valid_token=valid_token,
+                            proxy_logging_obj=proxy_logging_obj,
+                            user_obj=user_obj,
+                        )
+
+                    # Check 5. Max Budget Alert Check
+                    await _virtual_key_max_budget_alert_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,
                         user_obj=user_obj,
                     )
 
-                # Check 5. Max Budget Alert Check
-                await _virtual_key_max_budget_alert_check(
-                    valid_token=valid_token,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_obj=user_obj,
-                )
-
-                # Check 6. Soft Budget Check
-                await _virtual_key_soft_budget_check(
-                    valid_token=valid_token,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_obj=user_obj,
-                )
-
-                # Check 5. Token Model Spend is under Model budget
-                max_budget_per_model = valid_token.model_max_budget
-                current_model = request_data.get("model", None)
-
-                if (
-                    max_budget_per_model is not None
-                    and isinstance(max_budget_per_model, dict)
-                    and len(max_budget_per_model) > 0
-                    and prisma_client is not None
-                    and current_model is not None
-                    and valid_token.token is not None
-                ):
-                    ## GET THE SPEND FOR THIS MODEL
-                    await model_max_budget_limiter.is_key_within_model_budget(
-                        user_api_key_dict=valid_token,
-                        model=current_model,
+                    # Check 6. Soft Budget Check
+                    await _virtual_key_soft_budget_check(
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_obj=user_obj,
                     )
 
-                # Check 5b. End-user model max budget
-                end_user_mmb = valid_token.end_user_model_max_budget
-                if (
-                    end_user_mmb is not None
-                    and isinstance(end_user_mmb, dict)
-                    and len(end_user_mmb) > 0
-                    and current_model is not None
-                    and valid_token.end_user_id is not None
-                ):
-                    await model_max_budget_limiter.is_end_user_within_model_budget(
-                        end_user_id=valid_token.end_user_id,
-                        end_user_model_max_budget=end_user_mmb,
-                        model=current_model,
-                    )
+                    # Check 5. Token Model Spend is under Model budget
+                    max_budget_per_model = valid_token.model_max_budget
+                    current_model = request_data.get("model", None)
+
+                    if (
+                        max_budget_per_model is not None
+                        and isinstance(max_budget_per_model, dict)
+                        and len(max_budget_per_model) > 0
+                        and prisma_client is not None
+                        and current_model is not None
+                        and valid_token.token is not None
+                    ):
+                        ## GET THE SPEND FOR THIS MODEL
+                        await model_max_budget_limiter.is_key_within_model_budget(
+                            user_api_key_dict=valid_token,
+                            model=current_model,
+                        )
+
+                    # Check 5b. End-user model max budget
+                    end_user_mmb = valid_token.end_user_model_max_budget
+                    if (
+                        end_user_mmb is not None
+                        and isinstance(end_user_mmb, dict)
+                        and len(end_user_mmb) > 0
+                        and current_model is not None
+                        and valid_token.end_user_id is not None
+                    ):
+                        await model_max_budget_limiter.is_end_user_within_model_budget(
+                            end_user_id=valid_token.end_user_id,
+                            end_user_model_max_budget=end_user_mmb,
+                            model=current_model,
+                        )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
-                    _team_obj = await get_team_object(
-                        team_id=valid_token.team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
+                    with tracer.trace("litellm.proxy.auth.get_team_object"):
+                        _team_obj = await get_team_object(
+                            team_id=valid_token.team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                 except HTTPException:
                     _team_obj = LiteLLM_TeamTableCachedObj(
                         team_id=valid_token.team_id,
@@ -1426,11 +1437,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 litellm.max_budget > 0 and prisma_client is not None
             ):  # user set proxy max budget
                 cache_key = "{}:spend".format(litellm_proxy_admin_name)
-                global_proxy_spend = await _fetch_global_spend_with_event_coordination(
-                    cache_key=cache_key,
-                    user_api_key_cache=user_api_key_cache,
-                    prisma_client=prisma_client,
-                )
+                with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
+                    global_proxy_spend = (
+                        await _fetch_global_spend_with_event_coordination(
+                            cache_key=cache_key,
+                            user_api_key_cache=user_api_key_cache,
+                            prisma_client=prisma_client,
+                        )
+                    )
 
                 if global_proxy_spend is not None:
                     call_info = CallInfo(
@@ -1447,21 +1461,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             user_info=call_info,
                         )
                     )
-            _ = await common_checks(
-                request=request,
-                request_body=request_data,
-                team_object=_team_obj,
-                user_object=user_obj,
-                end_user_object=_end_user_object,
-                general_settings=general_settings,
-                global_proxy_spend=global_proxy_spend,
-                route=route,
-                llm_router=llm_router,
-                proxy_logging_obj=proxy_logging_obj,
-                valid_token=valid_token,
-                skip_budget_checks=skip_budget_checks,
-                project_object=_project_obj,
-            )
+            with tracer.trace("litellm.proxy.auth.common_checks"):
+                _ = await common_checks(
+                    request=request,
+                    request_body=request_data,
+                    team_object=_team_obj,
+                    user_object=user_obj,
+                    end_user_object=_end_user_object,
+                    general_settings=general_settings,
+                    global_proxy_spend=global_proxy_spend,
+                    route=route,
+                    llm_router=llm_router,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                    skip_budget_checks=skip_budget_checks,
+                    project_object=_project_obj,
+                )
             # Token passed all checks
             if valid_token is None:
                 raise HTTPException(401, detail="Invalid API key")
