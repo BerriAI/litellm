@@ -150,7 +150,7 @@ class TestBedrockCountTokensEndpoint:
             api_base=api_base,
             aws_bedrock_runtime_endpoint=runtime_endpoint,
         )
-        assert url.startswith(api_base)
+        assert url == f"{api_base}/model/amazon.nova-lite-v1:0/count-tokens"
 
     def test_env_var_overrides_default(self, monkeypatch):
         monkeypatch.setenv(
