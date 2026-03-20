@@ -738,11 +738,9 @@ def responses(
             )
         )
 
-        # Pre Call logging - preserve metadata for custom callbacks
-        # When called from completion bridge (codex models), metadata is in litellm_metadata
-        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
-
-        litellm_logging_obj.update_environment_variables(
+        # Pre Call logging
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(responses_api_request_params),
@@ -750,7 +748,6 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata_for_callbacks,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -926,7 +923,8 @@ def delete_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1106,7 +1104,8 @@ def get_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1262,7 +1261,8 @@ def list_input_items(
 
         local_vars.update(kwargs)
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={"response_id": response_id},
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -1421,7 +1421,8 @@ def cancel_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1625,7 +1626,8 @@ def compact_responses(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=model,
             optional_params=dict(responses_api_request_params),
             litellm_params={
@@ -1728,7 +1730,8 @@ async def _aresponses_websocket(
         api_key=api_key,
     )
 
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model,
         user=user,
         optional_params={},

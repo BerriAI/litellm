@@ -92,30 +92,33 @@ async def test_metadata_passed_to_custom_callback_codex_models():
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     litellm.callbacks = [callback]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = _make_mock_http_response(
-            mock_response.model_dump()
-        )
-        # gpt-5.1-codex has mode=responses - routes through responses bridge
-        await litellm.acompletion(
-            model="gpt-5.1-codex",
-            messages=[{"role": "user", "content": "Hello"}],
-            metadata=test_metadata,
-        )
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _make_mock_http_response(
+                mock_response.model_dump()
+            )
+            # gpt-5.1-codex has mode=responses - routes through responses bridge
+            await litellm.acompletion(
+                model="gpt-5.1-codex",
+                messages=[{"role": "user", "content": "Hello"}],
+                metadata=test_metadata,
+            )
 
-    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
+        await asyncio.wait_for(callback.event.wait(), timeout=5.0)
 
-    assert callback.captured_kwargs is not None, "Callback should have been invoked"
+        assert callback.captured_kwargs is not None, "Callback should have been invoked"
 
-    litellm_params = callback.captured_kwargs.get("litellm_params", {})
-    metadata = litellm_params.get("metadata") or {}
+        litellm_params = callback.captured_kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
 
-    assert "foo" in metadata, "metadata['foo'] should be accessible in callback"
-    assert metadata["foo"] == "bar"
-    assert metadata.get("trace_id") == "test-123"
+        assert "foo" in metadata, "metadata['foo'] should be accessible in callback"
+        assert metadata["foo"] == "bar"
+        assert metadata.get("trace_id") == "test-123"
+    finally:
+        litellm.callbacks = original_callbacks
 
 
 @pytest.mark.asyncio
@@ -152,27 +155,31 @@ async def test_metadata_passed_via_litellm_metadata_responses_api():
 
     test_metadata = {"request_id": "req-456"}
     callback = MetadataCaptureCallback()
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     litellm.callbacks = [callback]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = _make_mock_http_response(
-            mock_response.model_dump()
-        )
-        await litellm.aresponses(
-            model="gpt-4o",
-            input="hi",
-            litellm_metadata=test_metadata,
-        )
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _make_mock_http_response(
+                mock_response.model_dump()
+            )
+            await litellm.aresponses(
+                model="gpt-4o",
+                input="hi",
+                litellm_metadata=test_metadata,
+            )
 
-    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
+        await asyncio.wait_for(callback.event.wait(), timeout=5.0)
 
-    assert callback.captured_kwargs is not None
+        assert callback.captured_kwargs is not None
 
-    litellm_params = callback.captured_kwargs.get("litellm_params", {})
-    metadata = litellm_params.get("metadata") or {}
+        litellm_params = callback.captured_kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
 
-    assert "request_id" in metadata
-    assert metadata["request_id"] == "req-456"
+        assert "request_id" in metadata
+        assert metadata["request_id"] == "req-456"
+    finally:
+        litellm.callbacks = original_callbacks

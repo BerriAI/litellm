@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import smtplib
+import sys
 import threading
 import time
 import traceback
@@ -453,8 +454,6 @@ class ProxyLogging:
 
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
-            import inspect
-
             expected_args = inspect.getfullargspec(proxy_hook).args
             passed_in_args: Dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
@@ -558,6 +557,10 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Raw Bearer token from the original HTTP request — allows guardrails
+            # (e.g. MCPJWTSigner) to independently verify the caller's identity
+            # before re-signing an outbound token (FR-5 verify+re-sign).
+            "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
         }
 
         return synthetic_data
@@ -823,16 +826,29 @@ class ProxyLogging:
     ) -> dict:
         """
         Helper function to convert pre_call_hook response back to kwargs for MCP usage.
+
+        Supports:
+        - modified_arguments: Override tool call arguments
+        - extra_headers: Inject custom headers into the outbound MCP request
         """
         if not response_data:
             return original_kwargs
 
-        # Apply any argument modifications from the hook response
         modified_kwargs = original_kwargs.copy()
 
-        # If the response contains modified arguments, apply them
         if response_data.get("modified_arguments"):
             modified_kwargs["arguments"] = response_data["modified_arguments"]
+
+        if response_data.get("extra_headers"):
+            # Merge rather than replace — a prior guardrail in the chain may have
+            # already injected headers (e.g. tracing IDs).  Later guardrails win on
+            # key collisions so that the most-specific guardrail (e.g. JWT signer)
+            # takes precedence over earlier ones.
+            existing = modified_kwargs.get("extra_headers") or {}
+            modified_kwargs["extra_headers"] = {
+                **existing,
+                **response_data["extra_headers"],
+            }
 
         return modified_kwargs
 
@@ -1728,6 +1744,9 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Remove before callbacks iterate — not serialisable
+        request_data.pop("litellm_logging_obj", None)
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: Optional[HTTPException] = None
 
@@ -1848,7 +1867,7 @@ class ProxyLogging:
             for k, v in request_data.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k != "model" and k != "user":
+                elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
             litellm_logging_obj.update_environment_variables(
@@ -1859,20 +1878,33 @@ class ProxyLogging:
             )
 
             input: Union[list, str, dict] = ""
+            normalized_call_type: Optional[str] = None
             if "messages" in request_data and isinstance(
                 request_data["messages"], list
             ):
                 input = request_data["messages"]
                 litellm_logging_obj.model_call_details["messages"] = input
-                litellm_logging_obj.call_type = CallTypes.acompletion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    normalized_call_type = CallTypes.acompletion.value
             elif "prompt" in request_data and isinstance(request_data["prompt"], str):
                 input = request_data["prompt"]
                 litellm_logging_obj.model_call_details["prompt"] = input
-                litellm_logging_obj.call_type = CallTypes.atext_completion.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    normalized_call_type = CallTypes.atext_completion.value
             elif "input" in request_data and isinstance(request_data["input"], list):
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
-                litellm_logging_obj.call_type = CallTypes.aembedding.value
+                if litellm_logging_obj.call_type != CallTypes.pass_through.value:
+                    normalized_call_type = CallTypes.aembedding.value
+            if normalized_call_type is not None:
+                litellm_logging_obj.call_type = normalized_call_type
+                litellm_logging_obj.model_call_details[
+                    "call_type"
+                ] = normalized_call_type
+            # Pass-through endpoints are logged via the callback loop's
+            # async_post_call_failure_hook — skip pre_call and failure handlers.
+            if litellm_logging_obj.call_type == CallTypes.pass_through.value:
+                return
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
@@ -1908,6 +1940,7 @@ class ProxyLogging:
         4. /files
         """
 
+        from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1930,12 +1963,18 @@ class ProxyLogging:
                     ############## Handle Guardrails ########################################
                     #############################################################################
 
+            # Merge model-level guardrails before checking which guardrails to run
+            guardrail_data = _check_and_merge_model_level_guardrails(
+                data=data, llm_router=llm_router
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (
                     callback.should_run_guardrail(
-                        data=data, event_type=GuardrailEventHooks.post_call
+                        data=guardrail_data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
                     is not True
                 ):
@@ -3663,7 +3702,11 @@ class PrismaClient:
         Returns a set of reaped PIDs.  As PID 1 in Docker (or any
         process that spawns children), we must reap ALL terminated
         children to prevent zombie accumulation.
+
+        No-op on Windows: os.waitpid and os.WNOHANG are Unix-only.
         """
+        if sys.platform == "win32":
+            return set()
         reaped: set = set()
         while True:
             try:
@@ -3684,7 +3727,11 @@ class PrismaClient:
         via call_soon_threadsafe.
 
         Returns True if the thread was started, False on failure.
+        On Windows, returns False immediately (os.waitpid/WNOHANG are Unix-only);
+        caller falls back to os.kill polling.
         """
+        if sys.platform == "win32":
+            return False
         try:
             probe_pid, _ = os.waitpid(pid, os.WNOHANG)
         except ChildProcessError:
@@ -5224,7 +5271,7 @@ def normalize_route_for_root_path(route: str) -> Optional[str]:
     root_path = get_server_root_path()
     if root_path and root_path != "/":
         if route.startswith(root_path + "/"):
-            return route[len(root_path):]
+            return route[len(root_path) :]
         return None
     return route
 
