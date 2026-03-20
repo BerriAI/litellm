@@ -19,7 +19,7 @@ Two paths are covered:
 | **Native passthrough** | Provider natively supports `file_search` (OpenAI, Azure) | Decodes unified vector store ID → forwards to provider as-is |
 | **Emulated fallback** | Provider doesn't support `file_search` (Anthropic, Bedrock, etc.) | Converts to a function tool → intercepts tool call → runs vector search → synthesizes OpenAI-format output |
 
-
+In `tools[].vector_store_ids`, LiteLLM accepts both provider-native IDs (e.g. `vs_...`) **and** **managed vector store unified IDs** (URL-safe base64 strings from the proxy managed-vector flow), e.g. `litellm.responses(..., tools=[{"type": "file_search", "vector_store_ids": ["bGl0ZWxsbV9wcm94eT..."]}])`.
 
 ## Usage
 
