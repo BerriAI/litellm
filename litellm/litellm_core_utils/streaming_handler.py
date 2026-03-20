@@ -279,7 +279,7 @@ class CustomStreamWrapper:
                 model="",
                 llm_provider="",
             )
-        
+
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
         """
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.

@@ -114,7 +114,9 @@ class LangsmithLogger(CustomBatchLogger):
         self, metadata: dict, credentials: LangsmithCredentialsObject
     ):
         return {
-            "project_name": metadata.get("project_name", credentials["LANGSMITH_PROJECT"]),
+            "project_name": metadata.get(
+                "project_name", credentials["LANGSMITH_PROJECT"]
+            ),
             "run_name": metadata.get("run_name", self.langsmith_default_run_name),
             "run_id": metadata.get("id", metadata.get("run_id", None)),
             "parent_run_id": metadata.get("parent_run_id", None),
@@ -132,7 +134,9 @@ class LangsmithLogger(CustomBatchLogger):
                     extra_metadata[key] = requester_metadata[key]
         return extra_metadata
 
-    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> Dict[str, Any]:
+    def _build_outputs_with_usage(
+        self, payload: StandardLoggingPayload
+    ) -> Dict[str, Any]:
         response = payload["response"]
         outputs: Dict[str, Any]
         if isinstance(response, dict):
@@ -171,7 +175,7 @@ class LangsmithLogger(CustomBatchLogger):
         try:
             _litellm_params = kwargs.get("litellm_params", {}) or {}
             metadata = _litellm_params.get("metadata", {}) or {}
-            
+
             fields = self._extract_metadata_fields(metadata, credentials)
             verbose_logger.debug(
                 f"Langsmith Logging - project_name: {fields['project_name']}, run_name {fields['run_name']}"
@@ -202,7 +206,13 @@ class LangsmithLogger(CustomBatchLogger):
             if payload["error_str"] is not None and payload["status"] == "failure":
                 data["error"] = payload["error_str"]
 
-            for key in ("id", "parent_run_id", "trace_id", "session_id", "dotted_order"):
+            for key in (
+                "id",
+                "parent_run_id",
+                "trace_id",
+                "session_id",
+                "dotted_order",
+            ):
                 field_key = "run_id" if key == "id" else key
                 if fields[field_key]:
                     data[key] = fields[field_key]
