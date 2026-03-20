@@ -11080,6 +11080,14 @@ async def login_v3(request: Request):  # noqa: PLR0915
     from litellm.proxy.utils import get_custom_url
 
     try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
         body = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
