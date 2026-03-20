@@ -41,6 +41,7 @@ from .common_utils import (
     get_azure_ad_token_from_oidc,
     process_azure_headers,
     select_azure_base_url_or_endpoint,
+    validate_azure_request_payload,
 )
 from .image_generation import get_azure_image_generation_config
 
@@ -143,6 +144,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        validate_azure_request_payload(data)
         try:
             raw_response = azure_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -168,6 +170,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create by default
         """
         start_time = time.time()
+        validate_azure_request_payload(data)
         try:
             raw_response = await azure_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -307,6 +310,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
             else:
                 ## LOGGING
+                validate_azure_request_payload(data)
                 logging_obj.pre_call(
                     input=messages,
                     api_key=api_key,
@@ -417,6 +421,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
                 )
             ## LOGGING
+            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["messages"],
                 api_key=azure_client.api_key,
@@ -544,6 +549,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 message="azure_client is not an instance of AzureOpenAI or OpenAI",
             )
         ## LOGGING
+        validate_azure_request_payload(data)
         logging_obj.pre_call(
             input=data["messages"],
             api_key=azure_client.api_key,
@@ -602,6 +608,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
             ## LOGGING
+            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["messages"],
                 api_key=azure_client.api_key,
@@ -668,6 +675,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> EmbeddingResponse:
         response = None
         try:
+            validate_azure_request_payload(data)
             openai_aclient = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -771,6 +779,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if max_retries is None:
                 max_retries = litellm.DEFAULT_MAX_RETRIES
             ## LOGGING
+            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=input,
                 api_key=api_key,
@@ -825,7 +834,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding", _response_headers=process_azure_headers(headers))  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response.model_dump(),
+                model_response_object=model_response,
+                response_type="embedding",
+                _response_headers=process_azure_headers(headers),
+            )  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
@@ -855,6 +869,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         Alternative to needing a custom transport implementation
         """
+        validate_azure_request_payload(data)
         if client is None:
             _params = {}
             if timeout is not None:
@@ -969,6 +984,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         Alternative to needing a custom transport implementation
         """
+        validate_azure_request_payload(data)
         if client is None:
             _params = {}
             if timeout is not None:
@@ -1252,7 +1268,18 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 is_async=False,
             )
             if aimg_generation is True:
-                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
+                return self.aimage_generation(
+                    data=data,
+                    input=input,
+                    logging_obj=logging_obj,
+                    model_response=model_response,
+                    api_key=api_key,
+                    client=client,
+                    azure_client_params=azure_client_params,
+                    timeout=timeout,
+                    headers=headers,
+                    model=model,
+                )  # type: ignore
 
             # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
@@ -1288,7 +1315,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:

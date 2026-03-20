@@ -8,6 +8,9 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.llm_request_utils import (
+    find_surrogate_code_point_path,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -38,6 +41,24 @@ class AzureOpenAIError(BaseLLMException):
             headers=headers,
             body=body,
         )
+
+
+def validate_azure_request_payload(
+    payload: Any,
+    payload_name: str = "azure_request",
+) -> None:
+    surrogate_path = find_surrogate_code_point_path(payload, path=payload_name)
+    if surrogate_path is None:
+        return
+
+    raise AzureOpenAIError(
+        status_code=400,
+        message=(
+            "Invalid Unicode surrogate code point found in "
+            f"{surrogate_path}. Please replace truncated surrogate "
+            "characters with valid Unicode before calling Azure."
+        ),
+    )
 
 
 def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
