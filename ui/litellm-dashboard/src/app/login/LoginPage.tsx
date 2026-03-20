@@ -3,7 +3,7 @@
 import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
+import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
@@ -43,12 +43,25 @@ function LoginPageContent() {
       return;
     }
 
-    // Cross-origin SSO: worker redirected back with token in URL
+    // Cross-origin SSO: worker redirected back with a single-use code.
+    // Exchange it for the JWT via the worker's /v3/login/exchange endpoint.
     const params = new URLSearchParams(window.location.search);
+    const ssoCode = params.get("code");
+    if (ssoCode) {
+      const workerUrl = localStorage.getItem("litellm_worker_url");
+      exchangeLoginCode(ssoCode, workerUrl).then(() => {
+        params.delete("code");
+        const cleanSearch = params.toString();
+        window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
+        router.replace("/ui/?login=success");
+      });
+      return;
+    }
+
+    // Backwards compat: handle direct token in URL (legacy flow)
     const urlToken = params.get("token");
     if (urlToken && !isJwtExpired(urlToken)) {
       document.cookie = `token=${urlToken}; path=/; SameSite=Lax`;
-      // Strip token from URL to keep it out of browser history
       params.delete("token");
       const cleanSearch = params.toString();
       window.history.replaceState(

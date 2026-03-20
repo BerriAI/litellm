@@ -9100,6 +9100,30 @@ export const loginCall = async (username: string, password: string, useV3?: bool
   return data;
 };
 
+/**
+ * Exchange a single-use login code for a JWT token.
+ * Used by the SSO callback when the worker redirects back with ?code=.
+ */
+export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | null): Promise<string> => {
+  const base = workerBaseUrl || getProxyBaseUrl();
+  const response = await fetch(`${base}/v3/login/exchange`, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(deriveErrorMessage(errorData));
+  }
+
+  const data = await response.json();
+  if (data.token) {
+    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+  }
+  return data.token;
+};
+
 export const getUiSettings = async () => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
