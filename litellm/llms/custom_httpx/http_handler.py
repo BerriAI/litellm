@@ -130,7 +130,9 @@ def _prepare_request_data_and_content(
         if isinstance(data, (bytes, str)):
             # Bytes/strings belong in content= (only if not already provided)
             if content is None:
-                request_content = _sanitize_data(data) if isinstance(data, str) else data
+                request_content = (
+                    _sanitize_data(data) if isinstance(data, str) else data
+                )
         else:
             # dict/Mapping stays in data= parameter
             request_data = _sanitize_data(data)
