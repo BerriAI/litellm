@@ -42,9 +42,7 @@ class RunwareImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return (
-            api_base or get_secret_str("RUNWARE_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        return api_base or get_secret_str("RUNWARE_API_BASE") or self.DEFAULT_BASE_URL
 
     def validate_environment(
         self,
