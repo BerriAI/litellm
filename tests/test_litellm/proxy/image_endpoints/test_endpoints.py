@@ -43,11 +43,15 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     async def fake_post_call_success_hook(*, data, user_api_key_dict, response):
         return response
 
+    async def fake_post_call_response_headers_hook(**kwargs):
+        return {}
+
     fake_proxy_logger = SimpleNamespace(
         pre_call_hook=fake_pre_call_hook,
         update_request_status=fake_update_request_status,
         post_call_failure_hook=fake_post_call_failure_hook,
         post_call_success_hook=fake_post_call_success_hook,
+        post_call_response_headers_hook=fake_post_call_response_headers_hook,
     )
 
     captured_route_request_data: Dict[str, Any] = {}
@@ -85,7 +89,9 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
     monkeypatch.setattr(
