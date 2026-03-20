@@ -20453,6 +20453,7 @@
         "mode": "chat",
         "output_cost_per_token": 7e-06,
         "supports_function_calling": false,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
@@ -20504,6 +20505,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
         "supports_function_calling": false,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
