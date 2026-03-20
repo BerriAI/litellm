@@ -1589,18 +1589,34 @@ async def _add_guardrails_from_user_team_memberships(
         return
 
     try:
-        from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+        from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
             return
 
-        user_obj = await get_user_object(
-            user_id=user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
+        # Read user object from cache or DB. We look up the cache first
+        # (populated by the auth step), then fall back to a direct DB query.
+        # This avoids the _should_check_db throttle in get_user_object.
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        cached_user = await user_api_key_cache.async_get_cache(key=user_id)
+        if cached_user is not None:
+            if isinstance(cached_user, dict):
+                user_obj = LiteLLM_UserTable(**cached_user)
+            elif isinstance(cached_user, LiteLLM_UserTable):
+                user_obj = cached_user
+            else:
+                user_obj = None
+        else:
+            # Cache miss — query DB directly
+            response = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+            if response is None:
+                return
+            user_obj = LiteLLM_UserTable(**dict(response))
+
         if user_obj is None or not user_obj.teams:
             return
 
@@ -1680,33 +1696,38 @@ async def move_guardrails_to_metadata(
         "guardrails" in data or "guardrail_config" in data or "policies" in data
     )
 
-    # Check if user might have team memberships with guardrails
-    has_user_teams = bool(user_api_key_dict.user_id)
+    # Always check user team memberships for guardrails
+    await _add_guardrails_from_user_team_memberships(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+    )
 
-    # Only check policy engine if no local config (avoid import + registry lookup)
-    if not (has_key_config or has_team_config or has_request_config or has_user_teams):
-        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    # Check if any guardrails are configured at all in the proxy
+    has_any_guardrails_configured = bool(litellm.guardrail_name_config_map)
 
-        if not get_policy_registry().is_initialized():
-            # Nothing configured anywhere - clean up request body fields and return
-            data.pop("policies", None)
-            return
+    # Early-out: skip remaining guardrails processing when nothing is configured
+    if not (
+        has_key_config
+        or has_team_config
+        or has_request_config
+        or has_any_guardrails_configured
+    ):
+        # Check if user team memberships already added guardrails
+        has_user_team_guardrails = bool(
+            data.get(_metadata_variable_name, {}).get("guardrails")
+        )
+        if not has_user_team_guardrails:
+            from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+            if not get_policy_registry().is_initialized():
+                data.pop("policies", None)
+                return
 
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
-    )
-
-    #########################################################################################
-    # Apply guardrails from user's team memberships
-    # If a user is a member of teams (via user.teams), apply those teams'
-    # guardrails even if the key's team_id is null or different.
-    #########################################################################################
-    await _add_guardrails_from_user_team_memberships(
-        user_api_key_dict=user_api_key_dict,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
