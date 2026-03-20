@@ -82,7 +82,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             ),
         )
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -315,16 +315,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_creation_input_tokens"
-                        ] = chunk.usage._cache_creation_input_tokens
+                        usage_dict["cache_creation_input_tokens"] = (
+                            chunk.usage._cache_creation_input_tokens
+                        )
                     if (
                         hasattr(chunk.usage, "_cache_read_input_tokens")
                         and chunk.usage._cache_read_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_read_input_tokens"
-                        ] = chunk.usage._cache_read_input_tokens
+                        usage_dict["cache_read_input_tokens"] = (
+                            chunk.usage._cache_read_input_tokens
+                        )
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -463,7 +463,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        verbose_logger.debug("AnthropicStreamWrapper: async_anthropic_sse_wrapper called")
+        verbose_logger.debug(
+            "AnthropicStreamWrapper: async_anthropic_sse_wrapper called"
+        )
         async for chunk in self:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
