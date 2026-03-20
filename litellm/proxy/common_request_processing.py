@@ -900,6 +900,7 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
         is_streaming_request: Optional[bool] = False,
         contents: Optional[list] = None,  # Add contents parameter
+        skip_pre_call_logic: bool = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -909,22 +910,30 @@ class ProxyBaseLLMRequestProcessing:
         )
         self._debug_log_request_payload()
 
-        self.data, logging_obj = await self.common_processing_pre_call_logic(
-            request=request,
-            general_settings=general_settings,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            model=model,
-            route_type=route_type,
-            llm_router=llm_router,
-        )
+        if skip_pre_call_logic:
+            logging_obj = self.data.get("litellm_logging_obj")
+            if logging_obj is None:
+                raise ValueError(
+                    "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
+                    "Ensure common_processing_pre_call_logic was called before using this parameter."
+                )
+        else:
+            self.data, logging_obj = await self.common_processing_pre_call_logic(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=model,
+                route_type=route_type,
+                llm_router=llm_router,
+            )
 
         tasks = []
         # Start the moderation check (during_call_hook) as early as possible
