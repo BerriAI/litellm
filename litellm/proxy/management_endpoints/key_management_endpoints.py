@@ -641,13 +641,20 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         litellm.team_model_overrides_enabled
         or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
     ) and team_table is not None:
-        # Determine member models for THIS specific user being assigned to the key
-        member_obj = _get_user_in_team(team_table=team_table, user_id=data.user_id)
-        member_models = (
-            getattr(member_obj, "models", [])
-            if member_obj and getattr(member_obj, "models", None)
-            else []
-        )
+        # Read member models from LiteLLM_TeamMembership table (authoritative source),
+        # NOT from members_with_roles JSON blob which can be stale after /team/member_update.
+        member_models: list = []
+        if data.user_id and prisma_client is not None:
+            _membership = await prisma_client.db.litellm_teammembership.find_unique(
+                where={
+                    "user_id_team_id": {
+                        "user_id": data.user_id,
+                        "team_id": team_table.team_id,
+                    }
+                }
+            )
+            if _membership is not None:
+                member_models = _membership.models or []
         team_default_models = (
             getattr(team_table, "default_models", [])
             if team_table and getattr(team_table, "default_models", None)

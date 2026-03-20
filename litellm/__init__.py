@@ -30,15 +30,36 @@ from typing import (
     get_args,
     TYPE_CHECKING,
     Tuple,
+    overload,
     Type,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+    log_level,
 )
 import re
 from litellm.constants import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_FLUSH_INTERVAL_SECONDS,
+    ROUTER_MAX_FALLBACKS,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REPLICATE_POLLING_RETRIES,
+    DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
+    LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
+    OPENAI_CHAT_COMPLETION_PARAMS,
+    OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
+    OPENAI_FINISH_REASONS,
+    OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
+    openai_compatible_endpoints,
+    openai_compatible_providers,
+    openai_text_completion_compatible_providers,
+    _openai_like_providers,
     replicate_models,
     clarifai_models,
     huggingface_models,
@@ -46,12 +67,18 @@ from litellm.constants import (
     together_ai_models,
     baseten_models,
     WANDB_MODELS,
+    REPEATED_STREAMING_CHUNK_LIMIT,
+    request_timeout,
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
+    known_tokenizer_config,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
+    DEFAULT_ALLOWED_FAILS,
 )
 import httpx
 
@@ -1106,10 +1133,19 @@ from litellm.types.secret_managers.main import KeyManagementSettings
 _key_management_settings: KeyManagementSettings = KeyManagementSettings()
 
 # client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
 
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
 
+from .llms.custom_llm import CustomLLM
+from .llms.anthropic.common_utils import AnthropicModelInfo
+from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+from .llms.deprecated_providers.palm import (
+    PalmConfig,
+)  # here to prevent breaking changes
+from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
+from .llms.gemini.common_utils import GeminiModelInfo
 
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
@@ -1119,9 +1155,14 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
 
+from .llms.bedrock.embed.amazon_titan_v2_transformation import (
+    AmazonTitanV2Config,
+)
+from .llms.topaz.common_utils import TopazModelInfo
 
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
+from .llms.xai.common_utils import XAIModelInfo
 
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
@@ -1134,7 +1175,68 @@ from litellm.types.utils import LlmProviders
 from .main import *  # type: ignore
 
 # Skills API
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
+from .evals.main import (
+    create_eval,
+    acreate_eval,
+    list_evals,
+    alist_evals,
+    get_eval,
+    aget_eval,
+    delete_eval,
+    adelete_eval,
+    cancel_eval,
+    acancel_eval,
+    create_run,
+    acreate_run,
+    list_runs,
+    alist_runs,
+    get_run,
+    aget_run,
+    delete_run,
+    adelete_run,
+    cancel_run,
+    acancel_run,
+)
 from .integrations import *
+from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
+from .exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    BadRequestError,
+    ImageFetchError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServiceUnavailableError,
+    BadGatewayError,
+    OpenAIError,
+    ContextWindowExceededError,
+    ContentPolicyViolationError,
+    BudgetExceededError,
+    APIError,
+    Timeout,
+    APIConnectionError,
+    UnsupportedParamsError,
+    APIResponseValidationError,
+    UnprocessableEntityError,
+    InternalServerError,
+    JSONSchemaValidationError,
+    LITELLM_EXCEPTION_TYPES,
+    MockException,
+)
+from .budget_manager import BudgetManager
+from .proxy.proxy_cli import run_server
+from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
@@ -1146,16 +1248,48 @@ from .responses.main import *
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
+from . import interactions
+from .skills.main import (
+    create_skill,
+    acreate_skill,
+    list_skills,
+    alist_skills,
+    get_skill,
+    aget_skill,
+    delete_skill,
+    adelete_skill,
+)
 from .containers.main import *
 from .ocr.main import *
 from .rag.main import *
 from .search.main import *
+from .realtime_api.main import (
+    _arealtime,
+    acreate_realtime_client_secret,
+    arealtime_calls,
+)
+from .responses.main import _aresponses_websocket
 from .fine_tuning.main import *
 from .files.main import *
+from .vector_store_files.main import (
+    acreate as avector_store_file_create,
+    adelete as avector_store_file_delete,
+    alist as avector_store_file_list,
+    aretrieve as avector_store_file_retrieve,
+    aretrieve_content as avector_store_file_content,
+    aupdate as avector_store_file_update,
+    create as vector_store_file_create,
+    delete as vector_store_file_delete,
+    list as vector_store_file_list,
+    retrieve as vector_store_file_retrieve,
+    retrieve_content as vector_store_file_content,
+    update as vector_store_file_update,
+)
 from .scheduler import *
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
+import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 
@@ -1169,6 +1303,7 @@ vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
 
 ### RAG ###
+from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
@@ -1183,8 +1318,11 @@ disable_hf_tokenizer_download: Optional[
 global_disable_no_log_param: bool = False
 
 ### CLI UTILITIES ###
+from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
 ### PASSTHROUGH ###
+from .passthrough import allm_passthrough_route, llm_passthrough_route
+from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
@@ -1509,6 +1647,10 @@ if TYPE_CHECKING:
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
     )
+    from .llms.openai.chat.o_series_transformation import (
+        OpenAIOSeriesConfig as OpenAIOSeriesConfig,
+        OpenAIOSeriesConfig as OpenAIO1Config,
+    )
     from .llms.anthropic.skills.transformation import (
         AnthropicSkillsConfig as AnthropicSkillsConfig,
     )
@@ -1636,6 +1778,10 @@ if TYPE_CHECKING:
     from .llms.xai.chat.transformation import XAIChatConfig as XAIChatConfig
     from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
     from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
+    from .llms.volcengine.chat.transformation import (
+        VolcEngineChatConfig as VolcEngineChatConfig,
+        VolcEngineChatConfig as VolcEngineConfig,
+    )
     from .llms.codestral.completion.transformation import (
         CodestralTextCompletionConfig as CodestralTextCompletionConfig,
     )
@@ -1785,6 +1931,7 @@ if TYPE_CHECKING:
     bedrock_tool_name_mappings: InMemoryCache
 
     # Azure exception class (lazy-loaded)
+    from litellm.llms.azure.common_utils import AzureOpenAIError
 
     # Secret manager types (lazy-loaded)
     from litellm.types.secret_managers.main import (
@@ -1824,7 +1971,7 @@ _async_client_cleanup_registered = False
 if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
     # Load encoding at import time (pre-#18070 behavior)
     # This ensures encoding is initialized before VCR starts recording
-    pass
+    from .main import encoding
 
 
 def __getattr__(name: str) -> Any:
@@ -1995,6 +2142,30 @@ def __getattr__(name: str) -> Any:
         "cancel_run",
         "delete_run",
     ]:
+        from litellm.evals.main import (
+            acreate_eval,
+            alist_evals,
+            aget_eval,
+            aupdate_eval,
+            adelete_eval,
+            acancel_eval,
+            create_eval,
+            list_evals,
+            get_eval,
+            update_eval,
+            delete_eval,
+            cancel_eval,
+            acreate_run,
+            alist_runs,
+            aget_run,
+            acancel_run,
+            adelete_run,
+            create_run,
+            list_runs,
+            get_run,
+            cancel_run,
+            delete_run,
+        )
 
         return locals()[name]
 

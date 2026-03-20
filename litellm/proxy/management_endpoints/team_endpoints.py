@@ -1796,6 +1796,29 @@ async def _process_team_members(
         else None
     )
 
+    # Validate member model overrides are within team.models (prevent privilege escalation)
+    team_models = (
+        complete_team_data.models
+        if hasattr(complete_team_data, "models")
+        and isinstance(complete_team_data.models, list)
+        else []
+    )
+    members_to_validate = (
+        [data.member] if isinstance(data.member, Member) else data.member
+    )
+    for member in members_to_validate:
+        if member.models and team_models:
+            disallowed = set(member.models) - set(team_models)
+            if disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Member model overrides must be a subset of team models. "
+                        f"Disallowed: {sorted(disallowed)}. "
+                        f"Team models: {sorted(team_models)}"
+                    },
+                )
+
     if isinstance(data.member, Member):
         try:
             updated_user, updated_tm = await add_new_member(
