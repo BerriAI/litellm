@@ -2,7 +2,19 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload, Iterator, AsyncIterator
+from typing import (
+    Any,
+    Coroutine,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    overload,
+    Iterator,
+    AsyncIterator,
+)
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -18,7 +30,10 @@ from litellm.types.llms.openai import (
 from ....types.utils import ModelResponseStream, ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig, OpenAIChatCompletionStreamingHandler
+from ...openai.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIChatCompletionStreamingHandler,
+)
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
