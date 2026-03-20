@@ -365,8 +365,8 @@ class DualCache(BaseCache):
 
         Returns - float - the incremented value
         """
+        result: float = value
         try:
-            result: float = value
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment(
                     key, value, **kwargs
@@ -382,7 +382,11 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_increment_cache_pipeline(
         self,
@@ -391,8 +395,8 @@ class DualCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         **kwargs,
     ) -> Optional[List[float]]:
+        result: Optional[List[float]] = None
         try:
-            result: Optional[List[float]] = None
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment_pipeline(
                     increment_list=increment_list,
@@ -407,7 +411,11 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_set_cache_sadd(
         self, key, value: List, local_only: bool = False, **kwargs
