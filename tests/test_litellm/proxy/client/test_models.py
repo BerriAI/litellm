@@ -1,13 +1,5 @@
-import os
-import sys
-
 import pytest
 import requests
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
 
 
 import responses
@@ -215,9 +207,7 @@ def test_new_without_model_info(client):
     model_name = "gpt-4"
     model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
 
-    request = client.new(
-        model_name=model_name, model_params=model_params, return_request=True
-    )
+    request = client.new(model_name=model_name, model_params=model_params, return_request=True)
 
     # Check request body doesn't include model_info
     assert request.json == {"model_name": model_name, "litellm_params": model_params}
@@ -475,16 +465,12 @@ def test_get_invalid_params():
     # Test with no parameters
     with pytest.raises(ValueError) as exc_info:
         client.get()
-    assert "Exactly one of model_id or model_name must be provided" in str(
-        exc_info.value
-    )
+    assert "Exactly one of model_id or model_name must be provided" in str(exc_info.value)
 
     # Test with both parameters
     with pytest.raises(ValueError) as exc_info:
         client.get(model_id="123", model_name="gpt-4")
-    assert "Exactly one of model_id or model_name must be provided" in str(
-        exc_info.value
-    )
+    assert "Exactly one of model_id or model_name must be provided" in str(exc_info.value)
 
 
 @responses.activate
@@ -551,11 +537,7 @@ def test_get_not_found(client):
     responses.add(
         responses.GET,
         f"{client._base_url}/v1/model/info",
-        json={
-            "data": [
-                {"model_name": "gpt-3.5-turbo", "model_info": {"id": "other-model"}}
-            ]
-        },
+        json={"data": [{"model_name": "gpt-3.5-turbo", "model_info": {"id": "other-model"}}]},
         status=200,
     )
 
@@ -633,9 +615,7 @@ def test_update_without_model_info(client):
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
 
-    request = client.update(
-        model_id=model_id, model_params=model_params, return_request=True
-    )
+    request = client.update(model_id=model_id, model_params=model_params, return_request=True)
 
     # Check request body doesn't include model_info
     assert request.json == {"id": model_id, "litellm_params": model_params}

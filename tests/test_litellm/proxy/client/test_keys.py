@@ -1,12 +1,5 @@
-import os
-import sys
-
 import pytest
 import requests
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import responses
@@ -93,9 +86,7 @@ def test_list_request_filters(client):
 
 def test_list_request_flags(client):
     """Test list request with boolean flag parameters"""
-    request = client.list(
-        return_full_object=True, include_team_keys=False, return_request=True
-    )
+    request = client.list(return_full_object=True, include_team_keys=False, return_request=True)
 
     assert request.params == {
         "return_full_object": "true",
@@ -327,9 +318,7 @@ def test_delete_request_with_keys_and_aliases(client):
     """Test delete request with both keys and aliases"""
     keys_to_delete = ["key1", "key2"]
     aliases_to_delete = ["alias1", "alias2"]
-    request = client.delete(
-        keys=keys_to_delete, key_aliases=aliases_to_delete, return_request=True
-    )
+    request = client.delete(keys=keys_to_delete, key_aliases=aliases_to_delete, return_request=True)
 
     assert request.json == {"keys": keys_to_delete, "key_aliases": aliases_to_delete}
 
