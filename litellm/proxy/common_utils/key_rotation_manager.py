@@ -5,7 +5,10 @@ Handles finding keys that need rotation based on their individual schedules.
 """
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -30,14 +33,36 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient):
+    KEY_ROTATION_JOB_NAME = "key_rotation_job"
+
+    def __init__(
+        self,
+        prisma_client: PrismaClient,
+        pod_lock_manager: Optional["PodLockManager"] = None,
+    ):
         self.prisma_client = prisma_client
+        self.pod_lock_manager = pod_lock_manager
 
     async def process_rotations(self):
         """
         Main entry point - find and rotate keys that are due for rotation
         """
+        # Acquire distributed lock to prevent concurrent rotation across pods
+        lock_acquired = False
         try:
+            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=self.KEY_ROTATION_JOB_NAME,
+                    )
+                    or False
+                )
+                if not lock_acquired:
+                    verbose_proxy_logger.debug(
+                        "Key rotation skipped — another pod holds the lock"
+                    )
+                    return
+
             verbose_proxy_logger.info("Starting scheduled key rotation check...")
 
             # Clean up expired deprecated keys first
@@ -74,6 +99,11 @@ class KeyRotationManager:
 
         except Exception as e:
             verbose_proxy_logger.error(f"Key rotation process failed: {e}")
+        finally:
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=self.KEY_ROTATION_JOB_NAME,
+                )
 
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """

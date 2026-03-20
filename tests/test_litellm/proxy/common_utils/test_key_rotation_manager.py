@@ -290,3 +290,101 @@ class TestKeyRotationManager:
             call_args = mock_regenerate.call_args
             regenerate_request = call_args[1]["data"]
             assert regenerate_request.grace_period == "48h"
+
+
+class TestKeyRotationManagerDistributedLock:
+    """Tests for distributed lock behavior in process_rotations."""
+
+    @pytest.mark.asyncio
+    async def test_process_rotations_acquires_lock(self):
+        """Test that process_rotations acquires distributed lock before processing."""
+        from unittest.mock import patch, MagicMock
+
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = []
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = 0
+
+        mock_pod_lock_manager = MagicMock()
+        mock_pod_lock_manager.redis_cache = MagicMock()
+        mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+        mock_pod_lock_manager.release_lock = AsyncMock()
+
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
+        await manager.process_rotations()
+
+        mock_pod_lock_manager.acquire_lock.assert_called_once_with(
+            cronjob_id=KeyRotationManager.KEY_ROTATION_JOB_NAME,
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_rotations_skips_when_lock_held(self):
+        """Test that process_rotations skips when another pod holds the lock."""
+        from unittest.mock import MagicMock
+
+        mock_prisma_client = AsyncMock()
+        mock_pod_lock_manager = MagicMock()
+        mock_pod_lock_manager.redis_cache = MagicMock()
+        mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
+        mock_pod_lock_manager.release_lock = AsyncMock()
+
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
+        await manager.process_rotations()
+
+        # Should not attempt any DB queries since lock was not acquired
+        mock_prisma_client.db.litellm_verificationtoken.find_many.assert_not_called()
+        mock_pod_lock_manager.release_lock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_process_rotations_releases_lock_on_success(self):
+        """Test that lock is released after successful rotation."""
+        from unittest.mock import MagicMock
+
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = []
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = 0
+
+        mock_pod_lock_manager = MagicMock()
+        mock_pod_lock_manager.redis_cache = MagicMock()
+        mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+        mock_pod_lock_manager.release_lock = AsyncMock()
+
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
+        await manager.process_rotations()
+
+        mock_pod_lock_manager.release_lock.assert_called_once_with(
+            cronjob_id=KeyRotationManager.KEY_ROTATION_JOB_NAME,
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_rotations_releases_lock_on_failure(self):
+        """Test that lock is released even when rotation fails."""
+        from unittest.mock import MagicMock
+
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.side_effect = Exception("DB error")
+
+        mock_pod_lock_manager = MagicMock()
+        mock_pod_lock_manager.redis_cache = MagicMock()
+        mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+        mock_pod_lock_manager.release_lock = AsyncMock()
+
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
+        await manager.process_rotations()
+
+        # Lock should still be released via finally block
+        mock_pod_lock_manager.release_lock.assert_called_once_with(
+            cronjob_id=KeyRotationManager.KEY_ROTATION_JOB_NAME,
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_rotations_works_without_lock_manager(self):
+        """Test that process_rotations works when pod_lock_manager is None (single instance)."""
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = []
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = 0
+
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=None)
+        await manager.process_rotations()
+
+        # Should still execute normally without lock
+        mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.assert_called_once()
