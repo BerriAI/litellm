@@ -179,7 +179,7 @@ if MCP_AVAILABLE:
             team_id=resolved_team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
-            check_db_only=False,
+            check_db_only=True,  # bypass cache to get fresh object_permission
         )
 
         if not _is_user_team_mcp_manager(user_api_key_dict, team_obj):
