@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from .base import FocusDestination
 from .s3_destination import FocusS3Destination
+from .vantage_destination import FocusVantageDestination
 
 
 class FocusDestinationFactory:
@@ -26,6 +27,8 @@ class FocusDestinationFactory:
         )
         if provider_lower == "s3":
             return FocusS3Destination(prefix=prefix, config=normalized_config)
+        if provider_lower == "vantage":
+            return FocusVantageDestination(prefix=prefix, config=normalized_config)
         raise NotImplementedError(
             f"Provider '{provider}' not supported for Focus export"
         )
@@ -53,6 +56,21 @@ class FocusDestinationFactory:
             }
             if not resolved.get("bucket_name"):
                 raise ValueError("FOCUS_S3_BUCKET_NAME must be provided for S3 exports")
+            return {k: v for k, v in resolved.items() if v is not None}
+        if provider == "vantage":
+            resolved = {
+                "api_key": overrides.get("api_key") or os.getenv("VANTAGE_API_KEY"),
+                "integration_token": overrides.get("integration_token")
+                or os.getenv("VANTAGE_INTEGRATION_TOKEN"),
+                "base_url": overrides.get("base_url")
+                or os.getenv("VANTAGE_BASE_URL", "https://api.vantage.sh"),
+            }
+            if not resolved.get("api_key"):
+                raise ValueError("VANTAGE_API_KEY must be provided for Vantage exports")
+            if not resolved.get("integration_token"):
+                raise ValueError(
+                    "VANTAGE_INTEGRATION_TOKEN must be provided for Vantage exports"
+                )
             return {k: v for k, v in resolved.items() if v is not None}
         raise NotImplementedError(
             f"Provider '{provider}' not supported for Focus export configuration"

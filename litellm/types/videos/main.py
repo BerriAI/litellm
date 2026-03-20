@@ -1,9 +1,8 @@
 from typing import Any, Dict, List, Literal, Optional
 
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
-from litellm.types.utils import FileTypes
 
 
 class VideoObject(BaseModel):
@@ -83,6 +82,7 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     model: Optional[str]
     seconds: Optional[str]
     size: Optional[str]
+    characters: Optional[List[Dict[str, str]]]
     user: Optional[str]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
@@ -104,3 +104,43 @@ class DecodedVideoId(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     model_id: Optional[str]
     video_id: str
+
+
+class CharacterObject(BaseModel):
+    """Represents a character created from a video."""
+
+    id: str
+    object: Literal["character"] = "character"
+    created_at: int
+    name: str
+    _hidden_params: Dict[str, Any] = {}
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)
+        except Exception:
+            return self.dict()
+
+
+class VideoEditRequestParams(TypedDict, total=False):
+    """TypedDict for video edit request parameters."""
+
+    prompt: str
+    video: Dict[str, str]  # {"id": "video_123"}
+
+
+class VideoExtensionRequestParams(TypedDict, total=False):
+    """TypedDict for video extension request parameters."""
+
+    prompt: str
+    seconds: str
+    video: Dict[str, str]  # {"id": "video_123"}

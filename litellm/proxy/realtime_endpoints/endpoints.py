@@ -181,7 +181,7 @@ async def create_realtime_client_secret(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(
+        return Response(  # type: ignore[return-value]
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",

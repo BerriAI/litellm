@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -1075,12 +1076,20 @@ class Router:
         """Initialize video endpoints."""
         from litellm.videos import (
             avideo_content,
+            avideo_create_character,
+            avideo_edit,
+            avideo_extension,
             avideo_generation,
+            avideo_get_character,
             avideo_list,
             avideo_remix,
             avideo_status,
             video_content,
+            video_create_character,
+            video_edit,
+            video_extension,
             video_generation,
+            video_get_character,
             video_list,
             video_remix,
             video_status,
@@ -1110,6 +1119,26 @@ class Router:
             avideo_remix, call_type="avideo_remix"
         )
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
+        self.avideo_create_character = self.factory_function(
+            avideo_create_character, call_type="avideo_create_character"
+        )
+        self.video_create_character = self.factory_function(
+            video_create_character, call_type="video_create_character"
+        )
+        self.avideo_get_character = self.factory_function(
+            avideo_get_character, call_type="avideo_get_character"
+        )
+        self.video_get_character = self.factory_function(
+            video_get_character, call_type="video_get_character"
+        )
+        self.avideo_edit = self.factory_function(avideo_edit, call_type="avideo_edit")
+        self.video_edit = self.factory_function(video_edit, call_type="video_edit")
+        self.avideo_extension = self.factory_function(
+            avideo_extension, call_type="avideo_extension"
+        )
+        self.video_extension = self.factory_function(
+            video_extension, call_type="video_extension"
+        )
 
     def _initialize_container_endpoints(self):
         """Initialize container endpoints."""
@@ -1492,13 +1521,36 @@ class Router:
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
+
+        Guarantee metadata isolation: safe_deep_copy falls back to the original
+        reference when deepcopy fails (e.g. metadata contains UserAPIKeyAuth with
+        parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
+        copy of the metadata dict so mutations (model_group, is_silent_experiment)
+        never corrupt the main call's metadata.
         """
-        # Copy kwargs to ensure isolation (use safe_deep_copy to handle non-serializable objects like OTEL spans)
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
         silent_kwargs = safe_deep_copy(kwargs)
+
+        # safe_deep_copy may fall back to the original metadata reference when
+        # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
+        # Detect this via identity check and force a shallow copy so that setting
+        # model_group / is_silent_experiment on the silent dict doesn't corrupt
+        # the primary call's metadata.
+        original_metadata = kwargs.get("metadata")
+        if (
+            original_metadata is not None
+            and silent_kwargs.get("metadata") is original_metadata
+        ):
+            silent_kwargs["metadata"] = dict(original_metadata)
+
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
+
+        # OTel spans are not safe to use across event loops. The silent
+        # experiment runs in a new event loop, so strip the span to prevent
+        # cross-loop tracing races or span corruption.
+        silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
@@ -1551,7 +1603,9 @@ class Router:
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
                     # scheduled via asyncio.create_task during acompletion.
                     pending = asyncio.all_tasks()
-                    pending.discard(asyncio.current_task())
+                    current = asyncio.current_task()
+                    if current is not None:
+                        pending.discard(current)
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
 
@@ -3820,14 +3874,23 @@ class Router:
             The response from the handler function
         """
         handler_name = original_function.__name__
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name="generic_api_call"
+        )
         try:
             verbose_router_logger.debug(
                 f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            self._update_kwargs_before_fallbacks(
+                model=model,
+                kwargs=kwargs,
+                metadata_variable_name=metadata_variable_name,
             )
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
@@ -4802,6 +4865,14 @@ class Router:
             "video_content",
             "avideo_remix",
             "video_remix",
+            "avideo_create_character",
+            "video_create_character",
+            "avideo_get_character",
+            "video_get_character",
+            "avideo_edit",
+            "video_edit",
+            "avideo_extension",
+            "video_extension",
             "acreate_container",
             "create_container",
             "alist_containers",
@@ -4846,10 +4917,6 @@ class Router:
             "generate_content_stream",
             "vector_store_search",
             "vector_store_create",
-            "vector_store_retrieve",
-            "vector_store_list",
-            "vector_store_update",
-            "vector_store_delete",
             "ocr",
             "search",
             "video_generation",
@@ -4873,6 +4940,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_retrieve",
+            "vector_store_list",
+            "vector_store_update",
+            "vector_store_delete",
+        ):
+
+            def vector_store_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(
+                        original_function=original_function, **kwargs
+                    )
+                return original_function(**kwargs)
+
+            return vector_store_sync_wrapper
 
         if call_type in (
             "vector_store_file_create",
@@ -4951,6 +5040,10 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "avideo_create_character",
+                "avideo_get_character",
+                "avideo_edit",
+                "avideo_extension",
                 "acreate_skill",
                 "alist_skills",
                 "aget_skill",
@@ -6523,6 +6616,18 @@ class Router:
                     f"Ignoring deployment {deployment.model_name} as it is not active for environment {deployment.model_info['supported_environments']}"
                 )
                 return None
+
+            # Validate tag_regex patterns BEFORE adding the deployment so we never
+            # have partially-initialised router state if a pattern is invalid.
+            _tag_regex = deployment.litellm_params.get("tag_regex") or []
+            for pattern in _tag_regex:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"{pattern!r} — {exc}"
+                    ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
 
@@ -8515,6 +8620,7 @@ class Router:
             _model_info = deployment.get("model_info", {})
 
             # see if we have the info for this model
+            _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
             try:
                 base_model = _model_info.get("base_model", None)
                 if base_model is None:
@@ -8522,7 +8628,7 @@ class Router:
                 model_info = self.get_router_model_info(
                     deployment=deployment, received_model_name=model
                 )
-                model = base_model or _litellm_params.get("model", None)
+                _deployment_model = base_model or _litellm_params.get("model", None)
 
                 if (
                     isinstance(model_info, dict)
@@ -8536,7 +8642,9 @@ class Router:
                         _context_window_error = True
                         _potential_error_str += (
                             "Model={}, Max Input Tokens={}, Got={}".format(
-                                model, model_info["max_input_tokens"], input_tokens
+                                _deployment_model,
+                                model_info["max_input_tokens"],
+                                input_tokens,
                             )
                         )
                         continue
@@ -8592,13 +8700,21 @@ class Router:
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params
-                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                    model=model, litellm_params=LiteLLM_Params(**_litellm_params)
+                # get supported params — use per-deployment model to avoid overwriting the outer model group name
+                _dep_model_for_params = _deployment_model or model
+                (
+                    _dep_model_for_params,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(
+                    model=_dep_model_for_params,
+                    litellm_params=LiteLLM_Params(**_litellm_params),
                 )
 
                 supported_openai_params = litellm.get_supported_openai_params(
-                    model=model, custom_llm_provider=custom_llm_provider
+                    model=_dep_model_for_params,
+                    custom_llm_provider=custom_llm_provider,
                 )
 
                 if supported_openai_params is None:

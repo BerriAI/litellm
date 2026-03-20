@@ -386,8 +386,56 @@ class TestXAICostCalculator:
             completion_tokens=50,
             total_tokens=150,
         )
-        
+
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-        
+
         # Expected cost: No web search data = $0.0
         assert web_search_cost == 0.0
+
+    def test_grok_4_20_beta_reasoning_cost_calculation(self):
+        """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-beta-0309-reasoning", usage=usage
+        )
+
+        # Input: 100 tokens * $2e-6 = $0.0002
+        # Output: 200 tokens * $6e-6 = $0.0012
+        expected_prompt_cost = 100 * 2e-6
+        expected_completion_cost = 200 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_beta_non_reasoning_cost_calculation(self):
+        """Test cost calculation for grok-4.20-beta-0309-non-reasoning model."""
+        usage = Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-beta-0309-non-reasoning", usage=usage
+        )
+
+        # Input: 50 tokens * $2e-6 = $0.0001
+        # Output: 100 tokens * $6e-6 = $0.0006
+        expected_prompt_cost = 50 * 2e-6
+        expected_completion_cost = 100 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_multi_agent_cost_calculation(self):
+        """Test cost calculation for grok-4.20-multi-agent-beta-0309 model."""
+        usage = Usage(prompt_tokens=200, completion_tokens=300, total_tokens=500)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-multi-agent-beta-0309", usage=usage
+        )
+
+        # Input: 200 tokens * $2e-6 = $0.0004
+        # Output: 300 tokens * $6e-6 = $0.0018
+        expected_prompt_cost = 200 * 2e-6
+        expected_completion_cost = 300 * 6e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)

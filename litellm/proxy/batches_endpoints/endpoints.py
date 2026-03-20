@@ -32,6 +32,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_original_file_id,
     prepare_data_with_credentials,
     resolve_input_file_id_to_unified,
+    resolve_output_file_ids_to_unified,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -405,9 +406,11 @@ async def retrieve_batch(  # noqa: PLR0915
             verbose_proxy_logger=verbose_proxy_logger,
         )
 
-        # If batch is in a terminal state, return immediately
+        # If batch is in a terminal state, return immediately.
+        # Include "complete" (DB-normalized form of "completed").
         if response is not None and response.status in [
             "completed",
+            "complete",
             "failed",
             "cancelled",
             "expired",
@@ -417,10 +420,11 @@ async def retrieve_batch(  # noqa: PLR0915
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
-            # but not input_file_id. Resolve raw provider ID to unified ID.
+            # The DB may store raw provider file IDs (before hooks translate them).
+            # Resolve any raw input/output/error file IDs to unified IDs.
             if unified_batch_id:
                 await resolve_input_file_id_to_unified(response, prisma_client)
+                await resolve_output_file_ids_to_unified(response, prisma_client)
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -533,9 +537,10 @@ async def retrieve_batch(  # noqa: PLR0915
         )
 
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
-        # Resolve raw provider input_file_id to unified ID.
+        # Resolve raw provider file IDs (input, output, error) to unified IDs.
         if unified_batch_id:
             await resolve_input_file_id_to_unified(response, prisma_client)
+            await resolve_output_file_ids_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(

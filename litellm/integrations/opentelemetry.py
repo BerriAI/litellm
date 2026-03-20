@@ -11,7 +11,7 @@ from litellm.integrations._types.open_inference import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.secret_managers.main import get_secret_bool
+from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -68,6 +68,7 @@ class OpenTelemetryConfig:
     service_name: Optional[str] = None
     deployment_environment: Optional[str] = None
     model_id: Optional[str] = None
+    ignore_context_propagation: Optional[bool] = None
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -89,6 +90,10 @@ class OpenTelemetryConfig:
             )
         if not self.model_id:
             self.model_id = os.getenv("OTEL_MODEL_ID", self.service_name)
+        if self.ignore_context_propagation is None:
+            self.ignore_context_propagation = str_to_bool(
+                os.getenv("OTEL_IGNORE_CONTEXT_PROPAGATION")
+            )
 
     @classmethod
     def from_env(cls):
@@ -710,12 +715,7 @@ class OpenTelemetry(CustomLogger):
         )
         ctx, parent_span = self._get_span_context(kwargs)
 
-        # CRITICAL FIX: For langfuse_otel, ALWAYS create primary spans
-        # Don't use parent spans from other providers as they cause trace corruption
-        is_langfuse_otel = (
-            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
-        )
-        if is_langfuse_otel:
+        if self.config.ignore_context_propagation:
             parent_span = None  # Ignore parent spans from other providers
             ctx = None
 
@@ -1256,12 +1256,7 @@ class OpenTelemetry(CustomLogger):
         )
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
-        # CRITICAL FIX: For langfuse_otel, ALWAYS create primary spans
-        # Don't use parent spans from other providers as they cause trace corruption
-        is_langfuse_otel = (
-            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
-        )
-        if is_langfuse_otel:
+        if self.config.ignore_context_propagation:
             parent_otel_span = None  # Ignore parent spans from other providers
             _parent_context = None
 

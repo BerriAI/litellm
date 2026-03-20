@@ -1,7 +1,7 @@
 # LITELLM PROXY DEPENDENCIES #
 # Security: explicit pins for transitive deps (CVE fixes)
 urllib3>=2.6.0  # CVE-2025-66471, CVE-2025-66418, CVE-2026-21441
-tornado>=6.5.3  # CVE-2025-67725, CVE-2025-67726, CVE-2025-67724
+tornado>=6.5.5  # CVE-2025-67725, CVE-2025-67726, CVE-2025-67724, CVE-2026-31958, GHSA-78cv-mqj4-43f7
 filelock>=3.20.1  # CVE-2025-68146
 h11>=0.16.0    # CVE-2025-43859, GHSA-vqfr-h8mv-ghfj — HTTP request smuggling
 wheel>=0.46.2  # CVE-2026-24049 — path traversal
@@ -40,7 +40,7 @@ orjson==3.11.7 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
-pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
+pyjwt[crypto]==2.12.0 ; python_version >= "3.9"
 python-multipart>=0.0.20 # admin UI
 jaraco.context>=6.1.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
@@ -57,7 +57,7 @@ grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.56 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.58 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env

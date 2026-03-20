@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -172,16 +174,21 @@ def mock_pre_call_hook():
 
 def test_client_secrets_requires_auth(proxy_app):
     """POST /v1/realtime/client_secrets returns 401 without Authorization."""
-    client = TestClient(proxy_app)
-    with patch(
-        "litellm.proxy.proxy_server.route_request",
-        new_callable=AsyncMock,
-    ):
+    from fastapi import HTTPException
+
+    def _raise_401():
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    proxy_app.dependency_overrides[user_api_key_auth] = _raise_401
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
         response = client.post(
             "/v1/realtime/client_secrets",
             json={"model": "gpt-4o-realtime-preview"},
         )
-    assert response.status_code == 401
+        assert response.status_code == 401
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -192,49 +199,56 @@ async def test_client_secrets_success_with_mock(
     mock_pre_call_hook,
 ):
     """POST /v1/realtime/client_secrets returns 200 with valid auth and mocked upstream."""
-    client = TestClient(proxy_app)
-    with (
-        patch(
-            "litellm.proxy.proxy_server.route_request",
-            side_effect=mock_route_request_client_secrets,
-        ),
-        patch(
-            "litellm.proxy.proxy_server.add_litellm_data_to_request",
-            side_effect=mock_add_litellm_data,
-        ),
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj"
-        ) as mock_logging,
-    ):
-        mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
-        mock_logging.post_call_failure_hook = AsyncMock()
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", team_id="test-team"
+    )
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=mock_route_request_client_secrets,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj"
+            ) as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
 
-        response = client.post(
-            "/v1/realtime/client_secrets",
-            headers={"Authorization": "Bearer sk-test-master-key"},
-            json={"model": "gpt-4o-realtime-preview"},
-        )
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"model": "gpt-4o-realtime-preview"},
+            )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert "value" in data
-    assert data["expires_at"] is not None
-    assert data["expires_at"] > int(time.time())  # Should be in the future
-    # Proxy encrypts the upstream value, so returned value should differ
-    assert data["value"] != "upstream_ephemeral_key"
+        assert response.status_code == 200
+        data = response.json()
+        assert "value" in data
+        assert data["expires_at"] is not None
+        assert data["expires_at"] > int(time.time())  # Should be in the future
+        # Proxy encrypts the upstream value, so returned value should differ
+        assert data["value"] != "upstream_ephemeral_key"
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 def test_realtime_calls_requires_auth(proxy_app):
-    """POST /v1/realtime/calls returns 401 without Authorization."""
+    """POST /v1/realtime/calls returns 401 without Authorization.
+
+    Note: /realtime/calls does NOT use the user_api_key_auth dependency —
+    it checks the Bearer token manually (an encrypted ephemeral key from
+    /realtime/client_secrets).  So no dependency override is needed here.
+    """
     client = TestClient(proxy_app)
-    with patch(
-        "litellm.proxy.proxy_server.route_request",
-        new_callable=AsyncMock,
-    ):
-        response = client.post(
-            "/v1/realtime/calls",
-            content=b"v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n",
-        )
+    response = client.post(
+        "/v1/realtime/calls",
+        content=b"v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n",
+    )
     assert response.status_code == 401
 
 

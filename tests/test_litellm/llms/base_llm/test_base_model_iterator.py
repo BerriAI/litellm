@@ -1,8 +1,11 @@
 """
 Tests for BaseModelResponseIterator - specifically testing that empty SSE lines are filtered
+and non-string objects (e.g. Pydantic BaseModel events from the Responses API) pass through.
 """
 
 import pytest
+from pydantic import BaseModel
+
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk
 
@@ -115,3 +118,108 @@ async def test_filter_empty_sse_lines_async():
 
     # Should have 3 chunks: 2 content + 1 DONE
     assert len(chunks) == 3, f"Expected 3 chunks, got {len(chunks)}"
+
+
+class FakeResponseEvent(BaseModel):
+    """Simulates a Pydantic BaseModel event like ResponseCreatedEvent from the OpenAI SDK."""
+    type: str = "response.created"
+    data: dict = {}
+
+
+class TestBaseModelResponseIteratorNonStringChunks:
+    """
+    Test that non-string objects (e.g. Pydantic BaseModel events from the
+    Responses API) are not dropped by the empty-line filter.
+
+    Without the isinstance(str_line, str) guard, calling .strip() on a
+    BaseModel raises AttributeError: 'FakeResponseEvent' object has no
+    attribute 'strip'.
+    """
+
+    def test_pydantic_basemodel_chunk_passes_through_sync(self):
+        """Non-string chunks must not be dropped or cause AttributeError."""
+        event = FakeResponseEvent(type="response.created", data={"id": "resp_1"})
+
+        class TestIterator(BaseModelResponseIterator):
+            def _handle_string_chunk(self, str_line):
+                # Just return the object wrapped in a GenericStreamingChunk
+                return GenericStreamingChunk(
+                    text=str(str_line),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+
+        iterator = TestIterator(
+            streaming_response=iter([event]),
+            sync_stream=True,
+        )
+
+        chunks = list(iterator)
+        assert len(chunks) == 1
+        assert "response.created" in chunks[0]["text"]
+
+    def test_mixed_string_and_pydantic_chunks_sync(self):
+        """Mix of empty strings, valid SSE, and Pydantic objects."""
+        event = FakeResponseEvent(type="response.done", data={})
+
+        class TestIterator(BaseModelResponseIterator):
+            def _handle_string_chunk(self, str_line):
+                return GenericStreamingChunk(
+                    text=str(str_line),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+
+        items = [
+            "",          # empty string — should be skipped
+            event,       # Pydantic object — must pass through
+            "   ",       # whitespace — should be skipped
+            "data: [DONE]",  # valid SSE
+        ]
+
+        iterator = TestIterator(
+            streaming_response=iter(items),
+            sync_stream=True,
+        )
+
+        chunks = list(iterator)
+        # 2 chunks: the Pydantic event + [DONE]
+        assert len(chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_pydantic_basemodel_chunk_passes_through_async():
+    """Async variant: non-string chunks must not be dropped."""
+    event = FakeResponseEvent(type="response.created", data={"id": "resp_1"})
+
+    class TestIterator(BaseModelResponseIterator):
+        def _handle_string_chunk(self, str_line):
+            return GenericStreamingChunk(
+                text=str(str_line),
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+    async def async_gen():
+        yield event
+
+    iterator = TestIterator(
+        streaming_response=async_gen(),
+        sync_stream=False,
+    )
+
+    chunks = []
+    async for chunk in iterator:
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert "response.created" in chunks[0]["text"]

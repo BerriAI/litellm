@@ -132,3 +132,57 @@ class TestLangsmithLoggerInit:
         assert (
             logger.sampling_rate >= 0.0
         ), f"sampling_rate should be non-negative, got {logger.sampling_rate}"
+
+
+class TestLangsmithPrepareLogData:
+    """Regression test for #24001: _prepare_log_data must inject
+    usage_metadata into outputs so LangSmith's Cost column is populated."""
+
+    @patch("asyncio.create_task")
+    @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
+    def test_outputs_contain_usage_metadata(self, mock_create_task):
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+        )
+
+        payload = {
+            "id": "test-id",
+            "response": {"choices": [{"message": {"content": "hi"}}]},
+            "metadata": {},
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0042,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+        }
+
+        kwargs = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": payload,
+        }
+
+        credentials = {
+            "LANGSMITH_API_KEY": "test-key",
+            "LANGSMITH_PROJECT": "test-project",
+            "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+        }
+
+        data = logger._prepare_log_data(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials=credentials,
+        )
+
+        assert "usage_metadata" in data["outputs"]
+        um = data["outputs"]["usage_metadata"]
+        assert um["total_cost"] == 0.0042
+        assert um["input_tokens"] == 100
+        assert um["output_tokens"] == 50
+        assert um["total_tokens"] == 150
