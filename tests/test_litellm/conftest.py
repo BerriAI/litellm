@@ -58,6 +58,8 @@ def isolate_litellm_state():
     # through async_completion_with_fallbacks / Router, bypassing HTTP mocks
     if hasattr(litellm, "model_fallbacks"):
         original_state["model_fallbacks"] = litellm.model_fallbacks
+    if hasattr(litellm, "drop_params"):
+        original_state["drop_params"] = litellm.drop_params
 
     # Store transport/network globals — many tests set these without restoring,
     # causing subsequent tests to get None from _create_async_transport()
@@ -84,6 +86,8 @@ def isolate_litellm_state():
     # Clear routing globals
     if hasattr(litellm, "model_fallbacks"):
         litellm.model_fallbacks = None
+    if hasattr(litellm, "drop_params"):
+        litellm.drop_params = False
 
     yield
 
