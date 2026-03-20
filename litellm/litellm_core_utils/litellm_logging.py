@@ -1686,6 +1686,28 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         return logging_result
 
+    def _merge_hidden_params_from_response_into_metadata(self, logging_result: Any) -> None:
+        """
+        Copy response._hidden_params into litellm_params.metadata['hidden_params'].
+
+        Non-streaming success uses _process_hidden_params_and_response_cost (skipped when
+        stream=True). Streaming assembles the full response later; without this merge,
+        OTEL/callbacks that read metadata.hidden_params miss cost-related fields.
+        """
+        if logging_result is None:
+            return
+        hidden_params = getattr(logging_result, "_hidden_params", None)
+        if not hidden_params:
+            return
+        if self.model_call_details.get("litellm_params") is None:
+            return
+        self.model_call_details["litellm_params"].setdefault("metadata", {})
+        if self.model_call_details["litellm_params"]["metadata"] is None:
+            self.model_call_details["litellm_params"]["metadata"] = {}
+        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(
+            logging_result, "_hidden_params", {}
+        )
+
     def _process_hidden_params_and_response_cost(
         self,
         logging_result,
@@ -2010,6 +2032,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details[
                     "response_cost"
                 ] = self._response_cost_calculator(result=complete_streaming_response)
+                self._merge_hidden_params_from_response_into_metadata(
+                    complete_streaming_response
+                )
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details[
                     "standard_logging_object"
@@ -2544,6 +2569,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
                 )
                 self.model_call_details["response_cost"] = None
+
+            self._merge_hidden_params_from_response_into_metadata(
+                complete_streaming_response
+            )
 
             ## STANDARDIZED LOGGING PAYLOAD
             self.model_call_details[
