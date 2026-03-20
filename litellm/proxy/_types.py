@@ -1144,6 +1144,10 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
+    team_id: Optional[str] = Field(
+        None,
+        description="Team ID to assign the MCP server to. Required for team MCP managers.",
+    )
 
     @model_validator(mode="before")
     @classmethod
