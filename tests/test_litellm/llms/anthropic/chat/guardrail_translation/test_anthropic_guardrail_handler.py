@@ -442,6 +442,105 @@ class TestAnthropicOutputToolCallDeletion:
         assert result["stop_reason"] == "tool_use"
 
 
+class MockDeletionWithReplacementGuardrail(CustomGuardrail):
+    """Mock guardrail that deletes all tool calls and adds replacement text."""
+
+    def __init__(self, guardrail_name: str, replacement_text: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.replacement_text = replacement_text
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                tc["guardrail_deleted"] = True
+
+        texts = list(inputs.get("texts", []))
+        texts.append(self.replacement_text)
+
+        result: GenericGuardrailAPIInputs = {"texts": texts}
+        if tool_calls:
+            result["tool_calls"] = tool_calls  # type: ignore
+        return result
+
+
+class TestAnthropicReplacementText:
+    """Test adding replacement text when deleting tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_tool_only_response_deletion_with_replacement_text(self):
+        """Tool-call-only response: delete all and inject replacement text."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockDeletionWithReplacementGuardrail(
+            guardrail_name="test",
+            replacement_text="Tool call blocked by policy.",
+        )
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "dangerous_tool",
+                    "input": {"action": "delete"},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # Tool use deleted, replacement text injected
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Tool call blocked by policy."
+        assert result["stop_reason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_tool_only_response_no_deletion_no_replacement(self):
+        """Tool-call-only response with passthrough: no text added."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "my_tool",
+                    "input": {"a": "b"},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "tool_use"
+        assert result["stop_reason"] == "tool_use"
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

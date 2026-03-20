@@ -730,7 +730,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Apply guardrail responses back to output response.
 
-        Override this method to customize how responses are applied.
+        Mapped texts replace existing content items. Extra texts beyond
+        task_mappings length are appended as new message output items — this
+        allows guardrails to inject replacement text into tool-call-only
+        responses that originally had no text.
         """
         # Handle both dict and Pydantic object responses
         if isinstance(response, dict):
@@ -740,7 +743,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         else:
             return
 
-        for task_idx, guardrail_response in enumerate(responses):
+        # Apply mapped texts back to their original locations
+        for task_idx in range(min(len(responses), len(task_mappings))):
+            guardrail_response = responses[task_idx]
             mapping = task_mappings[task_idx]
             output_idx = cast(int, mapping[0])
             content_idx = cast(int, mapping[1])
@@ -782,6 +787,21 @@ class OpenAIResponsesHandler(BaseTranslation):
                         content[content_idx]["text"] = guardrail_response
                     elif hasattr(content[content_idx], "text"):
                         content[content_idx].text = guardrail_response
+
+        # Append extra texts as new message output items
+        if len(responses) > len(task_mappings):
+            for i, extra_text in enumerate(responses[len(task_mappings) :]):
+                response_output.append(
+                    {
+                        "type": "message",
+                        "id": f"guardrail_msg_{i}",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": extra_text},
+                        ],
+                    }
+                )
 
     def _apply_guardrail_responses_to_output_tool_calls(
         self,

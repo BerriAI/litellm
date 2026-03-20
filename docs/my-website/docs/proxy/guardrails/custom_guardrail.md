@@ -449,6 +449,32 @@ class ToolFilterGuardrail(CustomGuardrail):
   - For **input** messages: the `"tool_calls"` key is removed from the message dict.
   - For **output** responses: the tool calls are removed and the stop/finish reason is updated — OpenAI Chat changes `finish_reason` from `"tool_calls"` to `"stop"`, Anthropic changes `stop_reason` from `"tool_use"` to `"end_turn"`.
 
+### Adding Replacement Text
+
+When deleting tool calls, you can inject replacement text by appending to the `texts` list. This is useful for tool-call-only responses that have no existing text content:
+
+```python
+class ToolFilterGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        tool_calls = inputs.get("tool_calls", [])
+        blocked = False
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                name = tc.get("function", {}).get("name", "")
+                if name in BLOCKED_TOOLS:
+                    tc["guardrail_deleted"] = True
+                    blocked = True
+
+        if blocked:
+            texts = list(inputs.get("texts", []))
+            texts.append("Some tool calls were blocked by policy.")
+            inputs["texts"] = texts
+
+        return inputs
+```
+
+Extra texts beyond the original count are appended as new content — existing text is not affected.
+
 ## ✨ Pass additional parameters to guardrail
 
 :::info

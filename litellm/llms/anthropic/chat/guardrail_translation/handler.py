@@ -684,33 +684,31 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         Apply guardrail responses back to output response.
 
-        Override this method to customize how responses are applied.
+        Mapped texts replace existing content blocks. Extra texts beyond
+        task_mappings length are appended as new text content blocks — this
+        allows guardrails to inject replacement text into tool-call-only
+        responses that originally had no text.
         """
-        for task_idx, guardrail_response in enumerate(responses):
+        # Get response content once
+        if isinstance(response, dict):
+            response_content: List[Any] = response.get("content", []) or []
+        elif hasattr(response, "content"):
+            response_content = getattr(response, "content", None) or []
+        else:
+            return
+
+        # Apply mapped texts back to their original locations
+        for task_idx in range(min(len(responses), len(task_mappings))):
+            guardrail_response = responses[task_idx]
             mapping = task_mappings[task_idx]
             content_idx = cast(int, mapping[0])
 
-            # Handle both dict and object responses
-            response_content: List[Any] = []
-            if isinstance(response, dict):
-                response_content = response.get("content", []) or []
-            elif hasattr(response, "content"):
-                content = getattr(response, "content", None)
-                response_content = content or []
-            else:
-                continue
-
-            if not response_content:
-                continue
-
-            # Get the content block at the index
-            if content_idx >= len(response_content):
+            if not response_content or content_idx >= len(response_content):
                 continue
 
             content_block = response_content[content_idx]
 
             # Verify it's a text block and update the text field
-            # Handle both dict and Pydantic object content blocks
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
                     cast(Dict[str, Any], content_block)["text"] = guardrail_response
@@ -718,9 +716,13 @@ class AnthropicMessagesHandler(BaseTranslation):
                 hasattr(content_block, "type")
                 and getattr(content_block, "type", None) == "text"
             ):
-                # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):
                     content_block.text = guardrail_response
+
+        # Append extra texts as new content blocks
+        if len(responses) > len(task_mappings):
+            for extra_text in responses[len(task_mappings) :]:
+                response_content.append({"type": "text", "text": extra_text})
 
     def _apply_guardrail_responses_to_output_tool_calls(
         self,

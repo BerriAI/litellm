@@ -1299,6 +1299,168 @@ class TestGuardrailDeletedEdgeCases:
         assert response.choices[0].finish_reason == "tool_calls"
 
 
+class MockDeletionWithReplacementGuardrail(CustomGuardrail):
+    """Mock guardrail that deletes all tool calls and adds replacement text."""
+
+    def __init__(self, guardrail_name: str, replacement_text: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.replacement_text = replacement_text
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                tc["guardrail_deleted"] = True
+
+        texts = list(inputs.get("texts", []))
+        texts.append(self.replacement_text)
+
+        result: GenericGuardrailAPIInputs = {"texts": texts}
+        if tool_calls:
+            result["tool_calls"] = tool_calls  # type: ignore
+        return result
+
+
+class TestGuardrailReplacementText:
+    """Test adding replacement text when deleting tool calls from tool-call-only responses."""
+
+    @pytest.mark.asyncio
+    async def test_tool_only_response_deletion_with_replacement_text(self):
+        """Tool-call-only response: delete all tool calls and inject replacement text."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletionWithReplacementGuardrail(
+            guardrail_name="test",
+            replacement_text="Tool call blocked by policy.",
+        )
+
+        response = ModelResponse(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="dangerous_tool",
+                                    arguments='{"action":"delete"}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Tool calls should be deleted
+        assert response.choices[0].message.tool_calls is None
+        assert response.choices[0].finish_reason == "stop"
+        # Replacement text should be injected
+        assert response.choices[0].message.content == "Tool call blocked by policy."
+
+    @pytest.mark.asyncio
+    async def test_tool_only_response_no_deletion_no_replacement(self):
+        """Tool-call-only response with passthrough guardrail: no text added."""
+        handler = OpenAIChatCompletionsHandler()
+
+        class PassThrough(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+        guardrail = PassThrough(guardrail_name="test")
+
+        response = ModelResponse(
+            id="chatcmpl-2",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="my_tool",
+                                    arguments="{}",
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Tool calls should remain, no text added
+        assert response.choices[0].message.tool_calls is not None
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert response.choices[0].message.content is None
+
+    @pytest.mark.asyncio
+    async def test_mixed_text_and_tool_calls_with_replacement(self):
+        """Response with both text and tool calls: existing text preserved, extra appended."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockDeletionWithReplacementGuardrail(
+            guardrail_name="test",
+            replacement_text="Tool removed.",
+        )
+
+        response = ModelResponse(
+            id="chatcmpl-3",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="Let me help.",
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="bad_tool",
+                                    arguments="{}",
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Tool calls deleted, text preserved with replacement appended
+        assert response.choices[0].message.tool_calls is None
+        assert response.choices[0].message.content == "Let me help.\nTool removed."
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

@@ -306,13 +306,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
         """
 
-        # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
-            verbose_proxy_logger.warning(
-                "OpenAI Chat Completions: No text content in response, skipping guardrail"
-            )
-            return response
-
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[Dict[str, Any]] = []
@@ -365,7 +358,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 3: Map guardrail responses back to original response structure
-            if guardrailed_texts and texts_to_check:
+            if guardrailed_texts:
                 await self._apply_guardrail_responses_to_output_texts(
                     response=response,
                     responses=guardrailed_texts,
@@ -707,9 +700,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
         Apply guardrail text responses back to output response.
 
-        Override this method to customize how text responses are applied.
+        Mapped texts (indices within task_mappings) replace existing content.
+        Extra texts (beyond task_mappings length) are appended as new content
+        on the first choice — this allows guardrails to inject replacement text
+        into tool-call-only responses that originally had no text.
         """
-        for task_idx, guardrail_response in enumerate(responses):
+        # Apply mapped texts back to their original locations
+        for task_idx in range(min(len(responses), len(task_mappings))):
+            guardrail_response = responses[task_idx]
             mapping = task_mappings[task_idx]
             choice_idx = cast(int, mapping[0])
             content_idx_optional = cast(Optional[int], mapping[1])
@@ -728,6 +726,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
                 choice.message.content[content_idx_optional]["text"] = guardrail_response  # type: ignore
+
+        # Append extra texts as new content on the first choice
+        if len(responses) > len(task_mappings) and response.choices:
+            choice = cast(Choices, response.choices[0])
+            for extra_text in responses[len(task_mappings) :]:
+                if choice.message.content is None:
+                    choice.message.content = extra_text
+                elif isinstance(choice.message.content, str):
+                    choice.message.content += "\n" + extra_text
+                elif isinstance(choice.message.content, list):
+                    choice.message.content.append({"type": "text", "text": extra_text})
 
     async def _apply_guardrail_responses_to_output_tool_calls(
         self,
