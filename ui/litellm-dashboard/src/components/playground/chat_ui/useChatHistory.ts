@@ -91,7 +91,6 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   }, [messageTraceId, responsesSessionId, useApiSessionManagement]);
 
   const updateTextUI = (role: string, chunk: string, model?: string) => {
-    console.log("updateTextUI called with:", role, chunk, model);
     setChatHistory((prev) => {
       const last = prev[prev.length - 1];
       // if the last message is already from this same role, append
@@ -149,27 +148,21 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const updateTimingData = (timeToFirstToken: number) => {
-    console.log("updateTimingData called with:", timeToFirstToken);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
-      console.log("Current last message:", lastMessage);
 
       if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
-        const updatedHistory = [
+        return [
           ...prevHistory.slice(0, prevHistory.length - 1),
           {
             ...lastMessage,
             timeToFirstToken,
           },
         ];
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
       }
       // If the last message is a user message and no assistant message exists yet,
       // create a new assistant message with empty content
       else if (lastMessage && lastMessage.role === "user") {
-        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
         return [
           ...prevHistory,
           {
@@ -180,24 +173,20 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
         ];
       }
 
-      console.log("No appropriate message found to update timing");
       return prevHistory;
     });
   };
 
   const updateUsageData = (usage: TokenUsage, toolName?: string) => {
-    console.log("Received usage data:", usage);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
       if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with usage data:", usage);
         const updatedMessage = {
           ...lastMessage,
           usage,
           toolName,
         };
-        console.log("Updated message:", updatedMessage);
 
         return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
       }
@@ -207,7 +196,6 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const updateA2AMetadata = (a2aMetadata: A2ATaskMetadata) => {
-    console.log("Received A2A metadata:", a2aMetadata);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
@@ -242,12 +230,10 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const updateSearchResults = (searchResults: any[]) => {
-    console.log("Received search results:", searchResults);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
       if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with search results");
         const updatedMessage = {
           ...lastMessage,
           searchResults,
@@ -261,7 +247,6 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const handleResponseId = (responseId: string) => {
-    console.log("Received response ID for session management:", responseId);
     if (useApiSessionManagement) {
       setResponsesSessionId(responseId);
     }
@@ -276,7 +261,6 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   };
 
   const handleMCPEvent = (event: MCPEvent) => {
-    console.log("ChatUI: Received MCP event:", event);
     setMCPEvents((prev) => {
       // Check if this is a duplicate event (same item_id and type)
       // Only check for duplicates if item_id is defined (for mcp_list_tools, item_id is "mcp_list_tools")
@@ -291,13 +275,10 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
         : false;
 
       if (isDuplicate) {
-        console.log("ChatUI: Duplicate MCP event, skipping");
         return prev;
       }
 
-      const newEvents = [...prev, event];
-      console.log("ChatUI: Updated MCP events:", newEvents);
-      return newEvents;
+      return [...prev, event];
     });
   };
 
