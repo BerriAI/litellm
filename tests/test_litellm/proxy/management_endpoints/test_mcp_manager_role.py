@@ -69,6 +69,7 @@ class TestIsUserTeamMcpManager:
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi import HTTPException
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
 
@@ -316,3 +317,241 @@ class TestCreateMcpServerAsManager:
                 where={"team_id": "team1"},
                 data={"object_permission_id": "new_perm_id"},
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not mgmt_endpoints.MCP_AVAILABLE, reason="MCP module not installed"
+)
+class TestEditMcpServerAsManager:
+    async def test_edit_succeeds_for_mcp_manager(self):
+        """MCP manager should be able to edit a server assigned to their team."""
+        from litellm.proxy._types import UpdateMCPServerRequest
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="user1",
+            api_key="sk-test",
+            team_id="team1",
+        )
+
+        payload = UpdateMCPServerRequest(
+            server_id="server1",
+            description="Updated description",
+        )
+
+        mock_team = LiteLLM_TeamTableCachedObj(
+            team_id="team1",
+            members_with_roles=[
+                Member(user_id="user1", role="mcp_server_manager"),
+            ],
+        )
+
+        updated_server = MagicMock()
+        updated_server.server_id = "server1"
+        updated_server.credentials = None
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
+                AsyncMock(return_value=("team1", mock_team)),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(return_value=updated_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                MagicMock(
+                    update_server=AsyncMock(),
+                    reload_servers_from_database=AsyncMock(),
+                ),
+            ),
+        ):
+            result = await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+            # Should not raise — edit succeeded
+            assert result is not None
+
+    async def test_edit_fails_for_server_not_in_team(self):
+        """MCP manager should get 403 when editing a server not in their team."""
+        from litellm.proxy._types import UpdateMCPServerRequest
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="user1",
+            api_key="sk-test",
+            team_id="team1",
+        )
+
+        payload = UpdateMCPServerRequest(
+            server_id="server_not_in_team",
+            description="Updated description",
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
+                AsyncMock(side_effect=HTTPException(status_code=403, detail="Not in team")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+            assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not mgmt_endpoints.MCP_AVAILABLE, reason="MCP module not installed"
+)
+class TestDeleteMcpServerAsManager:
+    async def test_delete_succeeds_and_cleans_up_team(self):
+        """MCP manager deleting a server should also remove it from team permissions."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            remove_mcp_server,
+        )
+
+        user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="user1",
+            api_key="sk-test",
+            team_id="team1",
+        )
+
+        mock_team = LiteLLM_TeamTableCachedObj(
+            team_id="team1",
+            members_with_roles=[
+                Member(user_id="user1", role="mcp_server_manager"),
+            ],
+        )
+
+        deleted_server = MagicMock()
+        deleted_server.server_id = "server1"
+
+        mock_remove_from_team = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
+                AsyncMock(return_value=("team1", mock_team)),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_mcp_server",
+                AsyncMock(return_value=deleted_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                MagicMock(
+                    remove_server=MagicMock(),
+                    reload_servers_from_database=AsyncMock(),
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._remove_mcp_server_from_team",
+                mock_remove_from_team,
+            ),
+        ):
+            response = await remove_mcp_server(
+                server_id="server1", user_api_key_dict=user_auth
+            )
+            assert response.status_code == 202
+
+            # Verify team cleanup was called
+            mock_remove_from_team.assert_called_once()
+            call_kwargs = mock_remove_from_team.call_args.kwargs
+            assert call_kwargs["server_id"] == "server1"
+            assert call_kwargs["team_obj"] == mock_team
+
+    async def test_delete_fails_for_server_not_in_team(self):
+        """MCP manager should get 403 when deleting a server not in their team."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            remove_mcp_server,
+        )
+
+        user_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="user1",
+            api_key="sk-test",
+            team_id="team1",
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._assert_can_manage_team_mcp_server",
+                AsyncMock(side_effect=HTTPException(status_code=403, detail="Not in team")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await remove_mcp_server(
+                    server_id="server_not_in_team", user_api_key_dict=user_auth
+                )
+            assert exc_info.value.status_code == 403
+
+    async def test_remove_mcp_server_from_team_helper(self):
+        """_remove_mcp_server_from_team should update the permission list without the deleted server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _remove_mcp_server_from_team,
+        )
+
+        mock_team = LiteLLM_TeamTableCachedObj(
+            team_id="team1",
+            members_with_roles=[
+                Member(user_id="user1", role="mcp_server_manager"),
+            ],
+            object_permission_id="perm1",
+        )
+        mock_team.object_permission = MagicMock(
+            mcp_servers=["server1", "server2", "server3"]
+        )
+
+        mock_handle_common = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.handle_update_object_permission_common",
+                mock_handle_common,
+            ),
+        ):
+            await _remove_mcp_server_from_team(
+                server_id="server2",
+                team_obj=mock_team,
+            )
+
+            mock_handle_common.assert_called_once()
+            call_kwargs = mock_handle_common.call_args.kwargs
+            updated_servers = call_kwargs["data_json"]["object_permission"]["mcp_servers"]
+            assert "server2" not in updated_servers
+            assert "server1" in updated_servers
+            assert "server3" in updated_servers
+            assert call_kwargs["existing_object_permission_id"] == "perm1"
