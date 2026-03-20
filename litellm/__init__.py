@@ -358,7 +358,7 @@ model_cost_map_url: str = os.getenv(
 )
 blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
+    "https://docs.litellm.ai/blog/rss.xml",
 )
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
@@ -1465,9 +1465,15 @@ if TYPE_CHECKING:
     from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
     from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
     from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
-    from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
-    from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
-    from .llms.sagemaker.nova.transformation import SagemakerNovaConfig as SagemakerNovaConfig
+    from .llms.sagemaker.completion.transformation import (
+        SagemakerConfig as SagemakerConfig,
+    )
+    from .llms.sagemaker.chat.transformation import (
+        SagemakerChatConfig as SagemakerChatConfig,
+    )
+    from .llms.sagemaker.nova.transformation import (
+        SagemakerNovaConfig as SagemakerNovaConfig,
+    )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from .llms.anthropic.experimental_pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
