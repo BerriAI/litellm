@@ -9,6 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
 import asyncio
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
@@ -416,9 +417,11 @@ async def common_checks(  # noqa: PLR0915
                 team_model_aliases=valid_token.team_model_aliases
                 if valid_token
                 else None,
+                valid_token=valid_token,
             ):
+                effective_models = get_effective_team_models(team_object, valid_token)
                 raise ProxyException(
-                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
+                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {effective_models}",
                     type=ProxyErrorTypes.team_model_access_denied,
                     param="model",
                     code=status.HTTP_401_UNAUTHORIZED,
@@ -2690,11 +2693,52 @@ def can_org_access_model(
     )
 
 
+def get_effective_team_models(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth] = None,
+) -> List[str]:
+    """
+    Returns the effective list of models for a team member.
+    The union of:
+    - team_object.default_models (OR valid_token.team_default_models if available)
+    - team_membership.models (OR valid_token.team_member_models if available)
+
+    If the result is empty, falls back to team_object.models.
+    """
+    if not (
+        litellm.team_model_overrides_enabled
+        or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
+    ):
+        return team_object.models if team_object else []
+
+    effective_models: List[str] = []
+
+    # Get from team defaults
+    team_defaults = []
+    if team_object and team_object.default_models:
+        team_defaults = team_object.default_models
+    elif valid_token and valid_token.team_default_models:
+        team_defaults = valid_token.team_default_models
+
+    # Get from member specific overrides
+    member_models = []
+    if valid_token and valid_token.team_member_models:
+        member_models = valid_token.team_member_models
+
+    effective_models = list(set(team_defaults + member_models))
+
+    if not effective_models:
+        return team_object.models if team_object else []
+
+    return effective_models
+
+
 async def can_team_access_model(
     model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    valid_token: Optional[UserAPIKeyAuth] = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -2702,11 +2746,12 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    effective_models = get_effective_team_models(team_object, valid_token)
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=effective_models,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             object_type="team",

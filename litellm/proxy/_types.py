@@ -1611,6 +1611,16 @@ class Member(MemberBase):
     ] = Field(
         description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
     )
+    models: Optional[List[str]] = Field(
+        default=None,
+        description="Specific models this member can access within the team. If provided, these will be used in addition to the team's default models.",
+    )
+    tpm_limit: Optional[int] = Field(
+        default=None, description="Tokens per minute limit for this team member"
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None, description="Requests per minute limit for this team member"
+    )
 
 
 class OrgMember(MemberBase):
@@ -1642,6 +1652,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    default_models: List[str] = []
 
 
 class NewTeamRequest(TeamBase):
@@ -1719,6 +1730,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    default_models: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
@@ -2387,6 +2399,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: Optional[str] = None
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
+    team_member_models: Optional[List[str]] = None
+    team_default_models: Optional[List[str]] = None
     team_max_budget: Optional[float] = None
     team_soft_budget: Optional[float] = None
     team_models: List = []
@@ -3607,6 +3621,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     team_id: str
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
+    models: List[str] = []
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
@@ -3729,6 +3744,7 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
+    models: Optional[List[str]] = None
     tpm_limit: Optional[int] = Field(
         default=None, description="Tokens per minute limit for this team member"
     )
@@ -3739,6 +3755,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
+    models: Optional[List[str]] = None
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None

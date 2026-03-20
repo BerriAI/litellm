@@ -2424,6 +2424,19 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    ### validate member model overrides are within team.models (when restricted)
+    if data.models and existing_team_row.models:
+        disallowed = set(data.models) - set(existing_team_row.models)
+        if disallowed:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Member model overrides must be a subset of team models. "
+                    f"Disallowed: {sorted(disallowed)}. "
+                    f"Team models: {sorted(existing_team_row.models)}"
+                },
+            )
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2435,6 +2448,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            models=data.models,
         )
 
     ### update team member role
@@ -2464,6 +2478,7 @@ async def team_member_update(
         team_id=data.team_id,
         user_id=received_user_id,
         user_email=data.user_email,
+        models=data.models,
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,

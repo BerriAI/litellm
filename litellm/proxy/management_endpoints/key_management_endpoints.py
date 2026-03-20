@@ -636,6 +636,44 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
+    # [TEAM MODEL OVERRIDES] Handle effective team models for the key
+    if (
+        litellm.team_model_overrides_enabled
+        or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
+    ) and team_table is not None:
+        # Determine member models for THIS specific user being assigned to the key
+        member_obj = _get_user_in_team(team_table=team_table, user_id=data.user_id)
+        member_models = (
+            getattr(member_obj, "models", [])
+            if member_obj and getattr(member_obj, "models", None)
+            else []
+        )
+        team_default_models = (
+            getattr(team_table, "default_models", [])
+            if team_table and getattr(team_table, "default_models", None)
+            else []
+        )
+        effective_models = list(set(team_default_models + member_models))
+
+        if effective_models:
+            # if 'all-team-models' was requested, restrict it to the effective models
+            if "all-team-models" in (data.models or []):
+                data_json["models"] = effective_models
+            # if explicit models were requested, validate they're a subset of effective set
+            elif data.models:
+                disallowed = set(data.models) - set(effective_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Requested models not in user's effective team models. "
+                            f"Disallowed: {sorted(disallowed)}. "
+                            f"Effective models: {sorted(effective_models)}"
+                        },
+                    )
+            # if NO models was requested, runtime auth will compute effective models
+            # from the SQL view join (tm.models + t.default_models), so nothing to store here
+
     data_json = handle_key_type(data, data_json)
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users

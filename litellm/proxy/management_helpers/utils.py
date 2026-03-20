@@ -208,28 +208,48 @@ async def add_new_member(
 
     # Check if trying to set a budget for team member
 
-    if max_budget_in_team is not None:
+    if (
+        max_budget_in_team is not None
+        or new_member.tpm_limit is not None
+        or new_member.rpm_limit is not None
+    ):
         # create a new budget item for this member
+        _budget_create_data = {
+            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        }
+        if max_budget_in_team is not None:
+            _budget_create_data["max_budget"] = max_budget_in_team
+        if new_member.tpm_limit is not None:
+            _budget_create_data["tpm_limit"] = new_member.tpm_limit
+        if new_member.rpm_limit is not None:
+            _budget_create_data["rpm_limit"] = new_member.rpm_limit
+
         response = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": max_budget_in_team,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
+            data=_budget_create_data  # type: ignore
         )
 
         _budget_id = response.budget_id
     else:
         _budget_id = default_team_budget_id
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
+    if (
+        (_budget_id or new_member.models)
+        and returned_user is not None
+        and returned_user.user_id is not None
+    ):
+        membership_create_data = {
+            "team_id": team_id,
+            "user_id": returned_user.user_id,
+        }
+        if _budget_id:
+            membership_create_data["budget_id"] = _budget_id
+        if new_member.models:
+            membership_create_data["models"] = new_member.models
+
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
-                data={
-                    "team_id": team_id,
-                    "user_id": returned_user.user_id,
-                    "budget_id": _budget_id,
-                },
+                data=membership_create_data,  # type: ignore
                 include={"litellm_budget_table": True},
             )
         )
