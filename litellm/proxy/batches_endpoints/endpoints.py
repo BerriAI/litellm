@@ -506,6 +506,7 @@ async def retrieve_batch(  # noqa: PLR0915
                 )
                 if model_id_from_batch:
                     response._hidden_params["model_id"] = model_id_from_batch
+                    encode_batch_response_ids(response, model=model_id_from_batch)
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
