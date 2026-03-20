@@ -232,7 +232,9 @@ class LiteLLMCompletionResponsesConfig:
 
         # only pass non-None values
         litellm_completion_request = {
-            k: v for k, v in litellm_completion_request.items() if v is not None
+            k: v
+            for k, v in litellm_completion_request.items()
+            if v is not None
         }
         return litellm_completion_request
 
