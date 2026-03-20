@@ -21,7 +21,10 @@ def cost_per_token(
     from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 
     return generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="gemini", service_tier=service_tier
+        model=model,
+        usage=usage,
+        custom_llm_provider="gemini",
+        service_tier=service_tier,
     )
 
 

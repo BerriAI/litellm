@@ -44,6 +44,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
+    DYNAMOAI = "dynamoai"
     GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
@@ -78,6 +79,7 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    MCP_JWT_SIGNER = "mcp_jwt_signer"
 
 
 class Role(Enum):

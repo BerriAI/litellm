@@ -113,6 +113,7 @@ class HealthCheckCacheParams(BaseModel):
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
+
     embedding: Optional[List[float]]
     index: Optional[int]
     object: Optional[str]

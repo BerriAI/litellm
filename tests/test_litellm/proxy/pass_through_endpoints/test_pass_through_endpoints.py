@@ -2383,7 +2383,7 @@ def test_mapped_pass_through_routes_with_server_root_path():
     )
 
     with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+        "litellm.proxy.utils.get_server_root_path"
     ) as mock_get_root:
         mock_get_root.return_value = "/litellm"
 
@@ -2410,12 +2410,13 @@ def test_mapped_pass_through_routes_with_server_root_path():
         )
 
 
+
 @pytest.mark.asyncio
 async def test_multipart_passthrough_preserves_boundary():
     """
     Test that multipart/form-data requests through passthrough preserve the boundary
     and can be correctly parsed by the upstream server.
-    
+
     Regression test for multipart boundary stripping issue.
     """
     from io import BytesIO
@@ -2426,41 +2427,41 @@ async def test_multipart_passthrough_preserves_boundary():
     mock_response.headers = httpx.Headers({"content-type": "application/json"})
     mock_response.aread = AsyncMock(return_value=b'{"filename": "test.txt", "size": 17}')
     mock_response.text = '{"filename": "test.txt", "size": 17}'
-    
+
     async def mock_httpx_request(method, url, **kwargs):
         # Verify that files parameter is passed (not json)
         assert "files" in kwargs, "Files should be passed for multipart requests"
         assert "file" in kwargs["files"], "File field should be in files dict"
-        
+
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
         assert "content-type" not in headers, "content-type should be removed for multipart"
-        
+
         filename, content, content_type = kwargs["files"]["file"]
         assert filename == "test.txt"
         assert content == b"test file content"
         assert content_type == "text/plain"
-        
+
         return mock_response
-    
+
     async_client = MagicMock()
     async_client.request = AsyncMock(side_effect=mock_httpx_request)
-    
+
     # Create mock request
     request = MagicMock(spec=Request)
     request.method = "POST"
     request.headers = Headers({"content-type": "multipart/form-data; boundary=test123"})
-    
+
     # Mock form data
     file_content = b"test file content"
     file = BytesIO(file_content)
     headers = Headers({"content-type": "text/plain"})
     upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
     upload_file.read = AsyncMock(return_value=file_content)
-    
+
     form_data = {"file": upload_file}
     request.form = AsyncMock(return_value=form_data)
-    
+
     # Test the multipart handler directly
     response = await HttpPassThroughEndpointHelpers.make_multipart_http_request(
         request=request,
@@ -2469,7 +2470,7 @@ async def test_multipart_passthrough_preserves_boundary():
         headers={},
         requested_query_params=None,
     )
-    
+
     # Verify the response
     assert response.status_code == 200
     async_client.request.assert_called_once()

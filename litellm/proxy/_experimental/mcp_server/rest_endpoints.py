@@ -1,6 +1,6 @@
 import importlib
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Union
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -119,7 +119,9 @@ if MCP_AVAILABLE:
                 prisma_client = get_prisma_client_or_throw(
                     "Database not connected. Connect a database to use OAuth2 MCP tools."
                 )
-                cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+                cred = await get_user_oauth_credential(
+                    prisma_client, user_id, server_id
+                )
             if cred and cred.get("access_token"):
                 if is_oauth_credential_expired(cred):
                     verbose_logger.debug(
@@ -192,7 +194,9 @@ if MCP_AVAILABLE:
                 if c.get("access_token") and c.get("server_id")
             }
         except Exception:
-            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
+            verbose_logger.debug(
+                "Failed to bulk-fetch OAuth credentials", exc_info=True
+            )
             return {}
 
     def _create_tool_response_objects(tools, server_mcp_info):
@@ -356,7 +360,187 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
 
+    async def _list_tools_for_single_server(
+        server_id: str,
+        allowed_server_ids: List[str],
+        rest_client_ip: Optional[str],
+        mcp_server_auth_headers: dict,
+        mcp_auth_header: Optional[str],
+        raw_headers_from_request: dict,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> dict:
+        """
+        Resolve and fetch tools for a single specified MCP server.
+
+        Returns the full REST response dict (tools / error / message).
+        Raises HTTPException on access / IP-filter errors.
+        """
+        # Resolve a server name to its UUID if needed
+        _name_resolved = None
+        if server_id not in allowed_server_ids:
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            if _name_resolved is not None and _name_resolved.server_id in set(
+                allowed_server_ids
+            ):
+                server_id = _name_resolved.server_id
+
+        if server_id not in allowed_server_ids:
+            _server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                or _name_resolved
+            )
+            if (
+                _server is not None
+                and rest_client_ip is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    _server, rest_client_ip
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "ip_filtering",
+                        "message": (
+                            f"MCP server '{server_id}' is not accessible from your IP address "
+                            f"({rest_client_ip}). This server is restricted to internal "
+                            "networks only. To make it externally accessible, set "
+                            "'available_on_public_internet: true' in the server configuration."
+                        ),
+                    },
+                )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_id}",
+                },
+            )
+
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None:
+            return {
+                "tools": [],
+                "error": "server_not_found",
+                "message": f"Server with id {server_id} not found",
+            }
+
+        server_auth_header = _get_server_auth_header(
+            server, mcp_server_auth_headers, mcp_auth_header
+        )
+        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+            server, user_api_key_dict
+        )
+
+        try:
+            tools = await _get_tools_for_single_server(
+                server,
+                server_auth_header,
+                raw_headers_from_request,
+                user_api_key_dict,
+                extra_headers=user_oauth_extra_headers,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+            return {
+                "tools": [],
+                "error": "server_error",
+                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+            }
+
+        return {
+            "tools": tools,
+            "error": None,
+            "message": "Successfully retrieved tools",
+        }
+
     ########################################################
+
+    async def _list_tools_for_single_server(
+        server_id: str,
+        allowed_server_ids: List[str],
+        rest_client_ip: Optional[str],
+        mcp_server_auth_headers: dict,
+        mcp_auth_header: Optional[str],
+        raw_headers_from_request: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> dict:
+        """Handle tool listing for a single server_id request."""
+        # Resolve a server name to its UUID if needed
+        _name_resolved = None
+        if server_id not in allowed_server_ids:
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            if _name_resolved is not None and _name_resolved.server_id in set(
+                allowed_server_ids
+            ):
+                server_id = _name_resolved.server_id
+
+        if server_id not in allowed_server_ids:
+            _server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                or _name_resolved
+            )
+            if (
+                _server is not None
+                and rest_client_ip is not None
+                and not global_mcp_server_manager._is_server_accessible_from_ip(
+                    _server, rest_client_ip
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "ip_filtering",
+                        "message": (
+                            f"MCP server '{server_id}' is not accessible from your IP address "
+                            f"({rest_client_ip}). This server is restricted to internal "
+                            "networks only. To make it externally accessible, set "
+                            "'available_on_public_internet: true' in the server configuration."
+                        ),
+                    },
+                )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_id}",
+                },
+            )
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None:
+            return {
+                "tools": [],
+                "error": "server_not_found",
+                "message": f"Server with id {server_id} not found",
+            }
+
+        server_auth_header = _get_server_auth_header(
+            server, mcp_server_auth_headers, mcp_auth_header
+        )
+        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+            server, user_api_key_dict
+        )
+
+        try:
+            list_tools_result = await _get_tools_for_single_server(
+                server,
+                server_auth_header,
+                raw_headers_from_request,
+                user_api_key_dict,
+                extra_headers=user_oauth_extra_headers,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+            return {
+                "tools": [],
+                "error": "server_error",
+                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+            }
+        return {
+            "tools": list_tools_result,
+            "error": None,
+            "message": "Successfully retrieved tools",
+        }
+
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
@@ -411,10 +595,11 @@ if MCP_AVAILABLE:
                 )
                 allowed_server_ids_set.update(servers)
 
-            allowed_server_ids, _ip_blocked_count = (
-                global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-                    list(allowed_server_ids_set), _rest_client_ip
-                )
+            (
+                allowed_server_ids,
+                _ip_blocked_count,
+            ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                list(allowed_server_ids_set), _rest_client_ip
             )
 
             list_tools_result = []
@@ -422,80 +607,15 @@ if MCP_AVAILABLE:
 
             # If server_id is specified, only query that specific server
             if server_id:
-                # Resolve a server name to its UUID if needed (MCPConnectPicker passes
-                # server_name strings, but allowed_server_ids_set contains UUIDs).
-                # _name_resolved is kept so the second check can reuse it for accurate
-                # IP-filter error reporting if the resolved UUID is not in allowed_server_ids.
-                _name_resolved = None
-                if server_id not in allowed_server_ids:
-                    _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-                    if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
-                        server_id = _name_resolved.server_id
-
-                if server_id not in allowed_server_ids:
-                    # Try UUID lookup first; fall back to the name-resolved server so that
-                    # IP-filter reporting works correctly even when server_id is a name string.
-                    _server = (
-                        global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                        or _name_resolved
-                    )
-                    if (
-                        _server is not None
-                        and _rest_client_ip is not None
-                        and not global_mcp_server_manager._is_server_accessible_from_ip(
-                            _server, _rest_client_ip
-                        )
-                    ):
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "error": "ip_filtering",
-                                "message": (
-                                    f"MCP server '{server_id}' is not accessible from your IP address "
-                                    f"({_rest_client_ip}). This server is restricted to internal "
-                                    "networks only. To make it externally accessible, set "
-                                    "'available_on_public_internet: true' in the server configuration."
-                                ),
-                            },
-                        )
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "access_denied",
-                            "message": f"The key is not allowed to access server {server_id}",
-                        },
-                    )
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server is None:
-                    return {
-                        "tools": [],
-                        "error": "server_not_found",
-                        "message": f"Server with id {server_id} not found",
-                    }
-
-                server_auth_header = _get_server_auth_header(
-                    server, mcp_server_auth_headers, mcp_auth_header
+                return await _list_tools_for_single_server(
+                    server_id=server_id,
+                    allowed_server_ids=allowed_server_ids,
+                    rest_client_ip=_rest_client_ip,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    raw_headers_from_request=raw_headers_from_request,
+                    user_api_key_dict=user_api_key_dict,
                 )
-                # Single-server request: targeted lookup is more efficient than a bulk fetch.
-                user_oauth_extra_headers = await _get_user_oauth_extra_headers(server, user_api_key_dict)
-
-                try:
-                    list_tools_result = await _get_tools_for_single_server(
-                        server,
-                        server_auth_header,
-                        raw_headers_from_request,
-                        user_api_key_dict,
-                        extra_headers=user_oauth_extra_headers,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(
-                        f"Error getting tools from {server.name}: {e}"
-                    )
-                    return {
-                        "tools": [],
-                        "error": "server_error",
-                        "message": f"Failed to get tools from server {server.name}: {str(e)}",
-                    }
             else:
                 if not allowed_server_ids:
                     if _ip_blocked_count > 0:
@@ -540,7 +660,9 @@ if MCP_AVAILABLE:
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(
-                        server, user_api_key_dict, prefetched_creds=prefetched_oauth_creds
+                        server,
+                        user_api_key_dict,
+                        prefetched_creds=prefetched_oauth_creds,
                     )
 
                     try:
@@ -632,21 +754,24 @@ if MCP_AVAILABLE:
             tool_arguments = data.get("arguments")
 
             proxy_base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-            data, logging_obj = (
-                await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                    request=request,
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_config=proxy_config,
-                    route_type=CallTypes.call_mcp_tool.value,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                )
+            (
+                data,
+                logging_obj,
+            ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+                route_type=CallTypes.call_mcp_tool.value,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
             )
 
             # Extract MCP auth headers from request and add to data dict
-            mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request = (
-                _extract_mcp_headers_from_request(request, MCPRequestHandler)
-            )
+            (
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                raw_headers_from_request,
+            ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
@@ -745,7 +870,9 @@ if MCP_AVAILABLE:
         client_id: Optional[str] = creds.get("client_id")
         client_secret: Optional[str] = creds.get("client_secret")
         scopes_raw = creds.get("scopes")
-        scopes: Optional[List[str]] = scopes_raw if isinstance(scopes_raw, list) else None
+        scopes: Optional[List[str]] = (
+            scopes_raw if isinstance(scopes_raw, list) else None
+        )
         return client_id, client_secret, scopes
 
     async def _execute_with_mcp_client(
@@ -776,6 +903,18 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
+            _oauth2_flow: Optional[
+                Literal["client_credentials", "authorization_code"]
+            ] = request.oauth2_flow or (
+                "client_credentials"
+                if client_id and client_secret and request.token_url
+                else None
+            )
+            # client_credentials requires token_url to fetch a token; without it the
+            # incoming auth header would be dropped with nothing to replace it.
+            if _oauth2_flow == "client_credentials" and not request.token_url:
+                _oauth2_flow = None
+
             server_model = MCPServer(
                 server_id=request.server_id or "",
                 name=request.alias or request.server_name or "",
@@ -793,6 +932,7 @@ if MCP_AVAILABLE:
                 scopes=scopes,
                 authorization_url=request.authorization_url,
                 registration_url=request.registration_url,
+                oauth2_flow=_oauth2_flow,
             )
 
             stdio_env = global_mcp_server_manager._build_stdio_env(
@@ -848,7 +988,9 @@ if MCP_AVAILABLE:
                     if operation is None:
                         continue
 
-                    resolved_op = resolve_operation_params(operation, path_item, components)
+                    resolved_op = resolve_operation_params(
+                        operation, path_item, components
+                    )
 
                     op_id = operation.get("operationId", f"{method}_{path}")
                     summary = operation.get("summary", "")
@@ -857,7 +999,9 @@ if MCP_AVAILABLE:
                     tools.append(
                         {
                             "name": op_id,
-                            "description": description or summary or f"{method.upper()} {path}",
+                            "description": description
+                            or summary
+                            or f"{method.upper()} {path}",
                             "inputSchema": input_schema,
                         }
                     )

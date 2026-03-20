@@ -101,10 +101,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         """
         if prompt is None:
             raise ValueError("FLUX 2 image edit requires a prompt.")
-        
+
         if image is None:
             raise ValueError("FLUX 2 image edit requires an image.")
-        
+
         image_b64 = self._convert_image_to_base64(image)
 
         # Build request body with required params
@@ -170,4 +170,3 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             model=model,
             api_version=api_version,
         )
-

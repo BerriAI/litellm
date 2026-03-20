@@ -165,7 +165,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
-        bucket_name = litellm_params.get("bucket_name") or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None) or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = (
+            litellm_params.get("bucket_name")
+            or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None)
+            or os.getenv("GCS_BUCKET_NAME")
+        )
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         file_data = data.get("file")
@@ -410,6 +414,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             url = str(raw_response.request.url)
             if "/b/" in url and "/o/" in url:
                 import urllib.parse
+
                 bucket_part = url.split("/b/")[-1].split("/o/")[0]
                 encoded_name = url.split("/o/")[-1].split("?")[0]
                 file_id = f"gs://{bucket_part}/{urllib.parse.unquote(encoded_name)}"

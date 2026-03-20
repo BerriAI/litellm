@@ -81,7 +81,7 @@ class BaseFilesConfig(BaseConfig):
     ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
         """
         Transform OpenAI-style file creation request into provider-specific format.
-        
+
         Returns:
             - dict: For pre-signed single-step uploads (e.g., Bedrock S3)
             - str/bytes: For traditional file uploads

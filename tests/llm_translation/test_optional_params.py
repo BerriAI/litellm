@@ -769,7 +769,7 @@ def test_parse_additional_properties_json_schema(model, provider, expectedAddPro
 
 def test_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview-2024-09-12",
+        model="o1-2024-12-17",
         custom_llm_provider="openai",
         seed=10,
         user="John",
@@ -780,7 +780,7 @@ def test_o1_model_params():
 
 def test_azure_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview",
+        model="o1",
         custom_llm_provider="azure",
         seed=10,
         user="John",
@@ -798,13 +798,13 @@ def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview",
+                model="o1",
                 custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
         get_optional_params(
-            model="o1-preview-2024-09-12",
+            model="o1-2024-12-17",
             custom_llm_provider="openai",
             temperature=temperature,
         )

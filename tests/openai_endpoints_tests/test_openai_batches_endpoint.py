@@ -400,6 +400,8 @@ async def test_batch_status_sync_from_provider_to_database():
     assert update_call_args.kwargs["data"]["status"] == "complete"  # "completed" normalized to "complete"
     assert "file_object" in update_call_args.kwargs["data"]
     assert "updated_at" in update_call_args.kwargs["data"]
+    # batch_processed must be set to True when batch transitions to complete
+    assert update_call_args.kwargs["data"]["batch_processed"] is True
     
     # Verify logger was called with status change message
     mock_logger.info.assert_called()

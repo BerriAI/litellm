@@ -3,10 +3,15 @@ from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
-from litellm.proxy._types import (DBSpendUpdateTransactions,
-                                  Litellm_EntityType, SpendUpdateQueueItem)
+from litellm.proxy._types import (
+    DBSpendUpdateTransactions,
+    Litellm_EntityType,
+    SpendUpdateQueueItem,
+)
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
-    BaseUpdateQueue, service_logger_obj)
+    BaseUpdateQueue,
+    service_logger_obj,
+)
 from litellm.types.services import ServiceTypes
 
 

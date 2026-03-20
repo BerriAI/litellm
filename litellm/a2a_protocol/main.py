@@ -120,9 +120,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details["custom_llm_provider"] = (
-            custom_llm_provider
-        )
+        litellm_logging_obj.model_call_details[
+            "custom_llm_provider"
+        ] = custom_llm_provider
 
     return agent_name
 
@@ -664,9 +664,7 @@ async def create_a2a_client(
     if extra_headers:
         # Encode headers into a cache-key-only param so each unique header
         # set produces a distinct cache key.
-        _client_params["disable_aiohttp_transport"] = str(
-            sorted(extra_headers.items())
-        )
+        _client_params["disable_aiohttp_transport"] = str(sorted(extra_headers.items()))
     _async_handler = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2AProvider,
         params=_client_params,

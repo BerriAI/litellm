@@ -97,7 +97,6 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         elif isinstance(file_content_bytes, str):
             file_content_str = file_content_bytes
         else:
-
             return file_content
 
         # Parse JSONL properly, handling potential multiline JSON objects

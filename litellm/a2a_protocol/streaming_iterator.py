@@ -71,7 +71,11 @@ class A2AStreamingIterator:
     def _collect_text_from_chunk(self, chunk: Any) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            chunk_dict = (
+                chunk.model_dump(mode="json", exclude_none=True)
+                if hasattr(chunk, "model_dump")
+                else {}
+            )
             text = A2ARequestUtils.extract_text_from_response(chunk_dict)
             if text:
                 self.collected_text_parts.append(text)
@@ -81,7 +85,11 @@ class A2AStreamingIterator:
     def _is_completed_chunk(self, chunk: Any) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            chunk_dict = (
+                chunk.model_dump(mode="json", exclude_none=True)
+                if hasattr(chunk, "model_dump")
+                else {}
+            )
             result = chunk_dict.get("result", {})
             if isinstance(result, dict):
                 status = result.get("status", {})
@@ -102,7 +110,9 @@ class A2AStreamingIterator:
             prompt_tokens = A2ARequestUtils.count_tokens(input_text)
 
             # Use the last (most complete) text from chunks
-            output_text = self.collected_text_parts[-1] if self.collected_text_parts else ""
+            output_text = (
+                self.collected_text_parts[-1] if self.collected_text_parts else ""
+            )
             completion_tokens = A2ARequestUtils.count_tokens(output_text)
 
             total_tokens = prompt_tokens + completion_tokens
@@ -158,7 +168,9 @@ class A2AStreamingIterator:
         result: Dict[str, Any] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
-            "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
+            "usage": usage.model_dump()
+            if hasattr(usage, "model_dump")
+            else dict(usage),
         }
 
         # Add final chunk result if available
@@ -170,4 +182,3 @@ class A2AStreamingIterator:
                 pass
 
         return result
-

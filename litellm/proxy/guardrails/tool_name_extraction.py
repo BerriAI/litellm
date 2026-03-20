@@ -40,22 +40,28 @@ def _extract_mcp_tool_names(data: dict) -> List[str]:
 def _register_standalone_extractors() -> None:
     if STANDALONE_EXTRACTORS:
         return
-    STANDALONE_EXTRACTORS[CallTypes.generate_content.value] = _extract_generate_content_tool_names
-    STANDALONE_EXTRACTORS[CallTypes.agenerate_content.value] = _extract_generate_content_tool_names
+    STANDALONE_EXTRACTORS[
+        CallTypes.generate_content.value
+    ] = _extract_generate_content_tool_names
+    STANDALONE_EXTRACTORS[
+        CallTypes.agenerate_content.value
+    ] = _extract_generate_content_tool_names
     STANDALONE_EXTRACTORS[CallTypes.call_mcp_tool.value] = _extract_mcp_tool_names
 
 
 # Tool-capable call types (routes that can send tools in the request)
-TOOL_CAPABLE_CALL_TYPES = frozenset({
-    CallTypes.completion.value,
-    CallTypes.acompletion.value,
-    CallTypes.responses.value,
-    CallTypes.aresponses.value,
-    CallTypes.anthropic_messages.value,
-    CallTypes.generate_content.value,
-    CallTypes.agenerate_content.value,
-    CallTypes.call_mcp_tool.value,
-})
+TOOL_CAPABLE_CALL_TYPES = frozenset(
+    {
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.generate_content.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.call_mcp_tool.value,
+    }
+)
 
 
 def extract_request_tool_names(route: str, data: dict) -> List[str]:

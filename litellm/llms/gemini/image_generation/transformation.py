@@ -28,7 +28,7 @@ else:
 
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -36,11 +36,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Google AI Imagen API supported parameters
         https://ai.google.dev/gemini-api/docs/imagen
         """
-        return [
-            "n",
-            "size"
-        ]
-    
+        return ["n", "size"]
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -50,7 +47,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         mapped_params = {}
-        
+
         for k, v in non_default_params.items():
             if k not in optional_params.keys():
                 if k in supported_params:
@@ -61,9 +58,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                         # Map OpenAI size format to Google aspectRatio
                         mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
                     else:
-                        mapped_params[k] = v        
+                        mapped_params[k] = v
         return mapped_params
-    
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
         """
@@ -72,13 +68,13 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         aspect_ratio_map = {
             "1024x1024": "1:1",
-            "1792x1024": "16:9", 
+            "1792x1024": "16:9",
             "1024x1792": "9:16",
             "1280x896": "4:3",
             "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
-    
+
     def _transform_image_usage(self, usage_metadata: dict) -> ImageUsage:
         """
         Transform Gemini usageMetadata to ImageUsage format
@@ -87,7 +83,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             image_tokens=0,
             text_tokens=0,
         )
-        
+
         # Extract detailed token counts from promptTokensDetails
         tokens_details = usage_metadata.get("promptTokensDetails", [])
         for details in tokens_details:
@@ -98,7 +94,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     input_tokens_details.text_tokens = token_count
                 elif modality == "IMAGE":
                     input_tokens_details.image_tokens = token_count
-        
+
         return ImageUsage(
             input_tokens=usage_metadata.get("promptTokenCount", 0),
             input_tokens_details=input_tokens_details,
@@ -122,9 +118,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Other Imagen models: :predict
         """
         complete_url: str = (
-            api_base
-            or get_secret_str("GEMINI_API_BASE")
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
@@ -148,13 +142,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("GEMINI_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
-        
+
         headers["x-goog-api-key"] = final_api_key
         headers["Content-Type"] = "application/json"
         return headers
@@ -187,16 +178,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         # For Gemini Flash Image Preview models, use standard Gemini format
         if "gemini" in model:
             request_body: dict = {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt}
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "response_modalities": ["IMAGE", "TEXT"]
-                }
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"response_modalities": ["IMAGE", "TEXT"]},
             }
             return request_body
         else:
@@ -205,13 +188,12 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 GeminiImageGenerationInstance,
                 GeminiImageGenerationParameters,
             )
-            request_body_obj: GeminiImageGenerationRequest = GeminiImageGenerationRequest(
-                instances=[
-                    GeminiImageGenerationInstance(
-                        prompt=prompt
-                    )
-                ],
-                parameters=GeminiImageGenerationParameters(**optional_params)
+
+            request_body_obj: GeminiImageGenerationRequest = (
+                GeminiImageGenerationRequest(
+                    instances=[GeminiImageGenerationInstance(prompt=prompt)],
+                    parameters=GeminiImageGenerationParameters(**optional_params),
+                )
             )
             return request_body_obj.model_dump(exclude_none=True)
 
@@ -239,7 +221,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
 
@@ -256,22 +238,32 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                         inline_data = part["inlineData"]
                         if "data" in inline_data:
                             thought_sig = part.get("thoughtSignature")
-                            model_response.data.append(ImageObject(
-                                b64_json=inline_data["data"],
-                                url=None,
-                                provider_specific_fields={"thought_signature": thought_sig} if thought_sig else None,
-                            ))
-            
+                            model_response.data.append(
+                                ImageObject(
+                                    b64_json=inline_data["data"],
+                                    url=None,
+                                    provider_specific_fields={
+                                        "thought_signature": thought_sig
+                                    }
+                                    if thought_sig
+                                    else None,
+                                )
+                            )
+
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
-                model_response.usage = self._transform_image_usage(response_data["usageMetadata"])
+                model_response.usage = self._transform_image_usage(
+                    response_data["usageMetadata"]
+                )
         else:
             # Original Imagen format - predictions with generated images
             predictions = response_data.get("predictions", [])
             for prediction in predictions:
                 # Google AI returns base64 encoded images in the prediction
-                model_response.data.append(ImageObject(
-                    b64_json=prediction.get("bytesBase64Encoded", None),
-                    url=None,  # Google AI returns base64, not URLs
-                ))
+                model_response.data.append(
+                    ImageObject(
+                        b64_json=prediction.get("bytesBase64Encoded", None),
+                        url=None,  # Google AI returns base64, not URLs
+                    )
+                )
         return model_response

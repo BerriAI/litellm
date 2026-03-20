@@ -85,7 +85,9 @@ async def process_spend_logs_guardrail_usage(
         date_key = _date_str(start_time)
 
         for entry in _parse_guardrail_info_from_payload(payload):
-            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
+            guardrail_id = (
+                entry.get("guardrail_id") or entry.get("guardrail_name") or ""
+            )
             if not guardrail_id:
                 continue
             key = (guardrail_id, date_key)
@@ -98,12 +100,14 @@ async def process_spend_logs_guardrail_usage(
             else:
                 daily_guardrail[key]["flagged_count"] += 1
             policy_id = entry.get("policy_id")
-            index_rows.append({
-                "request_id": request_id,
-                "guardrail_id": guardrail_id,
-                "policy_id": policy_id,
-                "start_time": start_time,
-            })
+            index_rows.append(
+                {
+                    "request_id": request_id,
+                    "guardrail_id": guardrail_id,
+                    "policy_id": policy_id,
+                    "start_time": start_time,
+                }
+            )
 
     if not daily_guardrail and not index_rows:
         return
@@ -119,12 +123,14 @@ async def process_spend_logs_guardrail_usage(
                         st = datetime.fromisoformat(st.replace("Z", "+00:00"))
                     except (ValueError, TypeError):
                         continue
-                index_data.append({
-                    "request_id": r["request_id"],
-                    "guardrail_id": r["guardrail_id"],
-                    "policy_id": r.get("policy_id"),
-                    "start_time": st,
-                })
+                index_data.append(
+                    {
+                        "request_id": r["request_id"],
+                        "guardrail_id": r["guardrail_id"],
+                        "policy_id": r.get("policy_id"),
+                        "start_time": st,
+                    }
+                )
             try:
                 await prisma_client.db.litellm_spendlogguardrailindex.create_many(
                     data=index_data,
