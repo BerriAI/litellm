@@ -5,7 +5,7 @@
 
 ######################################################################
 import asyncio
-from typing import Dict, Optional, cast
+from typing import Any, Dict, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -655,7 +655,7 @@ async def list_batches(
             managed_files_obj, "list_user_batches"
         ):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
-            response = await managed_files_obj.list_user_batches(
+            response = await cast(Any, managed_files_obj).list_user_batches(
                 user_api_key_dict=user_api_key_dict,
                 limit=limit,
                 after=after,
@@ -686,8 +686,9 @@ async def list_batches(
 
             # Encode batch IDs in the list response so clients can use
             # them for retrieve/cancel/file downloads through the proxy.
-            if response and hasattr(response, "data") and response.data:
-                for batch in response.data:
+            response_data = getattr(response, "data", None)
+            if response_data:
+                for batch in response_data:
                     encode_batch_response_ids(batch, model=model_param)
 
             verbose_proxy_logger.debug(f"Listed batches using model: {model_param}")
@@ -897,7 +898,11 @@ async def cancel_batch(
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
             custom_llm_provider = (
-                provider or data.pop("custom_llm_provider", None) or "openai"
+                provider
+                or data.pop("custom_llm_provider", None)
+                or get_custom_llm_provider_from_request_headers(request=request)
+                or get_custom_llm_provider_from_request_query(request=request)
+                or "openai"
             )
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
