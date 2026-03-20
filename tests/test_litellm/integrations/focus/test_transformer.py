@@ -30,32 +30,53 @@ def _make_row(**overrides) -> dict:
     return base
 
 
-def test_service_name_uses_model_group_when_present():
-    row = _make_row(model_group="sonnet-group", model="claude-sonnet")
+def test_service_name_uses_custom_llm_provider_when_present():
+    row = _make_row(custom_llm_provider="anthropic", model="claude-sonnet")
     frame = pl.DataFrame([row])
     result = FocusTransformer().transform(frame)
-    assert result["ServiceName"][0] == "sonnet-group"
+    assert result["ServiceName"][0] == "anthropic"
 
 
-def test_service_name_falls_back_to_model_when_model_group_blank():
-    row = _make_row(model_group="", model="claude-sonnet")
+def test_service_name_falls_back_to_model_when_provider_blank():
+    row = _make_row(custom_llm_provider="", model="claude-sonnet")
     frame = pl.DataFrame([row])
     result = FocusTransformer().transform(frame)
     assert result["ServiceName"][0] == "claude-sonnet"
 
 
-def test_service_name_falls_back_to_model_when_model_group_null():
-    row = _make_row(model_group=None, model="claude-sonnet")
+def test_service_name_falls_back_to_model_when_provider_null():
+    row = _make_row(custom_llm_provider=None, model="claude-sonnet")
     frame = pl.DataFrame([row])
     result = FocusTransformer().transform(frame)
     assert result["ServiceName"][0] == "claude-sonnet"
 
 
 def test_service_name_defaults_to_unknown_when_both_blank():
-    row = _make_row(model_group="", model="")
+    row = _make_row(custom_llm_provider="", model="")
     frame = pl.DataFrame([row])
     result = FocusTransformer().transform(frame)
     assert result["ServiceName"][0] == "unknown"
+
+
+def test_service_category_uses_model_group_when_present():
+    row = _make_row(model_group="sonnet-group")
+    frame = pl.DataFrame([row])
+    result = FocusTransformer().transform(frame)
+    assert result["ServiceCategory"][0] == "sonnet-group"
+
+
+def test_service_category_null_when_model_group_blank():
+    row = _make_row(model_group="")
+    frame = pl.DataFrame([row])
+    result = FocusTransformer().transform(frame)
+    assert result["ServiceCategory"][0] is None
+
+
+def test_service_category_null_when_model_group_null():
+    row = _make_row(model_group=None)
+    frame = pl.DataFrame([row])
+    result = FocusTransformer().transform(frame)
+    assert result["ServiceCategory"][0] is None
 
 
 def test_tags_include_token_counts():

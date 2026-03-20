@@ -122,13 +122,19 @@ class FocusTransformer:
             pl.col("model").cast(pl.String).alias("ResourceId"),
             pl.col("model").cast(pl.String).alias("ResourceName"),
             pl.col("model").cast(pl.String).alias("ResourceType"),
-            pl.lit("AI and Machine Learning").alias("ServiceCategory"),
-            pl.lit("Generative AI").alias("ServiceSubcategory"),
             pl.when(
                 pl.col("model_group").cast(pl.String).is_not_null()
                 & (pl.col("model_group").cast(pl.String) != "")
             )
             .then(pl.col("model_group").cast(pl.String))
+            .otherwise(none_str)
+            .alias("ServiceCategory"),
+            pl.lit("Generative AI").alias("ServiceSubcategory"),
+            pl.when(
+                pl.col("custom_llm_provider").cast(pl.String).is_not_null()
+                & (pl.col("custom_llm_provider").cast(pl.String) != "")
+            )
+            .then(pl.col("custom_llm_provider").cast(pl.String))
             .when(
                 pl.col("model").cast(pl.String).is_not_null()
                 & (pl.col("model").cast(pl.String) != "")
