@@ -188,6 +188,25 @@ async def test_endpoint(request: Request):
 
 
 @router.get(
+    "/version",
+    tags=["health"],
+    include_in_schema=True,
+)
+async def get_version():
+    """
+    Returns the current LiteLLM version.
+
+    This endpoint is unauthenticated so it can be used for operational tooling,
+    dashboards, and deployment pipelines without requiring an API key.
+
+    Returns:
+        dict: A dictionary with a single key ``version`` containing the
+              installed LiteLLM version string (e.g. ``{"version": "1.40.0"}``).
+    """
+    return {"version": litellm.__version__}
+
+
+@router.get(
     "/health/services",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
