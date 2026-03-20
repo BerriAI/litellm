@@ -215,6 +215,35 @@ def test_anthropic_messages_pass_through_includes_metadata():
     assert result.get("metadata") == {"user_id": "user-123"}
 
 
+def test_anthropic_messages_handler_forwards_metadata_through_full_flow():
+    """
+    Test that metadata flows through the full anthropic_messages_handler path
+    and reaches the HTTP handler with the correct value.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.base_llm_http_handler.anthropic_messages_handler",
+        return_value=MagicMock(),
+    ) as mock_handler:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello"}],
+                model="anthropic/claude-3-5-sonnet-20240620",
+                api_key="test-api-key",
+                metadata={"user_id": "user-123"},
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_handler.assert_called_once()
+        call_kwargs = mock_handler.call_args.kwargs
+        assert call_kwargs["anthropic_messages_optional_request_params"].get("metadata") == {"user_id": "user-123"}
+
+
 class TestThinkingParameterTransformation:
     """Core tests for thinking parameter transformation logic."""
 
