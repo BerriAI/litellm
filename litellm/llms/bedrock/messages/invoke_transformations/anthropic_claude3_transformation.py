@@ -373,13 +373,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         schema_text = {"type": "text", "text": json.dumps(schema)}
         content.append(schema_text)
 
-
     _VALID_TOOL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
     _INVALID_TOOL_ID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
-    def _sanitize_tool_use_ids(
-        self, anthropic_messages_request: Dict
-    ) -> None:
+    def _sanitize_tool_use_ids(self, anthropic_messages_request: Dict) -> None:
         """
         Sanitize tool_use IDs to match Bedrock's required pattern.
 
@@ -409,12 +406,18 @@ class AmazonAnthropicClaudeMessagesConfig(
                 block_type = block.get("type")
                 if block_type == "tool_use" and "id" in block:
                     tool_id = block["id"]
-                    if isinstance(tool_id, str) and not self._VALID_TOOL_ID_PATTERN.match(tool_id):
+                    if isinstance(
+                        tool_id, str
+                    ) and not self._VALID_TOOL_ID_PATTERN.match(tool_id):
                         block["id"] = self._INVALID_TOOL_ID_CHARS.sub("_", tool_id)
                 elif block_type == "tool_result" and "tool_use_id" in block:
                     tool_use_id = block["tool_use_id"]
-                    if isinstance(tool_use_id, str) and not self._VALID_TOOL_ID_PATTERN.match(tool_use_id):
-                        block["tool_use_id"] = self._INVALID_TOOL_ID_CHARS.sub("_", tool_use_id)
+                    if isinstance(
+                        tool_use_id, str
+                    ) and not self._VALID_TOOL_ID_PATTERN.match(tool_use_id):
+                        block["tool_use_id"] = self._INVALID_TOOL_ID_CHARS.sub(
+                            "_", tool_use_id
+                        )
 
     def transform_anthropic_messages_request(
         self,
@@ -438,9 +441,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
