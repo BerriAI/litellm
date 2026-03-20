@@ -17,6 +17,7 @@ Endpoints:
 
 import json
 import re
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -130,6 +131,31 @@ async def get_marketplace():
         )
 
 
+# Matches percent-encoded dots (%2e/%2E), slashes (%2f/%2F), and backslashes (%5c/%5C)
+# that would still be present after a single urllib.parse.unquote pass (i.e. double-encoded).
+_SUSPICIOUS_ENCODED = re.compile(r"%2[ef]|%5c", re.IGNORECASE)
+
+
+def _validate_git_subdir_path(path: str) -> None:
+    """Raise HTTPException if path contains traversal sequences."""
+    normalized = urllib.parse.unquote(path)
+    if _SUSPICIOUS_ENCODED.search(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "git-subdir 'path' must be a relative path with no '..' segments"
+            },
+        )
+    segments = normalized.split("/")
+    if normalized.startswith("/") or ".." in segments or "\\" in normalized:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "git-subdir 'path' must be a relative path with no '..' segments"
+            },
+        )
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
@@ -204,10 +230,28 @@ async def register_plugin(
                         "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
                     },
                 )
+        elif source_type == "git-subdir":
+            if not source.get("url"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "git-subdir source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
+                    },
+                )
+            if not source.get("path"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"
+                    },
+                )
+            _validate_git_subdir_path(source["path"])
         else:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "source.source must be 'github' or 'url'"},
+                detail={
+                    "error": "source.source must be 'github', 'url', or 'git-subdir'"
+                },
             )
 
         # Build manifest for storage

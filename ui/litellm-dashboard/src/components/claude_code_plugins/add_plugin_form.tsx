@@ -39,7 +39,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [sourceType, setSourceType] = useState<"github" | "url">("github");
+  const [sourceType, setSourceType] = useState<"github" | "url" | "git-subdir">("github");
 
   const handleSubmit = async (values: any) => {
     if (!accessToken) {
@@ -75,6 +75,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
       return;
     }
 
+    // Validate git URL for url/git-subdir source types
+    if ((sourceType === "url" || sourceType === "git-subdir") && values.url && !isValidUrl(values.url)) {
+      message.error("Invalid git URL format");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       // Build plugin data
@@ -85,6 +91,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
             ? {
                 source: "github",
                 repo: values.repo.trim(),
+              }
+            : sourceType === "git-subdir"
+            ? {
+                source: "git-subdir",
+                url: values.url.trim(),
+                path: values.path.trim(),
               }
             : {
                 source: "url",
@@ -138,10 +150,10 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
     onClose();
   };
 
-  const handleSourceTypeChange = (value: "github" | "url") => {
+  const handleSourceTypeChange = (value: "github" | "url" | "git-subdir") => {
     setSourceType(value);
-    // Clear repo/url fields when switching
-    form.setFieldsValue({ repo: undefined, url: undefined });
+    // Clear repo/url/path fields when switching
+    form.setFieldsValue({ repo: undefined, url: undefined, path: undefined });
   };
 
   return (
@@ -185,7 +197,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         >
           <Select onChange={handleSourceTypeChange} className="rounded-lg">
             <Option value="github">GitHub</Option>
-            <Option value="url">URL</Option>
+            <Option value="url">Git URL</Option>
+            <Option value="git-subdir">Git Subdir</Option>
           </Select>
         </Form.Item>
 
@@ -208,7 +221,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         )}
 
         {/* Git URL */}
-        {sourceType === "url" && (
+        {(sourceType === "url" || sourceType === "git-subdir") && (
           <Form.Item
             label="Git URL"
             name="url"
@@ -218,6 +231,21 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
             <Input
               type="url"
               placeholder="https://github.com/org/repo.git"
+              className="rounded-lg"
+            />
+          </Form.Item>
+        )}
+
+        {/* Git Subdir Path */}
+        {sourceType === "git-subdir" && (
+          <Form.Item
+            label="Subdirectory Path"
+            name="path"
+            rules={[{ required: true, message: "Please enter subdirectory path" }]}
+            tooltip="Path to the plugin directory within the repository (e.g., plugins/plugin-name)"
+          >
+            <Input
+              placeholder="plugins/plugin-name"
               className="rounded-lg"
             />
           </Form.Item>
