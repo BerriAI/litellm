@@ -4774,11 +4774,16 @@ class StandardLoggingPayloadSetup:
 
         # Populate requester_custom_headers from proxy_server_request
         # headers so custom x-* headers are available in logging callbacks.
-        if proxy_server_request is not None:
+        # Only set if not already populated (e.g. by enterprise middleware via
+        # the metadata copy loop above).
+        if (
+            clean_metadata["requester_custom_headers"] is None
+            and proxy_server_request is not None
+        ):
             _request_headers = proxy_server_request.get("headers", {})
             if _request_headers and isinstance(_request_headers, dict):
                 custom_headers = {
-                    k: v
+                    k.lower(): v
                     for k, v in _request_headers.items()
                     if k.lower().startswith("x-")
                     and v is not None
