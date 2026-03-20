@@ -19,6 +19,80 @@ from litellm.types.utils import LiteLLMCommonStrings
 _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
 
+def _restore_litellm_exception(cls, state):
+    """Module-level callable used by pickle to reconstruct LiteLLM exceptions.
+
+    Standard Python exception pickling calls ``cls(*self.args)`` to rebuild the
+    object.  LiteLLM exceptions require several positional arguments
+    (``message``, ``llm_provider``, ``model``, …) that are *not* stored in
+    ``self.args``, so the default protocol fails with ``TypeError``.
+    Additionally, ``response`` / ``request`` attributes hold
+    ``httpx.Response`` / ``httpx.Request`` instances which are not themselves
+    picklable.
+
+    This function reconstructs the exception via ``object.__new__`` +
+    ``__dict__`` restoration, recreating minimal httpx objects for any
+    ``response`` / ``request`` attributes that were serialised separately.
+    """
+    obj = Exception.__new__(cls)
+    # Restore Exception.args so str(obj) and repr(obj) work correctly.
+    Exception.__init__(obj, state.get("message", ""))
+
+    http_attrs = state.get("_pickled_http_attrs", [])
+    clean_state = {k: v for k, v in state.items() if not k.startswith("_pickled_")}
+    obj.__dict__.update(clean_state)
+
+    for attr in http_attrs:
+        status_key = f"_pickled_{attr}_status"
+        if status_key in state:
+            setattr(
+                obj,
+                attr,
+                httpx.Response(
+                    status_code=state[status_key],
+                    request=httpx.Request(method="GET", url="https://litellm.ai"),
+                ),
+            )
+        else:
+            setattr(obj, attr, httpx.Request(method="GET", url="https://litellm.ai"))
+
+    return obj
+
+
+class _LiteLLMPickleMixin:
+    """Mixin that makes LiteLLM exception classes safe to pickle and unpickle.
+
+    Mix this in as the *first* base class of every LiteLLM exception that
+    inherits from an openai exception or from ``Exception`` directly with
+    non-trivial ``__init__`` arguments::
+
+        class AuthenticationError(_LiteLLMPickleMixin, openai.AuthenticationError):
+            ...
+
+    Subclasses that already inherit from a LiteLLM exception (e.g.
+    ``ContextWindowExceededError(BadRequestError)``) do **not** need to list
+    this mixin explicitly — they inherit the behaviour from their parent.
+    """
+
+    def __reduce__(self):
+        return _restore_litellm_exception, (type(self), self.__getstate__())
+
+    def __getstate__(self):
+        state = {}
+        http_attrs = []
+        for k, v in self.__dict__.items():
+            if isinstance(v, httpx.Response):
+                http_attrs.append(k)
+                state[f"_pickled_{k}_status"] = v.status_code
+            elif isinstance(v, httpx.Request):
+                http_attrs.append(k)
+            else:
+                state[k] = v
+        if http_attrs:
+            state["_pickled_http_attrs"] = http_attrs
+        return state
+
+
 def _get_minimal_error_response() -> httpx.Response:
     """Get a cached minimal httpx.Response object for error cases."""
     global _MINIMAL_ERROR_RESPONSE
@@ -30,7 +104,7 @@ def _get_minimal_error_response() -> httpx.Response:
     return _MINIMAL_ERROR_RESPONSE
 
 
-class AuthenticationError(openai.AuthenticationError):  # type: ignore
+class AuthenticationError(_LiteLLMPickleMixin, openai.AuthenticationError):  # type: ignore
     def __init__(
         self,
         message,
@@ -76,7 +150,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
 
 
 # raise when invalid models passed, example gpt-8
-class NotFoundError(openai.NotFoundError):  # type: ignore
+class NotFoundError(_LiteLLMPickleMixin, openai.NotFoundError):  # type: ignore
     def __init__(
         self,
         message,
@@ -121,7 +195,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         return _message
 
 
-class BadRequestError(openai.BadRequestError):  # type: ignore
+class BadRequestError(_LiteLLMPickleMixin, openai.BadRequestError):  # type: ignore
     def __init__(
         self,
         message,
@@ -196,7 +270,7 @@ class ImageFetchError(BadRequestError):
         )
 
 
-class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
+class UnprocessableEntityError(_LiteLLMPickleMixin, openai.UnprocessableEntityError):  # type: ignore
     def __init__(
         self,
         message,
@@ -235,7 +309,7 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
         return _message
 
 
-class Timeout(openai.APITimeoutError):  # type: ignore
+class Timeout(_LiteLLMPickleMixin, openai.APITimeoutError):  # type: ignore
     def __init__(
         self,
         message,
@@ -281,7 +355,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
+class PermissionDeniedError(_LiteLLMPickleMixin, openai.PermissionDeniedError):  # type:ignore
     def __init__(
         self,
         message,
@@ -320,7 +394,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
         return _message
 
 
-class RateLimitError(openai.RateLimitError):  # type: ignore
+class RateLimitError(_LiteLLMPickleMixin, openai.RateLimitError):  # type: ignore
     def __init__(
         self,
         message,
@@ -502,7 +576,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         return _message
 
 
-class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
+class ServiceUnavailableError(_LiteLLMPickleMixin, openai.APIStatusError):  # type: ignore
     def __init__(
         self,
         message,
@@ -552,7 +626,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class BadGatewayError(openai.APIStatusError):  # type: ignore
+class BadGatewayError(_LiteLLMPickleMixin, openai.APIStatusError):  # type: ignore
     def __init__(
         self,
         message,
@@ -602,7 +676,7 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class InternalServerError(openai.InternalServerError):  # type: ignore
+class InternalServerError(_LiteLLMPickleMixin, openai.InternalServerError):  # type: ignore
     def __init__(
         self,
         message,
@@ -653,7 +727,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
 
 
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
-class APIError(openai.APIError):  # type: ignore
+class APIError(_LiteLLMPickleMixin, openai.APIError):  # type: ignore
     def __init__(
         self,
         status_code: int,
@@ -694,7 +768,7 @@ class APIError(openai.APIError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIConnectionError(openai.APIConnectionError):  # type: ignore
+class APIConnectionError(_LiteLLMPickleMixin, openai.APIConnectionError):  # type: ignore
     def __init__(
         self,
         message,
@@ -733,7 +807,7 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIResponseValidationError(openai.APIResponseValidationError):  # type: ignore
+class APIResponseValidationError(_LiteLLMPickleMixin, openai.APIResponseValidationError):  # type: ignore
     def __init__(
         self,
         message,
@@ -784,7 +858,7 @@ class JSONSchemaValidationError(APIResponseValidationError):
         super().__init__(model=model, message=message, llm_provider=llm_provider)
 
 
-class OpenAIError(openai.OpenAIError):  # type: ignore
+class OpenAIError(_LiteLLMPickleMixin, openai.OpenAIError):  # type: ignore
     def __init__(self, original_exception=None):
         super().__init__()
         self.llm_provider = "openai"
@@ -841,7 +915,7 @@ LITELLM_EXCEPTION_TYPES = [
 ]
 
 
-class BudgetExceededError(Exception):
+class BudgetExceededError(_LiteLLMPickleMixin, Exception):
     def __init__(
         self, current_cost: float, max_budget: float, message: Optional[str] = None
     ):
@@ -856,7 +930,7 @@ class BudgetExceededError(Exception):
 
 
 ## DEPRECATED ##
-class InvalidRequestError(openai.BadRequestError):  # type: ignore
+class InvalidRequestError(_LiteLLMPickleMixin, openai.BadRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -873,7 +947,7 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class MockException(openai.APIError):
+class MockException(_LiteLLMPickleMixin, openai.APIError):
     # used for testing
     def __init__(
         self,
@@ -911,7 +985,7 @@ class LiteLLMUnknownProvider(BadRequestError):
         return self.message
 
 
-class GuardrailRaisedException(Exception):
+class GuardrailRaisedException(_LiteLLMPickleMixin, Exception):
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -924,7 +998,7 @@ class GuardrailRaisedException(Exception):
         super().__init__(self.message)
 
 
-class BlockedPiiEntityError(Exception):
+class BlockedPiiEntityError(_LiteLLMPickleMixin, Exception):
     def __init__(
         self,
         entity_type: str,
@@ -1017,7 +1091,7 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
 
 
 class GuardrailInterventionNormalStringError(
-    Exception
+    _LiteLLMPickleMixin, Exception
 ):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
     def __init__(self, message: str):
         self.message = message
