@@ -233,7 +233,8 @@ def create_container(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params=dict(container_create_request_params),
             litellm_params={
@@ -438,7 +439,8 @@ def list_containers(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params=dict(container_list_optional_params),
             litellm_params={
@@ -626,7 +628,8 @@ def retrieve_container(
             )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params={},
             litellm_params={
@@ -811,7 +814,8 @@ def delete_container(
             )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params={},
             litellm_params={
@@ -1010,7 +1014,8 @@ def list_container_files(
             )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params={
                 "container_id": container_id,
@@ -1255,7 +1260,8 @@ def upload_container_file(
             )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model="",
             optional_params={"container_id": container_id},
             litellm_params={

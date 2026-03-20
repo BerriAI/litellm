@@ -45,9 +45,6 @@ async def wait_for_team_member_spend_update(
     Wait for the team member spend update to be committed to the database.
     Polls the user info endpoint until the spend is updated.
     This is needed because spend updates are queued asynchronously and committed periodically.
-    
-    Note: If the model has no pricing (cost = 0), the spend will remain 0.0.
-    In that case, we just wait a bit to ensure the spend update queue has been processed.
     """
     start_time = time.time()
     initial_spend = None
@@ -62,21 +59,12 @@ async def wait_for_team_member_spend_update(
                             if initial_spend is None:
                                 initial_spend = spend
                                 print(f"Initial team member spend: {spend}")
-                            
-                            # If spend has been updated (even if still 0), the queue has been processed
-                            # For models with no pricing, spend will be 0, but we still need to wait
-                            # for the update to be committed so the budget check sees the current state
+
                             if spend >= expected_min_spend:
                                 print(f"[OK] Team member spend updated: {spend} >= {expected_min_spend}")
                                 return True
-                            
-                            # If we've waited a reasonable amount and spend is still 0,
-                            # it likely means the model has no pricing, but we should still
-                            # wait a bit more to ensure the update queue has been processed
-                            elapsed = time.time() - start_time
-                            if elapsed > 3.0:  # Wait at least 3 seconds for queue processing
-                                print(f"[OK] Waited {elapsed:.1f}s for spend update queue processing (spend: {spend})")
-                                return True
+
+                            print(f"[WAITING] Team member spend: {spend}, expected >= {expected_min_spend}, elapsed: {time.time() - start_time:.1f}s")
             await asyncio.sleep(0.5)
         except Exception as e:
             print(f"Error checking team member spend: {e}")
@@ -814,16 +802,17 @@ async def test_users_in_team_budget():
         # Wait for spend to be committed to database before checking budget
         # Spend updates are queued asynchronously and committed periodically (every minute),
         # so we need to wait for the spend from Call 1 to be persisted
-        # Note: Even if cost is 0 (model has no pricing), we wait to ensure the update queue is processed
         print("\n[DEBUG] ===== Waiting for spend to be committed =====")
         print("Waiting for team member spend to be committed to database...")
-        print("Note: Spend updates are flushed periodically, this may take up to 60 seconds...")
+        print("Note: Spend updates are flushed periodically, this may take up to 90 seconds...")
         spend_updated = await wait_for_team_member_spend_update(
-            session, get_user, team["team_id"], 0.0000001, max_wait=65
+            session, get_user, team["team_id"], 0.0000001, max_wait=90
         )
         if not spend_updated:
-            print("[WARNING] Team member spend not updated in time, but continuing test...")
-            print("This may indicate the spend update queue hasn't been flushed yet.")
+            pytest.fail(
+                "Team member spend was not updated within 90s. "
+                "The spend update queue may not have flushed, or the model may have 0 cost."
+            )
 
         # Check user info BEFORE Call 2
         user_info_before_call2 = await get_user_info(session, get_user, call_user="sk-1234")

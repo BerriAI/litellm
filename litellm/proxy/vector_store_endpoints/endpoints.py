@@ -386,7 +386,7 @@ async def vector_store_list(
         version,
     )
 
-    data = {}
+    data: dict = {}
     if after is not None:
         data["after"] = after
     if before is not None:

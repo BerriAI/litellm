@@ -610,7 +610,7 @@ class LangFuseLogger:
                 trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
             # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
-                trace_id = litellm_call_id
+                trace_id = kwargs.get("litellm_trace_id") or litellm_call_id
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             # If existing_trace_id is provided, use it as the trace_id to return
             # This allows continuing an existing trace while still returning the correct trace_id

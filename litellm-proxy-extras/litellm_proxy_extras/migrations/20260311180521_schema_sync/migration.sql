@@ -1,11 +1,11 @@
 -- DropIndex
-DROP INDEX "LiteLLM_MCPServerTable_approval_status_idx";
+DROP INDEX IF EXISTS "LiteLLM_MCPServerTable_approval_status_idx";
 
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN "approval_status",
-DROP COLUMN "review_notes",
-DROP COLUMN "reviewed_at",
-DROP COLUMN "source_url",
-DROP COLUMN "submitted_at",
-DROP COLUMN "submitted_by";
+ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN IF EXISTS "approval_status",
+DROP COLUMN IF EXISTS "review_notes",
+DROP COLUMN IF EXISTS "reviewed_at",
+DROP COLUMN IF EXISTS "source_url",
+DROP COLUMN IF EXISTS "submitted_at",
+DROP COLUMN IF EXISTS "submitted_by";
 

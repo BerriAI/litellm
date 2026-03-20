@@ -37,6 +37,18 @@ class UsersManagementClient:
         response.raise_for_status()
         return response.json()
 
+    def get_user_v2(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get user info v2 - lightweight, returns only user object (GET /v2/user/info)"""
+        url = f"{self.base_url}/v2/user/info"
+        params = {"user_id": user_id} if user_id else {}
+        response = requests.get(url, headers=self._get_headers(), params=params)
+        if response.status_code == 401:
+            raise UnauthorizedError(response.text)
+        if response.status_code == 404:
+            raise NotFoundError(response.text)
+        response.raise_for_status()
+        return response.json()
+
     def create_user(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new user (POST /user/new)"""
         url = f"{self.base_url}/user/new"

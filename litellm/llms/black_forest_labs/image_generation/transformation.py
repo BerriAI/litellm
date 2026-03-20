@@ -259,7 +259,12 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ImageResponse:
         """
         Transform Black Forest Labs response to OpenAI-compatible ImageResponse.

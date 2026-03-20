@@ -69,7 +69,8 @@ class LiteLLMSkillsTransformationHandler:
         """
         # Pre-call logging
         if logging_obj:
-            logging_obj.update_environment_variables(
+            logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 optional_params={"display_title": display_title},
                 litellm_params={"litellm_call_id": litellm_call_id},
@@ -172,7 +173,8 @@ class LiteLLMSkillsTransformationHandler:
         """
         # Pre-call logging
         if logging_obj:
-            logging_obj.update_environment_variables(
+            logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 optional_params={"limit": limit, "offset": offset},
                 litellm_params={"litellm_call_id": litellm_call_id},
@@ -231,7 +233,8 @@ class LiteLLMSkillsTransformationHandler:
         """
         # Pre-call logging
         if logging_obj:
-            logging_obj.update_environment_variables(
+            logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 optional_params={"skill_id": skill_id},
                 litellm_params={"litellm_call_id": litellm_call_id},
@@ -277,7 +280,8 @@ class LiteLLMSkillsTransformationHandler:
         """
         # Pre-call logging
         if logging_obj:
-            logging_obj.update_environment_variables(
+            logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 optional_params={"skill_id": skill_id},
                 litellm_params={"litellm_call_id": litellm_call_id},

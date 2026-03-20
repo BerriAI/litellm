@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_BudgetTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_BudgetTable" (
     "budget_id" TEXT NOT NULL,
     "max_budget" DOUBLE PRECISION,
     "soft_budget" DOUBLE PRECISION,
@@ -18,7 +18,7 @@ CREATE TABLE "LiteLLM_BudgetTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_CredentialsTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_CredentialsTable" (
     "credential_id" TEXT NOT NULL,
     "credential_name" TEXT NOT NULL,
     "credential_values" JSONB NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE "LiteLLM_CredentialsTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ProxyModelTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ProxyModelTable" (
     "model_id" TEXT NOT NULL,
     "model_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE "LiteLLM_ProxyModelTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_OrganizationTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_OrganizationTable" (
     "organization_id" TEXT NOT NULL,
     "organization_alias" TEXT NOT NULL,
     "budget_id" TEXT NOT NULL,
@@ -63,7 +63,7 @@ CREATE TABLE "LiteLLM_OrganizationTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ModelTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ModelTable" (
     "id" SERIAL NOT NULL,
     "aliases" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +75,7 @@ CREATE TABLE "LiteLLM_ModelTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_TeamTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_TeamTable" (
     "team_id" TEXT NOT NULL,
     "team_alias" TEXT,
     "organization_id" TEXT,
@@ -102,7 +102,7 @@ CREATE TABLE "LiteLLM_TeamTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_UserTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_UserTable" (
     "user_id" TEXT NOT NULL,
     "user_alias" TEXT,
     "team_id" TEXT,
@@ -131,7 +131,7 @@ CREATE TABLE "LiteLLM_UserTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_VerificationToken" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_VerificationToken" (
     "token" TEXT NOT NULL,
     "key_name" TEXT,
     "key_alias" TEXT,
@@ -166,7 +166,7 @@ CREATE TABLE "LiteLLM_VerificationToken" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_EndUserTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_EndUserTable" (
     "user_id" TEXT NOT NULL,
     "alias" TEXT,
     "spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -179,7 +179,7 @@ CREATE TABLE "LiteLLM_EndUserTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_Config" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_Config" (
     "param_name" TEXT NOT NULL,
     "param_value" JSONB,
 
@@ -187,7 +187,7 @@ CREATE TABLE "LiteLLM_Config" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_SpendLogs" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogs" (
     "request_id" TEXT NOT NULL,
     "call_type" TEXT NOT NULL,
     "api_key" TEXT NOT NULL DEFAULT '',
@@ -218,7 +218,7 @@ CREATE TABLE "LiteLLM_SpendLogs" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_ErrorLogs" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ErrorLogs" (
     "request_id" TEXT NOT NULL,
     "startTime" TIMESTAMP(3) NOT NULL,
     "endTime" TIMESTAMP(3) NOT NULL,
@@ -235,7 +235,7 @@ CREATE TABLE "LiteLLM_ErrorLogs" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_UserNotifications" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_UserNotifications" (
     "request_id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "models" TEXT[],
@@ -246,7 +246,7 @@ CREATE TABLE "LiteLLM_UserNotifications" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_TeamMembership" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_TeamMembership" (
     "user_id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0,
@@ -256,7 +256,7 @@ CREATE TABLE "LiteLLM_TeamMembership" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_OrganizationMembership" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_OrganizationMembership" (
     "user_id" TEXT NOT NULL,
     "organization_id" TEXT NOT NULL,
     "user_role" TEXT,
@@ -269,7 +269,7 @@ CREATE TABLE "LiteLLM_OrganizationMembership" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_InvitationLink" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_InvitationLink" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "is_accepted" BOOLEAN NOT NULL DEFAULT false,
@@ -284,7 +284,7 @@ CREATE TABLE "LiteLLM_InvitationLink" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_AuditLog" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AuditLog" (
     "id" TEXT NOT NULL,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "changed_by" TEXT NOT NULL DEFAULT '',
@@ -299,62 +299,132 @@ CREATE TABLE "LiteLLM_AuditLog" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_CredentialsTable_credential_name_key" ON "LiteLLM_CredentialsTable"("credential_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_CredentialsTable_credential_name_key" ON "LiteLLM_CredentialsTable"("credential_name");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_TeamTable_model_id_key" ON "LiteLLM_TeamTable"("model_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_TeamTable_model_id_key" ON "LiteLLM_TeamTable"("model_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_UserTable_sso_user_id_key" ON "LiteLLM_UserTable"("sso_user_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_UserTable_sso_user_id_key" ON "LiteLLM_UserTable"("sso_user_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SpendLogs_startTime_idx" ON "LiteLLM_SpendLogs"("startTime");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_idx" ON "LiteLLM_SpendLogs"("startTime");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SpendLogs_end_user_idx" ON "LiteLLM_SpendLogs"("end_user");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_end_user_idx" ON "LiteLLM_SpendLogs"("end_user");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_OrganizationMembership_user_id_organization_id_key" ON "LiteLLM_OrganizationMembership"("user_id", "organization_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_OrganizationMembership_user_id_organization_id_key" ON "LiteLLM_OrganizationMembership"("user_id", "organization_id");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_OrganizationTable" ADD CONSTRAINT "LiteLLM_OrganizationTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_OrganizationTable_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_OrganizationTable" ADD CONSTRAINT "LiteLLM_OrganizationTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_TeamTable" ADD CONSTRAINT "LiteLLM_TeamTable_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_TeamTable_organization_id_fkey') THEN
+        ALTER TABLE "LiteLLM_TeamTable" ADD CONSTRAINT "LiteLLM_TeamTable_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_TeamTable" ADD CONSTRAINT "LiteLLM_TeamTable_model_id_fkey" FOREIGN KEY ("model_id") REFERENCES "LiteLLM_ModelTable"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_TeamTable_model_id_fkey') THEN
+        ALTER TABLE "LiteLLM_TeamTable" ADD CONSTRAINT "LiteLLM_TeamTable_model_id_fkey" FOREIGN KEY ("model_id") REFERENCES "LiteLLM_ModelTable"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_UserTable" ADD CONSTRAINT "LiteLLM_UserTable_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_UserTable_organization_id_fkey') THEN
+        ALTER TABLE "LiteLLM_UserTable" ADD CONSTRAINT "LiteLLM_UserTable_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "LiteLLM_VerificationToken_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerificationToken_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "LiteLLM_VerificationToken_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "LiteLLM_VerificationToken_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerificationToken_organization_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VerificationToken" ADD CONSTRAINT "LiteLLM_VerificationToken_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_EndUserTable" ADD CONSTRAINT "LiteLLM_EndUserTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_EndUserTable_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_EndUserTable" ADD CONSTRAINT "LiteLLM_EndUserTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_TeamMembership" ADD CONSTRAINT "LiteLLM_TeamMembership_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_TeamMembership_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_TeamMembership" ADD CONSTRAINT "LiteLLM_TeamMembership_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_OrganizationMembership_user_id_fkey') THEN
+        ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_OrganizationMembership_organization_id_fkey') THEN
+        ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_organization_id_fkey" FOREIGN KEY ("organization_id") REFERENCES "LiteLLM_OrganizationTable"("organization_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_OrganizationMembership_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_OrganizationMembership" ADD CONSTRAINT "LiteLLM_OrganizationMembership_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_InvitationLink_user_id_fkey') THEN
+        ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_InvitationLink_created_by_fkey') THEN
+        ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_updated_by_fkey" FOREIGN KEY ("updated_by") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_InvitationLink_updated_by_fkey') THEN
+        ALTER TABLE "LiteLLM_InvitationLink" ADD CONSTRAINT "LiteLLM_InvitationLink_updated_by_fkey" FOREIGN KEY ("updated_by") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 

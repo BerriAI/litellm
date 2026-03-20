@@ -1,17 +1,17 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_DeletedTeamTable" ADD COLUMN     "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_DeletedTeamTable" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN     "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN     "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- AlterTable
-ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN     "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN IF NOT EXISTS "access_group_ids" TEXT[] DEFAULT ARRAY[]::TEXT[];
 
 -- CreateTable
-CREATE TABLE "LiteLLM_AccessGroupTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AccessGroupTable" (
     "access_group_id" TEXT NOT NULL,
     "access_group_name" TEXT NOT NULL,
     "description" TEXT,
@@ -29,5 +29,5 @@ CREATE TABLE "LiteLLM_AccessGroupTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_AccessGroupTable_access_group_name_key" ON "LiteLLM_AccessGroupTable"("access_group_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_AccessGroupTable_access_group_name_key" ON "LiteLLM_AccessGroupTable"("access_group_name");
 

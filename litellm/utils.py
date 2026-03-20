@@ -260,6 +260,9 @@ if TYPE_CHECKING:
     )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.llms.base_llm.realtime.http_transformation import (
+        BaseRealtimeHTTPConfig,
+    )
     from litellm.proxy._types import AllowedModelRegion
 
     # Type stubs for lazy-loaded functions to help mypy understand their types
@@ -6157,7 +6160,10 @@ def validate_environment(  # noqa: PLR0915
                     ["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"]
                 )
         elif custom_llm_provider == "anthropic":
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -6396,7 +6402,10 @@ def validate_environment(  # noqa: PLR0915
                 missing_keys.append("OPENAI_API_KEY")
         ## anthropic
         elif model in litellm.anthropic_models:
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -7942,6 +7951,7 @@ class ProviderConfigManager:
             LlmProviders.VERTEX_AI_BETA: (lambda: litellm.VertexGeminiConfig(), False),
             LlmProviders.CLOUDFLARE: (lambda: litellm.CloudflareChatConfig(), False),
             LlmProviders.SAGEMAKER_CHAT: (lambda: litellm.SagemakerChatConfig(), False),
+            LlmProviders.SAGEMAKER_NOVA: (lambda: litellm.SagemakerNovaConfig(), False),
             LlmProviders.SAGEMAKER: (lambda: litellm.SagemakerConfig(), False),
             LlmProviders.FIREWORKS_AI: (lambda: litellm.FireworksAIConfig(), False),
             LlmProviders.FRIENDLIAI: (lambda: litellm.FriendliaiChatConfig(), False),
@@ -8137,6 +8147,8 @@ class ProviderConfigManager:
             if provider_config is None:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
+
+        return None
 
     @staticmethod
     def get_provider_embedding_config(
@@ -8403,11 +8415,6 @@ class ProviderConfigManager:
                 or (supports_reasoning(model) and not is_gpt_model)
             )
 
-            is_o_series = model and (
-                "o_series" in model.lower()
-                or (supports_reasoning(model) and not is_gpt_model)
-            )
-
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
@@ -8592,9 +8599,7 @@ class ProviderConfigManager:
 
             return ManusFilesConfig()
         elif LlmProviders.ANTHROPIC == provider:
-            from litellm.llms.anthropic.files.transformation import (
-                AnthropicFilesConfig,
-            )
+            from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
         return None

@@ -190,7 +190,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
                     ],
                 )
                 # Modify current chunk to be the first chunk with role but no finish_reason
-                result.choices[0].finish_reason = None
+                result.choices[0].finish_reason = None  # type: ignore[assignment]
                 delta.role = "assistant"
                 # Ensure content is empty string for first chunk, not None
                 if delta.content is None:

@@ -1,0 +1,30 @@
+.sidebarContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100vh;
+}
+
+/* Make the sidebar content scroll inside the container */
+.sidebarContainer > aside,
+.sidebarContainer > div:last-child {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.searchBarContainer {
+  flex-shrink: 0;
+  padding: 0.75rem 1rem;
+  padding-top: calc(var(--ifm-navbar-height) + 0.75rem);
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+.searchBarContainer > div {
+  width: 100%;
+}
+
+/* Remove the default top padding from the sidebar content that follows */
+.searchBarContainer + div {
+  padding-top: 0 !important;
+}
