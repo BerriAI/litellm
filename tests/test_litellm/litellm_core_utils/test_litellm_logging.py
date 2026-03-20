@@ -270,6 +270,8 @@ class TestUpdateFromKwargs:
         result_meta = logging_obj.litellm_params["metadata"]
         assert result_meta["from_caller"] is True
         assert result_meta["user_api_key_hash"] == "hashed-xyz"
+        # caller's dict must not be mutated by the merge
+        assert "user_api_key_hash" not in caller_metadata
 
     def test_merge_handles_metadata_none(self, logging_obj):
         """When metadata=None is explicitly in kwargs alongside litellm_metadata,

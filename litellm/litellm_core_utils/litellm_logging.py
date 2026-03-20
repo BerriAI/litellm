@@ -589,7 +589,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if "litellm_metadata" in kwargs and isinstance(
             kwargs["litellm_metadata"], dict
         ):
-            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
 
         if litellm_params:
             base_litellm_params.update(litellm_params)
