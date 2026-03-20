@@ -14,10 +14,10 @@ Flow:
 import json
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
 # Keep ToolParam broad so we stay compatible with both dict and Pydantic forms
@@ -30,6 +30,7 @@ FILE_SEARCH_FUNCTION_NAME = "litellm_file_search"
 # Detection
 # ---------------------------------------------------------------------------
 
+
 def should_use_emulated_file_search(
     tools: Optional[Iterable[ToolParam]],
     provider_config: Any,  # BaseResponsesAPIConfig
@@ -37,9 +38,7 @@ def should_use_emulated_file_search(
     """Return True when there is a file_search tool and the provider can't handle it natively."""
     if not tools:
         return False
-    has_fs = any(
-        isinstance(t, dict) and t.get("type") == "file_search" for t in tools
-    )
+    has_fs = any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
     if not has_fs:
         return False
     return provider_config is None or not provider_config.supports_native_file_search()
@@ -48,6 +47,7 @@ def should_use_emulated_file_search(
 # ---------------------------------------------------------------------------
 # Tool conversion
 # ---------------------------------------------------------------------------
+
 
 def _build_function_tool(vector_store_ids: List[str]) -> Dict[str, Any]:
     """
@@ -104,7 +104,7 @@ def _replace_file_search_tools(
     non_file_search: List[Dict[str, Any]] = []
     vector_store_ids: List[str] = []
 
-    for tool in (tools or []):
+    for tool in tools or []:
         if isinstance(tool, dict) and tool.get("type") == "file_search":
             ids = tool.get("vector_store_ids") or []
             vector_store_ids.extend(ids)
@@ -122,6 +122,7 @@ def _replace_file_search_tools(
 # ---------------------------------------------------------------------------
 # Search execution
 # ---------------------------------------------------------------------------
+
 
 async def _run_vector_searches(
     queries: List[str],
@@ -150,7 +151,11 @@ async def _run_vector_searches(
                     vector_store_id=vs_id,
                     query=query,
                 )
-                results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
+                results_data = (
+                    response.get("data")
+                    if isinstance(response, dict)
+                    else getattr(response, "data", None)
+                )
                 if results_data:
                     all_results.extend(results_data)
             except Exception as exc:
@@ -167,6 +172,7 @@ async def _run_vector_searches(
 # ---------------------------------------------------------------------------
 # Result formatting
 # ---------------------------------------------------------------------------
+
 
 def _get_field(result: Any, key: str, default: Any = None) -> Any:
     """Read a field from either a dict/TypedDict or an attribute-based object."""
@@ -319,13 +325,27 @@ def _build_message_output(
 def _extract_text_from_responses_output(response: ResponsesAPIResponse) -> str:
     """Pull the assistant's text from the provider's response."""
     for item in response.output:
-        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        item_type = (
+            item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        )
         if item_type == "message":
-            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", [])
-            for block in (content or []):
-                block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            content = (
+                item.get("content")
+                if isinstance(item, dict)
+                else getattr(item, "content", [])
+            )
+            for block in content or []:
+                block_type = (
+                    block.get("type")
+                    if isinstance(block, dict)
+                    else getattr(block, "type", None)
+                )
                 if block_type == "output_text":
-                    raw = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
+                    raw = (
+                        block.get("text")
+                        if isinstance(block, dict)
+                        else getattr(block, "text", "")
+                    )
                     return str(raw) if raw is not None else ""
     return ""
 
@@ -345,13 +365,16 @@ def _synthesize_responses_api_response(
     synthesized _hidden_params so that billing callbacks see the total cost of
     both provider calls that the emulated flow makes.
     """
+    synthesized_output: List[Dict[str, Any]] = [file_search_call_output, message_output]
     synthesized = ResponsesAPIResponse(
         id=getattr(original_response, "id", f"resp_{uuid.uuid4().hex}"),
         object="response",
         created_at=getattr(original_response, "created_at", int(time.time())),
         status="completed",
         model=getattr(original_response, "model", ""),
-        output=[file_search_call_output, message_output],
+        output=cast(
+            List[Union[ResponseOutputItem, Dict[str, Any]]], synthesized_output
+        ),
         usage=getattr(original_response, "usage", None),
         error=None,
     )
@@ -359,9 +382,15 @@ def _synthesize_responses_api_response(
         hidden = dict(getattr(original_response, "_hidden_params") or {})
         if first_response is not None and hasattr(first_response, "_hidden_params"):
             first_hidden = getattr(first_response, "_hidden_params") or {}
-            first_cost = first_hidden.get("response_cost") if isinstance(first_hidden, dict) else getattr(first_hidden, "response_cost", None)
+            first_cost = (
+                first_hidden.get("response_cost")
+                if isinstance(first_hidden, dict)
+                else getattr(first_hidden, "response_cost", None)
+            )
             if first_cost is not None:
-                current_cost = hidden.get("response_cost") if isinstance(hidden, dict) else 0
+                current_cost = (
+                    hidden.get("response_cost") if isinstance(hidden, dict) else 0
+                )
                 hidden["response_cost"] = (current_cost or 0) + first_cost
         synthesized._hidden_params = hidden
     return synthesized
@@ -371,8 +400,12 @@ def _synthesize_responses_api_response(
 # Main entry point
 # ---------------------------------------------------------------------------
 
-async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
+
+async def _call_aresponses(
+    input, model, tools, **kwargs
+):  # pragma: no cover – thin wrapper for patching in tests
     from litellm.responses.main import aresponses
+
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
 
 
@@ -458,10 +491,17 @@ async def aresponses_with_emulated_file_search(
 
     for tool_call in file_search_calls:
         if isinstance(tool_call, dict):
-            call_id = tool_call.get("call_id") or tool_call.get("id") or file_search_call_id
+            call_id = str(
+                tool_call.get("call_id") or tool_call.get("id") or file_search_call_id
+            )
             raw_args = tool_call.get("arguments") or "{}"
         else:
-            call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", file_search_call_id)
+            raw_call_id = (
+                getattr(tool_call, "call_id", None)
+                or getattr(tool_call, "id", None)
+                or file_search_call_id
+            )
+            call_id = str(raw_call_id)
             raw_args = getattr(tool_call, "arguments", "{}") or "{}"
 
         try:
@@ -500,7 +540,11 @@ async def aresponses_with_emulated_file_search(
     # Including all output items (text blocks, reasoning, non-file-search calls) ensures providers
     # like Anthropic that emit text before the tool call have complete conversation context.
     # Serialize Pydantic model instances to plain dicts so the transformation layer can call .get().
-    original_input_items = list(input) if isinstance(input, (list, tuple)) else [{"role": "user", "content": str(input)}]
+    original_input_items = (
+        list(input)
+        if isinstance(input, (list, tuple))
+        else [{"role": "user", "content": str(input)}]
+    )
     first_response_output_items: List[Any] = []
     for _item in first_response.output:
         if isinstance(_item, dict):
@@ -510,11 +554,7 @@ async def aresponses_with_emulated_file_search(
         else:
             first_response_output_items.append(_item)
 
-    follow_up_input = (
-        original_input_items
-        + first_response_output_items
-        + tool_results
-    )
+    follow_up_input = original_input_items + first_response_output_items + tool_results
 
     # 6. Follow-up call — provider writes the final answer given search results.
     # Also an internal sub-call; billing is suppressed so the outer call fires once.
