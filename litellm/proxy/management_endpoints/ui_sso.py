@@ -133,6 +133,38 @@ def normalize_email(email: Optional[str]) -> Optional[str]:
     return email.lower() if isinstance(email, str) else email
 
 
+def _is_empty_email(email: Optional[str]) -> bool:
+    """True if email is None or blank string."""
+    if email is None:
+        return True
+    return isinstance(email, str) and email.strip() == ""
+
+
+def _derive_fake_email_from_sso_id(sso_user_id: str) -> str:
+    """
+    Derive a deterministic fake email from SSO user ID.
+    Used when SSO provider does not reveal user email (e.g. Lark with email disabled).
+    """
+    digest = hashlib.sha256(sso_user_id.encode()).hexdigest()[:24]
+    return f"{digest}@sso.example.com"
+
+
+def _maybe_apply_fake_email(
+    email: Optional[str], sso_user_id: Optional[str]
+) -> Optional[str]:
+    """
+    If GENERIC_FAKE_EMAIL is enabled and email is empty but sso_user_id exists,
+    return a deterministic fake email. Otherwise return the original email.
+    """
+    if os.getenv("GENERIC_FAKE_EMAIL", "").lower() != "true":
+        return email
+    if not sso_user_id or not isinstance(sso_user_id, str) or not sso_user_id.strip():
+        return email
+    if not _is_empty_email(email):
+        return email
+    return _derive_fake_email_from_sso_id(sso_user_id)
+
+
 def determine_role_from_groups(
     user_groups: List[str],
     role_mappings: "RoleMappings",
@@ -525,14 +557,19 @@ def generic_response_convertor(
             attr_name = attr_name.strip()
             extra_fields[attr_name] = get_nested_value(response, attr_name)
 
+    user_id = get_nested_value(response, generic_user_id_attribute_name)
+    raw_email = get_nested_value(response, generic_user_email_attribute_name)
+    email = normalize_email(raw_email)
+    email = _maybe_apply_fake_email(email, user_id)
+    if _is_empty_email(email):
+        email = None
+
     return CustomOpenID(
-        id=get_nested_value(response, generic_user_id_attribute_name),
+        id=user_id,
         display_name=get_nested_value(
             response, generic_user_display_name_attribute_name
         ),
-        email=normalize_email(
-            get_nested_value(response, generic_user_email_attribute_name)
-        ),
+        email=email,
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
@@ -1062,6 +1099,8 @@ async def get_user_info_from_db(
             if not isinstance(result, dict)
             else result.get("email", None)
         )
+        sso_user_id = potential_user_ids[0] if potential_user_ids else None
+        user_email = _maybe_apply_fake_email(user_email, sso_user_id)
 
         user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]] = None
 
@@ -2287,10 +2326,15 @@ class SSOAuthenticationHandler:
         """
         Gets the user email and id from the OpenID result after validating the email domain
         """
-        user_email: Optional[str] = normalize_email(getattr(result, "email", None))
-        user_id: Optional[str] = (
-            getattr(result, "id", None) if result is not None else None
-        )
+        if result is None:
+            user_email = None
+            user_id = None
+        elif isinstance(result, dict):
+            user_email = normalize_email(result.get("email"))
+            user_id = result.get("id")
+        else:
+            user_email = normalize_email(getattr(result, "email", None))
+            user_id = getattr(result, "id", None)
         user_role: Optional[str] = None
 
         if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
@@ -2308,7 +2352,11 @@ class SSOAuthenticationHandler:
 
         # Extract user_role from result (works for all SSO providers)
         if result is not None:
-            _user_role = getattr(result, "user_role", None)
+            _user_role = (
+                result.get("user_role")
+                if isinstance(result, dict)
+                else getattr(result, "user_role", None)
+            )
             if _user_role is not None:
                 # Convert enum to string if needed
                 user_role = (
@@ -2325,10 +2373,18 @@ class SSOAuthenticationHandler:
             generic_user_role_attribute_name = os.getenv(
                 "GENERIC_USER_ROLE_ATTRIBUTE", "role"
             )
-            user_id = getattr(result, "id", None)
-            user_email = normalize_email(getattr(result, "email", None))
+            if isinstance(result, dict):
+                user_id = result.get("id")
+                user_email = normalize_email(result.get("email"))
+            else:
+                user_id = getattr(result, "id", None)
+                user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
-                _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                _role_from_attr = (
+                    result.get(generic_user_role_attribute_name)
+                    if isinstance(result, dict)
+                    else getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                )
                 if _role_from_attr is not None:
                     # Convert enum to string if needed
                     user_role = (
@@ -2338,12 +2394,18 @@ class SSOAuthenticationHandler:
                     )
 
         if user_id is None and result is not None:
-            _first_name = getattr(result, "first_name", "") or ""
-            _last_name = getattr(result, "last_name", "") or ""
+            if isinstance(result, dict):
+                _first_name = result.get("first_name") or ""
+                _last_name = result.get("last_name") or ""
+            else:
+                _first_name = getattr(result, "first_name", "") or ""
+                _last_name = getattr(result, "last_name", "") or ""
             user_id = _first_name + _last_name
 
         if user_email is not None and (user_id is None or len(user_id) == 0):
             user_id = user_email
+
+        user_email = _maybe_apply_fake_email(user_email, user_id)
 
         return ParsedOpenIDResult(
             user_email=user_email,

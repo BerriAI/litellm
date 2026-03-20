@@ -23,6 +23,8 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    _derive_fake_email_from_sso_id,
+    _maybe_apply_fake_email,
     _setup_team_mappings,
     determine_role_from_groups,
     normalize_email,
@@ -702,6 +704,63 @@ def test_normalize_email():
     assert normalize_email("") == ""
 
 
+def test_derive_fake_email_from_sso_id_deterministic():
+    """Same SSO ID always yields same fake email."""
+    email1 = _derive_fake_email_from_sso_id("user-123")
+    email2 = _derive_fake_email_from_sso_id("user-123")
+    assert email1 == email2
+    assert email1.endswith("@sso.example.com")
+
+
+def test_maybe_apply_fake_email_when_disabled():
+    """When GENERIC_FAKE_EMAIL is not set, return original email."""
+    with patch.dict(os.environ, {}, clear=True):
+        os.environ.pop("GENERIC_FAKE_EMAIL", None)
+    result = _maybe_apply_fake_email(None, "user-123")
+    assert result is None
+    result = _maybe_apply_fake_email("", "user-123")
+    assert result == ""
+
+
+def test_maybe_apply_fake_email_when_enabled_empty_email():
+    """When GENERIC_FAKE_EMAIL is true and email is empty, derive fake email."""
+    with patch.dict(os.environ, {"GENERIC_FAKE_EMAIL": "true"}):
+        result = _maybe_apply_fake_email(None, "lark-user-456")
+    assert result is not None
+    assert result.endswith("@sso.example.com")
+    assert result == _derive_fake_email_from_sso_id("lark-user-456")
+
+
+def test_maybe_apply_fake_email_when_enabled_has_email():
+    """When GENERIC_FAKE_EMAIL is true but email exists, keep original."""
+    with patch.dict(os.environ, {"GENERIC_FAKE_EMAIL": "true"}):
+        result = _maybe_apply_fake_email("real@example.com", "user-123")
+    assert result == "real@example.com"
+
+
+def test_get_user_email_and_id_with_empty_email_generic_fake_enabled():
+    """When SSO returns empty email and GENERIC_FAKE_EMAIL is true, use derived fake email."""
+    result = {"id": "lark-user-789", "email": "", "display_name": "Test User"}
+    with patch.dict(os.environ, {"GENERIC_FAKE_EMAIL": "true"}):
+        parsed = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+            result=result, generic_client_id="generic"
+        )
+    assert parsed.get("user_email") is not None
+    assert parsed.get("user_email").endswith("@sso.example.com")
+    assert parsed.get("user_id") == "lark-user-789"
+
+
+def test_get_user_email_and_id_with_empty_email_generic_fake_disabled():
+    """When SSO returns empty email and GENERIC_FAKE_EMAIL is false, email stays empty."""
+    result = {"id": "lark-user-789", "email": "", "display_name": "Test User"}
+    with patch.dict(os.environ, {}, clear=True):
+        os.environ.pop("GENERIC_FAKE_EMAIL", None)
+    parsed = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        result=result, generic_client_id="generic"
+    )
+    assert parsed.get("user_email") == ""
+
+
 def test_build_sso_user_update_data_normalizes_email():
     """
     Test that _build_sso_user_update_data normalizes email addresses to lowercase.
@@ -759,6 +818,36 @@ def test_generic_response_convertor_normalizes_email():
     assert result.email == "test.user@example.com"
     assert result.id == "user123"
     assert result.display_name == "Test User"
+
+
+def test_generic_response_convertor_empty_email_fake_enabled():
+    """When SSO returns empty email and GENERIC_FAKE_EMAIL is true, use derived fake email."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _derive_fake_email_from_sso_id,
+        generic_response_convertor,
+    )
+
+    mock_response = {
+        "preferred_username": "lark-user-456",
+        "email": "",
+        "sub": "Lark User",
+        "first_name": "Lark",
+        "last_name": "User",
+        "provider": "lark",
+    }
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    with patch.dict(os.environ, {"GENERIC_FAKE_EMAIL": "true"}):
+        result = generic_response_convertor(
+            response=mock_response,
+            jwt_handler=mock_jwt_handler,
+            sso_jwt_handler=None,
+            role_mappings=None,
+        )
+
+    assert result.email == _derive_fake_email_from_sso_id("lark-user-456")
+    assert result.id == "lark-user-456"
 
 
 @pytest.mark.asyncio
