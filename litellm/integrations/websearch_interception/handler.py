@@ -28,6 +28,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -138,7 +139,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        query = get_last_user_message(messages)
+        query = get_last_user_message(cast(List[AllMessageValues], messages))
         if not query:
             return None
 

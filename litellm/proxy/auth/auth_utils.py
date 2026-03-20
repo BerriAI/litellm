@@ -560,7 +560,8 @@ def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
         raw = deployment.get("litellm_params", {}).get(field)
         if raw is not None:
             try:
-                limits.append(int(raw))
+                if isinstance(raw, (int, float, str, bytes, bytearray)):
+                    limits.append(int(raw))
             except (ValueError, TypeError):
                 pass
     return min(limits) if limits else None

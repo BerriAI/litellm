@@ -8,7 +8,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -151,13 +151,14 @@ async def _try_websearch_short_circuit(
             custom_llm_provider=custom_llm_provider,
         )
         if response is not None:
+            anthropic_response = cast(AnthropicMessagesResponse, response)
             if stream:
                 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
                     FakeAnthropicMessagesStreamIterator,
                 )
 
-                return FakeAnthropicMessagesStreamIterator(response)
-            return response
+                return FakeAnthropicMessagesStreamIterator(anthropic_response)
+            return anthropic_response
 
     return None
 
