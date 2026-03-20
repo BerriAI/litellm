@@ -9,7 +9,12 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.realtime import RealtimeClientSecretRequest, RealtimeQueryParams
+from litellm.types.realtime import (
+    RealtimeClientSecretRequest,
+    RealtimeExpiresAfter,
+    RealtimeQueryParams,
+    RealtimeSessionConfig,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -100,8 +105,8 @@ async def acreate_realtime_client_secret(
 ):
     req = RealtimeClientSecretRequest(
         model=model,
-        session=session,
-        expires_after=expires_after,
+        session=RealtimeSessionConfig(**session) if session else None,
+        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
     model_name = (
         (req.session.model if req.session is not None else None)
@@ -131,7 +136,8 @@ async def acreate_realtime_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model_name,
         optional_params={"expires_after": expires_after, "session": session},
         litellm_params={"api_base": resolved_api_base},
@@ -181,7 +187,8 @@ async def arealtime_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model_name,
         optional_params={"realtime_calls": True, "session": session},
         litellm_params={"api_base": resolved_api_base},
@@ -242,7 +249,8 @@ async def _arealtime(  # noqa: PLR0915
     if query_params is not None:
         query_params = {**query_params, "model": model}
 
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model,
         user=user,
         optional_params={},

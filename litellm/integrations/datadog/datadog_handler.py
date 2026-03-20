@@ -38,8 +38,13 @@ def get_datadog_pod_name() -> str:
 
 def get_datadog_tags(
     standard_logging_object: Optional[StandardLoggingPayload] = None,
-) -> str:
-    """Build Datadog tags string used by multiple integrations."""
+) -> List[str]:
+    """Build Datadog tags as a list of individual tag strings.
+
+    Returns a list of "key:value" strings suitable for Datadog LLM Observability
+    (which expects tags as an array). For Datadog Logs API (ddtags), join with
+    comma: ",".join(get_datadog_tags(...)).
+    """
 
     base_tags = {
         "env": get_datadog_env(),
@@ -66,4 +71,4 @@ def get_datadog_tags(
         if team_tag:
             tags.append(f"team:{team_tag}")
 
-    return ",".join(tags)
+    return tags

@@ -2,13 +2,15 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -64,11 +66,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base
-            or get_secret_str("MOONSHOT_API_BASE")
-            or "https://api.moonshot.ai/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
@@ -149,6 +147,50 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 optional_params["temperature"] = 0.3
         return optional_params
 
+    def fill_reasoning_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Moonshot reasoning models require `reasoning_content` on every assistant
+        message that contains tool_calls (multi-turn tool-calling flows).
+
+        For each such message that is missing the field:
+          1. Promote provider_specific_fields["reasoning_content"] if present and non-empty
+             (this is where LiteLLM stores it from a previous response)
+          2. Otherwise inject a single space — the minimum value the API accepts
+        Messages that already carry the field, or are not assistant/tool-call messages,
+        are appended as-is (no copy made).
+        """
+        result: List[AllMessageValues] = []
+        for msg in messages:
+            if (
+                msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+                and "reasoning_content" not in msg
+            ):
+                patched = dict(cast(dict, msg))
+                provider_fields = patched.get("provider_specific_fields") or {}
+                stored = provider_fields.get("reasoning_content")
+                if stored:
+                    patched["reasoning_content"] = stored
+                    # Remove the promoted key from provider_specific_fields to
+                    # avoid sending the value twice in the serialised request body
+                    cleaned_provider_fields = dict(provider_fields)
+                    cleaned_provider_fields.pop("reasoning_content", None)
+                    patched["provider_specific_fields"] = cleaned_provider_fields
+                else:
+                    litellm.verbose_logger.warning(
+                        "Moonshot reasoning model: assistant tool-call message is missing "
+                        "`reasoning_content`. Injecting a placeholder to satisfy API validation. "
+                        "For best results, preserve `reasoning_content` from the original "
+                        "assistant response when building multi-turn conversation history."
+                    )
+                    patched["reasoning_content"] = " "
+                result.append(cast(AllMessageValues, patched))
+            else:
+                result.append(msg)
+        return result
+
     def transform_request(
         self,
         model: str,
@@ -168,6 +210,10 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 messages=messages,
                 optional_params=optional_params,
             )
+
+        # Moonshot reasoning models: fill in reasoning_content before the API call
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            messages = self.fill_reasoning_content(messages)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(

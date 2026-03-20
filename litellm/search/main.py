@@ -286,7 +286,8 @@ def search(
 
         # Pre Call logging
         model_name = f"{search_provider}/search"
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model_name,
             optional_params=optional_params,
             litellm_params={
