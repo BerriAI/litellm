@@ -1791,7 +1791,15 @@ class SSOAuthenticationHandler:
                 detail="return_to is not allowed: control_plane_url is not configured",
             )
 
-        if urlparse(return_to).hostname != urlparse(control_plane_url).hostname:
+        def _origin(url: str) -> tuple:
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or "").lower()
+            hostname = (parsed.hostname or "").lower()
+            default_port = 443 if scheme == "https" else 80
+            port = parsed.port if parsed.port is not None else default_port
+            return (scheme, hostname, port)
+
+        if _origin(return_to) != _origin(control_plane_url):
             raise HTTPException(
                 status_code=400,
                 detail="return_to does not match the configured control_plane_url",
@@ -2405,6 +2413,7 @@ class SSOAuthenticationHandler:
             master_key,
             premium_user,
             proxy_logging_obj,
+            redis_usage_cache,
             user_api_key_cache,
             user_custom_sso,
         )
@@ -2573,18 +2582,32 @@ class SSOAuthenticationHandler:
             algorithm="HS256",
         )
 
-        # Control-plane cross-origin: redirect back to the control plane UI
-        # with the token in the URL (cookie won't work cross-origin)
+        # Control-plane cross-origin: store JWT behind a single-use opaque
+        # code (60s TTL) so the token never appears in browser history / logs.
+        # The control plane redeems it via POST /v3/login/exchange.
         if return_to is not None:
             SSOAuthenticationHandler._validate_return_to(return_to)
+
+            code = secrets.token_urlsafe(32)
+            cache_key = f"login_code:{code}"
+            cache_value = {"token": jwt_token, "redirect_url": return_to}
+            if redis_usage_cache is not None:
+                await redis_usage_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+            else:
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+
             separator = "&" if "?" in return_to else "?"
             redirect_url = (
                 return_to
                 + separator
-                + urlencode({"login": "success", "token": jwt_token})
+                + urlencode({"login": "success", "code": code})
             )
             verbose_proxy_logger.info(
-                "Cross-origin SSO: redirecting to control plane"
+                "Cross-origin SSO: redirecting to control plane with login code"
             )
             redirect_response = RedirectResponse(url=redirect_url, status_code=303)
             redirect_response.delete_cookie("litellm_cp_return_to")
