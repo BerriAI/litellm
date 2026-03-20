@@ -9,7 +9,7 @@ import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
-import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
@@ -339,7 +339,9 @@ function CreateKeyPageContent() {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
     if (accessToken && userID && userRole) {
-      fetchTeams(accessToken, userID, userRole, null, setTeams);
+      v2TeamListCall(accessToken, 1, 100, {
+        userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
+      }).then((response) => setTeams(response.teams ?? [])).catch(console.error);
     }
     if (accessToken) {
       fetchOrganizations(accessToken, setOrganizations);
