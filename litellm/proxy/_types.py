@@ -1760,6 +1760,12 @@ class BlockTeamRequest(LiteLLMPydanticObjectBase):
     team_id: str  # required
 
 
+class BlockUnblockUserRequest(LiteLLMPydanticObjectBase):
+    """Request body for POST /user/block and POST /user/unblock."""
+
+    user_id: str  # required
+
+
 class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
@@ -2390,6 +2396,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_soft_budget: Optional[float] = None
     team_models: List = []
     team_blocked: bool = False
+    user_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member: Optional[Member] = None
@@ -2655,6 +2662,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
+    blocked: bool = False
     max_budget: Optional[float] = None
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}

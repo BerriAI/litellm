@@ -21,6 +21,7 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
+from litellm.constants import BLOCK_UNBLOCK_KEYS_HARD_LIMIT, LITELLM_PROXY_ADMIN_NAME
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
@@ -30,7 +31,13 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
+    _delete_cache_key_object,
+    get_key_object,
+    get_team_object,
+    get_user_object,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
@@ -2051,6 +2058,194 @@ async def delete_user(
     )
 
     return deleted_users
+
+
+@router.post(
+    "/user/block",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def block_user(
+    data: BlockUnblockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Block the user and all keys belonging to them (up to 20k keys). Only proxy admins.
+    Cannot block the default proxy admin user (see LITELLM_PROXY_ADMIN_NAME).
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /user/block.",
+        )
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    if user_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User not found, passed user_id={data.user_id}"},
+        )
+    if data.user_id == LITELLM_PROXY_ADMIN_NAME:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot block the default proxy admin user (user_id={LITELLM_PROXY_ADMIN_NAME}).",
+        )
+
+    token_list: List[str] = []
+    updated_user = None
+    async with prisma_client.db.tx() as tx:
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_user = await tx.litellm_usertable.update(
+            where={"user_id": data.user_id},
+            data={"blocked": True},  # type: ignore
+        )
+        if token_list:
+            await tx.litellm_verificationtoken.update_many(
+                where={"token": {"in": token_list}},
+                data={"blocked": True},  # type: ignore
+            )
+
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"user/block: user {data.user_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit remain active until cache expires."
+        )
+
+    for hashed_token in token_list:
+        try:
+            await _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object = await get_key_object(
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object.blocked = True
+            await _cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_obj=key_object,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "user/block: cache refresh for key %s: %s", hashed_token, e
+            )
+
+    return updated_user
+
+
+@router.post(
+    "/user/unblock",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def unblock_user(
+    data: BlockUnblockUserRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Unblock the user and up to 20k keys belonging to them. Only proxy admins.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /user/unblock.",
+        )
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": data.user_id}
+    )
+    if user_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"User not found, passed user_id={data.user_id}"},
+        )
+
+    token_list: List[str] = []
+    updated_user = None
+    async with prisma_client.db.tx() as tx:
+        keys_to_update = await tx.litellm_verificationtoken.find_many(
+            where={"user_id": data.user_id},
+            take=BLOCK_UNBLOCK_KEYS_HARD_LIMIT,
+        )
+        token_list = [k.token for k in keys_to_update]
+
+        updated_user = await tx.litellm_usertable.update(
+            where={"user_id": data.user_id},
+            data={"blocked": False},  # type: ignore
+        )
+        if token_list:
+            await tx.litellm_verificationtoken.update_many(
+                where={"token": {"in": token_list}},
+                data={"blocked": False},  # type: ignore
+            )
+
+    if len(token_list) == BLOCK_UNBLOCK_KEYS_HARD_LIMIT:
+        verbose_proxy_logger.warning(
+            f"user/unblock: user {data.user_id} has >= {BLOCK_UNBLOCK_KEYS_HARD_LIMIT} keys; "
+            f"keys beyond this limit may retain stale blocked state until cache expires."
+        )
+
+    for hashed_token in token_list:
+        try:
+            await _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object = await get_key_object(
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            key_object.blocked = False
+            await _cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_obj=key_object,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "user/unblock: cache refresh for key %s: %s", hashed_token, e
+            )
+
+    return updated_user
 
 
 async def add_internal_user_to_organization(

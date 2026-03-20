@@ -251,6 +251,7 @@ model LiteLLM_UserTable {
     policies         String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    blocked          Boolean @default(false)
     created_at      DateTime?               @default(now()) @map("created_at")
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
 

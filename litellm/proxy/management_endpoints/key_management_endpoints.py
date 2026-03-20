@@ -46,6 +46,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_project_object,
     get_team_object,
+    get_user_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1207,6 +1208,7 @@ async def generate_key_fn(
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
+            proxy_logging_obj,
             user_api_key_cache,
             user_custom_key_generate,
         )
@@ -1279,6 +1281,31 @@ async def generate_key_fn(
                         status_code=400,
                         detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot create keys for non-existent teams.",
                     )
+
+        # Reject key creation for blocked user/team (exception: UI session keys)
+        if data.team_id != UI_SESSION_TOKEN_TEAM_ID:
+            if data.user_id is not None:
+                try:
+                    user_row = await get_user_object(
+                        user_id=data.user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=False,
+                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except Exception:
+                    user_row = None
+                if user_row is not None and getattr(user_row, "blocked", False):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="User is blocked. Cannot create keys for blocked users.",
+                    )
+            if team_table is not None and getattr(team_table, "blocked", False):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Team is blocked. Cannot create keys for blocked teams.",
+                )
 
         key_generation_check(
             team_table=team_table,
@@ -4906,7 +4933,7 @@ async def block_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can block keys.
+    Note: Only proxy admins can block keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -4916,6 +4943,12 @@ async def block_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /key/block.",
+        )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -4932,26 +4965,25 @@ async def block_key(
     else:
         hashed_token = data.key
 
-    # Admin-only: only proxy admins, team admins, or org admins can block keys
-    await _check_key_admin_access(
-        user_api_key_dict=user_api_key_dict,
-        hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        route="/key/block",
-    )
-
-    # Check if the key exists before trying to block it
-    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+    key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
         where={"token": hashed_token}
     )
-    if existing_record is None:
+    if key_row is None:
         raise ProxyException(
-            message="Key not found.",
-            type=ProxyErrorTypes.not_found_error,
+            message=f"Key {data.key} not found",
+            type=ProxyErrorTypes.bad_request_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
         )
+    if key_row.user_id:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": key_row.user_id}
+        )
+        if user_row is not None and getattr(user_row, "user_role", None) == "proxy_admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot block proxy admin keys.",
+            )
 
     if litellm.store_audit_logs is True:
         asyncio.create_task(
@@ -4967,7 +4999,7 @@ async def block_key(
                     object_id=hashed_token,
                     action="blocked",
                     updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    before_value=key_row.model_dump_json(),
                 )
             )
         )
@@ -5015,7 +5047,7 @@ async def unblock_key(
     }'
     ```
 
-    Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can unblock keys.
+    Note: Only proxy admins can unblock keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -5025,6 +5057,12 @@ async def unblock_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can call /key/unblock.",
+        )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5041,23 +5079,13 @@ async def unblock_key(
     else:
         hashed_token = data.key
 
-    # Admin-only: only proxy admins, team admins, or org admins can unblock keys
-    await _check_key_admin_access(
-        user_api_key_dict=user_api_key_dict,
-        hashed_token=hashed_token,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        route="/key/unblock",
-    )
-
-    # Check if the key exists before trying to unblock it
-    existing_record = await prisma_client.db.litellm_verificationtoken.find_unique(
+    key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
         where={"token": hashed_token}
     )
-    if existing_record is None:
+    if key_row is None:
         raise ProxyException(
-            message="Key not found.",
-            type=ProxyErrorTypes.not_found_error,
+            message=f"Key {data.key} not found",
+            type=ProxyErrorTypes.bad_request_error,
             param="key",
             code=status.HTTP_404_NOT_FOUND,
         )
@@ -5076,7 +5104,7 @@ async def unblock_key(
                     object_id=hashed_token,
                     action="unblocked",
                     updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
+                    before_value=key_row.model_dump_json(),
                 )
             )
         )

@@ -642,6 +642,8 @@ class RouteChecks:
                     "/key/service-account/generate",
                     "/key/block",
                     "/key/unblock",
+                    "/user/block",
+                    "/user/unblock",
                 ]
                 or route.startswith("/key/")
                 and route.endswith("/regenerate")
