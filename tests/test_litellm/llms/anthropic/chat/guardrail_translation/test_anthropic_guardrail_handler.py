@@ -294,6 +294,154 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert "input_schema" in tools[1]
 
 
+class MockToolCallDeletionGuardrail(CustomGuardrail):
+    """Mock guardrail that marks specific tool calls for deletion via guardrail_deleted flag."""
+
+    def __init__(self, guardrail_name: str, indices_to_delete: Optional[List[int]] = None):
+        super().__init__(guardrail_name=guardrail_name)
+        self.indices_to_delete = indices_to_delete or []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for idx in self.indices_to_delete:
+            if idx < len(tool_calls):
+                if isinstance(tool_calls[idx], dict):
+                    tool_calls[idx]["guardrail_deleted"] = True
+        return inputs
+
+
+class TestAnthropicOutputToolCallDeletion:
+    """Test guardrail_deleted support for Anthropic output tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_partial_tool_call_deletion(self):
+        """One tool_use block deleted, text and other tool_use remain."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockToolCallDeletionGuardrail(
+            guardrail_name="test", indices_to_delete=[0]
+        )
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Let me help you."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "dangerous_tool",
+                    "input": {"action": "delete"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "safe_tool",
+                    "input": {"query": "hello"},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # Text block should remain, first tool_use deleted, second remains
+        assert len(result["content"]) == 2
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Let me help you."
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["name"] == "safe_tool"
+        # stop_reason should stay tool_use since one tool_use remains
+        assert result["stop_reason"] == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_full_tool_call_deletion(self):
+        """All tool_use blocks deleted, stop_reason changes to end_turn."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockToolCallDeletionGuardrail(
+            guardrail_name="test", indices_to_delete=[0, 1]
+        )
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "I will run two tools."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "tool_a",
+                    "input": {"x": 1},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "tool_b",
+                    "input": {"y": 2},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # Only text block should remain
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "I will run two tools."
+        # stop_reason should change since no tool_use blocks remain
+        assert result["stop_reason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_no_deletion_regression(self):
+        """No deletion flag set — tool calls should pass through unchanged."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Running tool."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "my_tool",
+                    "input": {"a": "b"},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        assert len(result["content"]) == 2
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["name"] == "my_tool"
+        assert result["stop_reason"] == "tool_use"
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

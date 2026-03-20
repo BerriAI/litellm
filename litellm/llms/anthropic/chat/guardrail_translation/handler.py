@@ -16,11 +16,15 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    GUARDRAIL_DELETED_KEY,
+    BaseTranslation,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -275,8 +279,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
-        task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (content_index, None) for each text
+        task_mappings: List[
+            Tuple[int, Optional[int]]
+        ] = []  # (content_idx, None) for each text
+        tool_call_task_mappings: List[int] = []  # content_idx for each tool call
 
         # Handle both dict and object responses
         response_content: List[Any] = []
@@ -312,6 +318,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 continue
 
             if block_type in ["text", "tool_use"]:
+                prev_tool_call_count = len(tool_calls_to_check)
                 self._extract_output_text_and_images(
                     content_block=block_dict,
                     content_idx=content_idx,
@@ -320,6 +327,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                     task_mappings=task_mappings,
                     tool_calls_to_check=tool_calls_to_check,
                 )
+                # Track content_idx for any newly added tool calls
+                for _ in range(len(tool_calls_to_check) - prev_tool_call_count):
+                    tool_call_task_mappings.append(content_idx)
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
@@ -362,6 +372,20 @@ class AnthropicMessagesHandler(BaseTranslation):
                 responses=guardrailed_texts,
                 task_mappings=task_mappings,
             )
+
+            # Step 4: Apply guardrailed tool calls back to response
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
+            if tool_calls_to_check:
+                resolved = (
+                    guardrailed_tool_calls
+                    if guardrailed_tool_calls is not None
+                    else tool_calls_to_check
+                )
+                self._apply_guardrail_responses_to_output_tool_calls(
+                    response=response,
+                    tool_calls=resolved,
+                    task_mappings=tool_call_task_mappings,
+                )
 
         verbose_proxy_logger.debug(
             "Anthropic Messages: Processed output response: %s", response
@@ -411,7 +435,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if tool_calls_list:
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    # allow rejecting the response, if invalid
                     inputs=guardrail_inputs,
                     request_data={},
                     input_type="response",
@@ -441,7 +466,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         2. Parsed dict objects (for backwards compatibility)
 
         SSE format example:
-            b'event: content_block_delta\\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" curious"}}\\n\\n'
+            b'event: content_block_delta\\ndata: {"type":"content_block_delta","index":0,"delta":{
+            "type":"text_delta","text":" curious"}}\\n\\n'
 
         Dict format example:
             {
@@ -526,7 +552,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         2. Parsed dict objects (for backwards compatibility)
 
         SSE format example:
-            b'event: message_delta\\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},...}\\n\\n'
+            b'event: message_delta\\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use",
+            "stop_sequence":null},...}\\n\\n'
 
         Dict format example:
             {
@@ -694,3 +721,125 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):
                     content_block.text = guardrail_response
+
+    def _apply_guardrail_responses_to_output_tool_calls(
+        self,
+        response: "AnthropicMessagesResponse",
+        tool_calls: List[Any],
+        task_mappings: List[int],
+    ) -> None:
+        """
+        Apply guardrailed tool calls back to output response content blocks.
+
+        Two-pass approach similar to the OpenAI Chat pattern:
+        1. Modify pass: update tool_use content blocks with modified arguments/name
+        2. Delete pass: remove content blocks marked with guardrail_deleted
+        """
+        # Get response content
+        response_content: List[Any] = []
+        if isinstance(response, dict):
+            response_content = response.get("content", []) or []
+        elif hasattr(response, "content"):
+            content = getattr(response, "content", None)
+            response_content = content or []
+        else:
+            return
+
+        if not response_content:
+            return
+
+        # Pass 1: Modify non-deleted tool calls
+        indices_to_delete: List[int] = []
+        for task_idx, content_idx in enumerate(task_mappings):
+            if task_idx >= len(tool_calls):
+                continue
+
+            guardrailed_tool_call = tool_calls[task_idx]
+
+            # Check for deletion flag
+            is_deleted = False
+            if isinstance(guardrailed_tool_call, dict):
+                is_deleted = guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True
+            elif hasattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY):
+                is_deleted = (
+                    getattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY) is True
+                )
+
+            if is_deleted:
+                indices_to_delete.append(content_idx)
+                continue
+
+            if content_idx >= len(response_content):
+                continue
+
+            content_block = response_content[content_idx]
+
+            # Extract arguments and name from guardrailed tool call
+            func = None
+            if (
+                isinstance(guardrailed_tool_call, dict)
+                and "function" in guardrailed_tool_call
+            ):
+                func = guardrailed_tool_call["function"]
+            elif hasattr(guardrailed_tool_call, "function"):
+                func = getattr(guardrailed_tool_call, "function", None)
+
+            if func is None:
+                continue
+
+            new_arguments = (
+                func.get("arguments")
+                if isinstance(func, dict)
+                else getattr(func, "arguments", None)
+            )
+            new_name = (
+                func.get("name")
+                if isinstance(func, dict)
+                else getattr(func, "name", None)
+            )
+
+            # Update the content block (dict or Pydantic object)
+            if isinstance(content_block, dict):
+                if new_arguments is not None:
+                    try:
+                        content_block["input"] = (
+                            json.loads(new_arguments)
+                            if isinstance(new_arguments, str)
+                            else new_arguments
+                        )
+                    except json.JSONDecodeError:
+                        content_block["input"] = new_arguments
+                if new_name is not None:
+                    content_block["name"] = new_name
+            else:
+                if new_arguments is not None:
+                    try:
+                        parsed = (
+                            json.loads(new_arguments)
+                            if isinstance(new_arguments, str)
+                            else new_arguments
+                        )
+                    except json.JSONDecodeError:
+                        parsed = new_arguments
+                    if hasattr(content_block, "input"):
+                        content_block.input = parsed
+                if new_name is not None and hasattr(content_block, "name"):
+                    content_block.name = new_name
+
+        # Pass 2: Delete marked content blocks
+        if indices_to_delete:
+            remove_items_at_indices(response_content, indices_to_delete)
+
+            # Update stop_reason if no tool_use blocks remain
+            has_tool_use = any(
+                (b.get("type") if isinstance(b, dict) else getattr(b, "type", None))
+                == "tool_use"
+                for b in response_content
+            )
+            if not has_tool_use:
+                if isinstance(response, dict):
+                    if response.get("stop_reason") == "tool_use":
+                        response["stop_reason"] = "end_turn"
+                elif hasattr(response, "stop_reason"):
+                    if getattr(response, "stop_reason", None) == "tool_use":
+                        response.stop_reason = "end_turn"

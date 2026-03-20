@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
+GUARDRAIL_DELETED_KEY = "guardrail_deleted"
+
 
 class BaseTranslation(ABC):
     @staticmethod

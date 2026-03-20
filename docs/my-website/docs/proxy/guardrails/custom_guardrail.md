@@ -447,7 +447,7 @@ class ToolFilterGuardrail(CustomGuardrail):
 - **Partial deletion**: Only the marked tool calls are removed; the rest remain in the request/response.
 - **Full deletion (all tool calls removed)**:
   - For **input** messages: the `"tool_calls"` key is removed from the message dict.
-  - For **output** responses: `tool_calls` is set to `None` and `finish_reason` is changed from `"tool_calls"` to `"stop"`.
+  - For **output** responses: the tool calls are removed and the stop/finish reason is updated — OpenAI Chat changes `finish_reason` from `"tool_calls"` to `"stop"`, Anthropic changes `stop_reason` from `"tool_use"` to `"end_turn"`.
 
 ## ✨ Pass additional parameters to guardrail
 

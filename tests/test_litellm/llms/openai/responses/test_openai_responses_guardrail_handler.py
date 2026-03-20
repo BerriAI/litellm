@@ -833,6 +833,190 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockToolCallDeletionGuardrail(CustomGuardrail):
+    """Mock guardrail that marks specific tool calls for deletion via guardrail_deleted flag."""
+
+    def __init__(self, guardrail_name: str, indices_to_delete: Optional[List[int]] = None):
+        super().__init__(guardrail_name=guardrail_name)
+        self.indices_to_delete = indices_to_delete or []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for idx in self.indices_to_delete:
+            if idx < len(tool_calls):
+                if isinstance(tool_calls[idx], dict):
+                    tool_calls[idx]["guardrail_deleted"] = True
+        return inputs
+
+
+class TestOpenAIResponsesOutputToolCallDeletion:
+    """Test guardrail_deleted support for OpenAI Responses output tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_partial_tool_call_deletion(self):
+        """One function_call output item deleted, message output remains."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockToolCallDeletionGuardrail(
+            guardrail_name="test", indices_to_delete=[0]
+        )
+
+        response = ResponsesAPIResponse(
+            id="resp_123",
+            created_at=1234567890,
+            model="gpt-4",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Let me help."},
+                    ],
+                },
+                ResponseFunctionToolCall(
+                    arguments='{"action":"delete"}',
+                    call_id="call_1",
+                    name="dangerous_tool",
+                    type="function_call",
+                    id="fc_1",
+                    status="completed",
+                ),
+                ResponseFunctionToolCall(
+                    arguments='{"query":"hello"}',
+                    call_id="call_2",
+                    name="safe_tool",
+                    type="function_call",
+                    id="fc_2",
+                    status="completed",
+                ),
+            ],
+        )
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # First tool call deleted, message and second tool call remain
+        assert len(result.output) == 2
+        # Message output
+        msg = result.output[0]
+        if isinstance(msg, dict):
+            assert msg["type"] == "message"
+        else:
+            assert msg.type == "message"
+        # Remaining tool call
+        remaining_tc = result.output[1]
+        assert remaining_tc.name == "safe_tool"
+
+    @pytest.mark.asyncio
+    async def test_full_tool_call_deletion(self):
+        """All function_call items deleted."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockToolCallDeletionGuardrail(
+            guardrail_name="test", indices_to_delete=[0, 1]
+        )
+
+        response = ResponsesAPIResponse(
+            id="resp_123",
+            created_at=1234567890,
+            model="gpt-4",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Running tools."},
+                    ],
+                },
+                ResponseFunctionToolCall(
+                    arguments='{"x":1}',
+                    call_id="call_1",
+                    name="tool_a",
+                    type="function_call",
+                    id="fc_1",
+                    status="completed",
+                ),
+                ResponseFunctionToolCall(
+                    arguments='{"y":2}',
+                    call_id="call_2",
+                    name="tool_b",
+                    type="function_call",
+                    id="fc_2",
+                    status="completed",
+                ),
+            ],
+        )
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # Only message output should remain
+        assert len(result.output) == 1
+        msg = result.output[0]
+        if isinstance(msg, dict):
+            assert msg["type"] == "message"
+        else:
+            assert msg.type == "message"
+
+    @pytest.mark.asyncio
+    async def test_no_deletion_regression(self):
+        """No deletion flag set — tool calls pass through unchanged."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        response = ResponsesAPIResponse(
+            id="resp_123",
+            created_at=1234567890,
+            model="gpt-4",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Running tool."},
+                    ],
+                },
+                ResponseFunctionToolCall(
+                    arguments='{"a":"b"}',
+                    call_id="call_1",
+                    name="my_tool",
+                    type="function_call",
+                    id="fc_1",
+                    status="completed",
+                ),
+            ],
+        )
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        assert len(result.output) == 2
+        tc = result.output[1]
+        assert tc.name == "my_tool"
+
+
 class TestOpenAIResponsesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 

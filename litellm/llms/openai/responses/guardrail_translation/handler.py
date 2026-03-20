@@ -34,11 +34,15 @@ from openai.types.responses.response_function_tool_call import ResponseFunctionT
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    GUARDRAIL_DELETED_KEY,
+    BaseTranslation,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -371,8 +375,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
-        task_mappings: List[Tuple[int, int]] = []
-        # Track (output_item_index, content_index) for each text
+        task_mappings: List[
+            Tuple[int, int]
+        ] = []  # (output_idx, content_idx) for each text
+        tool_call_task_mappings: List[int] = []  # output_idx for each tool call
 
         # Handle both dict and Pydantic object responses
         if isinstance(response, dict):
@@ -391,6 +397,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Step 1: Extract all text content and tool calls from response output
         for output_idx, output_item in enumerate(response_output):
+            prev_tool_call_count = len(tool_calls_to_check)
             self._extract_output_text_and_images(
                 output_item=output_item,
                 output_idx=output_idx,
@@ -399,6 +406,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 task_mappings=task_mappings,
                 tool_calls_to_check=tool_calls_to_check,
             )
+            # Track output_idx for any newly added tool calls
+            for _ in range(len(tool_calls_to_check) - prev_tool_call_count):
+                tool_call_task_mappings.append(output_idx)
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
@@ -441,6 +451,20 @@ class OpenAIResponsesHandler(BaseTranslation):
                 responses=guardrailed_texts,
                 task_mappings=task_mappings,
             )
+
+            # Step 4: Apply guardrailed tool calls back to response
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
+            if tool_calls_to_check:
+                resolved = (
+                    guardrailed_tool_calls
+                    if guardrailed_tool_calls is not None
+                    else tool_calls_to_check
+                )
+                self._apply_guardrail_responses_to_output_tool_calls(
+                    response=response,
+                    tool_calls=resolved,
+                    task_mappings=tool_call_task_mappings,
+                )
 
         verbose_proxy_logger.debug(
             "OpenAI Responses API: Processed output response: %s", response
@@ -758,3 +782,95 @@ class OpenAIResponsesHandler(BaseTranslation):
                         content[content_idx]["text"] = guardrail_response
                     elif hasattr(content[content_idx], "text"):
                         content[content_idx].text = guardrail_response
+
+    def _apply_guardrail_responses_to_output_tool_calls(
+        self,
+        response: "ResponsesAPIResponse",
+        tool_calls: List[Any],
+        task_mappings: List[int],
+    ) -> None:
+        """
+        Apply guardrailed tool calls back to output response items.
+
+        Two-pass approach similar to the OpenAI Chat pattern:
+        1. Modify pass: update function_call output items with modified arguments/name
+        2. Delete pass: remove output items marked with guardrail_deleted
+        """
+        # Get response output
+        if isinstance(response, dict):
+            response_output = response.get("output", [])
+        elif hasattr(response, "output"):
+            response_output = response.output or []
+        else:
+            return
+
+        if not response_output:
+            return
+
+        # Pass 1: Modify non-deleted tool calls
+        indices_to_delete: List[int] = []
+        for task_idx, output_idx in enumerate(task_mappings):
+            if task_idx >= len(tool_calls):
+                continue
+
+            guardrailed_tool_call = tool_calls[task_idx]
+
+            # Check for deletion flag
+            is_deleted = False
+            if isinstance(guardrailed_tool_call, dict):
+                is_deleted = guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True
+            elif hasattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY):
+                is_deleted = (
+                    getattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY) is True
+                )
+
+            if is_deleted:
+                indices_to_delete.append(output_idx)
+                continue
+
+            if output_idx >= len(response_output):
+                continue
+
+            output_item = response_output[output_idx]
+
+            # Extract arguments and name from guardrailed tool call
+            func = None
+            if (
+                isinstance(guardrailed_tool_call, dict)
+                and "function" in guardrailed_tool_call
+            ):
+                func = guardrailed_tool_call["function"]
+            elif hasattr(guardrailed_tool_call, "function"):
+                func = getattr(guardrailed_tool_call, "function", None)
+
+            if func is None:
+                continue
+
+            new_arguments = (
+                func.get("arguments")
+                if isinstance(func, dict)
+                else getattr(func, "arguments", None)
+            )
+            new_name = (
+                func.get("name")
+                if isinstance(func, dict)
+                else getattr(func, "name", None)
+            )
+
+            # Update the output item (Pydantic object or dict)
+            if isinstance(output_item, dict):
+                if new_arguments is not None:
+                    output_item["arguments"] = new_arguments
+                if new_name is not None:
+                    output_item["name"] = new_name
+            else:
+                if new_arguments is not None and hasattr(output_item, "arguments"):
+                    output_item.arguments = new_arguments
+                if new_name is not None and hasattr(output_item, "name"):
+                    output_item.name = new_name
+
+        # Pass 2: Delete marked output items
+        # Note: Unlike OpenAI Chat (finish_reason) and Anthropic (stop_reason),
+        # the Responses API status field does not change based on tool call presence.
+        if indices_to_delete:
+            remove_items_at_indices(response_output, indices_to_delete)
