@@ -1358,7 +1358,7 @@ if MCP_AVAILABLE:
                     set(existing_mcp_servers + [new_mcp_server.server_id])
                 )
 
-                await handle_update_object_permission_common(
+                new_permission_id = await handle_update_object_permission_common(
                     data_json={
                         "object_permission": {
                             "mcp_servers": updated_mcp_servers,
@@ -1367,6 +1367,13 @@ if MCP_AVAILABLE:
                     existing_object_permission_id=existing_permission_id,
                     prisma_client=prisma_client,
                 )
+
+                # If the team had no object_permission_id, link the new one
+                if existing_permission_id is None and new_permission_id is not None:
+                    await prisma_client.db.litellm_teamtable.update(
+                        where={"team_id": manager_team_id},
+                        data={"object_permission_id": new_permission_id},
+                    )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
             raise HTTPException(
