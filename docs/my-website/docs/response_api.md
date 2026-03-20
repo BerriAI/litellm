@@ -1556,6 +1556,12 @@ curl -X POST "http://localhost:4000/v1/responses" \
   }'
 ```
 
+## File Search (Vector Stores)
+
+For full `file_search` usage (native + emulated fallback), SDK/Proxy examples, architecture diagram, and Q&A, see:
+
+- [`File Search in the Responses API — E2E Testing Guide`](/docs/tutorials/file_search_responses_api)
+
 ## Session Management
 
 LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
