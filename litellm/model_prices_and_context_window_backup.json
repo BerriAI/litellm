@@ -37104,5 +37104,157 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "volcengine/doubao-seed-2-0-pro-260215": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 4.6e-07,
+                "output_cost_per_token": 2.3e-06,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 7e-07,
+                "output_cost_per_token": 3.5e-06,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 1.4e-06,
+                "output_cost_per_token": 7e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
+    },
+    "volcengine/doubao-seed-2-0-lite-260215": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 8.7e-08,
+                "output_cost_per_token": 5.2e-07,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 1.3e-07,
+                "output_cost_per_token": 7.8e-07,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 2.6e-07,
+                "output_cost_per_token": 1.6e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
+    },
+    "volcengine/doubao-seed-2-0-mini-260215": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 2.9e-08,
+                "output_cost_per_token": 2.9e-07,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 5.8e-08,
+                "output_cost_per_token": 5.8e-07,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 1.2e-07,
+                "output_cost_per_token": 1.2e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
+    },
+    "volcengine/doubao-seed-2-0-code-preview-260215": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 4.6e-07,
+                "output_cost_per_token": 2.3e-06,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 7e-07,
+                "output_cost_per_token": 3.5e-06,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 1.4e-06,
+                "output_cost_per_token": 7e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
     }
 }
