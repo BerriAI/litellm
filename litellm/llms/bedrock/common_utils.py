@@ -322,7 +322,6 @@ def init_bedrock_client(
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
-            
         )
     elif aws_profile_name is not None:
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
