@@ -28,15 +28,18 @@ jobs:
         find . -type d -name "__pycache__" -exec rm -rf {} + || true
         find . -name "*.pyc" -delete || true
 
+    - name: Check poetry.lock is up to date
+      run: |
+        poetry check --lock || (echo "❌ poetry.lock is out of sync with pyproject.toml. Run 'poetry lock' locally and commit the result." && exit 1)
+
     - name: Install dependencies
       run: |
-        poetry lock
         poetry install --with dev
 
-    - name: Run Black formatting
+    - name: Check Black formatting
       run: |
         cd litellm
-        poetry run black .
+        poetry run black --check --exclude '/enterprise/' .
         cd ..
 
     - name: Debug - Check file state

@@ -139,11 +139,7 @@ class ChatClient:
         url = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Dict[str, Any] = {
-            "model": model, 
-            "messages": messages,
-            "stream": True
-        }
+        data: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -165,27 +161,24 @@ class ChatClient:
         session = requests.Session()
         try:
             response = session.post(
-                url, 
-                headers=self._get_headers(), 
-                json=data, 
-                stream=True
+                url, headers=self._get_headers(), json=data, stream=True
             )
             response.raise_for_status()
-            
+
             # Parse SSE stream
             for line in response.iter_lines():
                 if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
+                    line = line.decode("utf-8")
+                    if line.startswith("data: "):
                         data_str = line[6:]  # Remove 'data: ' prefix
-                        if data_str.strip() == '[DONE]':
+                        if data_str.strip() == "[DONE]":
                             break
                         try:
                             chunk = json.loads(data_str)
                             yield chunk
                         except json.JSONDecodeError:
                             continue
-                            
+
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

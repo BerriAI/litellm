@@ -78,11 +78,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def extract_model_from_operation_name(operation_name: str) -> Optional[str]:
         """
         Extract the model name from a Vertex AI operation name.
-        
+
         Args:
             operation_name: Operation name in format:
                 projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID
-        
+
         Returns:
             Model name (e.g., "veo-2.0-generate-001") or None if extraction fails
         """
@@ -174,17 +174,23 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
-        
+
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         # Ensure litellm_params is a dict for type checking
-        params_dict: Dict[str, Any] = cast(Dict[str, Any], litellm_params) if litellm_params is not None else {}
-        
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
-        
+        params_dict: Dict[str, Any] = (
+            cast(Dict[str, Any], litellm_params) if litellm_params is not None else {}
+        )
+
+        vertex_project = VertexBase.safe_get_vertex_ai_project(
+            litellm_params=params_dict
+        )
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
+            litellm_params=params_dict
+        )
+
         # Get access token from Vertex credentials
         access_token, project_id = self.get_access_token(
             credentials=vertex_credentials,
@@ -353,24 +359,23 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             video_id = operation_name
 
-
         video_obj = VideoObject(
-            id=video_id,
-            object="video",
-            status="processing",
-            model=model
+            id=video_id, object="video", status="processing", model=model
         )
 
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+            duration = (
+                parameters.get("durationSeconds")
+                or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+            )
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)
                 except (ValueError, TypeError):
                     pass
-        
+
         video_obj.usage = usage_data
         return video_obj
 
@@ -388,7 +393,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """
         operation_name = extract_original_video_id(video_id)
         model = self.extract_model_from_operation_name(operation_name)
-        
+
         if not model:
             raise ValueError(
                 f"Invalid operation name format: {operation_name}. "
@@ -500,7 +505,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Since we need to make an HTTP call here, we'll use the same fetchPredictOperation
         approach as status retrieval.
         """
-        return self.transform_video_status_retrieve_request(video_id, api_base, litellm_params, headers)
+        return self.transform_video_status_retrieve_request(
+            video_id, api_base, litellm_params, headers
+        )
 
     def transform_video_content_response(
         self,
@@ -617,6 +624,53 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Vertex AI Veo.")
 
+    def transform_video_create_character_request(
+        self, name, video, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
+
+    def transform_video_create_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
+
+    def transform_video_get_character_request(
+        self, character_id, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError("video get character is not supported for Vertex AI")
+
+    def transform_video_get_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError("video get character is not supported for Vertex AI")
+
+    def transform_video_edit_request(
+        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+    ):
+        raise NotImplementedError("video edit is not supported for Vertex AI")
+
+    def transform_video_edit_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video edit is not supported for Vertex AI")
+
+    def transform_video_extension_request(
+        self,
+        prompt,
+        video_id,
+        seconds,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+    ):
+        raise NotImplementedError("video extension is not supported for Vertex AI")
+
+    def transform_video_extension_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video extension is not supported for Vertex AI")
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
@@ -627,4 +681,3 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             message=error_message,
             headers=headers,
         )
-

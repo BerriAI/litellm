@@ -727,7 +727,9 @@ def _count_content_list(
                     num_tokens += count_function(thinking_text)
             else:
                 content_type = (
-                    c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
+                    c.get("type", type(c).__name__)
+                    if isinstance(c, dict)
+                    else type(c).__name__
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "

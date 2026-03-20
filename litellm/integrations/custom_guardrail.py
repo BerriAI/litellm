@@ -589,6 +589,16 @@ class CustomGuardrail(CustomLogger):
             guardrail_json_response
         )
 
+        # Strip secret_fields to prevent plaintext Authorization headers from
+        # being persisted to spend logs, OTEL traces, or other logging backends.
+        # This matches the pattern used by Langfuse and Arize integrations.
+        if isinstance(clean_guardrail_response, dict):
+            clean_guardrail_response.pop("secret_fields", None)
+        elif isinstance(clean_guardrail_response, list):
+            for item in clean_guardrail_response:
+                if isinstance(item, dict):
+                    item.pop("secret_fields", None)
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
             guardrail_provider=guardrail_provider,
