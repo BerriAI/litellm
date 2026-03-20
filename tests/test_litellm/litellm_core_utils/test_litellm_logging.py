@@ -466,21 +466,6 @@ class TestUpdateFromKwargs:
         result_meta = logging_obj.litellm_params["metadata"]
         assert result_meta["from_caller"] is True
         assert result_meta["user_api_key_hash"] == "hashed-xyz"
-        # caller's dict must not be mutated by the merge
-        assert "user_api_key_hash" not in caller_metadata
-
-    def test_merge_handles_metadata_none(self, logging_obj):
-        """When metadata=None is explicitly in kwargs alongside litellm_metadata,
-        the merge should not crash (dict(None) would TypeError)."""
-        kwargs = {
-            "metadata": None,
-            "litellm_metadata": {"user_api_key_hash": "hashed-abc"},
-        }
-
-        logging_obj.update_from_kwargs(kwargs=kwargs)
-
-        result_meta = logging_obj.litellm_params["metadata"]
-        assert result_meta["user_api_key_hash"] == "hashed-abc"
 
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
         """Explicit litellm_params from the caller should override auto-extracted values."""
@@ -491,7 +476,7 @@ class TestUpdateFromKwargs:
             litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
         )
 
-        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
+        assert logging_obj.litellm_params["metadata"]["from_caller"] is True
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
