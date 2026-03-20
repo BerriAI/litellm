@@ -16,7 +16,7 @@ Your system is likely high-risk if it is used for:
 - **Education assessment** (grading, admissions)
 - **Access to essential public services**
 
-If your use case does not fall under Annex III, Articles 12-14 do not apply. You may still have obligations under **Article 50** (transparency for chatbots and AI systems interacting directly with users) and **GDPR** (if processing personal data). Read those sections below.
+If your use case does not fall under Annex III, the high-risk obligations (Articles 9-15) are less likely to apply, but risk classification is context-dependent. **Do not self-classify without legal review.** You may still have obligations under **Article 50** (transparency for chatbots and AI systems interacting directly with users) and **GDPR** (if processing personal data). Focus on Article 50 (transparency) and GDPR (data protection) as your baseline obligations. Read those sections below.
 
 If your system is high-risk, the August 2, 2026 deadline for full compliance applies. The rest of this guide addresses high-risk obligations.
 
