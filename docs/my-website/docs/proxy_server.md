@@ -148,7 +148,7 @@ openai.api_key = "any-string-here"
 openai.api_base = "http://0.0.0.0:8080" # your proxy url
 
 # call openai
-response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+response = openai.ChatCompletion.create(model="gpt-4o", messages=[{"role": "user", "content": "Hey"}])
 
 print(response)
 
@@ -409,8 +409,8 @@ import openai
 openai.api_key = "any-string-here"
 openai.api_base = "http://0.0.0.0:8080" # your proxy url
 
-# call gpt-3.5-turbo
-response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+# call gpt-4o
+response = openai.ChatCompletion.create(model="gpt-4o", messages=[{"role": "user", "content": "Hey"}])
 
 print(response)
 

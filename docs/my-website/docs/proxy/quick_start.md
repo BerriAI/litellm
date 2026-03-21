@@ -40,7 +40,7 @@ In a new shell, run, this will make an `openai.chat.completions` request. Ensure
 litellm --test
 ```
 
-This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
+This will now automatically route any requests for gpt-4o to bigcode starcoder, hosted on huggingface inference endpoints. 
 
 ### Supported LLMs
 All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
@@ -75,7 +75,7 @@ $ export OPENAI_API_KEY=my-api-key
 ```
 
 ```shell
-$ litellm --model gpt-3.5-turbo
+$ litellm --model gpt-4o
 ```
 </TabItem>
 <TabItem value="ollama" label="Ollama">
@@ -231,12 +231,12 @@ Example config
 
 ```yaml
 model_list: 
-  - model_name: gpt-3.5-turbo # user-facing model alias
+  - model_name: gpt-4o # user-facing model alias
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
       model: azure/<your-deployment-name>
       api_base: <your-azure-api-endpoint>
       api_key: <your-azure-api-key>
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
@@ -270,7 +270,7 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -291,7 +291,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-4o", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -315,7 +315,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
+    model = "gpt-4o",
     temperature=0.1
 )
 
@@ -375,7 +375,7 @@ This is **not recommended**. There is duplicate logic as the proxy also uses the
 from litellm import completion 
 
 response = completion(
-    model="openai/gpt-3.5-turbo", 
+    model="openai/gpt-4o", 
     messages = [
         {
             "role": "user",
@@ -436,12 +436,12 @@ print(message.content)
 
 Events that occur during normal operation
 ```shell
-litellm --model gpt-3.5-turbo --debug
+litellm --model gpt-4o --debug
 ```
 
 Detailed information
 ```shell
-litellm --model gpt-3.5-turbo --detailed_debug
+litellm --model gpt-4o --detailed_debug
 ```
 
 ### Set Debug Level using env variables

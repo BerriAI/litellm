@@ -348,7 +348,7 @@ litellm --model huggingface/bigcode/starcoder
 
 ```yaml title="litellm_config.yaml"
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/your-deployment
       api_base: os.environ/AZURE_API_BASE
@@ -377,7 +377,7 @@ import openai
 client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:4000")
 
 response = client.chat.completions.create(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{"role": "user", "content": "Write a short poem"}]
 )
 print(response.choices[0].message.content)
