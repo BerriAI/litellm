@@ -1506,7 +1506,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
             # Detect data-URL images (e.g. from Anthropic tool_result with a single image block
             # that was serialised as a plain string by translate_anthropic_messages_to_openai)
             # and promote them to inline_data so Gemini receives actual image bytes.
-            if content_str.startswith("data:") and ";base64," in content_str:
+            if content_str[:5].lower() == "data:" and ";base64," in content_str:
                 try:
                     mime_rest = content_str[5:].split(";base64,", 1)
                     if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
