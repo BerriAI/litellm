@@ -20,6 +20,12 @@ CORS_MODULES = ("litellm.proxy.proxy_server",)
 def clear_cors_env(monkeypatch):
     for env_var in CORS_ENV_VARS:
         monkeypatch.delenv(env_var, raising=False)
+    yield
+    # CliRunner-invoked startup code writes directly to os.environ, outside of
+    # monkeypatch tracking. Remove any leftover values after each test so they
+    # cannot leak into later imports in the same pytest session.
+    for env_var in CORS_ENV_VARS:
+        os.environ.pop(env_var, None)
 
 
 def _reload_local_proxy_server():

@@ -188,9 +188,10 @@ def _load_general_settings_for_early_cors(
 
     CORSMiddleware is configured from module-level values at import time, so the
     startup path needs these settings in env vars before the first proxy_server
-    import. This early pass supports literal values, include files, and
-    os.environ/ references. Secret-manager-backed values are only available
-    later in startup and therefore cannot affect the initial middleware config.
+    import. This early pass supports literal values, os.environ/ references,
+    and local file-path include files. Secret-manager-backed values and include
+    directives inside S3/GCS configs are only resolved later in startup and
+    therefore cannot affect the initial middleware config.
     """
     config: Optional[dict] = None
 
