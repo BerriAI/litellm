@@ -308,6 +308,7 @@ const sidebars = {
                 "a2a_cost_tracking",
                 "a2a_agent_permissions",
                 "a2a_iteration_budgets",
+                "mcp_chat_completions_orchestration",
               ],
             },
             {
@@ -316,7 +317,6 @@ const sidebars = {
               items: [
                 "mcp",
                 "mcp_usage",
-                "mcp_chat_completions_orchestration",
                 "mcp_openapi",
                 "mcp_oauth",
                 "mcp_aws_sigv4",
