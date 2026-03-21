@@ -11,6 +11,7 @@ CORS_ENV_VARS = (
     "LITELLM_CORS_ALLOW_METHODS",
     "LITELLM_CORS_ALLOW_HEADERS",
 )
+CORS_MODULES = ("litellm.proxy.proxy_server",)
 
 
 @pytest.fixture(autouse=True)
@@ -23,13 +24,33 @@ def _reload_local_proxy_server():
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
 
-    for module_name in list(sys.modules):
-        if module_name == "litellm" or module_name.startswith("litellm."):
-            del sys.modules[module_name]
+    for module_name in CORS_MODULES:
+        sys.modules.pop(module_name, None)
 
     import litellm.proxy.proxy_server as proxy_server
 
     return importlib.reload(proxy_server)
+
+
+def test_normalize_cors_value_list():
+    from litellm.proxy.proxy_cli import _normalize_cors_value
+
+    assert _normalize_cors_value(
+        ["https://a.com", " https://b.com "], "cors_allow_origins"
+    ) == "https://a.com,https://b.com"
+
+
+def test_normalize_cors_value_empty_list():
+    from litellm.proxy.proxy_cli import _normalize_cors_value
+
+    assert _normalize_cors_value([], "cors_allow_origins") == ""
+
+
+def test_normalize_cors_value_invalid_type_raises():
+    from litellm.proxy.proxy_cli import _normalize_cors_value
+
+    with pytest.raises(ValueError, match="expected a string or list of strings"):
+        _normalize_cors_value(123, "cors_allow_origins")
 
 
 def test_cors_defaults_preserve_existing_proxy_behavior():

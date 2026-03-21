@@ -1150,6 +1150,8 @@ def _get_cors_allow_credentials(origins_were_configured: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes"}
 
 
+# CORSMiddleware is constructed once at startup, so changing these settings
+# requires a full proxy restart to take effect.
 configured_cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS")
 configured_cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS")
 configured_cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS")
@@ -1180,8 +1182,10 @@ should_validate_cors_credentials = (
 )
 if should_validate_cors_credentials and has_wildcard_origin and cors_allow_credentials:
     verbose_proxy_logger.warning(
-        "CORS config rejects allow_credentials with wildcard origins or patterns. "
-        "Set general_settings.cors_allow_origins to explicit origins to enable credentials."
+        "CORS config rejects allow_credentials with wildcard origins or patterns "
+        "(including subdomain wildcards such as 'https://*.example.com'). "
+        "Set general_settings.cors_allow_origins to fully-qualified explicit origins "
+        "to enable credentials."
     )
     cors_allow_credentials = False
 
