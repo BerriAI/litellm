@@ -103,7 +103,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -128,7 +128,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "user": "gm",
     "messages": [
         {
@@ -155,7 +155,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "user": "gm",
     "messages": [
         {
@@ -170,7 +170,7 @@ curl --location 'http://localhost:4000/chat/completions' \
 Expected Response
 
 ```shell
-{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
+{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-4o-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
 ```
 
 </TabItem>
@@ -481,7 +481,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -668,7 +668,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -688,7 +688,7 @@ print(response)
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -748,7 +748,7 @@ litellm_settings:
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",

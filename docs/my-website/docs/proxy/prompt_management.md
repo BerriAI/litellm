@@ -368,7 +368,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = "secret_key" # [OPTIONAL] set here or in `.c
 litellm.set_verbose = True # see raw request to provider
 
 resp = litellm.completion(
-    model="langfuse/gpt-3.5-turbo",
+    model="langfuse/gpt-4o",
     prompt_id="test-chat-prompt",
     prompt_variables={"user_message": "this is used"}, # [OPTIONAL]
     messages=[{"role": "user", "content": "<IGNORED>"}],
@@ -391,7 +391,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
   - model_name: openai-model
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -435,7 +435,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -465,7 +465,7 @@ print(response)
 POST Request Sent from LiteLLM:
 curl -X POST \
 https://api.openai.com/v1/ \
--d '{'model': 'gpt-3.5-turbo', 'messages': <YOUR LANGFUSE PROMPT TEMPLATE>}'
+-d '{'model': 'gpt-4o', 'messages': <YOUR LANGFUSE PROMPT TEMPLATE>}'
 ```
 
 ## How to set model 
@@ -479,7 +479,7 @@ You can do `langfuse/<litellm_model_name>`
 
 ```python
 litellm.completion(
-    model="langfuse/gpt-3.5-turbo", # or `langfuse/anthropic/claude-3-5-sonnet`
+    model="langfuse/gpt-4o", # or `langfuse/anthropic/claude-3-5-sonnet`
     ...
 )
 ```
@@ -489,9 +489,9 @@ litellm.completion(
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: langfuse/gpt-3.5-turbo # OR langfuse/anthropic/claude-3-5-sonnet
+      model: langfuse/gpt-4o # OR langfuse/anthropic/claude-3-5-sonnet
       prompt_id: <langfuse_prompt_id>
       api_key: os.environ/OPENAI_API_KEY
 ```
@@ -507,7 +507,7 @@ If the model is specified in the Langfuse config, it will be used.
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_key: os.environ/AZURE_API_KEY

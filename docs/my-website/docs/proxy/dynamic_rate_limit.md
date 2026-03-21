@@ -15,7 +15,7 @@ Dynamically allocate TPM/RPM quota to api keys, based on active keys in that min
 model_list: 
   - model_name: my-fake-model
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: my-fake-key
       mock_response: hello-world
       tpm: 60
@@ -130,9 +130,9 @@ Priority reservation allocates a percentage of your model's total TPM/RPM to spe
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: gpt-3.5-turbo             
+  - model_name: gpt-4o             
     litellm_params:
-      model: "gpt-3.5-turbo"       
+      model: "gpt-4o"       
       api_key: os.environ/OPENAI_API_KEY 
       rpm: 10   # Total model capacity
 
@@ -262,7 +262,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer sk-prod-key' \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello from prod"}]
   }'
 ```
@@ -273,7 +273,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer sk-dev-key' \
   -d '{
-    "model": "gpt-3.5-turbo", 
+    "model": "gpt-4o", 
     "messages": [{"role": "user", "content": "Hello from dev"}]
   }'
 ```

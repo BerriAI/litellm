@@ -30,7 +30,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello"}],
     "metadata": {
       "tags": ["custom-tag"]  # This will be rejected
@@ -56,7 +56,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello"}],
     "metadata": {
       "custom_field": "value"  # Other metadata fields are allowed
@@ -89,9 +89,9 @@ These tags will be automatically inherited by all requests made with that API ke
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 general_settings:

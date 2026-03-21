@@ -182,7 +182,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
                 soft_budget=800.0,
                 tpm_limit=10000,
                 rpm_limit=100,
-                models=["gpt-4", "claude-3-sonnet", "gpt-3.5-turbo"],
+                models=["gpt-4", "claude-3-sonnet", "gpt-4o"],
                 allowed_routes=["/chat/completions", "/embeddings"],
                 expires=datetime.now() + timedelta(days=30),
                 metadata={"department": "engineering", "cost_center": "ai_ops"}
@@ -198,7 +198,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
                 max_budget=100.0,
                 tpm_limit=1000,
                 rpm_limit=20,
-                models=["gpt-3.5-turbo", "claude-3-haiku"],
+                models=["gpt-4o", "claude-3-haiku"],
                 team_member_tpm_limit=500,  # Limit within team
                 end_user_tpm_limit=100,     # Per end-user limit
                 metadata={"project": "chatbot_v2"}
@@ -218,7 +218,7 @@ e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, t
 model_list: 
   - model_name: "openai-model"
     litellm_params: 
-      model: "gpt-3.5-turbo"
+      model: "gpt-4o"
 
 litellm_settings:
   drop_params: True
@@ -286,7 +286,7 @@ Key change set `mode: auto`. This will check both litellm api key auth + custom 
 model_list: 
   - model_name: "openai-model"
     litellm_params: 
-      model: "gpt-3.5-turbo"
+      model: "gpt-4o"
       api_key: os.environ/OPENAI_API_KEY
 
 general_settings:

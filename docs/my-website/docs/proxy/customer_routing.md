@@ -37,13 +37,13 @@ Supported regions are 'eu' and 'us'.
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-35-turbo # 👈 EU azure model
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: os.environ/AZURE_EUROPE_API_KEY
       region_name: "eu"
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -70,7 +70,7 @@ curl -X POST --location 'http://localhost:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer sk-1234' \
 --data '{
-    "model": "gpt-3.5-turbo", 
+    "model": "gpt-4o", 
     "messages": [
         {
         "role": "user",

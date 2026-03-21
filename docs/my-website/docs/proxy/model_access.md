@@ -12,12 +12,12 @@ Set allowed models for a key using the `models` param
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"]}'
+--data-raw '{"models": ["gpt-4o", "gpt-4"]}'
 ```
 
 :::info
 
-This key can only make requests to `models` that are `gpt-3.5-turbo` or `gpt-4`
+This key can only make requests to `models` that are `gpt-4o` or `gpt-4`
 
 :::
 
@@ -195,7 +195,7 @@ When `include_metadata=true` is specified, the response includes fallback inform
       "created": 1677610602,
       "owned_by": "openai",
       "fallbacks": {
-        "general": ["gpt-3.5-turbo", "claude-3-sonnet"],
+        "general": ["gpt-4o", "claude-3-sonnet"],
         "context_window": ["gpt-4-turbo", "claude-3-opus"],
         "content_policy": ["claude-3-haiku"]
       }

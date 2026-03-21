@@ -20,7 +20,7 @@ Create or update fallbacks for a specific model.
 **Request Body:**
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_models": ["gpt-4", "claude-3-haiku"],
   "fallback_type": "general"
 }
@@ -37,7 +37,7 @@ Create or update fallbacks for a specific model.
 **Response:**
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_models": ["gpt-4", "claude-3-haiku"],
   "fallback_type": "general",
   "message": "Fallback configuration created successfully"
@@ -50,7 +50,7 @@ curl -X POST "http://localhost:4000/fallback" \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "fallback_models": ["gpt-4", "claude-3-haiku"],
     "fallback_type": "general"
   }'
@@ -67,7 +67,7 @@ response = requests.post(
         "Content-Type": "application/json"
     },
     json={
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4o",
         "fallback_models": ["gpt-4", "claude-3-haiku"],
         "fallback_type": "general"
     }
@@ -87,7 +87,7 @@ Get fallback configuration for a specific model.
 **Response:**
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_models": ["gpt-4", "claude-3-haiku"],
   "fallback_type": "general"
 }
@@ -95,7 +95,7 @@ Get fallback configuration for a specific model.
 
 **Example using cURL:**
 ```bash
-curl -X GET "http://localhost:4000/fallback/gpt-3.5-turbo?fallback_type=general" \
+curl -X GET "http://localhost:4000/fallback/gpt-4o?fallback_type=general" \
   -H "Authorization: Bearer sk-1234"
 ```
 
@@ -104,7 +104,7 @@ curl -X GET "http://localhost:4000/fallback/gpt-3.5-turbo?fallback_type=general"
 import requests
 
 response = requests.get(
-    "http://localhost:4000/fallback/gpt-3.5-turbo",
+    "http://localhost:4000/fallback/gpt-4o",
     headers={"Authorization": "Bearer sk-1234"},
     params={"fallback_type": "general"}
 )
@@ -123,7 +123,7 @@ Delete fallback configuration for a specific model.
 **Response:**
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_type": "general",
   "message": "Fallback configuration deleted successfully"
 }
@@ -131,7 +131,7 @@ Delete fallback configuration for a specific model.
 
 **Example using cURL:**
 ```bash
-curl -X DELETE "http://localhost:4000/fallback/gpt-3.5-turbo?fallback_type=general" \
+curl -X DELETE "http://localhost:4000/fallback/gpt-4o?fallback_type=general" \
   -H "Authorization: Bearer sk-1234"
 ```
 
@@ -140,7 +140,7 @@ curl -X DELETE "http://localhost:4000/fallback/gpt-3.5-turbo?fallback_type=gener
 import requests
 
 response = requests.delete(
-    "http://localhost:4000/fallback/gpt-3.5-turbo",
+    "http://localhost:4000/fallback/gpt-4o",
     headers={"Authorization": "Bearer sk-1234"},
     params={"fallback_type": "general"}
 )
@@ -155,7 +155,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",
@@ -186,7 +186,7 @@ The endpoints perform the following validations:
 {
   "detail": {
     "error": "Invalid fallback models: ['non-existent-model']",
-    "available_models": ["gpt-3.5-turbo", "gpt-4", "claude-3-haiku"]
+    "available_models": ["gpt-4o", "gpt-4", "claude-3-haiku"]
   }
 }
 ```
@@ -195,7 +195,7 @@ The endpoints perform the following validations:
 ```json
 {
   "detail": {
-    "error": "Model 'gpt-3.5-turbo' not found in router",
+    "error": "Model 'gpt-4o' not found in router",
     "available_models": ["gpt-4", "claude-3-haiku"]
   }
 }
@@ -219,7 +219,7 @@ Used for any type of error that occurs during model invocation. This is the most
 
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_models": ["gpt-4", "claude-3-haiku"],
   "fallback_type": "general"
 }
@@ -232,7 +232,7 @@ Specifically triggered when a context window exceeded error occurs.
 
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "fallback_models": ["gpt-4-32k", "claude-3-opus"],
   "fallback_type": "context_window"
 }
