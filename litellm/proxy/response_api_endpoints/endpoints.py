@@ -989,7 +989,12 @@ async def responses_websocket_endpoint(
             route_type="_aresponses_websocket",
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        if ProxyBaseLLMRequestProcessing.should_log_exception_with_traceback(e):
+            verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        else:
+            verbose_proxy_logger.warning(
+                "Responses WebSocket pre-call request rejected: %s", str(e)
+            )
         try:
             await websocket.send_text(
                 json.dumps(
