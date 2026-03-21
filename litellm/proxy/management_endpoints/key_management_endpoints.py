@@ -41,6 +41,7 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
+    _compute_effective_models,
     _delete_cache_key_object,
     can_team_access_model,
     get_org_object,
@@ -658,14 +659,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             if _membership is not None:
                 member_models = _membership.models or []
         team_default_models = getattr(team_table, "default_models", None) or []
-        effective_models = list(set(team_default_models + member_models))
-
-        # Cap at team.models pool (same logic as get_effective_team_models)
         team_pool = team_table.models or []
-        if effective_models and team_pool:
-            effective_models = [m for m in effective_models if m in set(team_pool)]
-            if not effective_models:
-                effective_models = team_pool
+        effective_models = _compute_effective_models(
+            team_defaults=team_default_models,
+            member_models=member_models,
+            team_pool=team_pool,
+        )
 
         if effective_models:
             # if 'all-team-models' was requested, restrict it to the effective models

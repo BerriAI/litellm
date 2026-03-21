@@ -16,6 +16,7 @@ from litellm.proxy.auth.auth_checks import (
 @pytest.mark.asyncio
 async def test_get_effective_team_models():
     original_flag = litellm.team_model_overrides_enabled
+    original_env = os.environ.get("TEAM_MODEL_OVERRIDES")
     try:
         litellm.team_model_overrides_enabled = True
 
@@ -23,11 +24,14 @@ async def test_get_effective_team_models():
         team = LiteLLM_TeamTable(team_id="t1", models=["m1"])
         assert get_effective_team_models(team) == ["m1"]
 
-        # Case 2: Team defaults exist
-        team.default_models = ["d1"]
+        # Case 2: Team defaults exist (d1 must be in team.models pool)
+        team = LiteLLM_TeamTable(team_id="t1", models=["m1", "d1"], default_models=["d1"])
         assert set(get_effective_team_models(team)) == {"d1"}
 
-        # Case 3: Team defaults + Member overrides
+        # Case 3: Team defaults + Member overrides (all in team.models pool)
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
+        )
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         assert set(get_effective_team_models(team, token)) == {"d1", "mo1"}
 
@@ -37,9 +41,13 @@ async def test_get_effective_team_models():
 
         # Case 5: Feature disabled
         litellm.team_model_overrides_enabled = False
-        assert get_effective_team_models(team, token) == ["m1"]
+        if original_env:
+            os.environ.pop("TEAM_MODEL_OVERRIDES", None)
+        assert get_effective_team_models(team, token) == ["m1", "d1", "mo1"]
     finally:
         litellm.team_model_overrides_enabled = original_flag
+        if original_env:
+            os.environ["TEAM_MODEL_OVERRIDES"] = original_env
 
 
 @pytest.mark.asyncio
@@ -48,20 +56,22 @@ async def test_can_team_access_model_with_overrides():
     try:
         litellm.team_model_overrides_enabled = True
 
-        # Team has access to m1, but we override it to only d1
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
+        # Team pool includes m1, d1, g1. default_models=["d1"].
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "g1"], default_models=["d1"]
+        )
 
-        # Should NOT have access to m1 anymore if overrides are on
+        # With only defaults, should NOT have access to m1
         with pytest.raises(Exception):
             await can_team_access_model(model="m1", team_object=team, llm_router=None)
 
-        # Should have access to d1
+        # Should have access to d1 (it's a default)
         assert (
             await can_team_access_model(model="d1", team_object=team, llm_router=None)
             is True
         )
 
-        # Guest member has extra access to g1
+        # Member has extra access to g1
         token = UserAPIKeyAuth(team_member_models=["g1"])
         assert (
             await can_team_access_model(

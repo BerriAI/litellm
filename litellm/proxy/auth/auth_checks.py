@@ -2693,6 +2693,32 @@ def can_org_access_model(
     )
 
 
+def _compute_effective_models(
+    team_defaults: List[str],
+    member_models: List[str],
+    team_pool: List[str],
+) -> List[str]:
+    """
+    Core computation shared by the auth hot-path and key-generation.
+
+    effective = union(team_defaults, member_models), capped by team_pool.
+    - If neither defaults nor overrides are set, falls back to team_pool (backward compat).
+    - If cap empties the list (all stale), falls back to team_pool (NOT [] which = allow-all).
+    - team_pool=[] means "allow all" — cap is skipped.
+    """
+    effective = list(set(team_defaults + member_models))
+
+    if not effective:
+        return team_pool
+
+    if team_pool:
+        effective = [m for m in effective if m in set(team_pool)]
+        if not effective:
+            return team_pool
+
+    return effective
+
+
 def get_effective_team_models(
     team_object: Optional[LiteLLM_TeamTable],
     valid_token: Optional[UserAPIKeyAuth] = None,
@@ -2703,7 +2729,7 @@ def get_effective_team_models(
     - team_object.default_models (OR valid_token.team_default_models if available)
     - team_membership.models (OR valid_token.team_member_models if available)
 
-    If the result is empty, falls back to team_object.models.
+    Capped by team_object.models. Falls back to team_object.models when empty.
     """
     if not (
         litellm.team_model_overrides_enabled
@@ -2711,42 +2737,24 @@ def get_effective_team_models(
     ):
         return team_object.models if team_object else []
 
-    effective_models: List[str] = []
-
     # Get from team defaults — prefer team_object (authoritative, fresh from DB/cache)
     # over valid_token (snapshot from key creation time, may be stale).
     # Use `is not None` instead of truthiness so that an explicit empty list []
     # (meaning "no defaults") is not confused with "field missing".
-    team_defaults = []
+    team_defaults: List[str] = []
     if team_object and team_object.default_models is not None:
         team_defaults = team_object.default_models
     elif valid_token and valid_token.team_default_models:
         team_defaults = valid_token.team_default_models
 
     # Get from member specific overrides
-    member_models = []
+    member_models: List[str] = []
     if valid_token and valid_token.team_member_models:
         member_models = valid_token.team_member_models
 
-    effective_models = list(set(team_defaults + member_models))
-
-    if not effective_models:
-        return team_object.models if team_object else []
-
-    # Cap effective models at team.models (the allowed pool).
-    # This prevents stale member overrides from granting access to models
-    # that the team no longer has (e.g., after team.models was narrowed).
-    # team.models=[] means "allow all", so skip the cap in that case.
     team_pool = team_object.models if team_object else []
-    if team_pool:
-        effective_models = [m for m in effective_models if m in set(team_pool)]
-        # If cap emptied the list (all overrides/defaults are stale),
-        # fall back to team.models — NOT [] which means "allow all".
-        # This ensures the member is still restricted to the team's pool.
-        if not effective_models:
-            return team_pool
 
-    return effective_models
+    return _compute_effective_models(team_defaults, member_models, team_pool)
 
 
 async def can_team_access_model(

@@ -383,9 +383,14 @@ async def _upsert_budget_and_membership(
         # Only budget/rate-limit fields are being cleared — disconnect the budget
         # but do NOT touch models (models=None means "not specified", not "clear").
         # This prevents a role-only /team/member_update from wiping model overrides.
-        await tx.litellm_teammembership.update(
+        # Use upsert (not update) because members added without budget/models
+        # may not have a LiteLLM_TeamMembership row yet.
+        await tx.litellm_teammembership.upsert(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}},
+            data={
+                "create": {"user_id": user_id, "team_id": team_id},
+                "update": {"litellm_budget_table": {"disconnect": True}},
+            },
         )
         return
 

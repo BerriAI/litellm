@@ -54,15 +54,19 @@ async def test_upsert_disconnect(mock_tx, fake_user):
         user_api_key_dict=fake_user,
     )
 
+    # Uses upsert (not update) because member may not have a membership row yet.
     # models=None means "not specified" — should NOT be included in the update
-    # to avoid wiping existing model overrides on a role-only or budget-only update
-    mock_tx.litellm_teammembership.update.assert_awaited_once_with(
+    # to avoid wiping existing model overrides on a role-only or budget-only update.
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "user-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"disconnect": True}},
+        data={
+            "create": {"user_id": "user-1", "team_id": "team-1"},
+            "update": {"litellm_budget_table": {"disconnect": True}},
+        },
     )
     mock_tx.litellm_budgettable.update.assert_not_called()
     mock_tx.litellm_budgettable.create.assert_not_called()
-    mock_tx.litellm_teammembership.upsert.assert_not_called()
+    mock_tx.litellm_teammembership.update.assert_not_called()
 
 
 # TEST: existing budget id, creates new budget (current behavior)
