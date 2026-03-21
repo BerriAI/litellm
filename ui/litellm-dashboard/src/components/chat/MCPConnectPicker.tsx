@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Switch, Spin, message } from "antd";
+import { Switch, Spin } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
@@ -57,7 +58,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       const result = await listMCPTools(accessToken, serverName);
       // listMCPTools never throws; it returns { tools, error, message } on failure
       if (result?.error) {
-        message.warning(
+        MessageManager.warning(
           `Could not load tools for ${serverName} — it will be excluded from this message.`
         );
         // Do not add to selectedServers
@@ -65,7 +66,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      message.warning(
+      MessageManager.warning(
         `Could not load tools for ${serverName} — it will be excluded from this message.`
       );
       // Do not add to selectedServers
