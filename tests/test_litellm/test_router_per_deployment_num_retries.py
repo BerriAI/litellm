@@ -188,3 +188,51 @@ class TestPerDeploymentNumRetries:
 
         # Verify num_retries was converted from string to int
         assert exc.num_retries == 6
+
+    @pytest.mark.asyncio
+    async def test_async_function_with_retries_none_num_retries(self):
+        """
+        Test that async_function_with_retries handles None num_retries
+        without raising TypeError.
+        GitHub Issue: #23699
+
+        The bug is in the except block: `if num_retries > 0` crashes with
+        TypeError when num_retries is None. We must raise an exception
+        from the original function to enter that code path.
+        """
+        import litellm
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "test-key",
+                    },
+                },
+            ],
+            num_retries=3,
+        )
+
+        # The mock must raise so the except block (with the bug) is entered
+        async def mock_original_function(*args, **kwargs):
+            raise litellm.RateLimitError(
+                message="rate limit",
+                llm_provider="openai",
+                model="gpt-4",
+            )
+
+        kwargs = {
+            "original_function": mock_original_function,
+            "num_retries": None,
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {},
+        }
+
+        # Before the fix, this raised:
+        #   TypeError: '>' not supported between instances of 'NoneType' and 'int'
+        # After the fix, it should raise RateLimitError (not TypeError)
+        with pytest.raises(litellm.RateLimitError):
+            await router.async_function_with_retries(**kwargs)
